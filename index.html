@@ -1,29 +1,105 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Book a KnowDrive.ai Demo</title>
-  <meta name="description" content="Book a personal walk-through of KnowDrive.ai — pick a time that works for you and get a Google Meet invite automatically." />
-  <meta http-equiv="refresh" content="2;url=https://calendar.app.google/oBP2NVbguB9KVoKm8" />
+  <meta name="description" content="Book a 30-minute personal walk-through of KnowDrive.ai — pick a time and get a calendar invite with a Google Meet link automatically." />
+  <meta property="og:title" content="Book a KnowDrive.ai Demo" />
+  <meta property="og:description" content="A 30-minute walk-through of KnowDrive, shaped around your use case. Pick a time — the Google Meet invite is automatic." />
+  <meta property="og:url" content="https://demos.knowdrive.ai/" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
   <style>
-    :root { color-scheme: light dark; }
-    body {
-      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0b0f19; color: #e6e9f0; text-align: center; padding: 2rem;
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; background: #020617; }
+    .page { min-height: 100vh; display: flex; flex-direction: column; background: #020617; color: #cbd5e1; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+    .display { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #f8fafc; letter-spacing: -0.5px; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .kicker { color: #818cf8; font-size: 12px; letter-spacing: 2.5px; text-transform: uppercase; }
+    .hero-h { font-size: clamp(32px, 5vw, 52px); font-weight: 800; line-height: 1.08; text-wrap: pretty; }
+    .hero-sub { font-size: 17px; line-height: 1.65; font-weight: 300; max-width: 560px; text-wrap: pretty; }
+    .point-label { color: #f8fafc; font-size: 14.5px; font-weight: 600; }
+    .point-copy { font-size: 13.5px; line-height: 1.55; color: #94a3b8; }
+    .point-num { color: #6366f1; font-size: 11px; }
+    .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+    .point { display: flex; flex-direction: column; gap: 8px; }
+    .cal-card { background: #ffffff; border-radius: 16px; box-shadow: 0 12px 32px rgba(0,0,0,0.6); overflow: hidden; border: 1px solid rgba(255,255,255,0.08); }
+    .cal-frame { width: 100%; height: 760px; border: 0; display: block; }
+    .cal-fallback { font-size: 13px; color: #64748b; }
+    .cal-fallback a { color: #6366f1; text-decoration: underline; }
+    .top-link { color: #94a3b8; font-size: 13.5px; font-weight: 500; }
+    .top-link:hover { color: #f8fafc; }
+    .brand-name { font-size: 19px; font-weight: 700; color: #f8fafc; letter-spacing: -0.3px; }
+    .header-row { display: flex; align-items: center; justify-content: space-between; width: 100%; padding-top: 20px; padding-bottom: 20px; }
+    .brand-lockup { display: flex; align-items: center; gap: 12px; }
+    .hero { display: flex; flex-direction: column; gap: 20px; width: 100%; padding-top: 64px; padding-bottom: 48px; }
+    .cal-section { display: flex; flex-direction: column; gap: 12px; width: 100%; padding-bottom: 72px; }
+    .foot { border-top: 1px solid rgba(255,255,255,0.08); font-size: 12.5px; color: #64748b; margin-top: auto; }
+    .foot-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; width: 100%; padding-top: 20px; padding-bottom: 24px; }
+    a { text-decoration: none; color: inherit; }
+    @media (max-width: 900px) {
+      .points { grid-template-columns: 1fr 1fr; }
     }
-    main { max-width: 28rem; }
-    h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.75rem; }
-    p { color: #9aa3b5; line-height: 1.6; }
-    a { color: #6d9eeb; }
+    @media (max-width: 720px) {
+      .points { grid-template-columns: 1fr; gap: 20px; }
+      .hero-h br { display: none; }
+      .cal-frame { height: 640px; }
+      .hero { padding-top: 40px; padding-bottom: 36px; }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <h1>Book your KnowDrive.ai demo</h1>
-    <p>Taking you to the booking calendar&hellip;</p>
-    <p>If nothing happens, <a href="https://calendar.app.google/oBP2NVbguB9KVoKm8">tap here to pick a time</a>. You'll get a calendar invite with a Google Meet link automatically.</p>
-  </main>
+  <div class="page">
+    <header class="wrap header-row">
+      <a href="https://knowdrive.ai" class="brand-lockup">
+        <img src="./logo.svg" alt="KnowDrive" style="height:30px;width:auto" />
+        <span class="display brand-name">KnowDrive</span>
+      </a>
+      <a href="https://knowdrive.ai" class="top-link">knowdrive.ai &rarr;</a>
+    </header>
+
+    <section class="wrap hero">
+      <div class="mono kicker">Demo walk-through &middot; 30 min &middot; Google Meet</div>
+      <h1 class="display hero-h" style="margin:0">See KnowDrive in action, <br />with your use case in mind.</h1>
+      <p class="hero-sub" style="margin:0">Pick a time below and you&rsquo;ll get a calendar invite with a Google Meet link automatically. Bring your questions &mdash; we&rsquo;ll shape the session around what you want your knowledge to do.</p>
+    </section>
+
+    <section class="wrap points" style="padding-bottom:56px">
+      <div class="point">
+        <div class="mono point-num">01</div>
+        <div class="point-label">The live workbench</div>
+        <div class="point-copy">A real tour of KnowDrive &mdash; ingesting, searching, and working with a knowledge fleet.</div>
+      </div>
+      <div class="point">
+        <div class="mono point-num">02</div>
+        <div class="point-label">Your use case, mapped</div>
+        <div class="point-copy">We&rsquo;ll walk through how your documents, media, and workflows would land in KnowDrive.</div>
+      </div>
+      <div class="point">
+        <div class="mono point-num">03</div>
+        <div class="point-label">Your invite &amp; next steps</div>
+        <div class="point-copy">Leave with your invite activated and a clear picture of what to try first.</div>
+      </div>
+    </section>
+
+    <section class="wrap cal-section">
+      <div class="cal-card">
+        <iframe class="cal-frame" src="https://calendar.google.com/calendar/appointments/schedules/AcZssZ0gf1kPAv3yWcLxJZsAnNlWdsy6bORUrgOAj4_p88FemB0vtVAiXtIcO2rGv6tEx-c1QDEpR6eP?gv=true" title="Book a KnowDrive demo" loading="lazy"></iframe>
+      </div>
+      <div class="cal-fallback">Calendar not loading? <a href="https://calendar.app.google/oBP2NVbguB9KVoKm8">Open the booking page directly</a>.</div>
+    </section>
+
+    <footer class="foot">
+      <div class="wrap foot-row">
+        <span>&copy; <span id="year">2026</span> KnowDrive &middot; Recourse Software Inc.</span>
+        <a href="mailto:kd-feedback@recoursellm.com" class="top-link">kd-feedback@recoursellm.com</a>
+      </div>
+    </footer>
+  </div>
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
 </body>
 </html>
