@@ -7,3 +7,7 @@ Booking is powered by a Google Calendar appointment schedule (auto-creates the e
 ## Deploy
 
 Static site, no build step. Pushes to `main` deploy automatically via GitHub Pages. `CNAME` pins the custom domain — don't delete it.
+
+## Lab demos
+
+- [`latent-fovea/`](latent-fovea/): **Foveal Latent Explorer**. A latent-space visualizer that renders and streams data like a foveated VR headset, with the heavy lifting in WebAssembly. See its README for the design.
