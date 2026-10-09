@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Search with KnowDrive</title>
+  <meta name="description" content="Search a shared KnowDrive knowledge store — atoms and files, text, image or voice. Tap to search." />
+  <meta name="theme-color" content="#020617" />
+  <!-- Static unfurl. Chat apps don't run JS, so per-link titles/images come from the worker in production. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="KnowDrive" />
+  <meta property="og:title" content="Search with KnowDrive · Canada Public Record" />
+  <meta property="og:description" content="12,090 files · 391,922 atoms. Search by text, image or voice — tap to open." />
+  <meta property="og:url" content="https://demos.knowdrive.ai/unfurl/" />
+  <meta property="og:image" content="https://demos.knowdrive.ai/unfurl/og-search.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="A KnowDrive search box for the Canada Public Record store" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+  <link rel="apple-touch-icon" href="./og-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./kd.css" />
+  <style>
+    .hero { padding: 28px 0 18px; display: flex; flex-direction: column; gap: 10px; }
+    .store-name { font-size: clamp(26px, 6vw, 38px); font-weight: 800; line-height: 1.1; margin: 0; }
+    .store-meta { font-size: 13.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+    .ents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+
+    .searchbox { margin-top: 10px; padding: 6px; border-radius: 18px; background: linear-gradient(135deg, rgba(99,102,241,0.55), rgba(129,140,248,0.15) 40%, rgba(255,255,255,0.08)); }
+    .searchbox-inner { background: var(--panel-2); border-radius: 13px; display: flex; flex-direction: column; }
+    .searchrow { display: flex; align-items: center; gap: 4px; padding: 8px 12px 0 16px; }
+    .toolrow { display: flex; align-items: center; gap: 2px; padding: 4px 8px 8px 8px; }
+    .toolrow .spacer { flex: 1; }
+    #q::-webkit-search-cancel-button { display: none; }
+    .searchrow .glyph { color: var(--accent-2); flex: none; display: flex; }
+    #q { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--ink); font-size: 17px; padding: 10px 6px; }
+    #q::placeholder { color: var(--faint); }
+    .go { width: 42px; height: 42px; border-radius: 10px; background: var(--accent); border: 0; color: #fff; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+    .attach-row { display: none; padding: 0 12px 10px; gap: 8px; flex-wrap: wrap; }
+    .attach-row.show { display: flex; }
+    .media-chip { display: inline-flex; align-items: center; gap: 8px; padding: 5px 6px 5px 5px; border-radius: 10px; background: rgba(255,255,255,0.05); border: 1px solid var(--line-2); font-size: 12.5px; color: var(--body); max-width: 100%; }
+    .media-chip img { width: 30px; height: 30px; object-fit: cover; border-radius: 6px; }
+    .media-chip .x { border: 0; background: transparent; color: var(--muted); padding: 2px 6px; }
+    .hint { font-size: 12.5px; color: var(--warn); padding: 0 14px 10px; display: none; line-height: 1.5; }
+    .hint.show { display: block; }
+
+    .suggest { display: flex; gap: 8px; flex-wrap: wrap; padding: 14px 0 4px; }
+    .suggest button { background: transparent; border: 1px solid var(--line-2); color: var(--muted); padding: 6px 11px; border-radius: 999px; font-size: 12.5px; }
+    .suggest button:hover { color: var(--ink); border-color: rgba(129,140,248,0.5); }
+
+    .results-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 26px 0 12px; flex-wrap: wrap; }
+    .tabs { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+    .tabs button { border: 0; background: transparent; color: var(--muted); padding: 6px 12px; border-radius: 7px; font-size: 13px; font-weight: 500; }
+    .tabs button.on { background: rgba(255,255,255,0.08); color: var(--ink); }
+    .tabs button[disabled] { opacity: 0.4; cursor: not-allowed; }
+    .tabs .n { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--faint); margin-left: 4px; }
+    .meta-line { font-size: 12px; color: var(--faint); }
+
+    .list { display: flex; flex-direction: column; gap: 10px; }
+    .res { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+    .res-top { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+    .res-title { font-family: 'Plus Jakarta Sans', sans-serif; color: var(--ink); font-weight: 700; font-size: 15px; letter-spacing: -0.2px; }
+    .res-sub { font-size: 12px; color: var(--faint); margin-top: 2px; overflow-wrap: anywhere; }
+    .res-text { font-size: 14px; line-height: 1.6; color: var(--body); }
+    .res-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .score { flex: none; width: 46px; height: 4px; border-radius: 4px; background: rgba(255,255,255,0.08); margin-top: 8px; overflow: hidden; }
+    .score i { display: block; height: 100%; background: var(--accent-2); }
+    .kind { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--accent-2); text-transform: uppercase; letter-spacing: 1.5px; }
+
+    .empty, .state { text-align: center; padding: 36px 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .state h2 { margin: 0 0 6px; font-size: 22px; }
+    .skeleton { height: 112px; border-radius: var(--radius); background: linear-gradient(90deg, var(--panel) 0%, #111a33 50%, var(--panel) 100%); background-size: 200% 100%; animation: sk 1.1s infinite linear; }
+    @keyframes sk { to { background-position: -200% 0; } }
+  </style>
+</head>
+<body>
+  <div class="wrap-narrow">
+    <header class="topbar">
+      <a class="lockup" href="https://knowdrive.ai"><img src="../logo.svg" alt="" /><span class="name">KnowDrive</span><span class="sub">Shared search</span></a>
+      <a class="toplink" href="./dashboard.html">Make your own &rarr;</a>
+    </header>
+
+    <main id="app"></main>
+
+    <footer class="foot">
+      <span id="foot-link"></span>
+      <span>&copy; 2026 KnowDrive &middot; Recourse Software Inc.</span>
+    </footer>
+  </div>
+
+  <input type="file" id="img-in" accept="image/*" hidden />
+  <input type="file" id="aud-in" accept="audio/*" hidden />
+
+  <script src="./corpus.js"></script>
+  <script src="./kd.js"></script>
+  <script>
+  (function () {
+    const params = new URLSearchParams(location.search);
+    const link = KD.resolveLink(params, location.hash);
+    const app = document.getElementById('app');
+    const I = {
+      search: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+      mic: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+      img: '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>',
+      wave: '<svg class="i" viewBox="0 0 24 24"><path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0"/></svg>',
+      arrow: '<svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+      share: '<svg class="i" style="width:15px;height:15px" viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>',
+      quote: '<svg class="i" style="width:15px;height:15px" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+      open: '<svg class="i" style="width:15px;height:15px" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>'
+    };
+
+    if (!link) return renderState('Link not found', 'This KnowDrive link doesn’t exist. Ask the person who shared it for a new one.');
+    if (link.revoked) return renderState('Link revoked', 'The owner of this store has turned this link off. Nothing in the store is reachable through it any more.');
+    if (link.expired) return renderState('Link expired', 'This link stopped working on ' + KD.esc(link.expires) + '. Ask for a fresh one.');
+
+    const S = link.storeInfo, E = link.ent;
+    let tab = E.atoms ? 'atoms' : 'files', media = null, last = null, listening = false, rec = null;
+    document.title = 'Search ' + S.name + ' · KnowDrive';
+    document.getElementById('foot-link').innerHTML = 'Link <span class="mono">' + KD.esc(link.id) + '</span> &middot; read-only' + (link.expires ? ' &middot; until ' + KD.esc(link.expires) : '');
+
+    const ent = (on, label) => '<span class="chip ' + (on ? 'on' : 'off') + '">' + label + '</span>';
+    app.innerHTML =
+      '<section class="hero">' +
+        '<div class="mono kicker">Shared knowledge store</div>' +
+        '<h1 class="display store-name">' + KD.esc(S.name) + '</h1>' +
+        '<div class="store-meta"><span><span class="dot"></span>&nbsp; ' + S.files.toLocaleString() + ' files</span><span>' + S.atoms.toLocaleString() + ' atoms</span><span>shared by ' + KD.esc(link.createdBy || S.owner) + '</span></div>' +
+        '<div class="ents">' +
+          (link.scope.length ? link.scope.map((t) => '<span class="chip on mono">' + KD.esc(t) + '</span>').join('') : '<span class="chip on">Whole store</span>') +
+          ent(E.atoms, 'Atoms') + ent(E.files, 'Files') + ent(E.open, 'Open files') + ent(E.share, 'Share results') +
+        '</div>' +
+        '<form class="searchbox" id="form" autocomplete="off"><div class="searchbox-inner">' +
+          '<div class="searchrow">' +
+            '<span class="glyph">' + I.search + '</span>' +
+            '<input id="q" type="search" enterkeyhint="search" placeholder="Ask ' + KD.esc(S.short) + '…" aria-label="Search query" />' +
+          '</div>' +
+          '<div class="toolrow">' +
+            '<button type="button" class="iconbtn" id="mic" title="Speak your search" aria-label="Voice search">' + I.mic + '</button>' +
+            '<button type="button" class="iconbtn" id="img" title="Search by image" aria-label="Search by image"' + (E.image ? '' : ' disabled') + '>' + I.img + '</button>' +
+            '<button type="button" class="iconbtn" id="aud" title="Search by audio clip" aria-label="Search by audio clip"' + (E.audio ? '' : ' disabled') + '>' + I.wave + '</button>' +
+            '<span class="spacer"></span>' +
+            '<button type="submit" class="go" aria-label="Search">' + I.arrow + '</button>' +
+          '</div>' +
+          '<div class="attach-row" id="attach"></div>' +
+          '<div class="hint" id="hint"></div>' +
+        '</div></form>' +
+        '<div class="suggest" id="suggest">' + KD.D.SUGGESTIONS.map((s) => '<button type="button">' + KD.esc(s) + '</button>').join('') + '</div>' +
+      '</section>' +
+      '<section id="results"></section>';
+
+    const $ = (id) => document.getElementById(id);
+    const q = $('q');
+    $('form').addEventListener('submit', (e) => { e.preventDefault(); run(); });
+    $('suggest').addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') { q.value = e.target.textContent; run(); } });
+
+    // Voice: dictation into the query (Web Speech API; Safari and Chrome).
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    $('mic').addEventListener('click', () => {
+      if (!SR) return KD.toast('Voice input isn’t available in this browser');
+      if (listening) { rec && rec.stop(); return; }
+      rec = new SR(); rec.lang = navigator.language || 'en-US'; rec.interimResults = true;
+      rec.onresult = (ev) => { q.value = Array.from(ev.results).map((r) => r[0].transcript).join(''); };
+      rec.onend = () => { listening = false; $('mic').classList.remove('live'); if (q.value.trim()) run(); };
+      rec.onerror = () => KD.toast('Couldn’t hear that — try again');
+      listening = true; $('mic').classList.add('live'); rec.start();
+    });
+
+    $('img').addEventListener('click', () => $('img-in').click());
+    $('aud').addEventListener('click', () => $('aud-in').click());
+    $('img-in').addEventListener('change', (e) => attach(e.target.files[0], 'image'));
+    $('aud-in').addEventListener('change', (e) => attach(e.target.files[0], 'audio'));
+    // Paste an image straight into the box (e.g. a screenshot from the chat).
+    q.addEventListener('paste', (e) => {
+      const f = Array.from(e.clipboardData && e.clipboardData.files || []).find((x) => /^image\//.test(x.type));
+      if (f && E.image) { e.preventDefault(); attach(f, 'image'); }
+    });
+
+    function attach(file, kind) {
+      if (!file) return;
+      media = { file, kind };
+      const row = $('attach');
+      const thumb = kind === 'image' ? '<img alt="" src="' + URL.createObjectURL(file) + '"/>' : '<span style="padding:0 4px;color:var(--accent-2)">' + I.wave + '</span>';
+      row.innerHTML = '<span class="media-chip">' + thumb + '<span>' + KD.esc(KD.clip(file.name, 28)) + '</span><span class="mono" style="color:var(--faint)">' + (kind === 'image' ? 'vision' : 'audio') + '</span><button type="button" class="x" aria-label="Remove">✕</button></span>';
+      row.classList.add('show');
+      row.querySelector('.x').onclick = () => { media = null; row.classList.remove('show'); row.innerHTML = ''; hint(''); };
+      if (!KD.LIVE_PROXY) hint((kind === 'image' ? 'Image' : 'Audio') + ' search runs against the live store (' + (kind === 'image' ? 'Jina-CLIP vision' : 'CLAP audio') + ' embeddings). This snapshot demo can’t embed media in the browser — add a few words describing it and we’ll search on those.');
+      q.focus();
+    }
+    function hint(msg) { $('hint').textContent = msg; $('hint').classList.toggle('show', !!msg); }
+
+    async function run() {
+      const text = q.value.trim();
+      if (!text && !(media && KD.LIVE_PROXY)) { q.focus(); return; }
+      const params = new URLSearchParams(location.search); params.set('q', text);
+      history.replaceState(null, '', '?' + params.toString() + location.hash);
+      const R = $('results');
+      R.innerHTML = '<div class="results-head"><span class="meta-line">Searching ' + KD.esc(S.short) + '…</span></div><div class="list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
+      try {
+        last = { q: text, res: await KD.search(link, text, media && media.file) };
+        render();
+      } catch (err) {
+        R.innerHTML = '<div class="empty">' + KD.esc(err.message) + '</div>';
+      }
+    }
+
+    function render() {
+      const R = $('results'), res = last.res;
+      const tabBtn = (k, label, n, on) => '<button type="button" data-t="' + k + '" class="' + (tab === k ? 'on' : '') + '"' + (on ? '' : ' disabled title="Not included in this link"') + '>' + label + '<span class="n">' + (on ? n : '—') + '</span></button>';
+      let html = '<div class="results-head"><div class="tabs">' + tabBtn('atoms', 'Atoms', res.atoms.length, E.atoms) + tabBtn('files', 'Files', res.files.length, E.files) + '</div>' +
+        (E.share ? '<button type="button" class="btn small" id="share-search">' + I.share + ' Share this search</button>' : '') + '</div>';
+      const items = tab === 'atoms' ? res.atoms : res.files;
+      if (!items.length) html += '<div class="empty">No matches for “' + KD.esc(last.q) + '” in this store' + (link.scope.length ? ' scope' : '') + '. Try different words.</div>';
+      else html += '<div class="list">' + items.map((it, i) => tab === 'atoms' ? atomCard(it, i) : fileCard(it, i)).join('') + '</div>';
+      if (!KD.LIVE_PROXY) html += '<p class="meta-line" style="margin-top:14px">Snapshot demo · ' + KD.D.ATOMS.length + ' real atoms from this store, ranked in the browser. Connect the worker for live hybrid search across all ' + S.atoms.toLocaleString() + '.</p>';
+      R.innerHTML = html;
+      R.querySelectorAll('.tabs button[data-t]').forEach((b) => b.onclick = () => { if (!b.disabled) { tab = b.dataset.t; render(); } });
+      const ss = $('share-search');
+      if (ss) ss.onclick = async () => {
+        const url = KD.linkUrl(link.id, KD.stripLink(link), !KD.D.LINKS[link.id]);
+        const url2 = KD.LIVE_PROXY ? url + '?q=' + encodeURIComponent(last.q) : url.replace(/(\?l=[^#]+)/, '$1&q=' + encodeURIComponent(last.q));
+        const r = await KD.shareOrCopy({ title: 'KnowDrive: ' + last.q, text: 'Search “' + last.q + '” in ' + S.name + ' on KnowDrive\n' + url2, url: url2 });
+        if (r === 'copied') KD.toast('Search link copied — paste it in the chat');
+      };
+      R.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => act(b.dataset.act, b.dataset.id));
+    }
+
+    function atomCard(a, i) {
+      return '<article class="card res">' +
+        '<div class="res-top"><div><div class="kind">' + (a.kind === 'record' ? 'Record' : 'Transcript') + ' atom</div><div class="res-title">' + KD.esc(a.speaker || a.title) + (a.time ? ' <span class="mono" style="color:var(--faint);font-weight:400;font-size:12px">' + KD.esc(a.time) + '</span>' : '') + '</div>' +
+        '<div class="res-sub">' + KD.esc(a.breadcrumb) + ' · ' + KD.esc(a.date) + '</div></div>' +
+        '<div class="score" title="Relevance"><i style="width:' + Math.round(a.score * 100) + '%"></i></div></div>' +
+        (E.snippet ? '<div class="res-text">' + KD.highlight(KD.clip(a.text, 420), last.q) + '</div>' : '') +
+        '<div class="res-actions">' +
+          (E.share ? '<button class="btn small" data-act="share" data-id="' + KD.esc(a.id) + '">' + I.share + ' Share</button><button class="btn small" data-act="quote" data-id="' + KD.esc(a.id) + '">' + I.quote + ' Copy quote</button>' : '') +
+          (E.open ? '<button class="btn small" data-act="open" data-id="' + KD.esc(a.id) + '">' + I.open + ' Open in file</button>' : '') +
+        '</div></article>';
+    }
+    function fileCard(f) {
+      return '<article class="card res">' +
+        '<div class="res-top"><div><div class="kind">File · ' + f.hits + ' matching atom' + (f.hits > 1 ? 's' : '') + '</div><div class="res-title">' + KD.esc(f.title) + '</div>' +
+        '<div class="res-sub mono">' + KD.esc(f.filename) + '</div></div>' +
+        '<div class="score"><i style="width:' + Math.round(f.score * 100) + '%"></i></div></div>' +
+        (E.snippet ? '<div class="res-text">' + KD.highlight(KD.clip(f.top.text, 220), last.q) + '</div>' : '') +
+        '<div class="res-actions">' +
+          (E.share ? '<button class="btn small" data-act="share" data-id="' + KD.esc(f.top.id) + '">' + I.share + ' Share</button>' : '') +
+          (E.open ? '<button class="btn small" data-act="open" data-id="' + KD.esc(f.top.id) + '">' + I.open + ' Open file</button>' : '') +
+        '</div></article>';
+    }
+
+    async function act(kind, id) {
+      const a = KD.findAtom(id) || (last.res.atoms.find((x) => x.id === id));
+      if (kind === 'share') {
+        const url = KD.shareUrl(link, id);
+        const r = await KD.shareOrCopy({ title: a.title, text: '“' + KD.clip(a.text, 140) + '”\n' + url, url });
+        if (r === 'copied') KD.toast('Result link copied — paste it in the chat');
+      } else if (kind === 'quote') {
+        await KD.copy(KD.citation(link, a)); KD.toast('Quote + citation copied');
+      } else if (kind === 'open') {
+        const u = KD.shareUrl(link, id);
+        location.href = u.includes('share.html?') ? u.replace('share.html?', 'share.html?full=1&') : u + '?full=1';
+      }
+    }
+
+    const initial = params.get('q');
+    if (initial) { q.value = initial; run(); }
+    else q.focus({ preventScroll: true });
+  })();
+
+  function renderState(title, body) {
+    document.getElementById('app').innerHTML = '<div class="state"><h2 class="display">' + title + '</h2><p>' + body + '</p><a class="btn" href="./dashboard.html" style="margin-top:12px">Create a KnowDrive link</a></div>';
+  }
+  </script>
+</body>
+</html>

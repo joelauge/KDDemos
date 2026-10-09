@@ -1,0 +1,14 @@
+name = "knowdrive-unfurl"
+main = "unfurl-worker.js"
+compatibility_date = "2026-09-01"
+
+# Short host so pasted links stay tidy in chats, e.g. https://kd.link/u/pr-ca-7qx2
+# routes = [{ pattern = "kd.link/u/*", zone_name = "kd.link" }]
+
+[vars]
+KD_API = "https://knowdrive.ai"
+APP_BASE = "https://demos.knowdrive.ai/unfurl/"
+
+[[kv_namespaces]]
+binding = "LINKS"
+id = "<create with: wrangler kv namespace create LINKS>"

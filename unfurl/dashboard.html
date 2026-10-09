@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Unfurl Links · KnowDrive</title>
+  <meta name="description" content="Create a KnowDrive link that unfurls into a branded search box for one of your stores — paste it into iMessage, WhatsApp or Signal." />
+  <meta property="og:title" content="KnowDrive Corpus Unfurl — dashboard" />
+  <meta property="og:description" content="Turn any KnowDrive store into a link that unfurls as a search box in iMessage, WhatsApp and Signal." />
+  <meta property="og:image" content="https://demos.knowdrive.ai/unfurl/og-search.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./kd.css" />
+  <style>
+    .shell { display: grid; grid-template-columns: 210px 1fr; min-height: 100vh; }
+    .side { border-right: 1px solid var(--line); padding: 18px 14px; display: flex; flex-direction: column; gap: 4px; }
+    .side .lockup { padding: 0 6px 18px; }
+    .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 13.5px; color: var(--muted); }
+    .nav.on { background: rgba(255,255,255,0.06); color: var(--ink); }
+    .nav .new { margin-left: auto; font-size: 10px; color: var(--accent-2); font-family: 'JetBrains Mono', monospace; }
+    .main { padding: 24px 28px 40px; min-width: 0; }
+    h1.page-h { font-size: 26px; font-weight: 800; margin: 6px 0 6px; }
+    .lede { font-size: 14.5px; color: var(--muted); max-width: 640px; line-height: 1.6; margin: 0; }
+
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 400px); gap: 20px; margin-top: 22px; align-items: start; }
+    .panel { padding: 18px; }
+    .panel h2 { font-size: 15px; margin: 0 0 14px; }
+    .field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; }
+    .field > label, .field > .lbl { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+    .input, select.input { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 11px; font-size: 14px; color: var(--ink); outline: none; width: 100%; }
+    .input:focus { border-color: var(--accent); }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .toggles { display: flex; flex-wrap: wrap; gap: 7px; }
+    .tg { border: 1px solid var(--line-2); background: transparent; border-radius: 999px; padding: 6px 11px; font-size: 12.5px; color: var(--muted); }
+    .tg.on { color: var(--ink); border-color: rgba(129,140,248,0.6); background: var(--accent-soft); }
+    .tg.mono { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
+    .help { font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+
+    .preview { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 12px; }
+    .apps { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); align-self: flex-start; }
+    .apps button { border: 0; background: transparent; color: var(--muted); padding: 6px 12px; border-radius: 7px; font-size: 12.5px; font-weight: 500; }
+    .apps button.on { background: rgba(255,255,255,0.08); color: var(--ink); }
+    .phone { border-radius: 26px; padding: 16px 12px 18px; min-height: 380px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line-2); transition: background .2s; }
+    .phone .who { text-align: center; font-size: 11.5px; margin-bottom: 6px; }
+    .bubble-in { align-self: flex-start; max-width: 78%; padding: 8px 12px; border-radius: 18px; font-size: 14px; line-height: 1.35; }
+    .bubble-out { align-self: flex-end; max-width: 82%; border-radius: 18px; overflow: hidden; font-size: 14px; }
+    .ucard img { display: block; width: 100%; aspect-ratio: 1200 / 630; object-fit: cover; }
+    .ucard .meta { padding: 8px 12px 10px; }
+    .ucard .t { font-weight: 600; font-size: 13.5px; line-height: 1.3; }
+    .ucard .d { font-size: 12px; opacity: 0.75; margin-top: 2px; line-height: 1.35; }
+    .ucard .u { font-size: 11.5px; opacity: 0.6; margin-top: 3px; }
+    .ucard .url { padding: 0 12px 9px; font-size: 13px; word-break: break-all; }
+    /* iMessage */
+    .phone.imessage { background: #000; } .phone.imessage .who { color: #8e8e93; }
+    .phone.imessage .bubble-in { background: #26252a; color: #fff; }
+    .phone.imessage .bubble-out { background: #26252a; color: #fff; }
+    .phone.imessage .ucard .url { display: none; }
+    /* WhatsApp */
+    .phone.whatsapp { background: #0b141a; } .phone.whatsapp .who { color: #8696a0; }
+    .phone.whatsapp .bubble-in { background: #202c33; color: #e9edef; border-radius: 8px; }
+    .phone.whatsapp .bubble-out { background: #005c4b; color: #e9edef; border-radius: 8px; padding: 4px; }
+    .phone.whatsapp .ucard img, .phone.whatsapp .ucard .meta { background: #025144; border-radius: 6px; }
+    .phone.whatsapp .ucard .meta { border-radius: 0 0 6px 6px; } .phone.whatsapp .ucard img { border-radius: 6px 6px 0 0; }
+    .phone.whatsapp .ucard .url { color: #53bdeb; padding: 6px 6px 2px; }
+    /* Signal */
+    .phone.signal { background: #121212; } .phone.signal .who { color: #a1a1a1; }
+    .phone.signal .bubble-in { background: #3b3b3b; color: #fff; }
+    .phone.signal .bubble-out { background: #2c6bed; color: #fff; padding: 4px; }
+    .phone.signal .ucard img { border-radius: 14px 14px 0 0; }
+    .phone.signal .ucard .meta { background: rgba(0,0,0,0.18); border-radius: 0 0 14px 14px; }
+    .phone.signal .ucard .url { padding: 7px 8px 3px; text-decoration: underline; }
+
+    .made { padding: 14px; display: none; flex-direction: column; gap: 10px; border-color: rgba(52,211,153,0.4); }
+    .made.show { display: flex; }
+    .made .url { font-size: 12.5px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 10px; word-break: break-all; }
+    .made .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .links { margin-top: 26px; }
+    .links h2 { font-size: 15px; margin: 0 0 12px; }
+    .ltab { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .ltab th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11.5px; text-transform: uppercase; letter-spacing: 1px; padding: 0 12px 8px; }
+    .ltab td { padding: 12px; border-top: 1px solid var(--line); vertical-align: top; }
+    .ltab .acts { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+    .status-on { color: var(--ok); } .status-off { color: #f87171; }
+    .under { margin-top: 26px; padding: 18px; }
+    .under h2 { font-size: 15px; margin: 0 0 10px; }
+    .under ol { margin: 0; padding-left: 20px; font-size: 13.5px; line-height: 1.7; color: var(--muted); }
+    .under code { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-2); }
+
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } .preview { position: static; } }
+    @media (max-width: 760px) {
+      .shell { grid-template-columns: 1fr; }
+      .side { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 16px; }
+      .side .lockup { padding: 0 10px 0 0; } .side .nav:not(.on) { display: none; }
+      .main { padding: 18px 16px 32px; }
+      .row2 { grid-template-columns: 1fr; }
+      .ltab thead { display: none; } .ltab tr { display: block; border-top: 1px solid var(--line); padding: 10px 0; } .ltab td { display: block; border: 0; padding: 3px 0; } .ltab .acts { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="lockup" href="https://knowdrive.ai"><img src="../logo.svg" alt="" /><span class="name">KnowDrive</span></a>
+      <span class="nav">Stores</span>
+      <span class="nav">Search</span>
+      <span class="nav on">Unfurl links <span class="new">NEW</span></span>
+      <span class="nav">API tokens</span>
+      <span class="nav">Settings</span>
+    </aside>
+
+    <main class="main">
+      <div class="mono kicker">Corpus unfurl</div>
+      <h1 class="display page-h">Put a store in any chat</h1>
+      <p class="lede">Create a link for one store. Paste it into iMessage, WhatsApp or Signal and it unfurls as a KnowDrive search box. Whoever taps it can search that store, and only that store, with the permissions you set here. They can share any result back into the conversation.</p>
+
+      <div class="grid">
+        <form class="card panel" id="form" autocomplete="off">
+          <h2 class="display">New unfurl link</h2>
+          <div class="field">
+            <label for="label">Name</label>
+            <input class="input" id="label" value="Public Record — family group chat" maxlength="60" />
+          </div>
+          <div class="field">
+            <label for="store">Store</label>
+            <select class="input" id="store"></select>
+          </div>
+          <div class="field">
+            <span class="lbl">Scope: only atoms carrying all selected tags</span>
+            <div class="toggles" id="scope"></div>
+            <span class="help">Nothing selected = the whole store. Sent to KnowDB as a <span class="mono">tag_query</span> on every search, server-side.</span>
+          </div>
+          <div class="field">
+            <span class="lbl">What people with the link can do</span>
+            <div class="toggles" id="ents"></div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label for="max">Results per search</label>
+              <select class="input" id="max"><option>6</option><option selected>12</option><option>25</option></select>
+            </div>
+            <div class="field">
+              <label for="exp">Expires</label>
+              <select class="input" id="exp"><option value="">Never (revoke any time)</option><option value="7">In 7 days</option><option value="30" selected>In 30 days</option><option value="90">In 90 days</option></select>
+            </div>
+          </div>
+          <button class="btn primary" type="submit" style="width:100%">Create link</button>
+        </form>
+
+        <div class="preview">
+          <div class="apps" id="apps">
+            <button type="button" data-a="imessage" class="on">iMessage</button>
+            <button type="button" data-a="whatsapp">WhatsApp</button>
+            <button type="button" data-a="signal">Signal</button>
+          </div>
+          <div class="phone imessage" id="phone">
+            <div class="who">Preview · how it unfurls</div>
+            <div class="bubble-in">Where did we land on that AI regulation testimony?</div>
+            <div class="bubble-out"><div class="ucard">
+              <div class="url" id="pv-url"></div>
+              <img src="./og-search.png" alt="Unfurled KnowDrive search card" />
+              <div class="meta"><div class="t" id="pv-t"></div><div class="d" id="pv-d"></div><div class="u">demos.knowdrive.ai</div></div>
+            </div></div>
+            <div class="bubble-in">Oh nice, searching it now 🔍</div>
+          </div>
+          <div class="card made" id="made">
+            <div style="font-size:13px;color:var(--ok);font-weight:600">Link ready. Paste it anywhere.</div>
+            <div class="url mono" id="made-url"></div>
+            <div class="acts">
+              <button class="btn small primary" type="button" id="made-copy">Copy link</button>
+              <a class="btn small" id="made-open" target="_blank" rel="noopener">Open it</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section class="links">
+        <h2 class="display">Your unfurl links</h2>
+        <div class="card" style="padding:6px 6px 0;overflow:hidden">
+          <table class="ltab"><thead><tr><th>Link</th><th>Scope</th><th>Can</th><th>Status</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+        </div>
+      </section>
+
+      <section class="card under">
+        <h2 class="display">What “Create link” does in production</h2>
+        <ol>
+          <li>Mints a read-only, store-scoped token: <code>POST /-/apitokens/mint {aud: &lt;store id&gt;, sub: link:&lt;id&gt;, scp: "search:read", ttl}</code>. It can never exceed the creator’s own entitlements.</li>
+          <li>Saves <code>link id → {store, tag_query, fields, limits, token}</code> on the server. The URL holds only the opaque id, so the token never appears in a chat.</li>
+          <li>Each search is proxied to <code>GET /api/v1/vector_stores/{id}/search</code> with the scope and field projection enforced server-side. Snippets, files and media modes are switched off unless the link grants them.</li>
+          <li>Revoke calls <code>/-/apitokens/revoke</code>. Every copy of the link stops working, including ones forwarded to other chats.</li>
+        </ol>
+      </section>
+
+      <footer class="foot"><span>Demo dashboard · links you create are stored in this browser only</span><span>&copy; 2026 KnowDrive &middot; Recourse Software Inc.</span></footer>
+    </main>
+  </div>
+
+  <script src="./corpus.js"></script>
+  <script src="./kd.js"></script>
+  <script>
+  (function () {
+    const D = KD.D, $ = (id) => document.getElementById(id);
+    const ENTS = [['atoms', 'Search atoms'], ['files', 'Search files'], ['snippet', 'See snippets'], ['open', 'Open files'], ['share', 'Share results'], ['image', 'Image search'], ['audio', 'Audio search']];
+    const state = { scope: [], ent: { atoms: true, files: true, snippet: true, open: false, share: true, image: true, audio: false }, app: 'imessage', made: null };
+
+    $('store').innerHTML = Object.entries(D.STORES).map(([id, s]) => '<option value="' + id + '">' + KD.esc(s.name) + ' · ' + s.files.toLocaleString() + ' files</option>').join('');
+    const storeInfo = () => D.STORES[$('store').value];
+
+    function drawToggles() {
+      $('scope').innerHTML = storeInfo().tags.map((t) => '<button type="button" class="tg mono' + (state.scope.includes(t) ? ' on' : '') + '" data-t="' + t + '">' + t + '</button>').join('');
+      $('ents').innerHTML = ENTS.map(([k, l]) => '<button type="button" class="tg' + (state.ent[k] ? ' on' : '') + '" data-e="' + k + '">' + l + '</button>').join('');
+    }
+    $('scope').onclick = (e) => { const t = e.target.dataset.t; if (!t) return; state.scope = state.scope.includes(t) ? state.scope.filter((x) => x !== t) : [...state.scope, t]; drawToggles(); preview(); };
+    $('ents').onclick = (e) => { const k = e.target.dataset.e; if (!k) return; state.ent[k] = !state.ent[k]; if (!state.ent.atoms && !state.ent.files) state.ent[k === 'atoms' ? 'files' : 'atoms'] = true; drawToggles(); preview(); };
+    $('apps').onclick = (e) => { const a = e.target.dataset.a; if (!a) return; state.app = a; $('apps').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.a === a)); $('phone').className = 'phone ' + a; };
+    ['label', 'store'].forEach((id) => $(id).addEventListener('input', () => { if (id === 'store') { state.scope = []; drawToggles(); } preview(); }));
+
+    function preview() {
+      const s = storeInfo();
+      $('pv-t').textContent = 'Search with KnowDrive · ' + s.name;
+      const modes = ['text', state.ent.image && 'image', state.ent.audio && 'voice'].filter(Boolean);
+      $('pv-d').textContent = (state.scope.length ? state.scope.join(' + ') + ' in ' : '') + s.files.toLocaleString() + ' files. Search by ' + modes.join(', ').replace(/, ([^,]*)$/, ' or $1') + '. Tap to open.';
+      $('pv-url').textContent = state.made ? state.made : KD.BASE + '?l=…';
+    }
+
+    const rid = () => { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 4; i++) s += a[Math.floor(Math.random() * a.length)]; return s; };
+    $('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const label = $('label').value.trim() || 'Untitled link';
+      const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').split('-').slice(0, 2).join('-').slice(0, 14).replace(/-$/, '') || 'kd';
+      const id = slug + '-' + rid();
+      const days = $('exp').value;
+      const expires = days ? new Date(Date.now() + days * 864e5).toISOString().slice(0, 10) : null;
+      const link = { label, store: $('store').value, scope: state.scope.slice(), ent: { ...state.ent }, maxResults: +$('max').value, expires, channels: [state.app], createdBy: 'You' };
+      const mine = KD.store('kd-unfurl-links') || {}; mine[id] = link; KD.store('kd-unfurl-links', mine);
+      const url = KD.linkUrl(id, link, true);
+      state.made = url;
+      $('made-url').textContent = url; $('made-open').href = url; $('made').classList.add('show');
+      preview(); rows();
+    });
+    $('made-copy').onclick = async () => { await KD.copy(state.made); KD.toast('Link copied. Paste it into a chat'); };
+
+    function rows() {
+      const mine = KD.store('kd-unfurl-links') || {};
+      const revoked = KD.store('kd-unfurl-revoked') || [];
+      const all = [...Object.entries(mine).reverse(), ...Object.entries(D.LINKS)];
+      $('rows').innerHTML = all.map(([id, l]) => {
+        const off = revoked.includes(id), exp = l.expires && new Date(l.expires + 'T23:59:59') < new Date();
+        const can = ENTS.filter(([k]) => l.ent[k]).map(([, n]) => n.replace('Search ', '').replace('See ', '')).join(', ');
+        const url = KD.linkUrl(id, l, !D.LINKS[id]);
+        return '<tr><td><div style="color:var(--ink);font-weight:500">' + KD.esc(l.label) + '</div><div class="mono help">' + KD.esc(id) + ' · ' + KD.esc(D.STORES[l.store].short) + '</div></td>' +
+          '<td class="mono help">' + (l.scope.length ? l.scope.map(KD.esc).join('<br>') : 'whole store') + '</td>' +
+          '<td class="help">' + KD.esc(can) + '</td>' +
+          '<td>' + (off ? '<span class="status-off">Revoked</span>' : exp ? '<span class="status-off">Expired</span>' : '<span class="status-on">● Live</span>') + '<div class="help">' + (l.expires ? 'until ' + KD.esc(l.expires) : 'no expiry') + '</div></td>' +
+          '<td><div class="acts"><button class="btn small" data-copy="' + KD.esc(url) + '">Copy</button><a class="btn small" target="_blank" rel="noopener" href="' + KD.esc(url) + '">Open</a>' +
+          '<button class="btn small" data-rev="' + KD.esc(id) + '">' + (off ? 'Restore' : 'Revoke') + '</button></div></td></tr>';
+      }).join('');
+    }
+    $('rows').onclick = async (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.copy) { await KD.copy(b.dataset.copy); KD.toast('Link copied'); }
+      if (b.dataset.rev) {
+        let r = KD.store('kd-unfurl-revoked') || []; const id = b.dataset.rev;
+        r = r.includes(id) ? r.filter((x) => x !== id) : [...r, id]; KD.store('kd-unfurl-revoked', r);
+        KD.toast(r.includes(id) ? 'Revoked. The link now shows “Link revoked”' : 'Link restored'); rows();
+      }
+    };
+
+    drawToggles(); preview(); rows();
+  })();
+  </script>
+</body>
+</html>

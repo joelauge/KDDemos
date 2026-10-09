@@ -7,3 +7,7 @@ Booking is powered by a Google Calendar appointment schedule (auto-creates the e
 ## Deploy
 
 Static site, no build step. Pushes to `main` deploy automatically via GitHub Pages. `CNAME` pins the custom domain — don't delete it.
+
+## Other demos
+
+- [`/unfurl/`](https://demos.knowdrive.ai/unfurl/dashboard.html): **Corpus Unfurl**. Paste a link into iMessage, WhatsApp or Signal and it unfurls as a KnowDrive search box for one store. See [`unfurl/README.md`](unfurl/README.md).

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>KnowDrive result</title>
+  <meta name="description" content="A result shared from a KnowDrive knowledge store." />
+  <meta name="theme-color" content="#020617" />
+  <!-- Static fallback. In production the worker writes the atom's own snippet into og:title/og:description. -->
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="KnowDrive" />
+  <meta property="og:title" content="A result from KnowDrive · Canada Public Record" />
+  <meta property="og:description" content="Shared from a KnowDrive knowledge store — tap to read it in context and keep searching." />
+  <meta property="og:image" content="https://demos.knowdrive.ai/unfurl/og-result.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./kd.css" />
+  <style>
+    .result { margin-top: 18px; padding: 22px 20px; display: flex; flex-direction: column; gap: 14px; }
+    .who { font-family: 'Plus Jakarta Sans', sans-serif; color: var(--ink); font-weight: 700; font-size: 18px; }
+    .src { font-size: 12.5px; color: var(--faint); overflow-wrap: anywhere; }
+    blockquote { margin: 0; padding-left: 16px; border-left: 3px solid var(--accent); font-size: 17px; line-height: 1.65; color: var(--ink); font-weight: 300; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .ctx { margin-top: 26px; display: flex; flex-direction: column; gap: 10px; }
+    .ctx .card { padding: 14px 16px; font-size: 14px; line-height: 1.6; }
+    .ctx .card.here { border-color: rgba(129,140,248,0.5); background: #10173a; }
+    .ctx .lbl { font-size: 11.5px; color: var(--faint); margin-bottom: 4px; }
+    .licence { font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+    .state { text-align: center; padding: 48px 16px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap-narrow">
+    <header class="topbar">
+      <a class="lockup" href="https://knowdrive.ai"><img src="../logo.svg" alt="" /><span class="name">KnowDrive</span><span class="sub">Shared result</span></a>
+      <a class="toplink" id="back" href="./">Search &rarr;</a>
+    </header>
+    <main id="app"></main>
+    <footer class="foot"><span id="foot-link"></span><span>&copy; 2026 KnowDrive &middot; Recourse Software Inc.</span></footer>
+  </div>
+  <script src="./corpus.js"></script>
+  <script src="./kd.js"></script>
+  <script>
+  (function () {
+    const p = new URLSearchParams(location.search);
+    const link = KD.resolveLink(p, location.hash);
+    const app = document.getElementById('app');
+    const atom = window.KD_ATOM || KD.findAtom(p.get('a') || '');
+    if (!link || link.revoked || link.expired || !atom) {
+      app.innerHTML = '<div class="state"><h2 class="display">This result isn’t available</h2><p>' + (link && link.revoked ? 'The link it was shared through has been revoked.' : link && link.expired ? 'The link it was shared through has expired.' : 'It may have been removed from the store.') + '</p></div>';
+      return;
+    }
+    const E = link.ent, S = link.storeInfo;
+    const searchUrl = KD.linkUrl(link.id, KD.stripLink(link), !KD.D.LINKS[link.id]);
+    document.getElementById('back').href = searchUrl;
+    document.getElementById('foot-link').innerHTML = 'via <span class="mono">' + KD.esc(link.id) + '</span>';
+    document.title = (atom.speaker || atom.title) + ' · KnowDrive';
+
+    const siblings = window.KD_CONTEXT || KD.D.ATOMS.filter((a) => a.file_id === atom.file_id);
+    const showCtx = E.open && (p.get('full') === '1');
+    app.innerHTML =
+      '<article class="card result">' +
+        '<div class="mono kicker">From ' + KD.esc(S.name) + '</div>' +
+        '<div><div class="who">' + KD.esc(atom.speaker || atom.title) + (atom.time ? ' <span class="mono" style="color:var(--faint);font-weight:400;font-size:13px">' + KD.esc(atom.time) + '</span>' : '') + '</div>' +
+        '<div class="src">' + KD.esc(atom.breadcrumb) + ' · ' + KD.esc(atom.date) + '</div></div>' +
+        (E.snippet ? '<blockquote>' + KD.esc(atom.text) + '</blockquote>' : '<p class="src">Snippets aren’t included in this link.</p>') +
+        '<div class="actions">' +
+          (E.share ? '<button class="btn primary" id="reshare">Share back</button><button class="btn" id="quote">Copy quote</button>' : '') +
+          '<a class="btn" href="' + KD.esc(searchUrl) + '">Search this store</a>' +
+          (E.open && !showCtx ? '<a class="btn" href="' + KD.esc(location.pathname + '?full=1&' + location.search.slice(1) + location.hash) + '">Read in context</a>' : '') +
+        '</div>' +
+        '<div class="src mono">' + KD.esc(atom.filename) + '</div>' +
+      '</article>' +
+      (showCtx ? '<section class="ctx"><div class="mono kicker">In this file · ' + siblings.length + ' atoms' + (window.KD_CONTEXT ? '' : ' in snapshot') + '</div>' +
+        siblings.map((s) => '<div class="card' + (s.id === atom.id ? ' here' : '') + '"><div class="lbl">' + KD.esc(s.speaker || s.breadcrumb) + (s.time ? ' · ' + KD.esc(s.time) : '') + '</div>' + KD.esc(s.text) + '</div>').join('') + '</section>' : '') +
+      '<p class="licence" style="margin-top:20px">' + KD.esc(S.licence) + '</p>';
+
+    const rs = document.getElementById('reshare');
+    if (rs) rs.onclick = async () => {
+      const url = KD.shareUrl(link, atom.id);
+      const r = await KD.shareOrCopy({ title: atom.title, text: '“' + KD.clip(atom.text, 140) + '”\n' + url, url });
+      if (r === 'copied') KD.toast('Link copied — paste it back in the chat');
+    };
+    const qb = document.getElementById('quote');
+    if (qb) qb.onclick = async () => { await KD.copy(KD.citation(link, atom)); KD.toast('Quote + citation copied'); };
+  })();
+  </script>
+</body>
+</html>
