@@ -325,6 +325,9 @@ export class KnowDriveRetriever {
     this.exclude = (Array.isArray(exclude) ? exclude : String(exclude || '').split(',')).map((t) => t.trim()).filter(Boolean);
     this.tag = tag;
     this.prefix = String(prefix || '').replace(/^\/+/, '');
+    // KnowDrive tags every file with its folders (dir:<segment>), so the prefix is enforced in the search itself:
+    // a same-named file outside the folder can't take a result slot.
+    this.allOf = [...(this.tag ? [this.tag] : []), ...this.prefix.split('/').filter(Boolean).map((d) => `dir:${d}`)];
   }
 
   get name() { return 'knowdrive'; }
@@ -333,7 +336,7 @@ export class KnowDriveRetriever {
     const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
-      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.tag || this.exclude.length ? { filter: { ...(this.tag ? { all_of: [this.tag] } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
+      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.allOf.length || this.exclude.length ? { filter: { ...(this.allOf.length ? { all_of: this.allOf } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

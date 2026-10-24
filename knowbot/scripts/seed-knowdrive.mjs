@@ -8,7 +8,7 @@
 //      KNOWDRIVE_PREFIX (default knowbot/ugm/: the folder inside the shared production store).
 //
 // Each corpus file is uploaded with
-//   POST {base}/api/v1/vector_stores/{store}/files   (multipart: file, filename=<PREFIX><relpath>, purpose=assistants, tags)
+//   POST {base}/api/v1/ingest   (X-Vector-Store-Id: <store>; multipart: file named <PREFIX><relpath>, tags)
 // Path is the logical identity in knowDrive: re-uploading the same path creates a new version that
 // supersedes the old one, so this script is idempotent (run it again after editing the corpus).
 // Tags: knowbot, <KNOWDRIVE_TAG>, kind:<kind from frontmatter>, plus any canonical/TAGS.json tags for the file.
@@ -68,26 +68,32 @@ for (const abs of files) {
 }
 
 console.log(`${DRY ? '[dry-run] ' : ''}seeding ${plan.length} files from ${corpusDir}`);
-console.log(`  → ${base}/api/v1/vector_stores/${store}/files   prefix=${prefix} tag=${tag}`);
+console.log(`  → ${base}/api/v1/ingest (X-Vector-Store-Id: ${store})   prefix=${prefix} tag=${tag}`);
 
+// /api/v1/ingest stores the file at the multipart part's filename, folders included. (The store-scoped
+// /vector_stores/{id}/files route keeps only the basename on production, which collapses e.g. catalog/index.md
+// and blog/news/index.md into one file.) The store is chosen by the X-Vector-Store-Id header.
 async function upload(item) {
   const fd = new FormData();
-  fd.append('purpose', 'assistants');
-  fd.append('filename', item.storePath);
   fd.append('tags', item.tags.join(','));
   fd.append('mime_type', 'text/markdown');
-  fd.append('file', new Blob([item.src], { type: 'text/markdown' }), path.posix.basename(item.rel));
+  fd.append('file', new Blob([item.src], { type: 'text/markdown' }), item.storePath);
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const res = await fetch(`${base}/api/v1/vector_stores/${encodeURIComponent(store)}/files`, {
-        method: 'POST', headers: { authorization: `Bearer ${key}` }, body: fd, signal: AbortSignal.timeout(60000),
+      const res = await fetch(`${base}/api/v1/ingest`, {
+        method: 'POST', headers: { authorization: `Bearer ${key}`, 'x-vector-store-id': store }, body: fd, signal: AbortSignal.timeout(60000),
       });
       const text = await res.text();
-      if (res.ok) { let j = {}; try { j = JSON.parse(text); } catch {} return j; }
+      if (res.ok) {
+        let j = {}; try { j = JSON.parse(text); } catch {}
+        const got = j.files?.[0]?.filename ?? j.filename;
+        if (got && got !== item.storePath) throw Object.assign(new Error(`stored as "${got}", expected "${item.storePath}"`), { fatal: true });
+        return j.files?.[0] ?? j;
+      }
       lastErr = new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
       if (res.status < 500 && res.status !== 429) break;
-    } catch (e) { lastErr = e; }
+    } catch (e) { lastErr = e; if (e.fatal) break; }
     await new Promise((r) => setTimeout(r, 500 * attempt * attempt));
   }
   throw lastErr;
