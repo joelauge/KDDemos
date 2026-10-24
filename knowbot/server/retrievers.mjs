@@ -282,7 +282,8 @@ export class LocalRetriever {
         }
         if (c.titleTerms.has(t)) s += idf.get(t) * this.titleBoost;
       }
-      if (s > 0 && matched) scored.push({ c, s: s * (0.6 + 0.4 * matched / qTerms.length) });
+      // canonical answer cards are curated, verified summaries: prefer them when they match as well as the raw files
+      if (s > 0 && matched) scored.push({ c, s: s * (0.6 + 0.4 * matched / qTerms.length) * (c.filename.startsWith('canonical/') ? 1.3 : 1) });
     }
     scored.sort((a, b) => b.s - a.s);
     const perFile = new Map();
@@ -317,32 +318,46 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {} }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = 0.03 }) {
     this.baseUrl = String(baseUrl || 'https://dev.knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
+    this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0;
     this.tag = tag;
     this.prefix = String(prefix || '').replace(/^\/+/, '');
   }
 
   get name() { return 'knowdrive'; }
 
+  async query(query, k, mode) {
+    const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
+      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.tag ? { filter: { all_of: [this.tag] } } : {}) }),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const json = await res.json();
+    return Array.isArray(json?.data) ? json.data : [];
+  }
+
   async search(query, k = 6) {
     k = Math.max(1, Math.min(50, Number(k) || 6));
     try {
-      const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
-        body: JSON.stringify({ query, max_num_results: k, mode: 'hybrid', text: 'raw', ...(this.tag ? { filter: { all_of: [this.tag] } } : {}) }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-      if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      const json = await res.json();
-      const data = Array.isArray(json?.data) ? json.data : [];
+      // Hybrid ranks; a parallel vector query supplies an absolute similarity (hybrid scores are rank fusion and
+      // ignore max_distance), used for the relevance floor and to surface canonical answer cards first.
+      const floor = this.minSimilarity > 0;
+      const [hybrid, vector] = await Promise.all([this.query(query, k, 'hybrid'), floor ? this.query(query, 5, 'vector') : []]);
       await this.local?.ready; // title/url lookups need the local frontmatter index
       // defense in depth: when a prefix is configured, only hits under it (tag window is the primary guard)
-      const results = data.map((d) => this.mapResult(d)).filter((r) => r && r.text);
+      const results = hybrid.map((d) => this.mapResult(d)).filter((r) => r && r.text);
       results.sort((a, b) => b.score - a.score);
-      return { source: 'knowdrive', results };
+      if (!floor) return { source: 'knowdrive', results };
+      const near = vector.map((d) => this.mapResult(d)).filter((r) => r && r.text);
+      const top = near.reduce((m, r) => Math.max(m, r.score), 0);
+      if (top < this.minSimilarity) return { source: 'knowdrive', results: [], floor: { top, min: this.minSimilarity } };
+      const cards = near.filter((r) => r.filename.startsWith('canonical/') && r.score >= this.minSimilarity + this.canonicalMargin);
+      const merged = [...cards, ...results.filter((r) => !cards.some((c) => c.filename === r.filename))].slice(0, k);
+      return { source: 'knowdrive', results: merged, floor: { top, min: this.minSimilarity, canonical: cards.map((c) => c.filename) } };
     } catch (e) {
       this.log(`[retriever] knowDrive search failed (${e.name === 'TimeoutError' ? 'timeout' : e.message}); falling back to local`);
       const r = await this.local.search(query, k);
@@ -371,6 +386,8 @@ function pickStr(v) { return typeof v === 'string' && v.trim() ? v.trim() : null
 export const DEFAULT_STORE = 'vs_f66318f0dd0e4540b27663b03ea40f40';
 export const DEFAULT_TAG = 'knowbot:ugm';
 export const DEFAULT_PREFIX = '';
+// Calibrated on the benchmark (vector similarity of the top hit): off-topic 0.70–0.76, answerable 0.74–0.88.
+export const DEFAULT_MIN_SIMILARITY = 0.745;
 
 /** Build the retriever for the given env. */
 export function createRetriever({ corpusDir, env = process.env, logger, watch = true } = {}) {
@@ -382,6 +399,7 @@ export function createRetriever({ corpusDir, env = process.env, logger, watch = 
     const kd = new KnowDriveRetriever({
       baseUrl: env.KNOWDRIVE_BASE_URL || 'https://dev.knowdrive.ai', apiKey,
       store: env.KNOWDRIVE_STORE || DEFAULT_STORE, tag: env.KNOWDRIVE_TAG ?? DEFAULT_TAG, prefix: env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX, local, logger,
+      minSimilarity: Number(env.KNOWDRIVE_MIN_SIMILARITY ?? DEFAULT_MIN_SIMILARITY),
     });
     return { mode: 'knowdrive', retriever: kd, local };
   }

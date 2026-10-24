@@ -204,6 +204,37 @@ describe('retrievers (unit)', () => {
     } finally { await close(kd.srv); }
   });
 
+  test('KnowDriveRetriever: relevance floor refuses weak matches; canonical cards above the floor come first', async () => {
+    const local = new LocalRetriever({ corpusDir: await makeCorpus(), watch: false });
+    const hit = (filename, score) => ({ file_id: `f_${filename}`, filename, score, content: [{ type: 'text', text: `about ${filename}` }], attributes: {} });
+    let vectorTop = 0.86;
+    const calls = [];
+    const srv = http.createServer((req, res) => {
+      let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => {
+        const body = JSON.parse(b); calls.push(body);
+        const data = body.mode === 'vector'
+          ? [hit('canonical/returns.md', vectorTop), hit('policies/refund-policy.md', vectorTop - 0.05)]
+          : [hit('policies/refund-policy.md', 0.033), hit('catalog/products/dragon-dice.md', 0.031)];
+        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ object: 'list', data }));
+      });
+    });
+    const port = await listen(srv);
+    try {
+      const r = new KnowDriveRetriever({ baseUrl: `http://127.0.0.1:${port}`, apiKey: 'k', store: 's', local, minSimilarity: 0.745 });
+      const on = await r.search('how do returns work', 4);
+      assert.deepEqual(calls.map((c) => c.mode).sort(), ['hybrid', 'vector']);
+      assert.ok(calls.every((c) => c.filter?.all_of?.[0] === 'knowbot:ugm'), 'both queries stay in the tag window');
+      assert.deepEqual(on.results.map((x) => x.filename), ['canonical/returns.md', 'policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
+      vectorTop = 0.70;
+      const off = await r.search('weather this weekend', 4);
+      assert.equal(off.results.length, 0, 'below the floor => no sources => refusal');
+      assert.equal(off.floor.top, 0.70);
+      vectorTop = 0.76; // above the floor but below floor + canonical margin: card not promoted
+      const mid = await r.search('returns', 4);
+      assert.equal(mid.results[0].filename, 'policies/refund-policy.md');
+    } finally { await close(srv); }
+  });
+
   test('KnowDriveRetriever falls back to local on failure', async () => {
     const dir = await makeCorpus();
     const local = new LocalRetriever({ corpusDir: dir, watch: false });
