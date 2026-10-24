@@ -15,7 +15,7 @@ function inline(s, cite) {
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
-    .replace(/\[(\d{1,2})\](?!\()/g, (_, n) => cite(+n));
+    .replace(/\s?\[(\d{1,2})\](?!\()([.,;:!?)]*)/g, (_, n, p) => `<span class="kb-cw">${cite(+n)}${p}</span>`);
 }
 
 /** Escape first, then: **bold**, *em*, `code`, [text](http(s) only), - / 1. lists, # headings, line breaks, [n] chips. */
@@ -112,7 +112,7 @@ class ChatView {
       this.starters.appendChild(h('button', { type: 'button', class: 'kb-starter', onclick: () => this.ask(q) })).textContent = q;
     }
     this.starters.hidden = !(o.starters || []).length;
-    if (o.preload && this.bot.engine.type === 'webllm') this.loadModel();
+    if (o.preload && this.bot.engine.type === 'webllm') this.loadModel().catch(() => {});
   }
 
   autosize() { this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 140) + 'px'; }
@@ -145,14 +145,15 @@ class ChatView {
     if (p.progress >= 1) setTimeout(() => this.progress(null), 600);
   }
 
-  loadModel() {
-    if (this.bot.engine.loaded) return Promise.resolve();
-    if (typeof navigator !== 'undefined' && !navigator.gpu) {
-      this.progress({ progress: 0, text: 'This browser has no WebGPU; the in-browser model cannot load. Try Chrome or Edge on desktop.' });
-      return Promise.reject(new Error('WebGPU is not available in this browser.'));
+  async loadModel() {
+    if (this.bot.engine.loaded) return;
+    const gpu = typeof navigator !== 'undefined' && navigator.gpu;
+    if (!gpu || !(await gpu.requestAdapter().catch(() => null))) {
+      this.progress({ progress: 0, text: 'No WebGPU adapter in this browser, so the in-browser model cannot run. Try desktop Chrome or Edge.' });
+      throw new Error('WebGPU is not available in this browser.');
     }
     this.progress({ progress: 0, text: 'Downloading the model (first visit only)…' });
-    return this.bot.load((p) => this.progress(p));
+    await this.bot.load((p) => this.progress(p));
   }
 
   async ask(question) {
@@ -183,7 +184,7 @@ class ChatView {
     } catch (err) {
       cancelAnimationFrame(raf);
       msg.className = 'kb-msg kb-bot kb-error';
-      md.innerHTML = renderMarkdown(`Sorry — I couldn't reach the knowledge service. ${err?.message || err}`);
+      md.innerHTML = renderMarkdown(`Sorry, something went wrong: ${err?.message || err}`);
       this.o.onError?.(err);
     } finally {
       this.busy = false;

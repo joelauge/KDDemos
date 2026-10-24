@@ -162,7 +162,10 @@ export function createKnowBotServer(opts = {}) {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(env.LLM_API_KEY ? { authorization: `Bearer ${env.LLM_API_KEY}` } : {}) },
       body: JSON.stringify({ model: llmModel, messages, stream: false, ...settings }),
-      signal: AbortSignal.timeout(Number(env.LLM_TIMEOUT_MS || 120000)),
+      signal: AbortSignal.timeout(Number(env.LLM_TIMEOUT_MS || 300000)),
+    }).catch((e) => {
+      if (e.name === 'TimeoutError') throw new HttpError(504, `LLM timed out after ${Number(env.LLM_TIMEOUT_MS || 300000)}ms`);
+      throw new HttpError(502, `LLM unreachable at ${llmBase}: ${e.cause?.code || e.message}`);
     });
     if (!res.ok) throw new HttpError(502, `LLM HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const j = await res.json();

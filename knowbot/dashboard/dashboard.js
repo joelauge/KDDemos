@@ -25,6 +25,7 @@ function h(tag, attrs, ...kids) {
   append(el, kids);
   return el;
 }
+function rc(el, ...kids) { el.replaceChildren(); return append(el, kids); }
 function append(el, kids) {
   for (const c of kids.flat(Infinity)) {
     if (c == null || c === false) continue;
@@ -487,7 +488,7 @@ function renderKpis() {
   const meter = (x, bad) => h('div', { class: `meter${bad ? ' bad' : ''}`, 'aria-hidden': 'true' }, h('span', { style: { width: `${Math.round((x || 0) * 100)}%` } }));
   const pct = (x) => [fmtPct(x), x == null ? null : h('small', null, '%')];
   const el = $('#kpis');
-  el.replaceChildren(
+  rc(el, 
     tile('Active sessions', String(k.active), 'activity in last 5 min', null, 'active'),
     tile('Messages', String(k.messages), `${k.users} asked · ${k.bots} answered`, sparkline(k.buckets), 'messages'),
     tile('Grounded', pct(k.grounded), 'answers with ≥1 citation', meter(k.grounded), 'grounded'),
@@ -502,9 +503,9 @@ function renderKpis() {
 
 function renderFilterChip() {
   const chip = $('#filter-chip');
-  if (!S.filter) { chip.hidden = true; chip.replaceChildren(); return; }
+  if (!S.filter) { chip.hidden = true; rc(chip); return; }
   chip.hidden = false;
-  chip.replaceChildren(
+  rc(chip, 
     h('span', null, `Filter · ${DIM_LABEL[S.filter.dim]} = `, h('b', null, S.filter.value)),
     h('button', { type: 'button', 'aria-label': 'Clear filter', onclick: () => { S.filter = null; S.feedReset = true; schedule(); } }, '×'),
   );
@@ -512,11 +513,11 @@ function renderFilterChip() {
 
 function renderMeta() {
   const api = $('#cfg-api');
-  api.replaceChildren('api ', h('b', null, S.apiBase || '…'));
+  rc(api, 'api ', h('b', null, S.apiBase || '…'));
   const d = $('#cfg-detail');
   const c = S.config;
-  if (!c) { d.replaceChildren(S.conn === 'live' ? '' : h('span', null, 'server not reachable — showing same-browser events')); return; }
-  d.replaceChildren(
+  if (!c) { rc(d, S.conn === 'live' ? '' : h('span', null, 'server not reachable — showing same-browser events')); return; }
+  rc(d, 
     c.store ? h('span', null, 'store ', h('b', null, c.store)) : null,
     c.retrieval ? h('span', null, 'retrieval ', h('b', null, c.retrieval)) : null,
     c.engine && c.engine.model ? h('span', null, 'engine ', h('b', null, c.engine.model)) : null,
@@ -565,7 +566,7 @@ function renderSessions() {
       rowEls.set(s.sessionId, { pulse: s.pulse });
       return li;
     });
-    list.replaceChildren(...(kids.length ? kids : [h('div', { class: 'list-empty' }, 'No sessions match this filter.')]));
+    rc(list, ...(kids.length ? kids : [h('div', { class: 'list-empty' }, 'No sessions match this filter.')]));
   });
 }
 function selectSession(id, focusConvo) {
@@ -668,9 +669,9 @@ function renderConvo() {
   const tools = $('#convo-tools');
   const s = S.selected && S.sessions.get(S.selected);
   withFocus(box, () => {
-    tools.replaceChildren();
+    rc(tools);
     if (!s) {
-      box.replaceChildren(h('div', { class: 'convo-empty' },
+      rc(box, h('div', { class: 'convo-empty' },
         h('div', { class: 'display' }, 'Select a session'),
         h('div', null, 'Pick any session to read the transcript, its sources, and compare each answer with KnowBot’s canonical response.')));
       return;
@@ -697,7 +698,7 @@ function renderConvo() {
     const kids = [head];
     if (!turns.length) kids.push(h('p', { class: 'note' }, s.serverTurns ? `${s.serverTurns} turn(s) happened before this dashboard connected; the transcript isn’t in the stream replay.` : 'Session started — no messages yet.'));
     turns.forEach((t, i) => kids.push(turnView(s, t, i)));
-    box.replaceChildren(...kids);
+    rc(box, ...kids);
   });
 }
 function fact(k, v, wrap) { return h('div', null, h('dt', null, k), h('dd', { class: wrap ? 'wrap' : null, title: v }, v)); }
@@ -798,7 +799,7 @@ function renderSurfaces() {
   }
   const order = { kind: [...KINDS, 'unknown'], device: [...DEVICES, 'unknown'] };
   withFocus(el, () => {
-    el.replaceChildren(...[['kind', 'By surface kind'], ['device', 'By device'], ['host', 'By host']].map(([dim, label]) => {
+    rc(el, ...[['kind', 'By surface kind'], ['device', 'By device'], ['host', 'By host']].map(([dim, label]) => {
       let entries = [...groups[dim].entries()];
       if (dim === 'kind') entries = order.kind.filter((k) => KINDS.includes(k) && k !== 'dashboard' || groups.kind.has(k)).map((k) => [k, groups.kind.get(k) || { n: 0, msgs: 0 }]);
       else if (order[dim]) entries.sort((a, b) => order[dim].indexOf(a[0]) - order[dim].indexOf(b[0]));
@@ -840,7 +841,7 @@ function renderSources() {
   const top = [...agg.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 10);
   const max = Math.max(1, ...top.map(([, a]) => a.n));
   withFocus(el, () => {
-    el.replaceChildren(...(top.length ? top.map(([file, a], i) => {
+    rc(el, ...(top.length ? top.map(([file, a], i) => {
       const pressed = !!(S.filter && S.filter.dim === 'source' && S.filter.value === file);
       return h('li', null, h('button', {
         type: 'button', class: 'lb', 'aria-pressed': String(pressed), 'data-fk': `lb:${file}`, title: file,
@@ -890,7 +891,7 @@ function renderFeed() {
   if (S.feedReset || !el.childElementCount) {
     S.feedReset = false;
     el.setAttribute('aria-busy', 'true');
-    withFocus(el, () => el.replaceChildren(...S.feed.filter(feedVisible).map((it) => feedItem(it, false))));
+    withFocus(el, () => rc(el, ...S.feed.filter(feedVisible).map((it) => feedItem(it, false))));
     el.setAttribute('aria-busy', 'false');
     return;
   }
@@ -906,15 +907,15 @@ function renderFeed() {
 function renderAsk() {
   const out = $('#ask-out');
   const a = S.ask;
-  if (!a) { out.replaceChildren(); return; }
-  if (a.status === 'pending') { out.replaceChildren(h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)), h('span', { class: 'pending' }, h('span', { class: 'spinner' }), 'KnowBot is answering with canonical settings…')); return; }
-  if (a.status === 'error') { out.replaceChildren(h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)), h('div', { class: 'err' }, a.error), h('div', { class: 'note' }, 'Needs the KnowBot server: node knowbot/server/server.mjs')); return; }
+  if (!a) { rc(out); return; }
+  if (a.status === 'pending') { rc(out, h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)), h('span', { class: 'pending' }, h('span', { class: 'spinner' }), 'KnowBot is answering with canonical settings…')); return; }
+  if (a.status === 'error') { rc(out, h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)), h('div', { class: 'err' }, a.error), h('div', { class: 'note' }, 'Needs the KnowBot server: node knowbot/server/server.mjs')); return; }
   const ans = a.answer;
-  out.replaceChildren(
+  rc(out, 
     h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)),
     h('div', { class: 'msg-meta' }, answerBadges(ans), latencyView(ans.latencyMs)),
-    answerBody(ans),
-    engineLabel(ans.engine) ? h('div', { class: 'note mono' }, engineLabel(ans.engine)) : null);
+    ...answerBody(ans).flat(),
+    engineLabel(ans.engine) ? h('div', { class: 'note mono' }, engineLabel(ans.engine)) : '');
 }
 async function onAsk(ev) {
   ev.preventDefault();

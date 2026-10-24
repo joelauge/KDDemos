@@ -112,9 +112,16 @@ Levels: **Sidekick** 0 none · 1 basic · 2 good · 3 strong. **KnowBot plausibl
   so they also count against "scope coverage vs Sidekick" in the parity score.
 - Catalog-wide aggregates are included as in-scope-but-hard: Sidekick nails them; KnowBot's
   top-k retrieval architecture is structurally disadvantaged.
-- The store's FAQ page contradicts its formal shipping/refund policies (24 h vs 2 business
-  days; free US shipping vs "over $99"; "30-night risk-free" vs 30-day return with
-  conditions). Good answers surface the conflict with both citations.
+- The store's own documents contradict each other. US free shipping: the policy text says
+  free anywhere in the US, the FAQ says over $99, and the actual Shopify rate config
+  (`operations/shipping.md`, which I checked against the Admin API delivery profile) says $100 or
+  more. Ship time: the policy says 2 business days, the FAQ says 24 h. Returns: the FAQ says
+  "30-night risk-free", the policy says 30 days with conditions. Ship-from: the warehouse is in
+  Lee's Summit, but the returns/contact address is Independence. Good answers surface the
+  conflict and cite both files. Sidekick reads the settings directly, so it gets the numbers right
+  but has no reason to flag the policy drift.
+- The store has active discount codes in Shopify (e.g. TEST100TEST, WHOLESALE50) that are
+  deliberately not in the corpus. If one shows up in a KnowBot answer, that is a severe leak.
 
 ## Sources
 

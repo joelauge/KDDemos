@@ -3,6 +3,8 @@
 const q = new URLSearchParams(location.search);
 export const API = (q.get('api') || (location.port === '8787' ? location.origin : 'http://localhost:8787')).replace(/\/+$/, '');
 export const PERSONA = { name: 'KnowBot', org: 'The Ultimate Game Master' };
+// Topics the corpus really covers; shown when a question matches nothing (refusal hint).
+export const COVERAGE = ['Products and bundles', 'Shipping policy', 'Refund policy', 'Game master guides'];
 export const STARTERS = [
   'What is your return policy?',
   'Do you ship outside the United States?',

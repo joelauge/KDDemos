@@ -108,7 +108,7 @@ export async function* readChat(res) {
       line = line.trim();
       if (!line.startsWith('data:')) continue;
       const d = line.slice(5).trim();
-      if (d === '[DONE]') return reader.cancel().catch(() => {});
+      if (d === '[DONE]') return; // let the body finish naturally (cancelling shows as a failed request)
       try {
         const j = JSON.parse(d), c = j.choices?.[0], t = c?.delta?.content ?? c?.text;
         if (t) yield { t, model: j.model };
@@ -243,7 +243,7 @@ function stripTrailingSources(text) {
 }
 
 function snippetOf(t) {
-  const s = cleanSource(t).replace(/[#*_`>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const s = cleanSource(t).replace(/^#[^\n]*\n/, '').replace(/[#*_`>|]+/g, ' ').replace(/\s+/g, ' ').trim();
   return clip(s, 220);
 }
 
@@ -393,7 +393,8 @@ export class KnowBot {
         { onToken: o.onToken, onProgress: o.onProgress, signal: o.signal, settings: this.opts.settings });
       t2 = now();
     }
-    const fin = finalizeAnswer(raw, relevant.length ? relevant : results, { minScore: this.minScore, persona: this.persona });
+    const fin = finalizeAnswer(raw, relevant.length ? relevant : results, { minScore: this.minScore, persona: this.persona,
+      coverage: results.length ? undefined : this.opts.coverage });
     const answer = {
       ...fin,
       latencyMs: { retrieval: ms(t0, t1), generation: ms(t1, t2), total: ms(t0, now()) },

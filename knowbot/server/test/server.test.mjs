@@ -89,7 +89,7 @@ function fakeLLM() {
   return { srv, calls };
 }
 
-function fakeKnowDrive({ fail = false } = {}) {
+function fakeKnowDrive({ fail = false, data = null } = {}) {
   const calls = [];
   const srv = http.createServer((req, res) => {
     let body = '';
@@ -100,7 +100,7 @@ function fakeKnowDrive({ fail = false } = {}) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         object: 'vector_store.search_results.page',
-        data: [
+        data: data || [
           { file_id: 'file_a', filename: 'knowbot/ugm/policies/refund-policy.md', score: 0.91, content: [{ type: 'text', text: '30-day return policy.' }], attributes: {} },
           { file_id: 'file_x', filename: 'other-team/secret.md', score: 0.95, content: [{ type: 'text', text: 'not ours' }], attributes: { title: 'Secret' } },
           { file_id: 'file_b', filename: '/knowbot/ugm/catalog/products/dragon-dice.md', score: 0.5, content: [{ type: 'text', text: 'Dragon dice' }], attributes: { title: 'Dragon Dice (KD)' } },
@@ -392,8 +392,11 @@ describe('server (HTTP)', () => {
     } finally { await close(kb2.server); }
   });
 
-  test('server in knowdrive mode windows search and reports config', async () => {
-    const kd = fakeKnowDrive();
+  test('server in knowdrive mode (defaults: dedicated store, empty prefix) sends tag filter', async () => {
+    const kd = fakeKnowDrive({ data: [
+      { file_id: 'file_a', filename: 'policies/refund-policy.md', score: 0.9, content: [{ type: 'text', text: '30-day returns' }], attributes: {} },
+      { file_id: 'file_b', filename: 'catalog/products/dragon-dice.md', score: 0.4, content: [{ type: 'text', text: 'dice' }], attributes: {} },
+    ] });
     const kdPort = await listen(kd.srv);
     const kb3 = createKnowBotServer({ root: ROOT, corpusDir, dataDir: await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-')), libPath: LIB, quiet: true, watch: false,
       env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1`, KNOWDRIVE_BASE_URL: `http://127.0.0.1:${kdPort}`, KNOWDRIVE_API_KEY: 'k' } });
@@ -401,12 +404,28 @@ describe('server (HTTP)', () => {
     try {
       const c = await (await fetch(`http://127.0.0.1:${p3}/api/config`)).json();
       assert.equal(c.retrieval, 'knowdrive');
-      assert.equal(c.store, 'vs_ae932c1337994117a7ee3763026c050b');
+      assert.equal(c.store, 'vs_f66318f0dd0e4540b27663b03ea40f40');
       const j = await (await fetch(`http://127.0.0.1:${p3}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'returns' }) })).json();
       assert.equal(j.source, 'knowdrive');
-      assert.deepEqual(kd.calls[0].body.filter, { all_of: ['knowbot:ugm'] });
-      assert.equal(kd.calls[0].url, '/api/v1/vector_stores/vs_ae932c1337994117a7ee3763026c050b/search');
-      assert.ok(j.results.every((x) => !x.filename.startsWith('knowbot/') && x.filename !== 'other-team/secret.md'));
+      assert.deepEqual(kd.calls[0].body, { query: 'returns', max_num_results: 6, mode: 'hybrid', text: 'raw', filter: { all_of: ['knowbot:ugm'] } });
+      assert.equal(kd.calls[0].url, '/api/v1/vector_stores/vs_f66318f0dd0e4540b27663b03ea40f40/search');
+      assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
+      assert.equal(j.results[0].url, 'https://example.test/policies/refund-policy');
     } finally { await close(kb3.server); await close(kd.srv); }
+  });
+
+  test('server in knowdrive mode with KNOWDRIVE_PREFIX strips prefix and drops foreign hits', async () => {
+    const kd = fakeKnowDrive();
+    const kdPort = await listen(kd.srv);
+    const kb4 = createKnowBotServer({ root: ROOT, corpusDir, dataDir: await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-')), libPath: LIB, quiet: true, watch: false,
+      env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1`, KNOWDRIVE_BASE_URL: `http://127.0.0.1:${kdPort}`, KNOWDRIVE_API_KEY: 'k',
+        KNOWDRIVE_STORE: 'vs_shared', KNOWDRIVE_PREFIX: 'knowbot/ugm/', KNOWDRIVE_TAG: 'knowbot:ugm' } });
+    const p4 = await listen(kb4.server);
+    try {
+      const j = await (await fetch(`http://127.0.0.1:${p4}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'returns', k: 3 }) })).json();
+      assert.equal(kd.calls[0].url, '/api/v1/vector_stores/vs_shared/search');
+      assert.deepEqual(kd.calls[0].body.filter, { all_of: ['knowbot:ugm'] });
+      assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
+    } finally { await close(kb4.server); await close(kd.srv); }
   });
 });

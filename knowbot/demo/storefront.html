@@ -62,10 +62,10 @@
   <footer><div class="wrap">Demo page built for KnowBot by KnowDrive. Not affiliated checkout; no orders can be placed here.</div></footer>
   <script type="module">
     import { mountWidget } from '../lib/widget.js';
-    import { API, PERSONA, STARTERS, carryApiParam, showApiStatus } from './demo.js';
+    import { API, PERSONA, COVERAGE, STARTERS, carryApiParam, showApiStatus } from './demo.js';
     carryApiParam();
     showApiStatus();
-    window.knowbot = mountWidget({ apiBase: API, persona: PERSONA, starters: STARTERS, title: 'KnowBot', subtitle: 'Store help · answers cite the knowDrive',
+    window.knowbot = mountWidget({ apiBase: API, persona: PERSONA, coverage: COVERAGE, starters: STARTERS, title: 'KnowBot', subtitle: 'Store help · answers cite the knowDrive',
       open: new URLSearchParams(location.search).has('open') });
   </script>
 </body>

@@ -171,6 +171,7 @@ test('KnowBot.ask end-to-end with custom retriever + stub engine (no network)', 
   assert.equal(a.surface.kind, 'api');
   assert.ok(a.turnId.startsWith(a.sessionId));
   assert.deepEqual(toks, ['Hi [2]']);
+  assert.deepEqual(events.map((e) => e.type), ['session.start', 'message.user', 'message.bot']);
   for (const k of ['retrieval', 'generation', 'total']) assert.equal(typeof a.latencyMs[k], 'number');
 
   const none = new KnowBot({ telemetry: false, retriever: { type: 'custom', search: async () => [] },

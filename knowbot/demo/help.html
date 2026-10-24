@@ -44,11 +44,11 @@
   </main>
   <script type="module">
     import { mountInline } from '../lib/widget.js';
-    import { API, PERSONA, carryApiParam, showApiStatus } from './demo.js';
+    import { API, PERSONA, COVERAGE, carryApiParam, showApiStatus } from './demo.js';
     carryApiParam();
     showApiStatus();
     window.knowbot = mountInline('#assistant', {
-      apiBase: API, persona: PERSONA, title: 'Help assistant', subtitle: 'Answers cite the knowDrive',
+      apiBase: API, persona: PERSONA, coverage: COVERAGE, title: 'Help assistant', subtitle: 'Answers cite the knowDrive',
       starters: ['How do I start a return?', 'How long does shipping take?', 'Can I return a gift card?', 'How do subscriptions work?'],
     });
   </script>

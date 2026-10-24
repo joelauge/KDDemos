@@ -4,8 +4,8 @@
 //   KNOWDRIVE_API_KEY=... node knowbot/scripts/seed-knowdrive.mjs [--dry-run] [--only <substring>] [--concurrency 4]
 //
 // Env: KNOWDRIVE_BASE_URL (default https://dev.knowdrive.ai), KNOWDRIVE_API_KEY (required unless --dry-run),
-//      KNOWDRIVE_STORE (default vs_ae932c1337994117a7ee3763026c050b), KNOWDRIVE_TAG (default knowbot:ugm),
-//      KNOWDRIVE_PREFIX (default knowbot/ugm/).
+//      KNOWDRIVE_STORE (default vs_f66318f0dd0e4540b27663b03ea40f40), KNOWDRIVE_TAG (default knowbot:ugm),
+//      KNOWDRIVE_PREFIX (default empty: files live at corpus-relative paths in the dedicated store).
 //
 // Each corpus file is uploaded with
 //   POST {base}/api/v1/vector_stores/{store}/files   (multipart: file, filename=<PREFIX><relpath>, purpose=assistants, tags)

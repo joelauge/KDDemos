@@ -33,7 +33,7 @@
   <main id="chat"></main>
   <script type="module">
     import { mountFullpage } from '../lib/widget.js';
-    import { API, PERSONA, STARTERS, carryApiParam, showApiStatus } from './demo.js';
+    import { API, PERSONA, COVERAGE, STARTERS, carryApiParam, showApiStatus } from './demo.js';
     import { buildLocalIndex } from './local-index.js';
     carryApiParam();
     const pill = document.getElementById('retr');
@@ -60,7 +60,7 @@
     }
 
     window.knowbot = mountFullpage('#chat', {
-      apiBase: API, persona: PERSONA, starters: STARTERS,
+      apiBase: API, persona: PERSONA, coverage: COVERAGE, starters: STARTERS,
       engine: { type: 'webllm' },
       retriever: { type: 'custom', search },
       telemetry: cfg ? true : { url: null },   // BroadcastChannel always; POST only when a server is up

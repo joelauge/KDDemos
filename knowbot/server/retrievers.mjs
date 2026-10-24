@@ -317,7 +317,7 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = 'knowbot/ugm/', local, timeoutMs = 8000, logger = () => {} }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {} }) {
     this.baseUrl = String(baseUrl || 'https://dev.knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.tag = tag;
@@ -338,7 +338,8 @@ export class KnowDriveRetriever {
       if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const json = await res.json();
       const data = Array.isArray(json?.data) ? json.data : [];
-      // defense in depth: only hits under our prefix (tag window is the primary guard)
+      await this.local?.ready; // title/url lookups need the local frontmatter index
+      // defense in depth: when a prefix is configured, only hits under it (tag window is the primary guard)
       const results = data.map((d) => this.mapResult(d)).filter((r) => r && r.text);
       results.sort((a, b) => b.score - a.score);
       return { source: 'knowdrive', results };
@@ -367,9 +368,9 @@ export class KnowDriveRetriever {
 
 function pickStr(v) { return typeof v === 'string' && v.trim() ? v.trim() : null; }
 
-export const DEFAULT_STORE = 'vs_ae932c1337994117a7ee3763026c050b';
+export const DEFAULT_STORE = 'vs_f66318f0dd0e4540b27663b03ea40f40';
 export const DEFAULT_TAG = 'knowbot:ugm';
-export const DEFAULT_PREFIX = 'knowbot/ugm/';
+export const DEFAULT_PREFIX = '';
 
 /** Build the retriever for the given env. */
 export function createRetriever({ corpusDir, env = process.env, logger, watch = true } = {}) {
