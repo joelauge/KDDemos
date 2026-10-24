@@ -352,3 +352,11 @@ test('round-9 fixes: pinned privacy/warranty/price-premise routes, first-noun do
   const ql = lines.find((l) => /47\.99/.test(l.text));
   assert.equal(finalizeSelection(`L${ql.n}`, lines, src, { question: 'How much are rivet magnets for the screen?' }).text, NOT_IN_DATA, "another product's row never answers");
 });
+
+test('ship-to-country route quotes the named country; mid-card chunks have no headline; country card stays out of other questions', () => {
+  const card = S(1, { filename: 'canonical/shipping-by-country.md', title: 'Shipping by country', text: '# x\n- **Shipping to Hong Kong:** yes, the store ships to Hong Kong.\n- **Shipping to Japan:** yes, the store ships to Japan.' });
+  assert.equal(routeAnswer('Do you deliver to Japan?', [card]).text, '- Shipping to Japan: yes, the store ships to Japan. [1]'.replace(/^- /, ''));
+  const head = S(1, { filename: 'canonical/shipping-by-country.md', title: 'Shipping by country', text: '# x\nThe store ships to 29 countries, listed below.\n- **Shipping to Canada:** yes, the store ships to Canada.' });
+  assert.match(routeAnswer('Do you ship to Brazil?', [head]).text, /^The store ships to 29 countries/);
+  assert.equal(routeAnswer('How long does shipping take?', [head]), null);
+});

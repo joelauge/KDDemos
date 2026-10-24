@@ -469,23 +469,26 @@ export function candidateLines(sources = [], { max = 45, perSource = 12, budget 
   sources.forEach((s, si) => {
     const raw = cleanSource(s.text).split('\n');
     const lines = [];
+    let leadable = null; // a card's headline is its opening sentence, never a bullet (a mid-card chunk starts with one)
     for (let i = 0; i < raw.length; i++) {
       if (/^\s*\|.*\|\s*$/.test(raw[i])) {
         const tbl = [];
         while (i < raw.length && /^\s*\|.*\|\s*$/.test(raw[i])) tbl.push(raw[i++]);
         i--;
+        if (leadable === null) leadable = false;
         if (tbl.length > 2) lines.push(...tableLines(tbl).map((r) => (s.title ? `${String(s.title).split(' - ')[0].trim()}: ${r}` : r)));
         continue;
       }
       const l = raw[i].replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').replace(/\*\*/g, '').trim();
       if (!l || /^#/.test(l) || /^where this comes from/i.test(l) || l.split(/\s+/).length < 2) continue;
+      if (leadable === null) leadable = !/^\s*(?:[-*•]|\d+[.)])\s+/.test(raw[i]);
       lines.push(...(l.length > 320 ? l.split(/(?<=[.!?])\s+(?=[A-Z])/) : [l]));
     }
     let first = true;
     for (const text of lines.slice(0, perSource)) {
       if (out.length >= max || used + text.length > budget) return;
       out.push({ n: out.length + 1, source: si, text: clip(text, 320), title: String(s.title || ''),
-        lead: first && String(s.filename || '').startsWith('canonical/'), row: /^[^:]{1,60}: Variant: /.test(text) });
+        lead: first && !!leadable && String(s.filename || '').startsWith('canonical/'), row: /^[^:]{1,60}: Variant: /.test(text) });
       first = false;
       used += text.length;
     }
@@ -563,6 +566,11 @@ const looksNonEnglish = (q) => NON_EN.test(String(q || ''));
  * Deterministic answers for question shapes the 1.5B selector gets wrong:
  * "do you sell X?" answered by a "does not sell" line naming X, and contact/phone questions answered by the contact card.
  */
+// "Do you ship to Canada?" — a destination named after a shipping verb (capitalised country name).
+const SHIP_DEST = /\b(?:ship|ships|shipping|shipped|deliver|delivers|delivery|send|sent|post)\b[^?.!]{0,30}?\b(?:to|in|into)\s+(?:the\s+)?([A-Z][\w'-]*(?:\s+[A-Z][\w'-]*){0,3})/;
+// The per-country card answers only destination questions; elsewhere its 29 near-identical lines crowd out real answers.
+const COUNTRY_CARD = /^canonical\/shipping-by-country/;
+
 export function routeAnswer(question, sources = []) {
   const q = String(question || '');
   const lines = candidateLines(sources, { max: 120, perSource: 40, budget: 20000 });
@@ -574,6 +582,16 @@ export function routeAnswer(question, sources = []) {
     const i = card(/^canonical\/privacy-selling/), j = card(/^canonical\/privacy-rights/);
     const picked = [...fromCard(i, (l) => l.lead), ...fromCard(i, (l) => /opt out|opt-out/i.test(l.text)).slice(0, 1), ...fromCard(j, (l) => /opt out|opt-out|global privacy/i.test(l.text)).slice(0, 1)];
     if (i >= 0 && picked.length) return quote([...new Set(picked)].slice(0, 3));
+  }
+  // Shipping to a named country: that country's line, or the card's headline when the country isn't listed.
+  const dest = q.match(SHIP_DEST);
+  if (dest) {
+    const i = card(/^canonical\/shipping-by-country/);
+    if (i >= 0) {
+      const name = dest[1].toLowerCase();
+      const own = fromCard(i, (l) => !l.lead && (l.text.toLowerCase().includes(`ships to ${name}.`) || l.text.toLowerCase().includes(`ships to the ${name}.`)));
+      return quote(own.length ? own.slice(0, 1) : fromCard(i, (l) => l.lead));
+    }
   }
   // Warranty: the warranty card's headline and the durability/defect lines.
   if (/\bwarrant(?:y|ies|ee|eed)\b|\bguarantee(?:d)?\b(?!.{0,20}\b(?:deliver|ship))/i.test(q)) {
@@ -605,7 +623,7 @@ export function routeAnswer(question, sources = []) {
  * mode 'select' (default): the model only picks knowDrive lines; 'generate': cited free-text answer with support checks.
  */
 export async function answerFromSources({ question, results = [], complete, search, persona = {}, minScore = 0, k = 6, history = [], mode = 'select', budget, settings, onToken, onProgress, signal, coverage }) {
-  const relevant = selectSources(results, minScore, k);
+  const relevant = selectSources(results, minScore, k).filter((r) => SHIP_DEST.test(String(question || '')) || !COUNTRY_CARD.test(String(r.filename || '')));
   if (!relevant.length) return { fin: { text: NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false }, generated: false };
   if (mode === 'generate') {
     const raw = await complete(buildMessages(question, relevant, persona, history, { budget }), { onToken, onProgress, signal, settings });

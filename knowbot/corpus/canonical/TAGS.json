@@ -402,5 +402,14 @@
     "topic:defects",
     "entity:ultimate-game-master-screen-brown-portrait",
     "intent:policy"
+  ],
+  "canonical/shipping-by-country.md": [
+    "knowbot",
+    "knowbot:ugm",
+    "kind:canonical",
+    "topic:shipping",
+    "topic:international-shipping",
+    "topic:countries",
+    "intent:policy"
   ]
 }

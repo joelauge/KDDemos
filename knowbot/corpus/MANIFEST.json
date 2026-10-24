@@ -1102,5 +1102,13 @@
     "source_id": "gid://shopify/Shop/70900777193",
     "url": "https://theultimategamemaster.com",
     "bytes": 2274
+  },
+  {
+    "path": "canonical/shipping-by-country.md",
+    "title": "Shipping by country: does the store ship to my country?",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/shipping-policy",
+    "bytes": 4127
   }
 ]

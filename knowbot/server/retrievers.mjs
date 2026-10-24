@@ -326,10 +326,10 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, exclude = [] }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [] }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
-    this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0;
+    this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0; this.rescueMargin = Number(rescueMargin) || 0;
     this.exclude = (Array.isArray(exclude) ? exclude : String(exclude || '').split(',')).map((t) => t.trim()).filter(Boolean);
     this.tag = tag;
     this.prefix = String(prefix || '').replace(/^\/+/, '');
@@ -374,6 +374,12 @@ export class KnowDriveRetriever {
       const cards = [...cardHits.map((d) => this.mapResult(d)), ...near].filter((r, i, a) => r && r.text && r.filename.startsWith('canonical/')
         && r.score >= this.minSimilarity + this.canonicalMargin && a.findIndex((x) => x && x.filename === r.filename) === i);
       const top = near.reduce((m, r) => Math.max(m, r.score), 0);
+      // Short questions ("Do you ship to Canada?") embed weakly. Below the floor, a nearby card is still admitted
+      // when one of its topics names the question's intent AND its text contains another of the question's words.
+      if (top < this.minSimilarity && !cards.length) {
+        const rescued = this.rescueCards(query, [...cardHits.map((d) => this.mapResult(d)), ...near]);
+        if (rescued.length) cards.push(...rescued);
+      }
       if (top < this.minSimilarity && !cards.length) return { source: 'knowdrive', results: [], floor: { top, min: this.minSimilarity } };
       const merged = [...cards, ...results.filter((r) => !cards.some((c) => c.filename === r.filename))].slice(0, k);
       return { source: 'knowdrive', results: merged, floor: { top, min: this.minSimilarity, canonical: cards.map((c) => c.filename) } };
@@ -382,6 +388,23 @@ export class KnowDriveRetriever {
       const r = await this.local.search(query, k);
       return { ...r, source: 'local-fallback', error: String(e.message || e) };
     }
+  }
+
+  rescueCards(query, hits) {
+    const q = new Set(tokenize(query));
+    if (!q.size) return [];
+    const out = [];
+    for (const r of hits) {
+      if (!r || !r.text || !r.filename.startsWith('canonical/') || out.some((c) => c.filename === r.filename)) continue;
+      if (r.score < this.minSimilarity + this.rescueMargin) continue;
+      const topics = String(this.local?.lookup(r.filename)?.meta?.topics || '');
+      const intent = new Set(tokenize(topics.replace(/[[\],-]/g, ' ')));
+      const intentHit = [...q].filter((t) => intent.has(t));
+      if (!intentHit.length) continue;
+      const body = new Set(tokenize(r.text));
+      if ([...q].some((t) => !intent.has(t) && t.length >= 4 && body.has(t))) out.push(r);
+    }
+    return out;
   }
 
   mapResult(d) {

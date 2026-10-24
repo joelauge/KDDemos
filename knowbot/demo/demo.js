@@ -30,21 +30,31 @@ export function carryApiParam(root = document) {
   });
 }
 
-/** Fill any [data-api-status] element with a live server check. */
+/** Show a connection pip in any [data-api-status] element; the API address and model sit in its tooltip. */
 export async function showApiStatus(el = document.querySelector('[data-api-status]')) {
   if (!el) return null;
-  el.textContent = `API ${API} · checking…`;
+  const set = (state, label, detail) => {
+    el.dataset.state = state;
+    el.innerHTML = '<span class="api-pip" aria-hidden="true"></span><span class="api-label"></span>';
+    el.querySelector('.api-label').textContent = label;
+    el.title = detail;
+    el.setAttribute('role', 'status');
+  };
+  set('checking', 'Connecting…', `API ${API}`);
+  // A hosted API that has been idle takes a few seconds to wake its model container.
+  const hosted = API === hostedApi();
+  const slow = hosted ? setTimeout(() => set('checking', 'Waking up…', `API ${API} is starting its model`), 3000) : null;
   try {
     const ctl = new AbortController();
-    setTimeout(() => ctl.abort(), 3000);
+    setTimeout(() => ctl.abort(), hosted ? 45000 : 3000);
     const cfg = await (await fetch(`${API}/api/config`, { signal: ctl.signal })).json();
-    el.textContent = `API ${API} · retrieval: ${cfg.retrieval || '?'} · model: ${cfg.engine?.model || '?'}`;
-    el.dataset.state = 'ok';
+    set('ok', 'API connected', `API ${API} · retrieval: ${cfg.retrieval || '?'} · model: ${cfg.engine?.model || '?'}`);
     return cfg;
   } catch {
-    el.textContent = `API ${API} · not reachable (start server/server.mjs or pass ?api=)`;
-    el.dataset.state = 'down';
+    set('down', 'API offline', `API ${API} not reachable (start server/server.mjs or pass ?api=)`);
     return null;
+  } finally {
+    clearTimeout(slow);
   }
 }
 
