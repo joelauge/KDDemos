@@ -333,3 +333,22 @@ test('judge fixes: third-party/refund/platform guards, do-you-sell and contact r
   assert.equal(box.text.split('\n').length, 7, 'headline + all six items: list questions are not cut at 5');
   assert.match(box.text, /^- The bundle contains the screen and nine accessories/);
 });
+
+test('round-9 fixes: pinned privacy/warranty/price-premise routes, first-noun do-you-sell, product rows need the named product', () => {
+  const cards = [
+    S(1, { filename: 'canonical/privacy-selling-sharing-personal-data.md', title: 'Privacy', text: '# x\nThe privacy policy says personal data may be "sold" or "shared" in the legal sense.\n- **Sensitive data:** not used to infer traits.\n- **The opt-out:** customers can opt out on the Your Privacy Choices page.' }),
+    S(2, { filename: 'canonical/warranty-and-durability.md', title: 'Warranty', text: '# x\nNo. The store publishes no product warranty.\n- Lifetime durability describes construction. It is not a warranty.\n- Defective, damaged or wrong items: contact the store immediately.\n- Shipping is free over $100.' }),
+    S(3, { filename: 'canonical/not-offered.md', title: 'Not sold', text: '# x\n- The store does not sell paint, painting kits or miniatures.' }),
+    S(4, { filename: 'catalog/products/screen.md', title: 'Ultimate Game Master Screen - Brown', text: '| Variant | Price | Stock |\n|---|---|---|\n| Portrait | $149.99 | In stock |' }),
+  ];
+  const priv = routeAnswer('Do you sell or share my info with advertisers?', cards).text;
+  assert.match(priv, /"sold" or "shared"/); assert.match(priv, /opt out/); assert.doesNotMatch(priv, /Sensitive data/);
+  const w = routeAnswer('Is there a lifetime warranty on the screen?', cards).text;
+  assert.match(w, /^- No\. The store publishes no product warranty/); assert.doesNotMatch(w, /\$100/);
+  assert.match(routeAnswer('Why is the Ultimate Game Master Screen only $5?', cards).text, /\$149\.99/);
+  assert.match(routeAnswer('Do you sell paint kits for painting miniatures?', cards).text, /does not sell paint/);
+  const src = [cards[3], S(2, { filename: 'catalog/products/quick-load.md', title: 'Quick-Load Panel - Expansion', text: '| Variant | Price |\n|---|---|\n| Brown | $47.99 |' })];
+  const lines = candidateLines(src);
+  const ql = lines.find((l) => /47\.99/.test(l.text));
+  assert.equal(finalizeSelection(`L${ql.n}`, lines, src, { question: 'How much are rivet magnets for the screen?' }).text, NOT_IN_DATA, "another product's row never answers");
+});

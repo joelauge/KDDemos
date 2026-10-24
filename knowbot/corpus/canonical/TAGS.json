@@ -392,5 +392,15 @@
     "intent:price",
     "intent:contents",
     "intent:stock"
+  ],
+  "canonical/warranty-and-durability.md": [
+    "knowbot",
+    "knowbot:ugm",
+    "kind:canonical",
+    "topic:warranty",
+    "topic:durability",
+    "topic:defects",
+    "entity:ultimate-game-master-screen-brown-portrait",
+    "intent:policy"
   ]
 }

@@ -524,7 +524,13 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
   // Product table rows carry their product name, so they're judged on the row alone; a card's prose may lean on
   // its title. Words like "store" or "item" don't count.
   const q = specificTerms(`${opts.question || ''} ${opts.questionEn || ''}`);
-  const onTopic = (l) => !q.size || [...specificTerms(l.row ? l.text : `${l.lead || l.row ? '' : l.title} ${l.text}`)].some((w) => q.has(w));
+  const prefixOf = (l) => (l.row ? l.text.split(':')[0] : '');
+  const onTopic = (l) => {
+    if (!q.size) return true;
+    // a product row is only an answer when the question names that product
+    if (l.row) return [...specificTerms(prefixOf(l))].some((w) => q.has(w));
+    return [...specificTerms(`${l.lead ? '' : l.title} ${l.text}`)].some((w) => q.has(w));
+  };
   picks = picks.filter((n) => onTopic(lines[n - 1]));
   if (!picks.length) return none;
   // A card's headline line is its direct answer: lead with it when the card is used and the headline itself is on topic.
@@ -533,7 +539,8 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
     if (lead && !picks.includes(lead.n) && onTopic(lead)) picks.unshift(lead.n);
   }
   const listy = /\b(?:what(?:'s| is| are| comes)? in(?:cluded)?|which|all|every|list|contents?|includes?|in the box)\b/i.test(`${opts.question || ''} ${opts.questionEn || ''}`);
-  picks = picks.slice(0, listy ? 10 : 5);
+  const cap = (listy ? 10 : 5) + picks.filter((n) => lines[n - 1].lead).length; // headlines don't use a list slot
+  picks = picks.slice(0, cap);
   const citations = [], idx = new Map();
   const cite = (si) => {
     const s = sources[si], key = s.file_id || s.filename || `#${si}`;
@@ -560,9 +567,29 @@ export function routeAnswer(question, sources = []) {
   const q = String(question || '');
   const lines = candidateLines(sources, { max: 120, perSource: 40, budget: 20000 });
   const quote = (picked) => finalizeSelection(picked.map((l) => `L${l.n}`).join(', '), lines, sources);
+  const card = (re) => sources.findIndex((s) => re.test(String(s.filename || '')));
+  const fromCard = (i, pick) => (i < 0 ? [] : lines.filter((l) => l.source === i).filter(pick));
+  // Privacy: always the attributed disclosure plus how to opt out — never a reassuring partial line.
+  if (/\b(?:sell|sold|share|shared|sharing|selling|hand)\b.{0,50}\b(?:data|info|information|details|personal)\b|\bprivacy\b|\badvertis/i.test(q)) {
+    const i = card(/^canonical\/privacy-selling/), j = card(/^canonical\/privacy-rights/);
+    const picked = [...fromCard(i, (l) => l.lead), ...fromCard(i, (l) => /opt out|opt-out/i.test(l.text)).slice(0, 1), ...fromCard(j, (l) => /opt out|opt-out|global privacy/i.test(l.text)).slice(0, 1)];
+    if (i >= 0 && picked.length) return quote([...new Set(picked)].slice(0, 3));
+  }
+  // Warranty: the warranty card's headline and the durability/defect lines.
+  if (/\bwarrant(?:y|ies|ee|eed)\b|\bguarantee(?:d)?\b(?!.{0,20}\b(?:deliver|ship))/i.test(q)) {
+    const i = card(/^canonical\/warranty/);
+    if (i >= 0) return quote(fromCard(i, (l) => l.lead || /lifetime|defective|damaged/i.test(l.text)).slice(0, 3));
+  }
+  // Price premise ("why is X only $5?", "I get 30% off X"): quote X's own price and stock, never the premise.
+  if (/\$\s?\d|\d+\s?%|\bonly\b.{0,20}\b(?:cost|costs|price)/i.test(q)) {
+    const named = lines.filter((l) => l.row && [...specificTerms(l.text.split(':')[0])].some((w) => specificTerms(q).has(w)));
+    const own = named.filter((l) => /\$\s?\d/.test(l.text));
+    if (own.length) return quote(own.slice(0, 3));
+  }
   const sell = q.match(/\b(?:do|does|can|will)\s+(?:you|y'all|the store|ugm|they)\s+(?:also\s+)?(?:sell|carry|stock|offer|make|have)\s+([^?.!]+)/i);
   if (sell) {
-    const want = specificTerms(sell[1]);
+    // the first object named ("paint kits for painting miniatures" -> "paint kits")
+    const want = specificTerms(sell[1].split(/\b(?:for|to|that|so|which|with|because|,|and|or)\b/i)[0]);
     const neg = lines.filter((l) => /\b(?:does not|doesn't|do not|don't|not sold|not offered|no\b)/i.test(l.text) && [...specificTerms(l.text)].some((w) => want.has(w)));
     if (neg.length) return quote(neg.slice(0, 2));
   }
@@ -577,7 +604,7 @@ export function routeAnswer(question, sources = []) {
  * One question → one Answer fragment, shared by KnowBot.ask (browser) and /api/canonical (server).
  * mode 'select' (default): the model only picks knowDrive lines; 'generate': cited free-text answer with support checks.
  */
-export async function answerFromSources({ question, results = [], complete, persona = {}, minScore = 0, k = 6, history = [], mode = 'select', budget, settings, onToken, onProgress, signal, coverage }) {
+export async function answerFromSources({ question, results = [], complete, search, persona = {}, minScore = 0, k = 6, history = [], mode = 'select', budget, settings, onToken, onProgress, signal, coverage }) {
   const relevant = selectSources(results, minScore, k);
   if (!relevant.length) return { fin: { text: NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false }, generated: false };
   if (mode === 'generate') {
@@ -594,12 +621,27 @@ export async function answerFromSources({ question, results = [], complete, pers
       { onProgress, signal, settings: { ...SELECT_SETTINGS, max_tokens: 80 } });
     questionEn = cleanLine(String(t || '')).slice(0, 300);
   }
+  // Non-English: also search in English and keep cards found that way.
+  let pool0 = relevant;
+  if (questionEn && typeof search === 'function') {
+    try {
+      const more = selectSources((await search(questionEn))?.results || [], minScore, k);
+      pool0 = [...relevant, ...more.filter((m) => !relevant.some((r) => r.filename === m.filename))];
+      pool0 = [...pool0.filter((x) => String(x.filename || '').startsWith('canonical/')), ...pool0.filter((x) => !String(x.filename || '').startsWith('canonical/'))];
+    } catch { /* keep the original sources */ }
+  }
+  // Match the question's product or policy first: when some sources' titles name what was asked, use only those.
+  const qs = specificTerms(`${question} ${questionEn}`);
+  const affinity = (x) => [...specificTerms(String(x.title || '').split(' - ')[0])].filter((w) => qs.has(w)).length;
+  const best = Math.max(0, ...pool0.map(affinity));
+  if (best > 0) pool0 = pool0.filter((x) => affinity(x) > 0).sort((a, b) => affinity(b) - affinity(a));
   // Canonical answer cards first; the rest of the knowDrive only when no card line answers the question.
-  const cards = relevant.filter((s) => String(s.filename || '').startsWith('canonical/'));
-  const passes = cards.length && cards.length < relevant.length ? [cards, relevant.filter((s) => !cards.includes(s))] : [relevant];
-  let fin = finalizeSelection('', [], relevant);
+  const cards = pool0.filter((s) => String(s.filename || '').startsWith('canonical/'));
+  const passes = cards.length && cards.length < pool0.length ? [cards, pool0.filter((s) => !cards.includes(s))] : [pool0];
+  let fin = finalizeSelection('', [], pool0);
   for (const pool of passes) {
-    const lines = candidateLines(pool);
+    let lines = candidateLines(pool);
+    if (questionEn) lines = [...lines.filter((l) => NON_EN.test(l.text)), ...lines.filter((l) => !NON_EN.test(l.text))].map((l, i) => ({ ...l, n: i + 1 }));
     if (!lines.length) continue;
     const ask = questionEn ? `${questionEn} (${cleanLine(question)})` : question;
     const raw = await complete(buildSelectMessages(ask, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
@@ -700,7 +742,7 @@ export class KnowBot {
     let fin = guard, t2 = t1;
     if (!guard) {
       o.onStatus?.({ phase: 'answering' });
-      const r = await answerFromSources({ question: q, results, complete: (m, c) => this.engine.complete(m, c), persona: this.persona,
+      const r = await answerFromSources({ question: q, results, complete: (m, c) => this.engine.complete(m, c), search: (x) => this.retriever.search(x, this.k, o.signal), persona: this.persona,
         minScore: this.minScore, k: this.k, history: this.history, mode: this.opts.answerMode || 'select', budget: this.opts.budget,
         settings: this.opts.settings, onToken: o.onToken, onProgress: o.onProgress, signal: o.signal, coverage: results.length ? undefined : this.opts.coverage });
       fin = r.fin; t2 = now();

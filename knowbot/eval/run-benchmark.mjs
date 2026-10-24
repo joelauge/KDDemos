@@ -96,7 +96,6 @@ function derivedFrom(p) {
   }
   return DERIVED.get(normPath(p)) || [];
 }
-const citeMatches = (cited, exp) => pathMatches(cited, exp) || derivedFrom(cited).some((d) => pathMatches(d, exp));
 
 function pathMatches(a, b) {
   const x = normPath(a), y = normPath(b);
@@ -170,6 +169,14 @@ function check(item, answer, clientMs, error) {
   const citedFiles = cites.map((c) => c.filename).filter(Boolean);
   const expected = exp.expected_sources || [];               // entries: path | [any-of paths]
   const acceptable = [...expected.flat(), ...(exp.acceptable_sources || [])];
+  // A card earns credit for its derived_from files only when a line quoted from it carries a must_include fact.
+  const incMatchers = (exp.must_include || []).map(toMatcher);
+  const quotedFrom = (fname) => {
+    const ns = cites.filter((c) => normPath(c.filename) === normPath(fname)).map((c) => Number(c.n));
+    return text.split(/\n+|(?<=[.!?])\s+/).filter((seg) => ns.some((n) => seg.includes(`[${n}]`))).join(' ');
+  };
+  const cardCredit = new Map(citedFiles.map((c) => [c, !incMatchers.length || incMatchers.some((m) => m.test(quotedFrom(c)))]));
+  const citeMatches = (cited, e) => pathMatches(cited, e) || (cardCredit.get(cited) && derivedFrom(cited).some((d) => pathMatches(d, e)));
   const slotHit = (e) => (Array.isArray(e) ? e : [e]).some((x) => citedFiles.some((c) => citeMatches(c, x)));
   const hitExpected = expected.filter(slotHit);
   const recall = expected.length ? hitExpected.length / expected.length : (shouldRefuse ? null : 1);

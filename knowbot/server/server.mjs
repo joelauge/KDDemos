@@ -212,7 +212,7 @@ export function createKnowBotServer(opts = {}) {
     // Same path as KnowBot.ask() in lib/knowbot.js: guard -> retrieval -> answerFromSources (select mode by default).
     let fin = guard, tGen = tRet;
     if (!guard) {
-      const r = await lib.answerFromSources({ question, results, complete: (m, c) => llmComplete(m, c?.settings || settings), persona, minScore, k,
+      const r = await lib.answerFromSources({ question, results, complete: (m, c) => llmComplete(m, c?.settings || settings), search: (x) => retriever.search(x, k), persona, minScore, k,
         history: Array.isArray(history) ? history : [], mode: env.KNOWBOT_ANSWER_MODE || 'select', settings });
       fin = r.fin; tGen = performance.now();
     }
