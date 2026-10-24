@@ -3,6 +3,7 @@
 // written with textContent / createTextNode (never innerHTML).
 
 import { simulator, simCanonical } from './sim.js';
+import { hostedApi } from '../lib/site-config.js';
 
 /* ------------------------------------------------------------------ utils */
 const $ = (s, r = document) => r.querySelector(s);
@@ -298,6 +299,7 @@ function resolveCandidates() {
   const fromQ = q && safeUrl(q);
   if (fromQ) { S.apiFromParam = true; return [fromQ.replace(/\/+$/, '')]; }
   const out = [];
+  if (hostedApi()) out.push(hostedApi());
   if (/^https?:$/.test(location.protocol)) out.push(location.origin);
   out.push('http://localhost:8787');
   return [...new Set(out)];
@@ -305,7 +307,7 @@ function resolveCandidates() {
 async function resolveApi() {
   const cands = resolveCandidates();
   for (const c of cands) {
-    try { const cfg = await fetchJSON(`${c}/api/config`, 2500); S.apiBase = c; setConfig(cfg); return; } catch { /* next */ }
+    try { const cfg = await fetchJSON(`${c}/api/config`, c === hostedApi() ? 30000 : 2500); S.apiBase = c; setConfig(cfg); return; } catch { /* next */ }
   }
   // None answered: prefer same origin when it looks like the KnowBot server, else localhost.
   const local = /^(localhost|127\.|\[::1\])/.test(location.hostname) && location.port === '8787';

@@ -1,14 +1,15 @@
 // Shared helpers for the KnowBot demo pages.
+import { hostedApi } from '../lib/site-config.js';
 // apiBase: ?api=... override, else same origin when served by the KnowBot server (:8787), else http://localhost:8787.
 const q = new URLSearchParams(location.search);
 // ?api= is limited to loopback or same-origin servers so a crafted link can't point the demos at a hostile server.
 const apiParam = (() => {
   try {
     const u = new URL(q.get('api'));
-    return /^https?:$/.test(u.protocol) && (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname) || u.origin === location.origin) ? u.href : null;
+    return /^https?:$/.test(u.protocol) && (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname) || u.origin === location.origin || u.origin === hostedApi()) ? u.href : null;
   } catch { return null; }
 })();
-export const API = (apiParam || (location.port === '8787' ? location.origin : 'http://localhost:8787')).replace(/\/+$/, '');
+export const API = (apiParam || hostedApi() || (location.port === '8787' ? location.origin : 'http://localhost:8787')).replace(/\/+$/, '');
 export const PERSONA = { name: 'KnowBot', org: 'The Ultimate Game Master' };
 // Topics the corpus really covers; shown when a question matches nothing (refusal hint).
 export const COVERAGE = ['Products and bundles', 'Shipping policy', 'Refund policy', 'Game master guides'];

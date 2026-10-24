@@ -1,0 +1,8 @@
+{
+  "name": "knowbot-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": { "deploy": "wrangler deploy", "dev": "wrangler dev" },
+  "dependencies": { "@cloudflare/containers": "^0.3.7" },
+  "devDependencies": { "wrangler": "^4.152.0" }
+}

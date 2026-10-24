@@ -122,3 +122,10 @@ node knowbot/eval/run-benchmark.mjs --api http://localhost:8787     # writes eva
 Qwen2.5-1.5B-Instruct Q4_K_M on 4 CPU cores: ~5 s to first token, ~21 tok/s, ~15 s for a 6-source, 200-token
 answer. 3B doubles that; 0.5B halves it. See `eval/model-bench.md`. Canonical settings: temperature 0, top_p 1,
 max_tokens 400, seed 7.
+
+## Public hosting (knowbot.knowdrive.ai + Cloudflare)
+
+- **Static site:** GitHub Pages serves this repo's root at `knowbot.knowdrive.ai` (`CNAME`, `.nojekyll`; light mode by default).
+- **API:** `cloudflare/` deploys a Worker (`knowbot-api`) in front of one Cloudflare Container (`standard-4`, 4 vCPU / 12 GiB) that runs llama.cpp `llama-server` with Qwen2.5-1.5B-Instruct Q4_K_M plus the unchanged Node server. It is the same model and code as every judged round. The container sleeps after 15 minutes idle; the first request after that wakes it in roughly 5–20 s.
+- **Deploy:** `.github/workflows/deploy-cloudflare.yml` runs on push to `main` (or manually) once the repo secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `KNOWDRIVE_API_KEY` exist. Locally: `cd cloudflare && npm install && npx wrangler deploy` (needs Docker).
+- **Wire the pages to it:** put the deployed Worker URL in `lib/site-config.js` (`HOSTED_APIS['knowbot.knowdrive.ai']`). The dashboard and demos then use it by default.

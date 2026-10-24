@@ -9,3 +9,4 @@ llama.cpp/
 *.pid
 # Server runtime data (events.jsonl etc.)
 server/data/
+node_modules/
