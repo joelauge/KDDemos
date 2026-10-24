@@ -665,3 +665,135 @@ B's free-text generator produced new severe errors by contradicting the cards it
 1. **Check each selected line for relevance before quoting, and pin the headline.** Require each selected line to share the question's entity (product, policy, country) or intent. Otherwise drop it, and answer NONE if nothing is left. When a card is chosen, always include its first (answer) sentence. Raise the line cap to the card's full table or list when the question asks "what's in", "which" or "all". This targets the ~26% of wrong-line answers, the four misleading selections, and the cut-off lists (cat-08, ho-15, pol-05).
 2. **Intent guards before selection, so refusal doesn't depend on the selector.** Third-party order or PII questions (ho-28), action requests (ho-30, refund/cancel/change), platform how-to (ooc-04), and "do you sell X" where X is in the not-offered card (ho-22, ooc-01) should get a deterministic decline or the card's true-negative line. Contact and phone questions should always quote the contact card's first line (ooc-03, ho-10). Together this fixes the out-of-scope gate (held-out 0.25 → about 1.0, benchmark 0.833 → 1.0).
 3. **Multilingual select and fallback rules.** Select against an English rendering of non-English questions (adv-11, ho-24 false refusals), and prefer the card's own-language summary line when one exists. Let card-first fall back to the rest of the knowDrive when no card line is relevant, not just when none is on-topic (mer-01, syn-09). Separately, restore the conflict note for the Black bundle's "Brown screen" listing in `ultimate-bundle-contents.md` (ho-17), and source or drop "billed weekly".
+
+---
+
+# Round 9: C2 (judge fixes applied)
+
+- **Runs judged:** `eval/results/ab3/C2-benchmark/2026-10-24T22-03-58-865Z.json` and `eval/results/ab3/C2-heldout/2026-10-24T22-06-39-655Z.json`, with `*.judged.json` next to each.
+- **C2:** select mode after the round-8 top-3 fixes:
+  - a specific-word relevance rule, with the headline leading when it's on topic and up to 10 lines for list questions;
+  - deterministic routes for third-party orders, refunds and impersonation, platform how-to, analytics, "do you sell X", and contact;
+  - an English rendering of non-English questions, used only for selection;
+  - "billed weekly" removed from the cards;
+  - the scorer now credits cards via `derived_from`.
+- **Method:** same strictness and claim-level checks. 21 benchmark and 12 held-out answers are byte-identical to C and keep their C judgment (L is recomputed from this run).
+- **mer-04 is judged as recorded:** it quotes a shipping line in answer to an order and revenue question. The analytics guard came after the run. The coordinator reports that a re-run of mer-04 alone gives NOT_IN_DATA. I didn't verify that (no result file), so it's reported separately below.
+
+> **Bottom line.**
+> - Judged parity is **0.904 on the benchmark** (C 0.820) and **0.772 on held-out** (C 0.635).
+> - There are still **zero severe items** on both sets.
+> - **Held-out now passes every gate**, including out-of-scope refusal at 1.0 (C: 0.25). The deterministic guards fixed ho-22, ho-28 and ho-30 outright.
+> - **The benchmark still fails the out-of-scope gate** (0.833). mer-04 was recorded before its guard existed, and a new "do you sell X" misfire (ooc-01) only partly declines. With the reported mer-04 fix, the benchmark is 0.917 and parity 0.91; ooc-01 still blocks the gate.
+> - **Not yet Sidekick parity:** the benchmark is in the 0.8–1.0 "competitive in its niche" band, and held-out is under 0.8.
+> - The new **relevance rule caused three bad regressions** (cat-10, ho-20, and the privacy answer pol-08).
+
+## C vs C2
+
+| | C bench | **C2 bench** | C held-out | **C2 held-out** |
+|---|---|---|---|---|
+| **Judged parity** | 0.820 | **0.904** (0.91 with mer-04 fixed) | 0.635 | **0.772** |
+| Auto parity (harness) | 0.67 | 0.93 | 0.49 | 0.87 |
+| Mean item score: judged / auto | 74.1 / 68.3 | **80.9** / 85.0 | 55.7 / 50.2 | **65.3** / 75.7 |
+| catalog (ref 85) | 83.8 | 85.7 | 42.8 | 44.4 |
+| policy (ref 80) | 70.7 | 80.2 | 62.4 | 63.5 |
+| synthesis (ref 80) | 71.2 | 78.9 | 67.4 | 71.5 |
+| merchant (ref 90) | 76.8 | 72.9 (as recorded) | 60.5 | 61.1 |
+| out_of_corpus (ref 70) | 63.9 | 86.5 | 56.5 | 96.3 |
+| adversarial (ref 75) | 73.1 | 81.9 | 44.0 | 78.4 |
+| quality_parity | 0.929 | 1.034 | 0.679 | 0.867 |
+| answer_coverage | 0.463 | 0.574 | 0.294 | 0.412 |
+| Citation precision (claim-level) | 0.777 | 0.805 | 0.688 | 0.750 |
+| **Severe items** | 0 | **0** | 0 | **0** |
+| OOS refusal ≥ 95% | FAIL 0.833 | **FAIL 0.833** (mer-04 as recorded, ooc-01 partial) | FAIL 0.25 | **PASS 1.0** |
+| False refusal ≤ 10% | PASS 0.024 | PASS 0.0 | PASS 0.033 | PASS 0.0 |
+| Citation integrity / injection | PASS / PASS | PASS / PASS (adv-13 partial) | PASS / PASS | PASS / PASS |
+| Latency p50 / p90 (client) | 3.7 / 6.0 s | 3.2 / 5.7 s | 3.1 / 5.2 s | 3.4 / 6.2 s |
+| **Generalisation gap** (held-out − bench) | −18.3 | **−15.6** | | |
+
+**Gates.** All gates pass on held-out. On the benchmark only the out-of-scope gate fails.
+- Even with mer-04 fixed, the rate is 0.917, because ooc-01 gets only a partial decline (below).
+- **Parity rule check:** "parity ≥ 1.0 ⇒ matches Sidekick". C2 is 0.90 (benchmark) and 0.77 (held-out), so it is competitive in its niche on the benchmark and still loses on held-out.
+
+## My round-8 list of C failures: fixed or remaining
+
+**Fixed:**
+- **Out-of-scope refusals** (ho-22, ho-28, ho-30, ooc-03, ooc-04): all correct now, through the guards and routes.
+- **Headline skipped:** pol-05 ("Yes … within 14 days" now leads), syn-04 ("Yes. … saves $41.91"), pol-09 (the $100 line now leads), ho-26 ("$29.99 … Both are in stock").
+- **Wrong lines** fixed: cat-04 (the Quick-Load row is now quoted), mer-01 (falls back to `catalog/index.md`), adv-03 ($139.99), syn-06 (no more $299 Masterclass), ho-10 (contact route).
+- **Lists cut by the 5-line cap:** syn-07 (all 7 covers), cat-08 (9 of 10 items, see below), ho-15 (better, see below).
+- **Language false refusals:** adv-11 now answers 30 days. ho-24 is no longer refused, but the answer is wrong (below).
+
+**Remaining:**
+- **Wrong product or card:**
+  - adv-07: Quick-Load lines for a Red Landscape screen question.
+  - ho-11: screen lines for a Large Pouch question.
+  - ho-29: the Quick-Load's "It measures 9.5 x 12.5 inches" given for the Sci-Fi cover.
+  - ho-12: the screen's "Red is sold out in both orientations" given for the Gothic cover.
+  - ho-14: the Ultimate Bundle's saving given for the Full Color Set.
+  - ho-02: the EU line for a dispatch-time question.
+  - ho-05: not-offered lines for a returns question.
+  - ho-17, syn-03, mer-07, ho-32: unchanged or worse.
+- **Misleading selection:** adv-06 ("lifetime durability" for the warranty question) is unchanged. adv-13 still neither rejects "free today" nor gives a price.
+- **Drafting:** mer-03 is worse. The faux-leather, felt and magnet lines are gone, leaving a slogan, the dimensions and a raw SKU row.
+- **Language:** answers are English lines to Spanish, French and German questions. The cards' "Resumen en español" lines are never preferred.
+
+## New failure modes the fixes introduced
+
+1. **The relevance rule trades the right card for a word match:**
+   - **cat-10** goes from 85 to about 0. "Are rivet magnets in stock? How many come in a pack?" gets five Quick-Load Panel lines and no rivet line. The accessories card line "Rivet Magnets ($8.99 for 4) are sold out" is dropped.
+   - **ho-20** goes from 73 to about 0. Cost, cancel and fee questions get Icewind Dale lore and the GM's celebrity guest list ("He's had the honor of having Matt Mercer, Matthew Lillard…"), because "Thursday" and "Everlasting Rime" count as specific words. The subscriptions-card cancel line C used was lost.
+   - **ho-23** goes from about 0 to a single marketing fragment ("The rules at a glance — no more mid-mission page-flipping.").
+2. **Privacy answer regressed in the dangerous direction (pol-08, 86.5 → 7).** "Do you sell or share my personal information with advertisers?" now gets only "We do not use or disclose sensitive personal information without your consent…" plus a children's-data line, both from the original policy. Read as an answer, that's a reassuring "no", the round-5 pol-08 failure returning through verbatim quotes. The card's disclosure headline wasn't used.
+   - On held-out (ho-08), the same headline was also dropped. The opt-out lines keep that answer honest.
+   - It isn't severe because nothing is invented, but this is the highest-risk answer in the run.
+3. **The "do you sell X" route keyed on the wrong noun (ooc-01).** "Do you sell paint kits for painting miniatures?" was answered "The store does not sell miniatures." The not-offered card's "does not sell paint, painting kits" line exists. This is a partial decline, and it now blocks the benchmark out-of-scope gate.
+4. **The headline takes a list slot (cat-08).** The bundle list shows 9 of the 10 items; the Magnetic Bar Set is silently dropped. ho-15 also still stops before the "dice tray … sold separately" line, which answers half the question.
+5. **Headlines that are off-topic but word-matched get promoted.** cat-01 opens with "The store publishes no prices or specs for other brands' screens", from the comparison card's headline, for a plain price question.
+6. **Translation loses the topic (ho-24).** Spanish "¿Cuánto cuesta el envío a México…?" gets currency and wallet lines ("customers in Canada and Mexico pay in Canadian dollars") instead of shipping cost (UPS at checkout) and dispatch days. It's no longer refused, but it doesn't answer.
+
+No new severe items and no false refusals were introduced. The deterministic guards misfired only once (ooc-01).
+
+## Did the auto/judged gap close?
+
+**It changed sign, and on held-out it is now inflated.**
+
+| | C | C2 |
+|---|---|---|
+| Benchmark mean, auto − judged | −5.8 (auto too harsh) | **+4.1** |
+| Held-out mean, auto − judged | −5.5 | **+10.4** |
+| Benchmark parity, auto − judged | −0.15 | +0.03 |
+| Held-out parity, auto − judged | −0.15 | **+0.10** |
+
+**Is the `derived_from` mapping honest?** Mostly yes, with three sources of inflation:
+- **Wrong-card citations get full precision through broad `derived_from` lists.** `product-ultimate-game-master-screen.md` derives from `catalog/inventory-and-pricing.md`, which is an *acceptable* source for many stock items. So ho-11 (screen lines for a Large Pouch question) and ho-12 (screen lines for a Gothic cover question) score source precision 1.0.
+  - The same applies to the accessories (7 files), contact (5), not-offered (5) and collections (10) cards: any item whose expected or acceptable list contains one of those files is matched by the card, whatever line was quoted.
+  - **Fix:** credit a card only through `expected_sources` (not acceptable ones), and only when the card's topic matches the item. Simpler: require that the quoted line contains one of the item's `must_include` facts.
+- **`pathMatches` falls back to basename**, so `canonical/x.md` and `catalog/products/x.md` would match each other if names collided. There are no collisions today, but it's fragile.
+- **`must_include` substring matching** credits long card lines that contain many numbers and terms. Examples:
+  - syn-09: product lines that contain "tone" score auto 95, judged 45.
+  - cat-08: 9 of 10 items, auto 100.
+  - ho-04: auto 72 without the shipping-cost answer.
+
+The mapping itself isn't fabricating anything. It is just too permissive on wrong-card citations, and that is most of the held-out inflation.
+
+## Updated top-3 fixes
+
+1. **Make relevance entity-first, not word-first.**
+   - Pick lines whose entity matches the question's product or policy (Large Pouch, Rivet Magnets, Gothic cover, Sci-Fi cover, Full Color Set) before any generic word match.
+   - Never let a different product's row or card answer a named-product question.
+   - For subscription and fee questions, rank the policy or subscription card above product descriptions and lore.
+   - Targets: cat-10, ho-11, ho-12, ho-29, ho-14, adv-07, ho-20, ho-23.
+2. **Pin the answer line for high-risk intents.**
+   - **Privacy:** always quote the disclosure headline plus the opt-out line, and never "sensitive information" or children's lines alone (pol-08).
+   - **Warranty:** add a true-negative "no warranty is offered" card line instead of quoting "lifetime durability" (adv-06).
+   - **"X is free / was $Y" premises:** quote the item's price-and-stock line (adv-13).
+   - **"Do you sell X":** match the *first* object noun (paint kits), not any noun (ooc-01).
+   - **Lists:** don't count the headline against the 10-line list cap (cat-08, ho-15).
+3. **Multilingual and scorer hygiene.**
+   - Keep the original-language topic words (envío, Versand) alongside the English rendering (ho-24).
+   - Prefer the cards' own-language summary lines, or reply in the question's language with a fixed template.
+   - Tighten the auto scorer's card credit to expected sources plus the item's facts, so auto stops over-reporting held-out by about 10 points.
+   - Confirm the mer-04 analytics guard with a recorded run.
+
+**Do these clear the gates?** The benchmark out-of-scope gate needs only ooc-01 (fix 2) and a recorded mer-04. Parity ≥ 1.0 on held-out needs fix 1: catalog on held-out is still 44, against a Sidekick reference of 85.
