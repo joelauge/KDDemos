@@ -426,7 +426,7 @@ function withFocus(container, fn) {
   if (fk) { const n = container.querySelector(`[data-fk="${CSS.escape(fk)}"]`); if (n) n.focus({ preventScroll: true }); }
 }
 
-function surfaceBadge(surface, { full = false } = {}) {
+function surfaceBadge(surface, { full = false, sim = false } = {}) {
   const kind = surface.kind;
   const where = h('span', { class: 'where', title: `${surface.host}${surface.path}` });
   if (surface.host) where.append(h('b', null, surface.host));
@@ -435,6 +435,7 @@ function surfaceBadge(surface, { full = false } = {}) {
   return h('span', { class: 'sbadge' },
     h('span', { class: `kind kind-${kind}`, title: `Surface: ${kind}, device: ${surface.device}` },
       icon(surface.device === 'unknown' ? (kind === 'api' ? 'api' : 'unknown') : surface.device), kind),
+    sim ? simFlag() : null,
     where,
     surface.embedded ? h('span', { class: 'flag flag-iframe', title: 'Rendered inside an iframe' }, 'iframe') : null,
   );
@@ -446,15 +447,18 @@ function computeKpis() {
   const now = Date.now();
   let active = 0, users = 0, bots = 0, grounded = 0, refused = 0, cites = 0;
   const lat = [];
-  const buckets = new Array(30).fill(0); // messages per minute, last 30 min
+  const N = 24; const buckets = new Array(N).fill(0);
+  let first = now;
+  for (const s of S.sessions.values()) if (sessionMatches(s)) for (const t of s.turns.values()) for (const m of [t.user, t.bot]) if (m) first = Math.min(first, m.ts);
+  const span = Math.min(30 * 60000, Math.max(2 * 60000, now - first)); // adaptive window: 2–30 min
   for (const s of S.sessions.values()) {
     if (!sessionMatches(s)) continue;
     if (now - s.lastAt <= ACTIVE_MS) active++;
     for (const t of s.turns.values()) {
       for (const m of [t.user, t.bot]) {
         if (!m) continue;
-        const b = 29 - Math.floor((now - m.ts) / 60000);
-        if (b >= 0 && b < 30) buckets[b]++;
+        const b = N - 1 - Math.floor(((now - m.ts) / span) * N);
+        if (b >= 0 && b < N) buckets[b]++;
       }
       if (t.user) users++;
       if (t.bot) {
@@ -490,7 +494,7 @@ function renderKpis() {
   const el = $('#kpis');
   rc(el, 
     tile('Active sessions', String(k.active), 'activity in last 5 min', null, 'active'),
-    tile('Messages', String(k.messages), `${k.users} asked · ${k.bots} answered`, sparkline(k.buckets), 'messages'),
+    tile('Messages', String(k.messages), `${k.users} asked · ${k.bots} answered`, k.messages ? sparkline(k.buckets) : null, 'messages'),
     tile('Grounded', pct(k.grounded), 'answers with ≥1 citation', meter(k.grounded), 'grounded'),
     tile('Refusals', pct(k.refused), 'not covered by knowDrive', meter(k.refused, true), 'refused'),
     tile('Median latency', fmtMs(k.med), `total · n=${k.latN}`, null, 'median'),
@@ -541,7 +545,7 @@ function sessionRow(s) {
     type: 'button', class: 'srow', 'data-fk': `s:${s.sessionId}`, 'aria-current': S.selected === s.sessionId ? 'true' : 'false',
     onclick: () => selectSession(s.sessionId, true),
   },
-    h('span', { class: 'srow-meta' }, surfaceBadge(s.surface), s.sim ? simFlag() : null),
+    h('span', { class: 'srow-meta' }, surfaceBadge(s.surface, { sim: s.sim })),
     h('span', { class: `srow-q${lastQ ? '' : ' none'}` }, lastQ ? lastQ.user.text : 'No questions yet'),
     h('span', { class: 'srow-meta' },
       active ? h('span', { class: 'live-dot', title: 'active in last 5 min' }) : null,
@@ -686,13 +690,13 @@ function renderConvo() {
     }
     const sf = s.surface;
     const head = h('div', { class: 'convo-head' },
-      h('div', { class: 'convo-head-top' }, surfaceBadge(sf, { full: true }), s.sim ? simFlag() : null),
+      h('div', { class: 'convo-head-top' }, surfaceBadge(sf, { full: true, sim: s.sim })),
       h('dl', { class: 'facts' },
         fact('Surface', sf.kind), fact('Device', sf.device), fact('Channel', sf.channel || '—'), fact('Embedded', sf.embedded ? 'yes (iframe)' : 'no'),
         fact('Started', `${clock(s.startedAt)}`), fact('Last activity', ago(s.lastAt)), fact('Lang', sf.lang || '—'),
         fact('Turns', String(Math.max(turns.length, s.serverTurns || 0))),
         sf.referrer ? fact('Referrer', sf.referrer, true) : null,
-        sf.ua ? fact('User agent', sf.ua, true) : null),
+        sf.ua ? fact('User agent', sf.ua, 'ua') : null),
       h('div', { class: 'convo-sid' }, `session ${s.sessionId}`),
     );
     const kids = [head];
@@ -701,7 +705,7 @@ function renderConvo() {
     rc(box, ...kids);
   });
 }
-function fact(k, v, wrap) { return h('div', null, h('dt', null, k), h('dd', { class: wrap ? 'wrap' : null, title: v }, v)); }
+function fact(k, v, wrap) { return h('div', { class: wrap ? 'fact-wide' : null }, h('dt', null, k), h('dd', { class: wrap ? `wrap${wrap === 'ua' ? ' clamp' : ''}` : null, title: v }, v)); }
 
 function turnView(s, t, i) {
   const wrap = h('article', { class: 'turn', 'aria-label': `Turn ${i + 1}` });
