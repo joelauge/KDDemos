@@ -67,6 +67,22 @@ To re-seed the store after editing `corpus/`:
 KNOWDRIVE_API_KEY=... node knowbot/scripts/seed-knowdrive.mjs --dry-run   # then without --dry-run
 ```
 
+## Sync
+
+`scripts/sync-knowdrive.mjs` keeps the live store identical to `corpus/`. It compares every corpus file with the live
+file at `KNOWDRIVE_PREFIX` + its path and plans `add`, `update` (content differs), `same`, `retag` (missing `knowbot`,
+`knowbot:ugm`, `kind:` or `canonical/TAGS.json` tags) and `remove` (live files tagged `knowbot:ugm` under the prefix that
+no longer exist locally). Nothing outside the prefix and tag is touched: the store is shared.
+
+```bash
+KNOWDRIVE_API_KEY=... node knowbot/scripts/sync-knowdrive.mjs           # dry run: prints the plan
+KNOWDRIVE_API_KEY=... node knowbot/scripts/sync-knowdrive.mjs --apply   # uploads, retags (additive), deletes
+node knowbot/scripts/sync-knowdrive.mjs --json                           # machine-readable plan/result
+```
+
+Local-mode retrieval reads the same `corpus/` folder, so after a sync the two modes search identical content and
+cite identical paths.
+
 ## Embed it
 
 ```html
