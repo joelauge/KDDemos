@@ -261,7 +261,7 @@ describe('server (HTTP)', () => {
     llmPort = await listen(llm.srv);
     kb = createKnowBotServer({
       root: ROOT, corpusDir, dataDir, libPath: LIB, quiet: true, watch: false, rateLimit: 1000,
-      env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1`, LLM_MODEL: 'fake-model' },
+      env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1`, LLM_MODEL: 'fake-model', KNOWBOT_ANSWER_MODE: 'generate' },
     });
     await kb.ready;
     port = await listen(kb.server);

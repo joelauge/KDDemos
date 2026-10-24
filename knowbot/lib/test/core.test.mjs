@@ -1,7 +1,7 @@
 // node --test knowbot/lib/test/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { KnowBot, guardRequest, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever } from '../knowbot.js';
+import { KnowBot, guardRequest, NOT_IN_DATA, candidateLines, buildSelectMessages, finalizeSelection, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever } from '../knowbot.js';
 
 const S = (i, over = {}) => ({
   file_id: `f${i}`, filename: `policies/doc${i}.md`, title: `Doc ${i}`, url: `https://example.com/${i}`, score: 10 - i,
@@ -49,19 +49,19 @@ test('rule 2: an uncited "not covered" reply is ungrounded, not given fake citat
   assert.equal(a.citations.length, 0);
 });
 
-test('rule 3: nothing relevant => refused, suggests covered topics, no claims', () => {
+test('rule 3: nothing relevant => refused with the fixed sentence, no claims', () => {
   const empty = finalizeAnswer(null, [], { persona: { org: 'Acme' } });
   assert.equal(empty.refused, true);
   assert.equal(empty.grounded, false);
   assert.deepEqual(empty.citations, []);
-  assert.match(empty.text, /Acme's knowDrive/);
+  assert.equal(empty.text, NOT_IN_DATA);
 
   const weak = [S(1, { score: 0.004, title: 'Refund policy' }), S(2, { score: 0.002, title: 'Shipping policy' })];
   const r = finalizeAnswer('The capital of France is Paris [1].', weak, { minScore: 0.01, persona: { org: 'Acme' } });
   assert.equal(r.refused, true);
   assert.equal(r.citations.length, 0);
   assert.doesNotMatch(r.text, /Paris/);
-  assert.match(r.text, /\*\*Refund policy\*\*, \*\*Shipping policy\*\*/);
+  assert.equal(r.text, NOT_IN_DATA);
 
   // BM25 zero scores are irrelevant by default; hybrid/RRF small positive scores pass by default
   assert.equal(finalizeAnswer('x [1]', [S(1, { score: 0 })]).refused, true);
@@ -176,7 +176,7 @@ test('KnowBot.ask end-to-end with custom retriever + stub engine (no network)', 
   const events = [];
   const bot = new KnowBot({
     apiBase: 'http://127.0.0.1:1', telemetry: false, persona: { org: 'Acme' },
-    retriever: { type: 'custom', search: async () => [S(1), S(2)] },
+    retriever: { type: 'custom', search: async () => [S(1), S(2)] }, answerMode: 'generate',
     engine: { type: 'stub', model: 'stub-1', complete: async (msgs, o) => { o.onToken?.('Hi [2]', 'Hi [2]'); return 'Hi [2] and [1].'; } },
   });
   bot.emit = (e) => events.push(e);
@@ -196,6 +196,7 @@ test('KnowBot.ask end-to-end with custom retriever + stub engine (no network)', 
     engine: { type: 'stub', complete: async () => { throw new Error('must not call LLM'); } } });
   const r = await none.ask('anything');
   assert.equal(r.refused, true);
+  assert.equal(r.text, NOT_IN_DATA);
 });
 
 test('guardRequest: refuses actions, personal data and prompt extraction before retrieval', () => {
@@ -274,4 +275,29 @@ test('support check: claims whose numbers or wording are not in the cited source
   assert.equal(m.pruned, 1); assert.equal(m.citations[0].file_id, 'f2');
   const r = finalizeAnswer('The Ultimate Game Master Screen costs $139.99 [1].', src);
   assert.equal(r.citations[0].file_id, 'f2', 'mis-cited claim is re-cited to the source that supports it');
+});
+
+test('select mode: the model only names lines; KnowBot quotes them with citations, or gives the fixed refusal', async () => {
+  const src = [S(1, { filename: 'canonical/returns.md', title: 'Returns', text: '---\ntitle: Returns\n---\n# Returns\nReturns are accepted within 30 days of receipt.\n- After 30 days a return is not accepted.\n- Sale items and gift cards cannot be returned.\nWhere this comes from: policies/refund.md' }),
+    S(2, { filename: 'catalog/products/screen.md', title: 'Screen', text: '# Screen\n| Variant | Price | Available |\n|---|---|---|\n| Red | $139.99 | no |\n| Brown | $139.99 | yes |' })];
+  const lines = candidateLines(src);
+  assert.deepEqual(lines.map((l) => l.text), ['Returns are accepted within 30 days of receipt.', 'After 30 days a return is not accepted.',
+    'Sale items and gift cards cannot be returned.', 'Variant: Red; Price: $139.99; Available: no', 'Variant: Brown; Price: $139.99; Available: yes']);
+  const msgs = buildSelectMessages('Can I return after 5 weeks?', lines, { org: 'Acme' });
+  assert.match(msgs.at(-1).content, /^LINES:\nL1 Returns are accepted/);
+  const a = finalizeSelection('L2, L1', lines, src, { question: 'Can I return after 5 weeks?' });
+  assert.equal(a.text, '- After 30 days a return is not accepted. [1]\n- Returns are accepted within 30 days of receipt. [1]');
+  assert.deepEqual(a.citations.map((c) => c.filename), ['canonical/returns.md']);
+  const red = finalizeSelection('L4', lines, src);
+  assert.equal(red.text, 'Variant: Red; Price: $139.99; Available: no. [1]'); assert.equal(red.citations[0].filename, 'catalog/products/screen.md');
+  for (const raw of ['NONE', 'none of these', '']) {
+    const n = finalizeSelection(raw, raw ? lines : [], src, { question: 'weather on Saturday?' });
+    assert.equal(n.text, NOT_IN_DATA); assert.equal(n.refused, true); assert.deepEqual(n.citations, []);
+  }
+  assert.equal(finalizeSelection('L99', lines, src, { question: 'opening hours on Saturday' }).text, NOT_IN_DATA, 'invalid picks never invent text');
+
+  const bot = new KnowBot({ telemetry: false, retriever: { type: 'custom', search: async () => src },
+    engine: { type: 'stub', complete: async (m, o) => { assert.equal(o.settings.max_tokens, 24); return 'L3'; } } });
+  const r = await bot.ask('Can I return a gift card?');
+  assert.equal(r.text, 'Sale items and gift cards cannot be returned. [1]'); assert.equal(r.grounded, true);
 });

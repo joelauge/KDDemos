@@ -209,17 +209,13 @@ export function createKnowBotServer(opts = {}) {
     const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}` };
     const engine = { type: 'openai', model: llmModel };
 
-    // Mirror KnowBot.ask() in lib/knowbot.js exactly: selectSources -> buildMessages -> LLM -> finalizeAnswer.
-    const relevant = typeof lib.selectSources === 'function'
-      ? lib.selectSources(results, minScore, k)
-      : results.filter((r) => r.score == null || r.score > minScore).slice(0, k);
-    let raw = null, tGen = tRet;
-    if (!guard && relevant.length) {
-      const messages = lib.buildMessages(question, relevant, persona, Array.isArray(history) ? history : []);
-      raw = await llmComplete(messages, settings);
-      tGen = performance.now();
+    // Same path as KnowBot.ask() in lib/knowbot.js: guard -> retrieval -> answerFromSources (select mode by default).
+    let fin = guard, tGen = tRet;
+    if (!guard) {
+      const r = await lib.answerFromSources({ question, results, complete: (m, c) => llmComplete(m, c?.settings || settings), persona, minScore, k,
+        history: Array.isArray(history) ? history : [], mode: env.KNOWBOT_ANSWER_MODE || 'select', settings });
+      fin = r.fin; tGen = performance.now();
     }
-    const fin = guard || lib.finalizeAnswer(raw, relevant.length ? relevant : results, { minScore, persona, question });
     const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
     const answer = {
       ...fin,
