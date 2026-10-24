@@ -319,7 +319,7 @@ export class KnowDriveRetriever {
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
   constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = 0.03 }) {
-    this.baseUrl = String(baseUrl || 'https://dev.knowdrive.ai').replace(/\/+$/, '');
+    this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0;
     this.tag = tag;
@@ -383,9 +383,10 @@ export class KnowDriveRetriever {
 
 function pickStr(v) { return typeof v === 'string' && v.trim() ? v.trim() : null; }
 
-export const DEFAULT_STORE = 'vs_f66318f0dd0e4540b27663b03ea40f40';
+// Production home: "Joel's Store" on knowdrive.ai, windowed to the knowbot/ugm/ folder and knowbot:ugm tag.
+export const DEFAULT_STORE = 'vs_97c857474b1f4e8892b134c283cf9849';
 export const DEFAULT_TAG = 'knowbot:ugm';
-export const DEFAULT_PREFIX = '';
+export const DEFAULT_PREFIX = 'knowbot/ugm/';
 // Calibrated on the benchmark (vector similarity of the top hit): off-topic 0.70–0.76, answerable 0.74–0.88.
 export const DEFAULT_MIN_SIMILARITY = 0.745;
 
@@ -397,7 +398,7 @@ export function createRetriever({ corpusDir, env = process.env, logger, watch = 
     const file = env.KNOWDRIVE_API_KEY_FILE;
     const apiKey = file ? () => { try { return readFileSync(file, 'utf8').trim(); } catch { return ''; } } : env.KNOWDRIVE_API_KEY;
     const kd = new KnowDriveRetriever({
-      baseUrl: env.KNOWDRIVE_BASE_URL || 'https://dev.knowdrive.ai', apiKey,
+      baseUrl: env.KNOWDRIVE_BASE_URL || 'https://knowdrive.ai', apiKey,
       store: env.KNOWDRIVE_STORE || DEFAULT_STORE, tag: env.KNOWDRIVE_TAG ?? DEFAULT_TAG, prefix: env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX, local, logger,
       minSimilarity: Number(env.KNOWDRIVE_MIN_SIMILARITY ?? DEFAULT_MIN_SIMILARITY),
     });

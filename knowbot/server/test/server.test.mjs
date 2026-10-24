@@ -425,10 +425,10 @@ describe('server (HTTP)', () => {
     } finally { await close(kb2.server); }
   });
 
-  test('server in knowdrive mode (defaults: dedicated store, empty prefix) sends tag filter', async () => {
+  test('server in knowdrive mode (defaults: production store, knowbot/ugm/ prefix) sends tag filter', async () => {
     const kd = fakeKnowDrive({ data: [
-      { file_id: 'file_a', filename: 'policies/refund-policy.md', score: 0.9, content: [{ type: 'text', text: '30-day returns' }], attributes: {} },
-      { file_id: 'file_b', filename: 'catalog/products/dragon-dice.md', score: 0.4, content: [{ type: 'text', text: 'dice' }], attributes: {} },
+      { file_id: 'file_a', filename: 'knowbot/ugm/policies/refund-policy.md', score: 0.9, content: [{ type: 'text', text: '30-day returns' }], attributes: {} },
+      { file_id: 'file_b', filename: 'knowbot/ugm/catalog/products/dragon-dice.md', score: 0.4, content: [{ type: 'text', text: 'dice' }], attributes: {} },
     ] });
     const kdPort = await listen(kd.srv);
     const kb3 = createKnowBotServer({ root: ROOT, corpusDir, dataDir: await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-')), libPath: LIB, quiet: true, watch: false,
@@ -437,11 +437,11 @@ describe('server (HTTP)', () => {
     try {
       const c = await (await fetch(`http://127.0.0.1:${p3}/api/config`)).json();
       assert.equal(c.retrieval, 'knowdrive');
-      assert.equal(c.store, 'vs_f66318f0dd0e4540b27663b03ea40f40');
+      assert.equal(c.store, 'vs_97c857474b1f4e8892b134c283cf9849');
       const j = await (await fetch(`http://127.0.0.1:${p3}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'returns' }) })).json();
       assert.equal(j.source, 'knowdrive');
       assert.deepEqual(kd.calls[0].body, { query: 'returns', max_num_results: 6, mode: 'hybrid', text: 'raw', filter: { all_of: ['knowbot:ugm'] } });
-      assert.equal(kd.calls[0].url, '/api/v1/vector_stores/vs_f66318f0dd0e4540b27663b03ea40f40/search');
+      assert.equal(kd.calls[0].url, '/api/v1/vector_stores/vs_97c857474b1f4e8892b134c283cf9849/search');
       assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
       assert.equal(j.results[0].url, 'https://example.test/policies/refund-policy');
     } finally { await close(kb3.server); await close(kd.srv); }

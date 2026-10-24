@@ -46,15 +46,16 @@ The dashboard also works with no server: open it and press **Simulate traffic**.
 | `local` | no key | BM25 over `corpus/`. The same paths are cited, so answers are comparable, but keyword-only. |
 
 ```bash
-KNOWDRIVE_API_KEY=<developer key from dev.knowdrive.ai/developer-keys> knowbot/scripts/dev.sh
+KNOWDRIVE_API_KEY=<developer key from knowdrive.ai/developer-keys> knowbot/scripts/dev.sh
 ```
 
 | Variable | Default |
 |---|---|
-| `KNOWDRIVE_BASE_URL` | `https://dev.knowdrive.ai` |
-| `KNOWDRIVE_STORE` | `vs_f66318f0dd0e4540b27663b03ea40f40` |
+| `KNOWDRIVE_BASE_URL` | `https://knowdrive.ai` (production) |
+| `KNOWDRIVE_STORE` | `vs_97c857474b1f4e8892b134c283cf9849` ("Joel's Store") |
 | `KNOWDRIVE_TAG` | `knowbot:ugm` |
-| `KNOWDRIVE_PREFIX` | empty; set it to host the corpus in a shared store under a folder |
+| `KNOWDRIVE_PREFIX` | `knowbot/ugm/` (the folder inside the shared store) |
+| `KNOWDRIVE_MIN_SIMILARITY` | `0.745`: relevance floor on vector similarity; below it KnowBot refuses |
 | `KNOWDRIVE_API_KEY_FILE` | path to a file holding the key; re-read on every search, so a rotated key needs no restart |
 
 Minted MCP tokens last about 120 seconds, so a long-running server needs a developer key. If knowDrive fails, the

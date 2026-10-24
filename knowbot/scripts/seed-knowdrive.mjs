@@ -3,15 +3,15 @@
 //
 //   KNOWDRIVE_API_KEY=... node knowbot/scripts/seed-knowdrive.mjs [--dry-run] [--only <substring>] [--concurrency 4]
 //
-// Env: KNOWDRIVE_BASE_URL (default https://dev.knowdrive.ai), KNOWDRIVE_API_KEY (required unless --dry-run),
-//      KNOWDRIVE_STORE (default vs_f66318f0dd0e4540b27663b03ea40f40), KNOWDRIVE_TAG (default knowbot:ugm),
-//      KNOWDRIVE_PREFIX (default empty: files live at corpus-relative paths in the dedicated store).
+// Env: KNOWDRIVE_BASE_URL (default https://knowdrive.ai), KNOWDRIVE_API_KEY (required unless --dry-run),
+//      KNOWDRIVE_STORE (default vs_97c857474b1f4e8892b134c283cf9849, "Joel's Store"), KNOWDRIVE_TAG (default knowbot:ugm),
+//      KNOWDRIVE_PREFIX (default knowbot/ugm/: the folder inside the shared production store).
 //
 // Each corpus file is uploaded with
 //   POST {base}/api/v1/vector_stores/{store}/files   (multipart: file, filename=<PREFIX><relpath>, purpose=assistants, tags)
 // Path is the logical identity in knowDrive: re-uploading the same path creates a new version that
 // supersedes the old one, so this script is idempotent (run it again after editing the corpus).
-// Tags: knowbot, <KNOWDRIVE_TAG>, kind:<kind from frontmatter>.
+// Tags: knowbot, <KNOWDRIVE_TAG>, kind:<kind from frontmatter>, plus any canonical/TAGS.json tags for the file.
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +26,7 @@ const DRY = flag('--dry-run') || flag('-n');
 const ONLY = opt('--only', '');
 const CONCURRENCY = Math.max(1, Number(opt('--concurrency', 4)));
 const corpusDir = path.resolve(opt('--corpus', path.join(__dirname, '..', 'corpus')));
-const base = String(process.env.KNOWDRIVE_BASE_URL || 'https://dev.knowdrive.ai').replace(/\/+$/, '');
+const base = String(process.env.KNOWDRIVE_BASE_URL || 'https://knowdrive.ai').replace(/\/+$/, '');
 const key = process.env.KNOWDRIVE_API_KEY || '';
 const store = process.env.KNOWDRIVE_STORE || DEFAULT_STORE;
 const tag = process.env.KNOWDRIVE_TAG ?? DEFAULT_TAG;
@@ -52,13 +52,18 @@ let files;
 try { files = (await walk(corpusDir)).sort(); } catch (e) { console.error(`cannot read corpus at ${corpusDir}: ${e.message}`); process.exit(1); }
 if (ONLY) files = files.filter((f) => f.includes(ONLY));
 
+// Canonical answer cards carry extra targeting tags (topic:, entity:, intent:) from corpus/canonical/TAGS.json.
+let extraTags = {};
+try { extraTags = JSON.parse(await fsp.readFile(path.join(corpusDir, 'canonical', 'TAGS.json'), 'utf8')); } catch { /* no cards yet */ }
+
 const plan = [];
 for (const abs of files) {
   const rel = path.relative(corpusDir, abs).split(path.sep).join('/');
   const src = await fsp.readFile(abs, 'utf8');
   const { meta } = parseFrontmatter(src);
   const kind = typeof meta.kind === 'string' && meta.kind ? meta.kind : 'page';
-  const tags = ['knowbot', tag, `kind:${kind}`].filter(Boolean);
+  const extra = (extraTags[rel] || extraTags[`canonical/${path.basename(rel)}`] || []).map((t) => String(t).toLowerCase()).filter((t) => /^[a-z0-9:._-]+$/.test(t));
+  const tags = [...new Set(['knowbot', tag, `kind:${kind}`, ...extra].filter(Boolean))];
   plan.push({ rel, storePath: `${prefix}${rel}`, bytes: Buffer.byteLength(src), tags, src, title: meta.title || '' });
 }
 
