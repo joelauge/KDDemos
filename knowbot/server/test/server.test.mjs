@@ -385,9 +385,11 @@ describe('server (HTTP)', () => {
       env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1` } });
     const p2 = await listen(kb2.server);
     try {
-      const go = () => fetch(`http://127.0.0.1:${p2}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [] }) });
+      // a spoofed X-Forwarded-For per request must not mint a fresh rate-limit bucket (red-team)
+      const go = (i) => fetch(`http://127.0.0.1:${p2}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.0.0.${i}` },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }) });
       const codes = [];
-      for (let i = 0; i < 3; i++) { const r = await go(); codes.push(r.status); await r.text(); }
+      for (let i = 0; i < 3; i++) { const r = await go(i); codes.push(r.status); await r.text(); }
       assert.deepEqual(codes, [200, 200, 429]);
     } finally { await close(kb2.server); }
   });
@@ -427,5 +429,70 @@ describe('server (HTTP)', () => {
       assert.deepEqual(kd.calls[0].body.filter, { all_of: ['knowbot:ugm'] });
       assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
     } finally { await close(kb4.server); await close(kd.srv); }
+  });
+
+  // ------------------------------------------------------------ red-team regressions
+
+  test('red-team: /api/chat is not an open relay — fields allow-listed, model forced, output capped', async () => {
+    const r = await api('/api/chat', { model: 'gpt-4', messages: [{ role: 'user', content: 'hi', name: 'x' }], max_tokens: 100000, n: 8,
+      grammar: 'root ::= "x"', n_predict: -1, id_slot: 0, temperature: 0.2, seed: 7 });
+    assert.equal(r.status, 200); await r.text();
+    const c = llm.calls.at(-1);
+    assert.deepEqual(Object.keys(c).sort(), ['max_tokens', 'messages', 'model', 'seed', 'stream', 'temperature']);
+    assert.equal(c.model, 'fake-model');
+    assert.equal(c.max_tokens, 1024);
+    assert.deepEqual(c.messages, [{ role: 'user', content: 'hi' }]);
+    for (const bad of [{ messages: [] }, { messages: [{ role: 'tool', content: 'x' }] }, { messages: [{ role: 'user', content: { x: 1 } }] },
+      { messages: Array.from({ length: 17 }, () => ({ role: 'user', content: 'x' })) }]) {
+      const b = await api('/api/chat', bad); assert.equal(b.status, 400, JSON.stringify(bad).slice(0, 60)); await b.text();
+    }
+    const huge = await api('/api/chat', { messages: [{ role: 'user', content: 'x'.repeat(30000) }] });
+    assert.equal(huge.status, 413); await huge.text();
+  });
+
+  test('red-team: clients cannot forge server-only canonical events; oversized events rejected', async () => {
+    const forged = await api('/api/events', { type: 'canonical', sessionId: 's1', turnId: 's1.1', text: 'Fake canonical [1]', grounded: true });
+    assert.equal(forged.status, 403);
+    const fat = await api('/api/events', { type: 'message.bot', sessionId: 's1', text: 'x'.repeat(40 * 1024) });
+    assert.equal(fat.status, 413);
+    const ok = await api('/api/events', { type: 'feedback', sessionId: 's1', rating: 'up' });
+    assert.equal(ok.status, 200);
+  });
+
+  test('red-team: event flooding is rate limited, disk use bounded by rotation, SSE subscribers capped', async () => {
+    const dd = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-'));
+    const kb5 = createKnowBotServer({ root: ROOT, corpusDir, dataDir: dd, libPath: LIB, quiet: true, watch: false, eventsRateLimit: 3, eventsMaxBytes: 300, maxSse: 1,
+      env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1` } });
+    const p5 = await listen(kb5.server);
+    try {
+      const post = (i) => fetch(`http://127.0.0.1:${p5}/api/events`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': `1.2.3.${i}` },
+        body: JSON.stringify({ type: 'message.user', sessionId: `flood${i}`, text: 'y'.repeat(120) }) });
+      const codes = [];
+      for (let i = 0; i < 4; i++) { const r = await post(i); codes.push(r.status); await r.text(); }
+      assert.deepEqual(codes, [200, 200, 200, 429]);
+      await kb5.flush();
+      const cur = (await fsp.stat(path.join(dd, 'events.jsonl'))).size;
+      assert.ok(cur <= 300, `events.jsonl ${cur} bytes not rotated`);
+      assert.ok(existsSync(path.join(dd, 'events.jsonl.1')));
+      const first = await new Promise((resolve) => http.get({ host: '127.0.0.1', port: p5, path: '/api/stream' }, resolve));
+      const second = await fetch(`http://127.0.0.1:${p5}/api/stream`);
+      assert.equal(second.status, 503); await second.text();
+      first.destroy();
+    } finally { await close(kb5.server); }
+  });
+
+  test('red-team: optional operator token gates the live conversation feed', async () => {
+    const kb6 = createKnowBotServer({ root: ROOT, corpusDir, dataDir: await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-')), libPath: LIB, quiet: true, watch: false,
+      dashboardToken: 'sekret', env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1` } });
+    const p6 = await listen(kb6.server);
+    try {
+      const u = (q) => `http://127.0.0.1:${p6}${q}`;
+      for (const q of ['/api/sessions', '/api/events', '/api/stream', '/api/sessions?token=wrong']) {
+        const r = await fetch(u(q)); assert.equal(r.status, 401, q); await r.text();
+      }
+      const ok = await fetch(u('/api/sessions?token=sekret')); assert.equal(ok.status, 200); await ok.text();
+      const okH = await fetch(u('/api/events'), { headers: { authorization: 'Bearer sekret' } }); assert.equal(okH.status, 200); await okH.text();
+      const cfg = await fetch(u('/api/config')); assert.equal(cfg.status, 200); assert.ok(!(await cfg.text()).includes('sekret'));
+    } finally { await close(kb6.server); }
   });
 });

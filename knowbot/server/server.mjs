@@ -202,7 +202,8 @@ export function createKnowBotServer(opts = {}) {
     const minScore = Number(env.KNOWBOT_MIN_SCORE || 0);
     const settings = { ...CANONICAL, ...(lib.CANONICAL || {}) };
     const t0 = performance.now();
-    const ret = await retriever.search(question, k);
+    const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(question, persona) : null;
+    const ret = guard ? { source: 'guard', results: [] } : await retriever.search(question, k);
     const tRet = performance.now();
     const results = ret.results;
     const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}` };
@@ -213,12 +214,12 @@ export function createKnowBotServer(opts = {}) {
       ? lib.selectSources(results, minScore, k)
       : results.filter((r) => r.score == null || r.score > minScore).slice(0, k);
     let raw = null, tGen = tRet;
-    if (relevant.length) {
+    if (!guard && relevant.length) {
       const messages = lib.buildMessages(question, relevant, persona, Array.isArray(history) ? history : []);
       raw = await llmComplete(messages, settings);
       tGen = performance.now();
     }
-    const fin = lib.finalizeAnswer(raw, relevant.length ? relevant : results, { minScore, persona });
+    const fin = guard || lib.finalizeAnswer(raw, relevant.length ? relevant : results, { minScore, persona });
     const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
     const answer = {
       ...fin,

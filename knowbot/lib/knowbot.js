@@ -62,12 +62,19 @@ export const serverRetriever = ({ apiBase }) => ({
   },
 });
 
-export const knowdriveRetriever = ({ baseUrl = 'https://dev.knowdrive.ai', store, token, mode = 'hybrid' }) => ({
+/** Direct knowDrive search, windowed to `tag` (SPEC: never cite untagged files) and, when set, to `prefix` (stripped). */
+export const knowdriveRetriever = ({ baseUrl = 'https://dev.knowdrive.ai', store, token, mode = 'hybrid', tag = 'knowbot:ugm', prefix = '' }) => ({
   type: 'knowdrive',
   async search(query, k, signal) {
     const url = `${trimSlash(baseUrl)}/api/v1/vector_stores/${encodeURIComponent(store)}/search`;
-    const j = await (await post(url, { query, max_num_results: k, mode, text: 'raw' }, token ? { authorization: `Bearer ${token}` } : {}, signal)).json();
-    return { source: 'knowdrive', results: (j.data || []).map(normalizeResult) };
+    const body = { query, max_num_results: k, mode, text: 'raw', ...(tag ? { filter: { all_of: [tag] } } : {}) };
+    const j = await (await post(url, body, token ? { authorization: `Bearer ${token}` } : {}, signal)).json();
+    const pre = String(prefix || '').replace(/^\/+/, '');
+    const rows = (j.data || []).flatMap((d) => {
+      const f = String(d.filename || d.attributes?.filename || '').replace(/^\/+/, '');
+      return !pre ? [d] : f.startsWith(pre) && f.length > pre.length ? [{ ...d, filename: f.slice(pre.length) }] : [];
+    });
+    return { source: 'knowdrive', results: rows.map(normalizeResult) };
   },
 });
 
@@ -173,13 +180,22 @@ export function createEngine(spec = { type: 'server' }, apiBase) {
 
 /* ---------- prompt ---------- */
 
+// Chat-template control tokens (<|im_start|>, [INST], <s>…): llama.cpp parses them inside message content.
+const CTRL = /<\|[^|>\n]{0,40}\|>|\[\/?INST\]|<\/?s>|<<\/?SYS>>/gi;
+// Untrusted text (corpus, titles, question) must not be able to fake the prompt's own delimiters or citation markers.
+const unspoof = (t) => String(t)
+  .replace(CTRL, ' ')
+  .replace(/\bEND\s+OF\s+SOURCES\b/gi, 'end-of-sources')
+  .replace(/^(\s*)(SOURCES|Question)\s*:/gim, '$1$2 -');
+
 function cleanSource(t = '') {
-  return parseFrontmatter(String(t)).body
+  return unspoof(parseFrontmatter(String(t)).body)
     .replace(/<[^>]{0,200}>/g, ' ')            // html tags
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')      // images
-    .replace(/\[(\d{1,3})\]/g, '($1)')          // citation look-alikes can't spoof numbering
+    .replace(MARKER_FORMS, (_, list) => `(${list})`) // citation look-alikes ([n], [Source n], 【n】, [^n]) can't spoof numbering
     .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').replace(/\n{2,}/g, '\n').trim();
 }
+const cleanLine = (t) => unspoof(t).replace(/<[^>]{0,200}>/g, ' ').replace(MARKER_FORMS, (_, l) => `(${l})`).replace(/\s+/g, ' ').trim();
 
 function clip(s, max) {
   if (s.length <= max) return s;
@@ -203,10 +219,10 @@ Rules:
 }
 
 const CITE_EXAMPLE = [
-  { role: 'user', content: 'SOURCES:\n[1] Gift Card (catalog/products/gift-card.md)\nGift cards come in $25, $50 and $100 values and never expire.\n\n[2] FAQ (pages/faq.md)\nGift cards are valid for one year.\nEND OF SOURCES\n\nQuestion: Do gift cards expire?' },
-  { role: 'assistant', content: 'The sources disagree. The product page says gift cards never expire [1], but the FAQ says they are valid for one year [2]. They come in $25, $50 and $100 values [1].' },
+  { role: 'user', content: 'SOURCES:\n[1] Gift Card (catalog/products/gift-card.md)\nGift cards come in $25, $50 and $100 values and never expire.\n\n[2] Contact (policies/contact.md)\nQuestions about a gift card? Email the team.\nEND OF SOURCES\n\nQuestion: Do gift cards expire, and who do I ask about one?' },
+  { role: 'assistant', content: 'No, gift cards never expire [1]. They come in $25, $50 and $100 values [1]. For questions about a card, email the team [2].' },
 ];
-const CITE_REMINDER = 'Answer using only the SOURCES. Include every relevant price, option and condition. After each fact, write its source number in brackets, e.g. [1]. If sources disagree, say so and cite each.';
+const CITE_REMINDER = 'Answer using only the SOURCES. Include every relevant price, option and condition. After each fact, write its source number in brackets, e.g. [1]. If two sources state different values for the same thing, say they differ and cite both; otherwise do not mention disagreement.';
 
 /**
  * Build OpenAI chat messages. Sources share `budget` chars (default 5000, fits ~6 sources in a 1.5B model);
@@ -216,7 +232,7 @@ export function buildMessages(question, sources = [], persona = {}, history = []
   const budget = opts.budget ?? 5000, n = sources.length, blocks = [];
   let left = budget;
   sources.forEach((s, i) => {
-    const head = `[${i + 1}] ${String(s.title || 'Untitled').replace(/\s+/g, ' ').slice(0, 120)} (${s.filename || s.file_id || 'unknown'})\n`;
+    const head = `[${i + 1}] ${cleanLine(s.title || 'Untitled').slice(0, 120) || 'Untitled'} (${cleanLine(s.filename || s.file_id || 'unknown').slice(0, 200)})\n`;
     const room = Math.floor(left / (n - i)) - head.length - 2; // 2 = block separator
     const block = head + clip(cleanSource(s.text), Math.max(room, 0));
     left -= block.length + 2;
@@ -226,10 +242,30 @@ export function buildMessages(question, sources = [], persona = {}, history = []
   const msgs = [{ role: 'system', content: systemPrompt(persona) }, ...CITE_EXAMPLE];
   for (const h of (history || []).slice(-4)) {
     if (h && (h.role === 'user' || h.role === 'assistant') && h.content)
-      msgs.push({ role: h.role, content: clip(String(h.content).replace(/\s*\[\d+\]/g, ''), 400) });
+      msgs.push({ role: h.role, content: clip(String(h.content).replace(CTRL, ' ').replace(/\s*\[\d+\]/g, ''), 400) });
   }
-  msgs.push({ role: 'user', content: `SOURCES:\n${blocks.join('\n\n') || '(none)'}\nEND OF SOURCES\n\nQuestion: ${String(question).trim()}\n\n${CITE_REMINDER}` });
+  msgs.push({ role: 'user', content: `SOURCES:\n${blocks.join('\n\n') || '(none)'}\nEND OF SOURCES\n\nQuestion: ${unspoof(question).trim()}\n\n${CITE_REMINDER}` });
   return msgs;
+}
+
+/* ---------- request guard ---------- */
+
+// Requests a read-only, cited assistant must decline whatever the sources say. Checked before retrieval,
+// so the model never sees them; shared by KnowBot.ask and the server's canonical path.
+const GUARDS = [
+  { kind: 'prompt', re: /\b(?:ignore|disregard|forget)\b.{0,30}\b(?:instructions|rules|prompt)|\bsystem prompt\b|\b(?:reveal|print|show|repeat|output)\b.{0,30}\b(?:your (?:instructions|prompt|rules)|sources? block|raw sources?)|\b(?:system override|developer mode|jailbreak)\b|\byou are now\b/i,
+    text: (org) => `I can't share or change my instructions. I answer questions about ${org} from its knowDrive, with sources.` },
+  { kind: 'pii', re: /\b(?:customers?|buyers?|purchasers?|people|person|who)\b.{0,40}\b(?:bought|ordered|purchased|orders?)\b.{0,60}\b(?:names?|emails?|address(?:es)?|phone|contact|details)\b|\b(?:names?|emails?|addresses|home address|phone numbers?)\b.{0,30}\b(?:of|for) (?:the |my |your )?(?:customers?(?!\s+(?:service|support|care))|buyers?|people who)\b|\blast (?:person|customer|buyer)\b.{0,40}\b(?:order|bought|purchas)/i,
+    text: (org) => `I can't share customer or order details. The knowDrive I work from holds ${org}'s catalog, policies, pages and articles, not personal records.` },
+  { kind: 'action', re: /^\s*(?:please\s+)?(?:can you\s+|could you\s+)?(?:change|set|update|edit|delete|remove|cancel|refund|issue|apply|create|generate|make)\b.{0,60}\b(?:price|order|inventory|stock|discount|coupon|promo|code|refund)\b|\b(?:give|send|issue) me\b.{0,30}\b(?:discount|coupon|promo)?\s*codes?\b|\band confirm (?:when|once) (?:done|it'?s done)\b/i,
+    text: (org) => `I can't make changes or issue codes. I'm a read-only assistant for ${org}'s knowDrive. I can tell you what the current catalog, prices and policies say, with sources.` },
+];
+
+/** Returns a refusal Answer fragment for out-of-bounds requests, or null. Pure and deterministic. */
+export function guardRequest(question, persona = {}) {
+  const q = String(question ?? ''), org = { ...DEF_PERSONA, ...persona }.org;
+  const g = GUARDS.find((x) => x.re.test(q));
+  return g ? { text: g.text(org), citations: [], grounded: false, refused: true, fallback: false, guard: g.kind } : null;
 }
 
 /* ---------- citations / canonical answer ---------- */
@@ -247,6 +283,30 @@ function stripTrailingSources(text) {
     }
   }
   return text;
+}
+
+// Lexical support check for the grounded fallback: a sentence is attributed to the source sharing the most
+// content words with it, and only when the overlap is real. Unsupported sentences stay uncited (honest), never pinned to [1].
+const STOPW = new Set('the and for with that this from your you are our can will have has had not but all any its was were been they them their there what when which who how also just more than into about over only per each yes sure here some may get one'.split(' '));
+function terms(t) {
+  const out = new Set();
+  for (let w of String(t).toLowerCase().match(/[a-z0-9]+(?:[.,]\d+)*/g) || []) {
+    w = w.replace(/,/g, '');
+    if (w.length > 3 && /[a-z]s$/.test(w) && !/ss$/.test(w)) w = w.slice(0, -1);
+    if ((w.length > 2 || /\d/.test(w)) && !STOPW.has(w)) out.add(w);
+  }
+  return out;
+}
+function bestSource(sentence, srcTerms) {
+  const st = terms(sentence);
+  if (st.size < 2) return 0;
+  let best = 0, bestScore = 0;
+  srcTerms.forEach((set, i) => {
+    let hit = 0, score = 0;
+    for (const w of st) if (set.has(w)) { hit++; score += /\d/.test(w) ? 2 : 1; }
+    if (hit >= 2 && hit / st.size >= 0.34 && score > bestScore) { best = i + 1; bestScore = score; }
+  });
+  return best;
 }
 
 function snippetOf(t) {
@@ -281,13 +341,28 @@ export function finalizeAnswer(raw, sources = [], opts = {}) {
   // normalise "[1, 2]" / "[Source 3]" / "【4】" / "[^5]" into "[1][2]"
   text = text.replace(MARKER_FORMS, (_, list) => list.match(/\d+/g).map((d) => `[${+d}]`).join(''));
   const valid = (n) => n >= 1 && n <= sources.length;
+  // A reply that only says "the sources don't cover this" is a refusal, not a cited answer: don't let a
+  // stray [n] (or the rule-2 fallback) dress it up as grounded.
+  const sentences = text.replace(/\[\d+\](?!\()/g, '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+  if (sentences.length && sentences.every((x) => DECLINE.test(x) || /^(?:i'?m sorry|sorry|therefore|unfortunately)\b[^.]*\.?$/i.test(x))) {
+    return { text: text.replace(/\s*\[\d+\](?!\()/g, '').trim(), citations: [], grounded: false, refused: true, fallback: false };
+  }
   const hasValid = [...text.matchAll(/\[(\d+)\](?!\()/g)].some((m) => valid(+m[1]));
   let fallback = false;
   if (!hasValid) {
     text = text.replace(/\s*\[\d+\](?!\()/g, '');
     if (DECLINE.test(text.slice(0, 200))) return { text, citations: [], grounded: false, refused: false, fallback: false };
-    // grounded fallback: cite the top source on every claim-bearing line
-    text = text.split('\n').map((l) => (l.trim() && !/[:]\s*$/.test(l) && !/^\s*#/.test(l) ? l.replace(/\s*$/, ' [1]') : l)).join('\n');
+    // grounded fallback: cite each claim-bearing sentence to the source that actually supports it (lexical overlap)
+    const srcTerms = sources.map((s) => terms(`${s.title || ''} ${cleanSource(s.text)}`));
+    let attached = 0;
+    text = text.split('\n').map((l) => {
+      if (!l.trim() || /[:]\s*$/.test(l) || /^\s*#/.test(l)) return l;
+      return l.replace(/\s*$/, '').split(/(?<=[.!?])\s+(?=\S)/).map((sen) => {
+        const n = bestSource(sen, srcTerms);
+        return n ? (attached++, `${sen} [${n}]`) : sen;
+      }).join(' ');
+    }).join('\n');
+    if (!attached) return { text, citations: [], grounded: false, refused: false, fallback: false };
     fallback = true;
   }
   const map = new Map(), citations = [];
@@ -390,17 +465,18 @@ export class KnowBot {
     this.start();
     const turnId = `${this.sessionId}.${++this.turns}`, t0 = now();
     this.emit({ type: 'message.user', turnId, text: q });
-    o.onStatus?.({ phase: 'retrieving' });
-    const { source, results } = await this.retriever.search(q, this.k, o.signal);
+    const guard = guardRequest(q, this.persona);
+    o.onStatus?.({ phase: guard ? 'guarded' : 'retrieving' });
+    const { source, results } = guard ? { source: 'guard', results: [] } : await this.retriever.search(q, this.k, o.signal);
     const t1 = now(), relevant = selectSources(results, this.minScore, this.k);
     let raw = null, t2 = t1;
-    if (relevant.length) {
+    if (!guard && relevant.length) {
       o.onStatus?.({ phase: 'generating' });
       raw = await this.engine.complete(buildMessages(q, relevant, this.persona, this.history, { budget: this.opts.budget }),
         { onToken: o.onToken, onProgress: o.onProgress, signal: o.signal, settings: this.opts.settings });
       t2 = now();
     }
-    const fin = finalizeAnswer(raw, relevant.length ? relevant : results, { minScore: this.minScore, persona: this.persona,
+    const fin = guard || finalizeAnswer(raw, relevant.length ? relevant : results, { minScore: this.minScore, persona: this.persona,
       coverage: results.length ? undefined : this.opts.coverage });
     const answer = {
       ...fin,

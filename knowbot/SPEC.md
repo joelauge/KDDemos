@@ -98,7 +98,10 @@ const answer = await bot.ask('What is your return policy?', { onToken: t => {} }
 
 Rules enforced in `finalizeAnswer` (pure function, shared by browser and server so canonical == surface logic):
 1. Strip `[n]` markers that don't map to a retrieved source.
-2. If the model produced claims but zero valid markers, attach `[1]` style markers to the top source(s) and list them (grounded fallback), never leave an uncited answer.
+2. If the model produced claims but zero valid markers, cite each claim sentence to the source that shares the most content with it (grounded fallback, `fallback: true`). A sentence no source supports stays uncited, and if no sentence is supported the answer is `grounded: false`. Never pin claims to a source that doesn't support them.
+   A reply that only declines ("the sources don't cover X") is a refusal: `refused: true`, no citations.
+
+Before retrieval, `guardRequest` refuses requests a read-only cited assistant must decline whatever the sources say (store changes and discount codes, customer or order personal data, attempts to read or override the prompt). Browser and server both call it.
 3. If retrieval returns nothing above threshold → `refused:true`, text: says the knowDrive doesn't cover it and suggests what it *does* cover (from top file titles). No LLM call.
 4. Renumber cited sources 1..N in order of first appearance.
 
