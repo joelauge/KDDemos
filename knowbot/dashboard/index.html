@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KnowBot Operator</title>
+  <meta name="description" content="Live KnowBot operator dashboard: see which surface each user is chatting through and pull KnowBot's canonical, cited answer in real time." />
+  <meta name="color-scheme" content="dark" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./dashboard.css" />
+  <script type="module" src="./dashboard.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to dashboard</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a href="https://knowdrive.ai" class="brand" aria-label="KnowDrive home">
+        <img src="./logo.svg" alt="" width="40" height="28" />
+        <span class="display brand-name">KnowDrive</span>
+        <span class="brand-sep" aria-hidden="true"></span>
+        <span class="brand-product">KnowBot <span class="mono">Operator</span></span>
+      </a>
+      <div class="top-actions">
+        <button type="button" id="conn" class="pill pill-conn" data-state="connecting" title="Server stream status — click to reconnect">
+          <span class="dot" aria-hidden="true"></span><span id="conn-label">Connecting…</span>
+        </button>
+        <span id="bc" class="pill pill-bc" title="BroadcastChannel('knowbot') — receives events from KnowBot surfaces in this browser, no server needed">
+          <span class="dot" aria-hidden="true"></span>Same-browser
+        </span>
+        <label class="switch" title="Request a canonical answer for every new user message as it arrives">
+          <input type="checkbox" id="auto-canon" role="switch" />
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+          <span class="switch-label">Auto-canonicalize</span>
+        </label>
+        <button type="button" id="sim-btn" class="btn btn-ghost" aria-pressed="false">
+          <span class="sim-dot" aria-hidden="true"></span><span class="sim-label">Simulate traffic</span>
+        </button>
+      </div>
+    </div>
+    <div class="meta-row mono" id="meta-row">
+      <span id="cfg-api"></span>
+      <span id="cfg-detail" class="meta-detail"></span>
+      <span id="filter-chip" class="filter-chip" hidden></span>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="kpis" aria-label="Live metrics" id="kpis"></section>
+
+    <section class="empty-hero" id="empty-hero" aria-labelledby="empty-title" hidden>
+      <div class="empty-copy">
+        <div class="mono kicker">Waiting for conversations</div>
+        <h1 class="display empty-title" id="empty-title">No KnowBot traffic yet.</h1>
+        <p class="empty-sub">Every chat a visitor starts — floating widget, inline help panel, full-page chat, or a raw API call — streams in here with the surface it came through. Pick any question and pull KnowBot's <em>canonical</em> answer to compare it against what the visitor saw.</p>
+        <ol class="steps">
+          <li><span class="mono step-n">01</span><div><strong>Start the server</strong><code class="mono">node knowbot/server/server.mjs</code><span class="step-note">Then open this page at <span class="mono">http://localhost:8787/dashboard/</span>, or add <span class="mono">?api=&lt;server&gt;</span> to point it elsewhere.</span></div></li>
+          <li><span class="mono step-n">02</span><div><strong>Chat through a surface</strong><span class="step-note">Open a page under <span class="mono">/demo/</span>, or embed <span class="mono">lib/embed.js</span> on any site. Surfaces in this browser show up even without a server.</span></div></li>
+          <li><span class="mono step-n">03</span><div><strong>Or demo it right now</strong><span class="step-note">Simulated traffic is generated in this tab, tagged <span class="mono">channel: sim</span>, and marked SIM everywhere.</span></div></li>
+        </ol>
+        <button type="button" class="btn btn-primary" id="sim-btn-hero">Simulate traffic</button>
+      </div>
+      <div class="empty-art" aria-hidden="true">
+        <svg viewBox="0 0 320 220" width="320" height="220">
+          <defs>
+            <linearGradient id="g1" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#6366f1" stop-opacity=".55"/><stop offset="1" stop-color="#22d3ee" stop-opacity=".15"/></linearGradient>
+          </defs>
+          <g fill="none" stroke="rgba(148,163,184,.25)" stroke-width="1.2">
+            <path d="M58 52 C120 52 120 110 160 110" /><path d="M58 110 L160 110" /><path d="M58 168 C120 168 120 110 160 110" />
+            <path d="M190 110 L262 110" stroke-dasharray="3 4" />
+          </g>
+          <g font-family="JetBrains Mono, monospace" font-size="9" fill="#94a3b8">
+            <rect x="14" y="38" width="66" height="28" rx="8" fill="#0b1224" stroke="#818cf8" stroke-opacity=".6"/><text x="47" y="56" text-anchor="middle">widget</text>
+            <rect x="14" y="96" width="66" height="28" rx="8" fill="#0b1224" stroke="#22d3ee" stroke-opacity=".6"/><text x="47" y="114" text-anchor="middle">inline</text>
+            <rect x="14" y="154" width="66" height="28" rx="8" fill="#0b1224" stroke="#f472b6" stroke-opacity=".6"/><text x="47" y="172" text-anchor="middle">fullpage</text>
+            <circle cx="175" cy="110" r="22" fill="url(#g1)" stroke="#818cf8"/><text x="175" y="113" text-anchor="middle" fill="#f8fafc">KB</text>
+            <rect x="240" y="88" width="70" height="44" rx="10" fill="#0b1224" stroke="rgba(255,255,255,.12)"/><text x="275" y="107" text-anchor="middle">canonical</text><text x="275" y="121" text-anchor="middle" fill="#34d399">[1] [2]</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <div class="grid" id="grid">
+      <section class="panel p-sessions" aria-labelledby="h-sessions">
+        <div class="panel-head">
+          <h2 id="h-sessions" class="panel-title">Live sessions</h2>
+          <span class="panel-count mono" id="sessions-count"></span>
+        </div>
+        <div class="sessions-list" id="sessions" role="list" aria-label="Sessions, most recent activity first"></div>
+      </section>
+
+      <section class="panel p-convo" aria-labelledby="h-convo" id="convo-panel">
+        <div class="panel-head">
+          <h2 id="h-convo" class="panel-title">Conversation</h2>
+          <div class="panel-tools" id="convo-tools"></div>
+        </div>
+        <div class="convo" id="convo" tabindex="-1"></div>
+      </section>
+
+      <aside class="side" aria-label="Breakdowns and tools">
+        <section class="panel" aria-labelledby="h-surfaces">
+          <div class="panel-head"><h2 id="h-surfaces" class="panel-title">Surfaces</h2><span class="panel-count mono">sessions · click to filter</span></div>
+          <div id="surfaces" class="surfaces"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="h-ask">
+          <div class="panel-head"><h2 id="h-ask" class="panel-title">Ask KnowBot <span class="tag-canon">canonical</span></h2></div>
+          <form id="ask-form" class="ask-form">
+            <label for="ask-input" class="sr-only">Question for KnowBot</label>
+            <textarea id="ask-input" rows="2" maxlength="1000" placeholder="Ask anything the knowDrive covers…"></textarea>
+            <button type="submit" class="btn btn-primary" id="ask-btn">Ask</button>
+          </form>
+          <div id="ask-out" class="ask-out" aria-live="polite"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="h-sources">
+          <div class="panel-head"><h2 id="h-sources" class="panel-title">Most-cited sources</h2><span class="panel-count mono">knowDrive files</span></div>
+          <ol id="sources" class="leader"></ol>
+        </section>
+
+        <section class="panel" aria-labelledby="h-feed">
+          <div class="panel-head"><h2 id="h-feed" class="panel-title">Live feed</h2><span class="panel-count mono" id="feed-count"></span></div>
+          <ol id="feed" class="feed" aria-live="polite" aria-relevant="additions" aria-label="Live event feed, newest first"></ol>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <span>KnowBot operator · every answer cites its knowDrive sources</span>
+    <a href="https://knowdrive.ai">knowdrive.ai &rarr;</a>
+  </footer>
+  <div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>

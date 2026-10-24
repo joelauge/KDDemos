@@ -61,8 +61,10 @@ knowbot/
 | `GET /api/sessions` | – | `[{ sessionId, surface, startedAt, lastAt, turns, groundedRate }]` |
 | `GET /*` | – | static files from `knowbot/` (so `/dashboard/`, `/demo/`, `/lib/` all work) |
 
-Env: `PORT`, `LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`), `LLM_MODEL`, `KNOWDRIVE_BASE_URL` (default `https://dev.knowdrive.ai`), `KNOWDRIVE_API_KEY`, `KNOWDRIVE_STORE`. If no key/store → local BM25 retriever over `corpus/`.
-KnowDrive search call: `POST {base}/api/v1/vector_stores/{store}/search` with `Authorization: Bearer <key>`, body `{ query, max_num_results:k, mode:"hybrid", text:"raw" }`; response `data[] = {file_id, filename, score, content:[{type,text}], attributes}`.
+Env: `PORT`, `LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`), `LLM_MODEL`, `KNOWDRIVE_BASE_URL` (default `https://dev.knowdrive.ai`), `KNOWDRIVE_API_KEY`, `KNOWDRIVE_STORE` (default `vs_ae932c1337994117a7ee3763026c050b`, the existing "Business" store on Dev), `KNOWDRIVE_TAG` (default `knowbot:ugm`), `KNOWDRIVE_PREFIX` (default `knowbot/ugm/`). If no key → local BM25 retriever over `corpus/`.
+
+**Tag windowing:** KnowBot does not get its own store. Its files live in a shared store under the path prefix `knowbot/ugm/` and every file carries the tag `knowbot:ugm` (plus `knowbot`, `kind:<kind>`). Every search is windowed to that tag so KnowBot can never see or cite anything else in the store.
+KnowDrive search call: `POST {base}/api/v1/vector_stores/{store}/search` with `Authorization: Bearer <key>`, body `{ query, max_num_results:k, mode:"hybrid", text:"raw", filter: { all_of: [TAG] } }`; response `data[] = {file_id, filename, score, content:[{type,text}], attributes}`. Strip `KNOWDRIVE_PREFIX` from `filename` so citations match corpus-relative paths; drop any hit whose filename lacks the prefix (defense in depth).
 
 ## Core library API (`lib/knowbot.js`)
 
