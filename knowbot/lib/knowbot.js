@@ -247,7 +247,7 @@ function snippetOf(t) {
   return clip(s, 220);
 }
 
-function coverageText(org, titles) {
+function coverageText(titles) {
   const t = [...new Set(titles.filter(Boolean))].slice(0, 3);
   return t.length ? ` It does cover topics such as ${t.map((x) => `**${x}**`).join(', ')}.` : '';
 }
@@ -263,12 +263,12 @@ export function finalizeAnswer(raw, sources = [], opts = {}) {
   const org = { ...DEF_PERSONA, ...opts.persona }.org;
   const titles = (opts.coverage || sources.map((s) => s.title)).filter(Boolean);
   if (!sources.some((s) => isRelevant(s, opts.minScore))) {
-    return { text: `I couldn't find anything about that in ${org}'s knowDrive, so I won't guess.${coverageText(org, titles)}`,
+    return { text: `I couldn't find anything about that in ${org}'s knowDrive, so I won't guess.${coverageText(titles)}`,
       citations: [], grounded: false, refused: true, fallback: false };
   }
   let text = stripTrailingSources(String(raw ?? '').replace(/\r/g, '').trim());
   if (!text) {
-    return { text: `I couldn't put together an answer from ${org}'s knowDrive for that.${coverageText(org, titles)}`,
+    return { text: `I couldn't put together an answer from ${org}'s knowDrive for that.${coverageText(titles)}`,
       citations: [], grounded: false, refused: false, fallback: false };
   }
   // normalise "[1, 2]" / "[Source 3]" / "【4】" / "[^5]" into "[1][2]"
@@ -295,7 +295,7 @@ export function finalizeAnswer(raw, sources = [], opts = {}) {
     }
     return `${/^\s/.test(m) ? ' ' : ''}[${map.get(key)}]`;
   });
-  text = text.replace(/(\[\d+\])(?:\s*\1)+/g, '$1').replace(/ +([.,;:!?])/g, '$1').replace(/[ \t]{2,}/g, ' ').trim();
+  text = text.replace(/(\[\d+\])(?:\s*\1)+/g, '$1').replace(/(\S) +([.,;:!?])(?=\s|$)/g, '$1$2').replace(/(\S)[ \t]{2,}/g, '$1 ').trim();
   return { text, citations, grounded: citations.length > 0, refused: false, fallback };
 }
 

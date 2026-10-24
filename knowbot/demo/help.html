@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Help Center Demo</title>
+  <meta name="description" content="Demo help-center page with an inline KnowBot panel that answers from The Ultimate Game Master's knowDrive with citations." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./demo.css" />
+  <style>
+    .layout { display: grid; grid-template-columns: 1fr 1.15fr; gap: 32px; padding: 40px 0 72px; align-items: start; }
+    .layout h1 { margin: 0 0 10px; font-size: clamp(28px, 4vw, 40px); font-weight: 800; line-height: 1.1; }
+    .lede { margin: 0 0 24px; font-size: 15.5px; line-height: 1.65; font-weight: 300; }
+    .topics { display: flex; flex-direction: column; gap: 10px; }
+    .topic { padding: 14px 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); background: #0b1224; }
+    .topic h2 { margin: 0 0 4px; font: 600 14.5px 'Plus Jakarta Sans', system-ui; color: #f8fafc; }
+    .topic p { margin: 0; font-size: 13px; color: #94a3b8; line-height: 1.5; }
+    .topic a { color: #818cf8; }
+    #assistant { --kb-inline-height: min(640px, 78vh); position: sticky; top: 20px; }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } #assistant { position: static; --kb-inline-height: 70vh; } }
+  </style>
+</head>
+<body>
+  <div class="demo-bar" role="note"><div class="wrap">
+    <span><b>DEMO PAGE</b> &middot; help center for The Ultimate Game Master (demo, not the real site)</span>
+    <span><a data-keep-api href="./index.html">All demos</a> &middot; <span data-api-status></span></span>
+  </div></div>
+  <main class="wrap layout">
+    <section>
+      <div class="mono kicker">Help center</div>
+      <h1 class="display">How can we help?</h1>
+      <p class="lede">Ask the assistant anything about orders, shipping, returns or the products. It answers only from the store's
+        knowDrive and shows the files each answer came from.</p>
+      <div class="topics">
+        <div class="topic"><h2>Returns &amp; refunds</h2><p>Official policy: <a href="https://theultimategamemaster.com/policies/refund-policy">refund policy</a></p></div>
+        <div class="topic"><h2>Shipping</h2><p>Official policy: <a href="https://theultimategamemaster.com/policies/shipping-policy">shipping policy</a></p></div>
+        <div class="topic"><h2>Products &amp; bundles</h2><p>Screens, rules packs, trackers, covers and accessories.</p></div>
+        <div class="topic"><h2>Subscriptions &amp; campaigns</h2><p>Ongoing games and subscription terms.</p></div>
+      </div>
+    </section>
+    <section id="assistant" aria-label="Help assistant"></section>
+  </main>
+  <script type="module">
+    import { mountInline } from '../lib/widget.js';
+    import { API, PERSONA, carryApiParam, showApiStatus } from './demo.js';
+    carryApiParam();
+    showApiStatus();
+    window.knowbot = mountInline('#assistant', {
+      apiBase: API, persona: PERSONA, title: 'Help assistant', subtitle: 'Answers cite the knowDrive',
+      starters: ['How do I start a return?', 'How long does shipping take?', 'Can I return a gift card?', 'How do subscriptions work?'],
+    });
+  </script>
+</body>
+</html>

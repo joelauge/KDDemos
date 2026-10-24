@@ -1,0 +1,842 @@
+[
+  {
+    "path": "README.md",
+    "title": "KnowBot corpus README",
+    "kind": "guide",
+    "source_id": null,
+    "url": null,
+    "bytes": 2662
+  },
+  {
+    "path": "blog/news/beyond-initiative-crafting-engaging-non-combat-encounters-for-your-campaign.md",
+    "title": "Beyond Initiative: Crafting Engaging Non-Combat Encounters for Your Campaign",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595824541929",
+    "url": "https://theultimategamemaster.com/blogs/news/beyond-initiative-crafting-engaging-non-combat-encounters-for-your-campaign",
+    "bytes": 4034
+  },
+  {
+    "path": "blog/news/beyond-initiative-crafting-engaging-non-combat-encounters.md",
+    "title": "Beyond Initiative: Crafting Engaging Non-Combat Encounters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594616189161",
+    "url": "https://theultimategamemaster.com/blogs/news/beyond-initiative-crafting-engaging-non-combat-encounters",
+    "bytes": 3539
+  },
+  {
+    "path": "blog/news/beyond-initiative-crafting-memorable-non-combat-encounters.md",
+    "title": "Beyond Initiative: Crafting Memorable Non-Combat Encounters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595948470505",
+    "url": "https://theultimategamemaster.com/blogs/news/beyond-initiative-crafting-memorable-non-combat-encounters",
+    "bytes": 4438
+  },
+  {
+    "path": "blog/news/beyond-initiative-engaging-non-combat-encounters-for-your-campaign.md",
+    "title": "Beyond Initiative: Engaging Non-Combat Encounters for Your Campaign",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595901087977",
+    "url": "https://theultimategamemaster.com/blogs/news/beyond-initiative-engaging-non-combat-encounters-for-your-campaign",
+    "bytes": 4142
+  },
+  {
+    "path": "blog/news/beyond-initiative-mastering-non-combat-encounters.md",
+    "title": "Beyond Initiative: Mastering Non-Combat Encounters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595793281257",
+    "url": "https://theultimategamemaster.com/blogs/news/beyond-initiative-mastering-non-combat-encounters",
+    "bytes": 4065
+  },
+  {
+    "path": "blog/news/build-less-play-more-worldbuilding-without-over-prepping-your-campaign.md",
+    "title": "Build Less, Play More: Worldbuilding Without Over-Prepping Your Campaign",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595933331689",
+    "url": "https://theultimategamemaster.com/blogs/news/build-less-play-more-worldbuilding-without-over-prepping-your-campaign",
+    "bytes": 5690
+  },
+  {
+    "path": "blog/news/clues-that-land-running-d-d-mysteries-your-players-cant-crack-too-soon.md",
+    "title": "Clues That Land: Running D&D Mysteries Your Players Can't Crack Too Soon",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595802554601",
+    "url": "https://theultimategamemaster.com/blogs/news/clues-that-land-running-d-d-mysteries-your-players-cant-crack-too-soon",
+    "bytes": 6020
+  },
+  {
+    "path": "blog/news/dm-screen-tips-for-new-dungeon-masters-your-complete-starter-guide-2025.md",
+    "title": "DM Screen Tips for New Dungeon Masters: Your Complete Starter Guide",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594044879081",
+    "url": "https://theultimategamemaster.com/blogs/news/dm-screen-tips-for-new-dungeon-masters-your-complete-starter-guide-2025",
+    "bytes": 13950
+  },
+  {
+    "path": "blog/news/dnd-2024-vs-5e-dungeon-masters-guide.md",
+    "title": "D&D 2024 vs 5th Edition (2014): A Dungeon Master’s Complete Guide",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594741330153",
+    "url": "https://theultimategamemaster.com/blogs/news/dnd-2024-vs-5e-dungeon-masters-guide",
+    "bytes": 7411
+  },
+  {
+    "path": "blog/news/game-master-organization-tips.md",
+    "title": "Game Master Organization Tips: 15 Expert Strategies for Better Sessions",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594044846313",
+    "url": "https://theultimategamemaster.com/blogs/news/game-master-organization-tips",
+    "bytes": 12585
+  },
+  {
+    "path": "blog/news/how-to-set-up-a-dm-screen-the-complete-guide-for-game-masters-2025.md",
+    "title": "How to Set Up a DM Screen: The Complete Guide for Game Masters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594044813545",
+    "url": "https://theultimategamemaster.com/blogs/news/how-to-set-up-a-dm-screen-the-complete-guide-for-game-masters-2025",
+    "bytes": 6717
+  },
+  {
+    "path": "blog/news/index.md",
+    "title": "The UGM Blog — article index",
+    "kind": "guide",
+    "source_id": "gid://shopify/Blog/93627187433",
+    "url": "https://theultimategamemaster.com/blogs/news",
+    "bytes": 4480
+  },
+  {
+    "path": "blog/news/keep-players-hooked-mastering-engagement-in-your-campaign-1.md",
+    "title": "Keep Players Hooked: Mastering Engagement in Your Campaign",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594596069609",
+    "url": "https://theultimategamemaster.com/blogs/news/keep-players-hooked-mastering-engagement-in-your-campaign-1",
+    "bytes": 3788
+  },
+  {
+    "path": "blog/news/keep-the-table-moving-how-to-rescue-a-d-d-session-when-the-pace-drags.md",
+    "title": "Keep the Table Moving: How to Rescue a D&D Session When the Pace Drags",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/596003782889",
+    "url": "https://theultimategamemaster.com/blogs/news/keep-the-table-moving-how-to-rescue-a-d-d-session-when-the-pace-drags",
+    "bytes": 5935
+  },
+  {
+    "path": "blog/news/leave-them-wanting-more-how-to-end-every-session-on-a-powerful-cliffhanger.md",
+    "title": "Leave Them Wanting More: How to End Every Session on a Powerful Cliffhanger",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595781124329",
+    "url": "https://theultimategamemaster.com/blogs/news/leave-them-wanting-more-how-to-end-every-session-on-a-powerful-cliffhanger",
+    "bytes": 7062
+  },
+  {
+    "path": "blog/news/monster-mayhem-managed-designing-balanced-d-d-5e-combat-encounters.md",
+    "title": "Monster Mayhem Managed: Designing Balanced D&D 5e Combat Encounters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594603770089",
+    "url": "https://theultimategamemaster.com/blogs/news/monster-mayhem-managed-designing-balanced-d-d-5e-combat-encounters",
+    "bytes": 3787
+  },
+  {
+    "path": "blog/news/order-in-the-chaos-tracking-initiative-and-conditions-in-big-d-d-combats.md",
+    "title": "Order in the Chaos: Tracking Initiative and Conditions in Big D&D Combats",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/596050608361",
+    "url": "https://theultimategamemaster.com/blogs/news/order-in-the-chaos-tracking-initiative-and-conditions-in-big-d-d-combats",
+    "bytes": 6461
+  },
+  {
+    "path": "blog/news/prep-like-a-pro-effective-time-saving-techniques-for-game-masters.md",
+    "title": "Prep Like a Pro: Effective Time-Saving Techniques for Game Masters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594595971305",
+    "url": "https://theultimategamemaster.com/blogs/news/prep-like-a-pro-effective-time-saving-techniques-for-game-masters",
+    "bytes": 3507
+  },
+  {
+    "path": "blog/news/prep-like-a-pro-efficient-techniques-for-game-masters.md",
+    "title": "Prep Like a Pro: Efficient Techniques for Game Masters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/593996579049",
+    "url": "https://theultimategamemaster.com/blogs/news/prep-like-a-pro-efficient-techniques-for-game-masters",
+    "bytes": 3936
+  },
+  {
+    "path": "blog/news/session-zero-to-hero-a-new-dungeon-masters-guide.md",
+    "title": "Session Zero to Hero: A New Dungeon Master's Guide",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/593932615913",
+    "url": "https://theultimategamemaster.com/blogs/news/session-zero-to-hero-a-new-dungeon-masters-guide",
+    "bytes": 3416
+  },
+  {
+    "path": "blog/news/sharing-the-spotlight-balancing-airtime-for-every-player-at-your-table.md",
+    "title": "Sharing the Spotlight: Balancing Airtime for Every Player at Your Table",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595875004649",
+    "url": "https://theultimategamemaster.com/blogs/news/sharing-the-spotlight-balancing-airtime-for-every-player-at-your-table",
+    "bytes": 6109
+  },
+  {
+    "path": "blog/news/start-strong-running-a-session-zero-that-sets-up-your-whole-campaign.md",
+    "title": "Start Strong: Running a Session Zero That Sets Up Your Whole Campaign",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/596039729385",
+    "url": "https://theultimategamemaster.com/blogs/news/start-strong-running-a-session-zero-that-sets-up-your-whole-campaign",
+    "bytes": 6161
+  },
+  {
+    "path": "blog/news/tips-designing-choosing-functional-gm-screens.md",
+    "title": "Tips for Designing or Choosing Functional GM Screens for Gamemasters",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/594117558505",
+    "url": "https://theultimategamemaster.com/blogs/news/tips-designing-choosing-functional-gm-screens",
+    "bytes": 8310
+  },
+  {
+    "path": "blog/news/treasure-worth-fighting-for-designing-loot-that-rewards-players-without-breaking-your-game.md",
+    "title": "Treasure Worth Fighting For: Designing Loot That Rewards Players Without Breaking Your Game",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595893387497",
+    "url": "https://theultimategamemaster.com/blogs/news/treasure-worth-fighting-for-designing-loot-that-rewards-players-without-breaking-your-game",
+    "bytes": 5723
+  },
+  {
+    "path": "blog/news/voices-in-the-dark-running-memorable-npcs-that-bring-your-world-to-life.md",
+    "title": "Voices in the Dark: Running Memorable NPCs That Bring Your World to Life",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595768410345",
+    "url": "https://theultimategamemaster.com/blogs/news/voices-in-the-dark-running-memorable-npcs-that-bring-your-world-to-life",
+    "bytes": 7308
+  },
+  {
+    "path": "blog/news/when-the-map-runs-out-improvising-like-a-pro-when-players-go-off-script.md",
+    "title": "When the Map Runs Out: Improvising Like a Pro When Players Go Off-Script",
+    "kind": "article",
+    "source_id": "gid://shopify/Article/595793805545",
+    "url": "https://theultimategamemaster.com/blogs/news/when-the-map-runs-out-improvising-like-a-pro-when-players-go-off-script",
+    "bytes": 6342
+  },
+  {
+    "path": "catalog/collections/5e-accessories.md",
+    "title": "5E Accessories (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/454253084905",
+    "url": "https://theultimategamemaster.com/collections/5e-accessories",
+    "bytes": 1383
+  },
+  {
+    "path": "catalog/collections/accessories.md",
+    "title": "Accessories (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/449996390633",
+    "url": "https://theultimategamemaster.com/collections/accessories",
+    "bytes": 3278
+  },
+  {
+    "path": "catalog/collections/combat-management.md",
+    "title": "Combat Management (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/454253117673",
+    "url": "https://theultimategamemaster.com/collections/combat-management",
+    "bytes": 1483
+  },
+  {
+    "path": "catalog/collections/courses.md",
+    "title": "Courses (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/453952209129",
+    "url": "https://theultimategamemaster.com/collections/courses",
+    "bytes": 743
+  },
+  {
+    "path": "catalog/collections/dice-accessories.md",
+    "title": "Dice & Accessories (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/471762272489",
+    "url": "https://theultimategamemaster.com/collections/dice-accessories",
+    "bytes": 768
+  },
+  {
+    "path": "catalog/collections/digital-accessories.md",
+    "title": "Digital Accessories (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/454253248745",
+    "url": "https://theultimategamemaster.com/collections/digital-accessories",
+    "bytes": 4205
+  },
+  {
+    "path": "catalog/collections/frontpage.md",
+    "title": "Home page (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/439596318953",
+    "url": "https://theultimategamemaster.com/collections/frontpage",
+    "bytes": 730
+  },
+  {
+    "path": "catalog/collections/game-master-screen-1.md",
+    "title": "Game Master Screen (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/450014544105",
+    "url": "https://theultimategamemaster.com/collections/game-master-screen-1",
+    "bytes": 1114
+  },
+  {
+    "path": "catalog/collections/game-master-screen.md",
+    "title": "Ultimate Bundles (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/449569718505",
+    "url": "https://theultimategamemaster.com/collections/game-master-screen",
+    "bytes": 1227
+  },
+  {
+    "path": "catalog/collections/gifts.md",
+    "title": "Gifts (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/471762895081",
+    "url": "https://theultimategamemaster.com/collections/gifts",
+    "bytes": 881
+  },
+  {
+    "path": "catalog/collections/initiative-tracker.md",
+    "title": "Initiative Tracker (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/454258426089",
+    "url": "https://theultimategamemaster.com/collections/initiative-tracker",
+    "bytes": 11020
+  },
+  {
+    "path": "catalog/collections/kickstarter-exclusives-limited-quantity.md",
+    "title": "Kickstarter Exclusives (Limited Quantity) (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/456328544489",
+    "url": "https://theultimategamemaster.com/collections/kickstarter-exclusives-limited-quantity",
+    "bytes": 1963
+  },
+  {
+    "path": "catalog/collections/magnetic-accessories.md",
+    "title": "Magnetic Accessories (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/454253052137",
+    "url": "https://theultimategamemaster.com/collections/magnetic-accessories",
+    "bytes": 5280
+  },
+  {
+    "path": "catalog/collections/magnetic-covers.md",
+    "title": "Magnetic Covers (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/469514518761",
+    "url": "https://theultimategamemaster.com/collections/magnetic-covers",
+    "bytes": 1517
+  },
+  {
+    "path": "catalog/collections/storage-organization.md",
+    "title": "Storage & Organization (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/454253150441",
+    "url": "https://theultimategamemaster.com/collections/storage-organization",
+    "bytes": 4180
+  },
+  {
+    "path": "catalog/collections/the-endless-rime-monthly-subscription-copy.md",
+    "title": "The Endless Rime (Weekly Subscription) (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/463223324905",
+    "url": "https://theultimategamemaster.com/collections/the-endless-rime-monthly-subscription-copy",
+    "bytes": 1308
+  },
+  {
+    "path": "catalog/collections/the-endless-rime-monthly-subscription.md",
+    "title": "The Endless Rime (Monthly Subscription) (collection)",
+    "kind": "collection",
+    "source_id": "gid://shopify/Collection/463223292137",
+    "url": "https://theultimategamemaster.com/collections/the-endless-rime-monthly-subscription",
+    "bytes": 940
+  },
+  {
+    "path": "catalog/index.md",
+    "title": "The Ultimate Game Master — catalog overview",
+    "kind": "guide",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/all",
+    "bytes": 8188
+  },
+  {
+    "path": "catalog/products/5th-edition-rules-pack.md",
+    "title": "5th Edition Rules Pack - D&D 5e Magnetic Charts & Trackers for Game Master Screen",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8898620653801",
+    "url": "https://theultimategamemaster.com/products/5th-edition-rules-pack",
+    "bytes": 2097
+  },
+  {
+    "path": "catalog/products/blank-magnetic-charts.md",
+    "title": "Blank Magnetic Charts - Custom DM Reference Sheets for TTRPG Game Master Screens",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8894423171305",
+    "url": "https://theultimategamemaster.com/products/blank-magnetic-charts",
+    "bytes": 1877
+  },
+  {
+    "path": "catalog/products/creature-trackers-brown.md",
+    "title": "Creature Trackers (Pack of 3) - Magnetic Combat Organizers for D&D & TTRPG Game Master Screen",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8896044531945",
+    "url": "https://theultimategamemaster.com/products/creature-trackers-brown",
+    "bytes": 2391
+  },
+  {
+    "path": "catalog/products/eldritch-horror-magnetic-screen-cover.md",
+    "title": "Eldritch Horror Magnetic Screen Cover",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984063443177",
+    "url": "https://theultimategamemaster.com/products/eldritch-horror-magnetic-screen-cover",
+    "bytes": 2077
+  },
+  {
+    "path": "catalog/products/epic-fantasy-magnetic-screen-cover.md",
+    "title": "Epic Fantasy Magnetic Screen Cover",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984076976361",
+    "url": "https://theultimategamemaster.com/products/epic-fantasy-magnetic-screen-cover",
+    "bytes": 2049
+  },
+  {
+    "path": "catalog/products/full-color-set-creature-initiative-trackers.md",
+    "title": "Full Color Set — Creature & Initiative Trackers",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9273528156393",
+    "url": "https://theultimategamemaster.com/products/full-color-set-creature-initiative-trackers",
+    "bytes": 1960
+  },
+  {
+    "path": "catalog/products/game-master-foundations-online-course.md",
+    "title": "Dungeon Masterclass: The Art of Game Mastering",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9327675998441",
+    "url": "https://theultimategamemaster.com/products/game-master-foundations-online-course",
+    "bytes": 1161
+  },
+  {
+    "path": "catalog/products/gothic-horror-magnetic-screen-cover.md",
+    "title": "Gothic Horror Magnetic Screen Cover",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984080253161",
+    "url": "https://theultimategamemaster.com/products/gothic-horror-magnetic-screen-cover",
+    "bytes": 2047
+  },
+  {
+    "path": "catalog/products/initiative-trackers-brown.md",
+    "title": "Initiative Trackers (Pack of 4) - Magnetic Turn Order Cards for D&D 5e and TTRPG Combat Management",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8895870861545",
+    "url": "https://theultimategamemaster.com/products/initiative-trackers-brown",
+    "bytes": 2535
+  },
+  {
+    "path": "catalog/products/large-pouch-black-1.md",
+    "title": "Large Magnetic Pouch - Premium Storage for Game Master Screen DM Accessories",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8887213752553",
+    "url": "https://theultimategamemaster.com/products/large-pouch-black-1",
+    "bytes": 2037
+  },
+  {
+    "path": "catalog/products/magnetic-map-pack-1.md",
+    "title": "Magnetic Map Pack - Dry-Erase Battle Maps for D&D Combat & Game Master Screen",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8886077817065",
+    "url": "https://theultimategamemaster.com/products/magnetic-map-pack-1",
+    "bytes": 1803
+  },
+  {
+    "path": "catalog/products/magnetic-phone-holder-brown.md",
+    "title": "Magnetic Phone Holder - Digital Tools Mount for Game Master Screen & TTRPG Sessions",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8898619015401",
+    "url": "https://theultimategamemaster.com/products/magnetic-phone-holder-brown",
+    "bytes": 2102
+  },
+  {
+    "path": "catalog/products/magnetic-tablet-holder-brown.md",
+    "title": "Magnetic Tablet Holder - Digital Display Mount for Game Master Screen & D&D Tools",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8898617737449",
+    "url": "https://theultimategamemaster.com/products/magnetic-tablet-holder-brown",
+    "bytes": 2406
+  },
+  {
+    "path": "catalog/products/pathfinder-magnetic-screen-cover.md",
+    "title": "Pathfinder Magnetic Screen Cover",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984066916585",
+    "url": "https://theultimategamemaster.com/products/pathfinder-magnetic-screen-cover",
+    "bytes": 1822
+  },
+  {
+    "path": "catalog/products/pathfinder-rules-pack-1.md",
+    "title": "Pathfinder Rules Pack",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984082579689",
+    "url": "https://theultimategamemaster.com/products/pathfinder-rules-pack-1",
+    "bytes": 1562
+  },
+  {
+    "path": "catalog/products/quick-load-panel-brown-1.md",
+    "title": "Quick-Load Panel - Magnetic Expansion Accessory for Ultimate Game Master Screen",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8886082240745",
+    "url": "https://theultimategamemaster.com/products/quick-load-panel-brown-1",
+    "bytes": 2139
+  },
+  {
+    "path": "catalog/products/rivet-magnets.md",
+    "title": "Rivet Magnets - Strong Neodymium Hardware for Game Master Screen Accessories",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8889983860969",
+    "url": "https://theultimategamemaster.com/products/rivet-magnets",
+    "bytes": 1745
+  },
+  {
+    "path": "catalog/products/savage-worlds-magnetic-screen-cover.md",
+    "title": "Savage Worlds Magnetic Screen Cover",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984066195689",
+    "url": "https://theultimategamemaster.com/products/savage-worlds-magnetic-screen-cover",
+    "bytes": 1797
+  },
+  {
+    "path": "catalog/products/savage-worlds-rules-pack-1.md",
+    "title": "Savage Worlds Rules Pack",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984086085865",
+    "url": null,
+    "bytes": 1496
+  },
+  {
+    "path": "catalog/products/sci-fi-magnetic-screen-cover.md",
+    "title": "Sci-Fi Magnetic Screen Cover",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984080875753",
+    "url": "https://theultimategamemaster.com/products/sci-fi-magnetic-screen-cover",
+    "bytes": 1999
+  },
+  {
+    "path": "catalog/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf.md",
+    "title": "Session Zero Checklist – The Ultimate Game Master Companion (Digital PDF)",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8997534171369",
+    "url": "https://theultimategamemaster.com/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf",
+    "bytes": 2922
+  },
+  {
+    "path": "catalog/products/set-of-15-magnetic-pips.md",
+    "title": "Set of 15 Magnetic Tokens (for Map Pack)",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8773048238313",
+    "url": null,
+    "bytes": 1622
+  },
+  {
+    "path": "catalog/products/set-of-2-brown-magnetic-bar-copy.md",
+    "title": "Magnetic Bar Set - Screen Extension Hardware for Ultimate Game Master Screen",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8889994871017",
+    "url": "https://theultimategamemaster.com/products/set-of-2-brown-magnetic-bar-copy",
+    "bytes": 2260
+  },
+  {
+    "path": "catalog/products/small-magnetic-pouch-brown.md",
+    "title": "Small Magnetic Pouch - Compact Storage for DM Screen Accessories & Dice",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8889984778473",
+    "url": "https://theultimategamemaster.com/products/small-magnetic-pouch-brown",
+    "bytes": 1962
+  },
+  {
+    "path": "catalog/products/starfinder-rules-pack.md",
+    "title": "Starfinder Rules Pack",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8773049417961",
+    "url": null,
+    "bytes": 1453
+  },
+  {
+    "path": "catalog/products/tales-of-the-valiant-magnetic-screen-cover.md",
+    "title": "Tales of the Valiant Magnetic Screen Cover",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8984067997929",
+    "url": "https://theultimategamemaster.com/products/tales-of-the-valiant-magnetic-screen-cover",
+    "bytes": 1890
+  },
+  {
+    "path": "catalog/products/tales-of-the-valiant-rules-pack.md",
+    "title": "Tales of the Valiant Rules Pack",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8773049647337",
+    "url": "https://theultimategamemaster.com/products/tales-of-the-valiant-rules-pack",
+    "bytes": 1591
+  },
+  {
+    "path": "catalog/products/the-everlasting-rime-drop-in.md",
+    "title": "The Everlasting Rime (Drop-In)",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9162867015913",
+    "url": "https://theultimategamemaster.com/products/the-everlasting-rime-drop-in",
+    "bytes": 2133
+  },
+  {
+    "path": "catalog/products/the-everlasting-rime-monday.md",
+    "title": "The Everlasting Rime (Monday)",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9140554432745",
+    "url": "https://theultimategamemaster.com/products/the-everlasting-rime-monday",
+    "bytes": 2247
+  },
+  {
+    "path": "catalog/products/the-everlasting-rime-thursday.md",
+    "title": "The Everlasting Rime (Thursday)",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9162772349161",
+    "url": "https://theultimategamemaster.com/products/the-everlasting-rime-thursday",
+    "bytes": 2259
+  },
+  {
+    "path": "catalog/products/the-everlasting-rime-wednesday.md",
+    "title": "The Everlasting Rime (Wednesday)",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9140554662121",
+    "url": "https://theultimategamemaster.com/products/the-everlasting-rime-wednesday",
+    "bytes": 2082
+  },
+  {
+    "path": "catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md",
+    "title": "The Ultimate Game Master Gift Card - Let them have the adventure they want!",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9158243385577",
+    "url": "https://theultimategamemaster.com/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want",
+    "bytes": 3473
+  },
+  {
+    "path": "catalog/products/twisted-hand-of-fate-full-6-part-module.md",
+    "title": "Realmsmith's Twisted Hand of Fate - Full 6-Part Module",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/9327678849257",
+    "url": "https://theultimategamemaster.com/products/twisted-hand-of-fate-full-6-part-module",
+    "bytes": 5298
+  },
+  {
+    "path": "catalog/products/ugms-backer-dice-set-with-leather-case.md",
+    "title": "UGMS Premium Dice Set with Leather Case",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8773047419113",
+    "url": "https://theultimategamemaster.com/products/ugms-backer-dice-set-with-leather-case",
+    "bytes": 1503
+  },
+  {
+    "path": "catalog/products/ugms-backer-tshirt.md",
+    "title": "UGM Backer T-Shirt",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8774053527785",
+    "url": null,
+    "bytes": 1471
+  },
+  {
+    "path": "catalog/products/ugms-kickstarter-backer-pin.md",
+    "title": "Kickstarter Backer Pin (Exclusive)",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8773048795369",
+    "url": "https://theultimategamemaster.com/products/ugms-kickstarter-backer-pin",
+    "bytes": 1290
+  },
+  {
+    "path": "catalog/products/ugms-magnetic-dice-tray.md",
+    "title": "Magnetic Dice Tray",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8773048140009",
+    "url": "https://theultimategamemaster.com/products/ugms-magnetic-dice-tray",
+    "bytes": 1535
+  },
+  {
+    "path": "catalog/products/ultimate-bundle-black.md",
+    "title": "Ultimate Bundle (Black) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8900958650601",
+    "url": "https://theultimategamemaster.com/products/ultimate-bundle-black",
+    "bytes": 4264
+  },
+  {
+    "path": "catalog/products/ultimate-bundle.md",
+    "title": "Ultimate Bundle (Brown) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8900945576169",
+    "url": "https://theultimategamemaster.com/products/ultimate-bundle",
+    "bytes": 4344
+  },
+  {
+    "path": "catalog/products/ultimate-game-master-screen-brown-portrait.md",
+    "title": "Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs",
+    "kind": "product",
+    "source_id": "gid://shopify/Product/8884727578857",
+    "url": "https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait",
+    "bytes": 3529
+  },
+  {
+    "path": "operations/locations.md",
+    "title": "Fulfillment locations",
+    "kind": "shop",
+    "source_id": "gid://shopify/Location/81133830377",
+    "url": null,
+    "bytes": 705
+  },
+  {
+    "path": "operations/markets.md",
+    "title": "Markets and currencies",
+    "kind": "shop",
+    "source_id": null,
+    "url": null,
+    "bytes": 847
+  },
+  {
+    "path": "operations/promotions.md",
+    "title": "Active automatic promotions",
+    "kind": "shop",
+    "source_id": null,
+    "url": null,
+    "bytes": 2034
+  },
+  {
+    "path": "operations/shipping.md",
+    "title": "Shipping zones, carriers and rates",
+    "kind": "shop",
+    "source_id": "gid://shopify/DeliveryProfile/98327658729",
+    "url": null,
+    "bytes": 2278
+  },
+  {
+    "path": "pages/avada-faqs.md",
+    "title": "Frequently Asked Questions",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/120218681577",
+    "url": "https://theultimategamemaster.com/pages/avada-faqs",
+    "bytes": 2430
+  },
+  {
+    "path": "pages/build-your-bundle.md",
+    "title": "Build Your Bundle",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/133928452329",
+    "url": "https://theultimategamemaster.com/pages/build-your-bundle",
+    "bytes": 323
+  },
+  {
+    "path": "pages/data-sharing-opt-out.md",
+    "title": "Your Privacy Choices",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/118455566569",
+    "url": "https://theultimategamemaster.com/pages/data-sharing-opt-out",
+    "bytes": 1382
+  },
+  {
+    "path": "pages/gallery.md",
+    "title": "Gallery",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/118539354345",
+    "url": "https://theultimategamemaster.com/pages/gallery",
+    "bytes": 1284
+  },
+  {
+    "path": "pages/how-to-be-a-dungeon-master.md",
+    "title": "How to Be a Dungeon Master: Complete Beginner's Guide",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/121234194665",
+    "url": "https://theultimategamemaster.com/pages/how-to-be-a-dungeon-master",
+    "bytes": 21173
+  },
+  {
+    "path": "pages/resources.md",
+    "title": "Resources",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/134165758185",
+    "url": "https://theultimategamemaster.com/pages/resources",
+    "bytes": 240
+  },
+  {
+    "path": "pages/session-zero-checklist-downloadable-pdf.md",
+    "title": "Session Zero Checklist (Downloadable PDF)",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/122181681385",
+    "url": "https://theultimategamemaster.com/pages/session-zero-checklist-downloadable-pdf",
+    "bytes": 3266
+  },
+  {
+    "path": "pages/ultimate-game-master-vs-traditional-dm-screens.md",
+    "title": "Ultimate Game Master Screen vs Traditional DM Screens: The Complete 2025 Comparison",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/121226592489",
+    "url": "https://theultimategamemaster.com/pages/ultimate-game-master-vs-traditional-dm-screens",
+    "bytes": 12349
+  },
+  {
+    "path": "pages/wholesale.md",
+    "title": "Wholesale",
+    "kind": "page",
+    "source_id": "gid://shopify/Page/134156157161",
+    "url": "https://theultimategamemaster.com/pages/wholesale",
+    "bytes": 212
+  },
+  {
+    "path": "policies/contact.md",
+    "title": "Contact information",
+    "kind": "policy",
+    "source_id": "gid://shopify/ShopPolicy/36231676137",
+    "url": "https://theultimategamemaster.com/policies/contact-information",
+    "bytes": 389
+  },
+  {
+    "path": "policies/privacy.md",
+    "title": "Privacy policy",
+    "kind": "policy",
+    "source_id": "gid://shopify/ShopPolicy/30426628329",
+    "url": "https://theultimategamemaster.com/policies/privacy-policy",
+    "bytes": 19240
+  },
+  {
+    "path": "policies/refund.md",
+    "title": "Refund policy",
+    "kind": "policy",
+    "source_id": "gid://shopify/ShopPolicy/36231643369",
+    "url": "https://theultimategamemaster.com/policies/refund-policy",
+    "bytes": 2736
+  },
+  {
+    "path": "policies/shipping.md",
+    "title": "Shipping policy",
+    "kind": "policy",
+    "source_id": "gid://shopify/ShopPolicy/36231839977",
+    "url": "https://theultimategamemaster.com/policies/shipping-policy",
+    "bytes": 1183
+  },
+  {
+    "path": "policies/subscription.md",
+    "title": "Cancellation (subscription) policy",
+    "kind": "policy",
+    "source_id": "gid://shopify/ShopPolicy/40385904873",
+    "url": "https://theultimategamemaster.com/policies/subscription-policy",
+    "bytes": 1685
+  },
+  {
+    "path": "policies/terms.md",
+    "title": "Terms of service policy",
+    "kind": "policy",
+    "source_id": "gid://shopify/ShopPolicy/36231774441",
+    "url": "https://theultimategamemaster.com/policies/terms-of-service",
+    "bytes": 22520
+  },
+  {
+    "path": "shop/about.md",
+    "title": "About The Ultimate Game Master",
+    "kind": "shop",
+    "source_id": "gid://shopify/Shop/70900777193",
+    "url": "https://theultimategamemaster.com",
+    "bytes": 2274
+  }
+]

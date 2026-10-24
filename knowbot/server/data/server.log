@@ -1,0 +1,15 @@
+[knowbot] listening on http://localhost:8787
+[knowbot] retrieval=local corpus=/home/user/KDDemos/knowbot/corpus llm=http://127.0.0.1:8080/v1 model=qwen2.5-1.5b-instruct
+[knowbot] dashboard: http://localhost:8787/dashboard/   demo: http://localhost:8787/demo/
+[retriever] indexed 105 files / 371 chunks from /home/user/KDDemos/knowbot/corpus in 107ms
+2026-10-24T13:21:20.102Z 127.0.0.1 GET /healthz 200 15ms
+2026-10-24T13:21:28.287Z 127.0.0.1 POST /api/search 200 2ms
+2026-10-24T13:21:28.309Z 127.0.0.1 POST /api/search 200 1ms
+[error] POST /api/canonical: TimeoutError: The operation was aborted due to timeout
+    at node:internal/deps/undici/undici:14902:13
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async llmComplete (file:///home/user/KDDemos/knowbot/server/server.mjs:161:17)
+    at async canonical (file:///home/user/KDDemos/knowbot/server/server.mjs:192:13)
+    at async handle (file:///home/user/KDDemos/knowbot/server/server.mjs:352:26)
+    at async Server.<anonymous> (file:///home/user/KDDemos/knowbot/server/server.mjs:418:7)
+2026-10-24T13:23:36.592Z 127.0.0.1 POST /api/canonical 500 120010ms

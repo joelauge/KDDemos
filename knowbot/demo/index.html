@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KnowBot Demos</title>
+  <meta name="description" content="KnowBot: a small front-end library plus a small open-weights model that answers from a knowDrive and cites every source." />
+  <link rel="icon" type="image/svg+xml" href="../../favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./demo.css" />
+  <style>
+    header .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 20px; padding-bottom: 20px; }
+    .brand { display: flex; align-items: center; gap: 12px; font: 700 19px 'Plus Jakarta Sans', system-ui; color: #f8fafc; }
+    .hero { padding: 56px 0 40px; display: flex; flex-direction: column; gap: 18px; }
+    .hero h1 { margin: 0; font-size: clamp(32px, 5vw, 50px); font-weight: 800; line-height: 1.08; }
+    .hero p { margin: 0; max-width: 620px; font-size: 17px; line-height: 1.65; font-weight: 300; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; padding-bottom: 64px; }
+    .card { display: flex; flex-direction: column; gap: 8px; padding: 20px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); background: #0b1224; transition: border-color .15s, transform .15s; }
+    .card:hover, .card:focus-visible { border-color: #6366f1; transform: translateY(-2px); outline: none; }
+    .card .num { color: #6366f1; font-size: 11px; }
+    .card h2 { margin: 0; font-size: 17px; }
+    .card p { margin: 0; font-size: 13.5px; line-height: 1.55; color: #94a3b8; }
+    .card code { font-size: 11.5px; color: #818cf8; }
+    pre { margin: 0 0 64px; padding: 18px; border-radius: 14px; background: #0b1224; border: 1px solid rgba(255,255,255,0.08); overflow-x: auto; font: 12.5px/1.6 'JetBrains Mono', monospace; color: #cbd5e1; }
+    h3 { color: #f8fafc; font: 600 15px 'Plus Jakarta Sans', system-ui; margin: 0 0 12px; }
+  </style>
+</head>
+<body>
+  <div class="demo-bar"><div class="wrap"><span>KnowBot demo hub</span><span data-api-status></span></div></div>
+  <header><div class="wrap">
+    <a class="brand" href="https://knowdrive.ai"><img src="../../logo.svg" alt="" style="height:28px" /> KnowBot</a>
+    <a class="mono" style="font-size:13px;color:#94a3b8" href="https://knowdrive.ai">knowdrive.ai &rarr;</a>
+  </div></header>
+  <main class="wrap">
+    <section class="hero">
+      <div class="mono kicker">Small model &middot; small store &middot; cited answers</div>
+      <h1 class="display">One library, every surface.<br />Every answer cites the knowDrive.</h1>
+      <p>KnowBot acts as a knowledgeable professional for whatever lives in a knowDrive store. These pages embed it on different
+        surfaces for <strong>The Ultimate Game Master</strong> store. Open the dashboard in another tab to watch the sessions arrive live.</p>
+    </section>
+    <section class="grid" aria-label="Demos">
+      <a class="card" data-keep-api href="./storefront.html"><span class="mono num">01 &middot; widget</span><h2 class="display">Storefront widget</h2><p>A demo storefront with the floating chat bubble in the corner.</p><code>mountWidget()</code></a>
+      <a class="card" data-keep-api href="./help.html"><span class="mono num">02 &middot; inline</span><h2 class="display">Help-center panel</h2><p>An inline panel embedded in a support page, next to FAQ content.</p><code>mountInline(el)</code></a>
+      <a class="card" data-keep-api href="./chat.html"><span class="mono num">03 &middot; fullpage</span><h2 class="display">Full-page chat</h2><p>A dedicated chat page, responsive down to phone width.</p><code>mountFullpage(el)</code></a>
+      <a class="card" data-keep-api href="./browser-only.html"><span class="mono num">04 &middot; in-browser</span><h2 class="display">Browser-only</h2><p>The model runs in your browser with WebGPU (WebLLM). Retrieval falls back to a local index if the server is down.</p><code>engine: { type: 'webllm' }</code></a>
+      <a class="card" data-keep-api href="../dashboard/"><span class="mono num">05 &middot; operator</span><h2 class="display">Live dashboard</h2><p>See which surface each user is on, and get KnowBot's canonical answer in real time.</p><code>/api/stream</code></a>
+    </section>
+    <h3>Embed on any page with one line</h3>
+<pre>&lt;script type="module" src="https://demos.knowdrive.ai/knowbot/lib/embed.js"
+        data-api="http://localhost:8787" data-mode="widget"
+        data-org="The Ultimate Game Master"&gt;&lt;/script&gt;</pre>
+  </main>
+  <script type="module">
+    import { carryApiParam, showApiStatus } from './demo.js';
+    carryApiParam();
+    showApiStatus();
+  </script>
+</body>
+</html>

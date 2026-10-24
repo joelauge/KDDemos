@@ -157,11 +157,11 @@ export function createKnowBotServer(opts = {}) {
     return libCache;
   }
 
-  async function llmComplete(messages) {
+  async function llmComplete(messages, settings = CANONICAL) {
     const res = await fetch(`${llmBase}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(env.LLM_API_KEY ? { authorization: `Bearer ${env.LLM_API_KEY}` } : {}) },
-      body: JSON.stringify({ model: llmModel, messages, stream: false, ...CANONICAL }),
+      body: JSON.stringify({ model: llmModel, messages, stream: false, ...settings }),
       signal: AbortSignal.timeout(Number(env.LLM_TIMEOUT_MS || 120000)),
     });
     if (!res.ok) throw new HttpError(502, `LLM HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -171,49 +171,43 @@ export function createKnowBotServer(opts = {}) {
 
   async function canonical({ question, sessionId, turnId, history }) {
     const lib = await loadLib();
-    const persona = { ...DEFAULT_PERSONA, ...(lib.DEFAULT_PERSONA || {}) };
+    const persona = { ...DEFAULT_PERSONA, ...(env.KNOWBOT_ORG ? { org: env.KNOWBOT_ORG } : {}) };
     const k = 6;
+    const minScore = Number(env.KNOWBOT_MIN_SCORE || 0);
+    const settings = { ...CANONICAL, ...(lib.CANONICAL || {}) };
     const t0 = performance.now();
     const ret = await retriever.search(question, k);
     const tRet = performance.now();
-    const sources = ret.results;
+    const results = ret.results;
     const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}` };
     const engine = { type: 'openai', model: llmModel };
 
-    // Let the library decide refusal (threshold) when it exposes a helper; otherwise refuse on empty retrieval.
-    let refuse = sources.length === 0;
-    if (!refuse && typeof lib.shouldRefuse === 'function') refuse = !!lib.shouldRefuse(sources);
-    else if (!refuse && typeof lib.relevantSources === 'function') refuse = lib.relevantSources(sources).length === 0;
-
-    let raw = '';
-    let tGen = tRet;
-    if (!refuse) {
-      const messages = lib.buildMessages(question, sources, persona, Array.isArray(history) ? history : []);
-      raw = await llmComplete(messages);
+    // Mirror KnowBot.ask() in lib/knowbot.js exactly: selectSources -> buildMessages -> LLM -> finalizeAnswer.
+    const relevant = typeof lib.selectSources === 'function'
+      ? lib.selectSources(results, minScore, k)
+      : results.filter((r) => r.score == null || r.score > minScore).slice(0, k);
+    let raw = null, tGen = tRet;
+    if (relevant.length) {
+      const messages = lib.buildMessages(question, relevant, persona, Array.isArray(history) ? history : []);
+      raw = await llmComplete(messages, settings);
       tGen = performance.now();
     }
-    const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(tGen - t0) };
-    const fin = await lib.finalizeAnswer(raw, sources, {
-      question, persona, engine, surface, sessionId, turnId, latencyMs, refused: refuse, retrieval: ret.source,
-    });
+    const fin = lib.finalizeAnswer(raw, relevant.length ? relevant : results, { minScore, persona });
+    const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
     const answer = {
-      text: '', citations: [], grounded: false, refused: refuse,
       ...fin,
-      latencyMs: fin?.latencyMs && Object.keys(fin.latencyMs).length ? fin.latencyMs : latencyMs,
-      engine: fin?.engine || engine,
-      surface: fin?.surface || surface,
-      sessionId: sessionId ?? fin?.sessionId ?? null,
-      turnId: turnId ?? fin?.turnId ?? randomUUID(),
+      latencyMs, engine, surface,
+      sessionId: sessionId ?? null,
+      turnId: turnId ?? `canonical.${randomUUID().slice(0, 8)}`,
     };
-    answer.latencyMs = { ...latencyMs, ...answer.latencyMs };
+    const retrieval = { source: ret.source, count: results.length, topScore: results[0]?.score ?? null };
     const event = {
       v: 1, type: 'canonical', ts: Date.now(), sessionId: answer.sessionId, turnId: answer.turnId, surface,
       question, text: answer.text, citations: answer.citations, grounded: answer.grounded, refused: answer.refused,
-      latencyMs: answer.latencyMs, engine: answer.engine,
-      retrieval: { source: ret.source, count: sources.length, topScore: sources[0]?.score ?? 0 },
+      latencyMs, engine, retrieval,
     };
     publish([event]);
-    return { ...answer, retrieval: event.retrieval };
+    return { ...answer, retrieval };
   }
 
   // ------------------------------------------------------------ helpers

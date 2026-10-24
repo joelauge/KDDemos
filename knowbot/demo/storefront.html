@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Storefront Widget Demo</title>
+  <meta name="description" content="Demo storefront (not the real store) showing the KnowBot floating widget answering from The Ultimate Game Master's knowDrive." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./demo.css" />
+  <style>
+    body { background: #f6f3ee; color: #2b2622; }
+    .shop-head { background: #1f1a17; color: #f6efe6; }
+    .shop-head .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 18px; padding-bottom: 18px; gap: 16px; flex-wrap: wrap; }
+    .logo { font: 800 20px 'Plus Jakarta Sans', system-ui; letter-spacing: -0.3px; }
+    .logo small { display: block; font: 500 10px 'JetBrains Mono', monospace; letter-spacing: 2px; color: #c9a36a; text-transform: uppercase; }
+    nav { display: flex; gap: 18px; font-size: 14px; flex-wrap: wrap; }
+    nav a:hover { color: #c9a36a; }
+    .hero { padding: 56px 0 36px; display: grid; gap: 14px; }
+    .hero h1 { margin: 0; font: 800 clamp(30px, 5vw, 46px)/1.1 'Plus Jakarta Sans', system-ui; color: #1f1a17; letter-spacing: -0.6px; }
+    .hero p { margin: 0; max-width: 560px; font-size: 16px; line-height: 1.6; color: #5b524b; }
+    .hint { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: #6366f1; font-weight: 600; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; padding-bottom: 80px; }
+    .p { background: #fff; border-radius: 14px; overflow: hidden; border: 1px solid #e7dfd4; display: flex; flex-direction: column; }
+    .p .img { aspect-ratio: 4 / 3; display: grid; place-items: center; font: 700 13px 'JetBrains Mono', monospace; color: rgba(255,255,255,.85); letter-spacing: 1px; text-transform: uppercase; }
+    .p .body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+    .p h2 { margin: 0; font: 600 15px/1.35 'Plus Jakarta Sans', system-ui; color: #1f1a17; }
+    .p a.view { margin-top: auto; font-size: 13px; color: #8a5a1c; font-weight: 600; }
+    .p a.view:hover { text-decoration: underline; }
+    h3.sec { font: 700 20px 'Plus Jakarta Sans', system-ui; color: #1f1a17; margin: 8px 0 16px; }
+    footer { background: #1f1a17; color: #a89c90; font-size: 12.5px; }
+    footer .wrap { padding-top: 22px; padding-bottom: 22px; }
+  </style>
+</head>
+<body>
+  <div class="demo-bar" role="note"><div class="wrap">
+    <span><b>DEMO PAGE</b> &middot; not the real store &middot; product names link to the live shop at theultimategamemaster.com</span>
+    <span><a data-keep-api href="./index.html">All demos</a> &middot; <span data-api-status></span></span>
+  </div></div>
+  <header class="shop-head"><div class="wrap">
+    <div class="logo">The Ultimate Game Master<small>demo storefront</small></div>
+    <nav aria-label="Demo store"><a href="#products">Shop</a><a href="https://theultimategamemaster.com/policies/refund-policy">Returns</a><a href="https://theultimategamemaster.com/policies/shipping-policy">Shipping</a></nav>
+  </div></header>
+  <main class="wrap">
+    <section class="hero">
+      <h1>Run the table like a pro.</h1>
+      <p>Magnetic game master screens, rules packs and combat trackers. Got a question about a product, shipping or returns?
+        Ask KnowBot in the corner: it answers only from the store's knowDrive and cites every file it used.</p>
+      <span class="hint">&#8600; Try the chat bubble, bottom right</span>
+    </section>
+    <h3 class="sec" id="products">Popular in the catalog</h3>
+    <section class="grid" aria-label="Products">
+      <article class="p"><div class="img" style="background:linear-gradient(135deg,#5b3a1e,#a0702f)">Bundle</div><div class="body"><h2>Ultimate Bundle (Brown) - Complete Game Master Screen Kit</h2><a class="view" href="https://theultimategamemaster.com/products/ultimate-bundle">View in the real store &rarr;</a></div></article>
+      <article class="p"><div class="img" style="background:linear-gradient(135deg,#1f2937,#4b5563)">Rules pack</div><div class="body"><h2>5th Edition Rules Pack - D&amp;D 5e Magnetic Charts &amp; Trackers</h2><a class="view" href="https://theultimategamemaster.com/products/5th-edition-rules-pack">View in the real store &rarr;</a></div></article>
+      <article class="p"><div class="img" style="background:linear-gradient(135deg,#3b0764,#7c3aed)">Screen cover</div><div class="body"><h2>Eldritch Horror Magnetic Screen Cover</h2><a class="view" href="https://theultimategamemaster.com/products/eldritch-horror-magnetic-screen-cover">View in the real store &rarr;</a></div></article>
+      <article class="p"><div class="img" style="background:linear-gradient(135deg,#7c2d12,#c2410c)">Trackers</div><div class="body"><h2>Initiative Trackers (Pack of 4) - Magnetic Turn Order Cards</h2><a class="view" href="https://theultimategamemaster.com/products/initiative-trackers-brown">View in the real store &rarr;</a></div></article>
+      <article class="p"><div class="img" style="background:linear-gradient(135deg,#064e3b,#059669)">Map pack</div><div class="body"><h2>Magnetic Map Pack - Dry-Erase Battle Maps</h2><a class="view" href="https://theultimategamemaster.com/products/magnetic-map-pack-1">View in the real store &rarr;</a></div></article>
+      <article class="p"><div class="img" style="background:linear-gradient(135deg,#1e3a8a,#3b82f6)">Course</div><div class="body"><h2>Dungeon Masterclass: The Art of Game Mastering</h2><a class="view" href="https://theultimategamemaster.com/products/game-master-foundations-online-course">View in the real store &rarr;</a></div></article>
+    </section>
+  </main>
+  <footer><div class="wrap">Demo page built for KnowBot by KnowDrive. Not affiliated checkout; no orders can be placed here.</div></footer>
+  <script type="module">
+    import { mountWidget } from '../lib/widget.js';
+    import { API, PERSONA, STARTERS, carryApiParam, showApiStatus } from './demo.js';
+    carryApiParam();
+    showApiStatus();
+    window.knowbot = mountWidget({ apiBase: API, persona: PERSONA, starters: STARTERS, title: 'KnowBot', subtitle: 'Store help · answers cite the knowDrive',
+      open: new URLSearchParams(location.search).has('open') });
+  </script>
+</body>
+</html>
