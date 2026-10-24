@@ -12,6 +12,7 @@
 // slot per item for a later LLM-judge pass (see eval/rubric.md).
 
 import { readFile, writeFile, mkdir, access, readdir } from 'node:fs/promises';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -79,6 +80,24 @@ function looksLikeRefusal(text) {
 function normPath(p) {
   return String(p || '').trim().replace(/^\.?\/+/, '').replace(/^corpus\//, '').replace(/\\/g, '/').toLowerCase();
 }
+// Canonical answer cards (corpus/canonical/*.md) are derived from original store files (frontmatter derived_from).
+// A cited card counts as citing those files, so the expected_sources written before the cards existed still match.
+let DERIVED = null;
+function derivedFrom(p) {
+  if (!DERIVED) {
+    DERIVED = new Map();
+    try {
+      for (const f of readdirSync(join(CORPUS, 'canonical'))) {
+        if (!f.endsWith('.md')) continue;
+        const m = readFileSync(join(CORPUS, 'canonical', f), 'utf8').match(/^derived_from:\s*\[([^\]]*)\]/m);
+        if (m) DERIVED.set(normPath(`canonical/${f}`), m[1].split(',').map((x) => x.trim()).filter(Boolean));
+      }
+    } catch { /* no cards */ }
+  }
+  return DERIVED.get(normPath(p)) || [];
+}
+const citeMatches = (cited, exp) => pathMatches(cited, exp) || derivedFrom(cited).some((d) => pathMatches(d, exp));
+
 function pathMatches(a, b) {
   const x = normPath(a), y = normPath(b);
   if (!x || !y) return false;
@@ -151,15 +170,15 @@ function check(item, answer, clientMs, error) {
   const citedFiles = cites.map((c) => c.filename).filter(Boolean);
   const expected = exp.expected_sources || [];               // entries: path | [any-of paths]
   const acceptable = [...expected.flat(), ...(exp.acceptable_sources || [])];
-  const slotHit = (e) => (Array.isArray(e) ? e : [e]).some((x) => citedFiles.some((c) => pathMatches(c, x)));
+  const slotHit = (e) => (Array.isArray(e) ? e : [e]).some((x) => citedFiles.some((c) => citeMatches(c, x)));
   const hitExpected = expected.filter(slotHit);
   const recall = expected.length ? hitExpected.length / expected.length : (shouldRefuse ? null : 1);
-  const relevantCited = citedFiles.filter((c) => acceptable.some((e) => pathMatches(c, e)));
+  const relevantCited = citedFiles.filter((c) => acceptable.some((e) => citeMatches(c, e)));
   let precision;
   if (citedFiles.length) precision = acceptable.length ? relevantCited.length / citedFiles.length : null;
   else precision = shouldRefuse ? 1 : 0;
   const missing = expected.filter((e) => !hitExpected.includes(e));
-  const extraneous = citedFiles.filter((c) => !acceptable.some((e) => pathMatches(c, e)));
+  const extraneous = citedFiles.filter((c) => !acceptable.some((e) => citeMatches(c, e)));
 
   // C
   const C = excHits.length ? 0 : 5 * incRate * (shouldRefuse && !refusalDetected ? 0 : 1);

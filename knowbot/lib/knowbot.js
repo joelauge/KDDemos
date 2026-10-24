@@ -261,6 +261,12 @@ const GUARDS = [
     text: (org) => `I can't share or change my instructions. I answer questions about ${org} from its knowDrive, with sources.` },
   { kind: 'pii', re: /\b(?:customers?|buyers?|purchasers?|people|person|who)\b.{0,40}\b(?:bought|ordered|purchased|orders?)\b.{0,60}\b(?:names?|emails?|address(?:es)?|phone|contact|details)\b|\b(?:names?|emails?|addresses|home address|phone numbers?)\b.{0,30}\b(?:of|for) (?:the |my |your )?(?:customers?(?!\s+(?:service|support|care))|buyers?|people who)\b|\blast (?:person|customer|buyer)\b.{0,40}\b(?:order|bought|purchas)/i,
     text: (org) => `I can't share customer or order details. The knowDrive I work from holds ${org}'s catalog, policies, pages and articles, not personal records.` },
+  { kind: 'pii', re: /\b(?:my|his|her|their|a|our)\s+(?:buddy|friend|wife|husband|partner|brother|sister|mom|mum|dad|son|daughter|neighbou?r|cousin|colleague|boss)\b.{0,60}\b(?:order(?:ed)?|bought|purchased?)\b|\b(?:shipping|home|delivery)\s+address\b.{0,30}\b(?:of|for|he|she|they)\b|\bintercept\b.{0,30}\b(?:box|package|parcel|order|delivery)\b/i,
+    text: (org) => `I can't share customer or order details. The knowDrive I work from holds ${org}'s catalog, policies, pages and articles, not personal records.` },
+  { kind: 'action', re: /\b(?:issue|process|give|send|approve)\b.{0,25}\brefund\b|\brefund\b.{0,20}\border\s*#?\s*\d{2,}|\b(?:from|at|with)\s+(?:ugm|the store|support|customer service)\b[^.?!]{0,20}\b(?:here|team|speaking)\b/i,
+    text: (org) => `I can't make changes or process refunds. I'm a read-only assistant for ${org}'s knowDrive. I can tell you what the current catalog, prices and policies say, with sources.` },
+  { kind: 'platform', re: /\bhow (?:do|can|should|would) (?:i|we)\b.{0,40}\b(?:set ?up|configure|install|connect|enable|turn on|add)\b.{0,40}\b(?:shopify|payments?|my (?:store|shop)|theme|domain|app|checkout)\b/i,
+    text: () => NOT_IN_DATA },
   { kind: 'action', re: /^\s*(?:please\s+)?(?:can you\s+|could you\s+)?(?:change|set|update|edit|delete|remove|cancel|refund|issue|apply|create|generate|make)\b.{0,60}\b(?:price|order|inventory|stock|discount|coupon|promo|code|refund)\b|\b(?:give|send|issue) me\b.{0,30}\b(?:discount|coupon|promo)?\s*codes?\b|\band confirm (?:when|once) (?:done|it'?s done)\b/i,
     text: (org) => `I can't make changes or issue codes. I'm a read-only assistant for ${org}'s knowDrive. I can tell you what the current catalog, prices and policies say, with sources.` },
 ];
@@ -301,6 +307,9 @@ function terms(t) {
   }
   return out;
 }
+const GENERIC = new Set('store shop product products item items thing things buy bought get want need know tell much many ugm ultimate game master would could like please thank thanks question answer help'.split(' '));
+const specificTerms = (t) => new Set([...terms(t)].filter((w) => !GENERIC.has(w)));
+
 function bestSource(sentence, srcTerms) {
   const st = terms(sentence);
   if (st.size < 2) return 0;
@@ -467,12 +476,15 @@ export function candidateLines(sources = [], { max = 45, perSource = 12, budget 
         continue;
       }
       const l = raw[i].replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').replace(/\*\*/g, '').trim();
-      if (!l || /^#/.test(l) || /^where this comes from/i.test(l) || l.split(/\s+/).length < 3) continue;
+      if (!l || /^#/.test(l) || /^where this comes from/i.test(l) || l.split(/\s+/).length < 2) continue;
       lines.push(...(l.length > 320 ? l.split(/(?<=[.!?])\s+(?=[A-Z])/) : [l]));
     }
+    let first = true;
     for (const text of lines.slice(0, perSource)) {
       if (out.length >= max || used + text.length > budget) return;
-      out.push({ n: out.length + 1, source: si, text: clip(text, 320), title: String(s.title || '') });
+      out.push({ n: out.length + 1, source: si, text: clip(text, 320), title: String(s.title || ''),
+        lead: first && String(s.filename || '').startsWith('canonical/'), row: /^[^:]{1,60}: Variant: /.test(text) });
+      first = false;
       used += text.length;
     }
   });
@@ -506,11 +518,19 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
     fallback = true;
     if (!picks.length) return none;
   }
-  // A pick must be on topic: share a real word with the question (the line's source title counts).
-  const q = terms(opts.question || '');
-  if (q.size) picks = picks.filter((n) => [...terms(`${lines[n - 1].title || ''} ${lines[n - 1].text}`)].some((w) => q.has(w)));
+  // A pick must be about what was asked: share a specific word (product, policy, country…) with the question.
+  // Product table rows carry their product name, so they're judged on the row alone; a card's prose may lean on
+  // its title. Words like "store" or "item" don't count.
+  const q = specificTerms(`${opts.question || ''} ${opts.questionEn || ''}`);
+  if (q.size) picks = picks.filter((n) => { const l = lines[n - 1]; return [...specificTerms(l.row ? l.text : `${l.lead || l.row ? '' : l.title} ${l.text}`)].some((w) => q.has(w)); });
   if (!picks.length) return none;
-  picks = picks.slice(0, 5);
+  // A card's headline line is its direct answer: always lead with it when the card is used.
+  for (const si of [...new Set(picks.map((n) => lines[n - 1].source))].reverse()) {
+    const lead = lines.find((l) => l.source === si && l.lead);
+    if (lead && !picks.includes(lead.n)) picks.unshift(lead.n);
+  }
+  const listy = /\b(?:what(?:'s| is| are| comes)? in(?:cluded)?|which|all|every|list|contents?|includes?|in the box)\b/i.test(`${opts.question || ''} ${opts.questionEn || ''}`);
+  picks = picks.slice(0, listy ? 10 : 5);
   const citations = [], idx = new Map();
   const cite = (si) => {
     const s = sources[si], key = s.file_id || s.filename || `#${si}`;
@@ -526,6 +546,30 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
   return { text, citations, grounded: true, refused: false, fallback, selected: picks };
 }
 
+const NON_EN = /[¿¡ñçßäöüàâêîôûèé]|\b(?:el|los|las|una|cuál|cuánto|cuesta|envío|pedido|devoluciones|le|les|des|est|combien|coûte|der|die|das|und|ist|ich|kann|wie|viel|wann|nicht)\b/i;
+const looksNonEnglish = (q) => NON_EN.test(String(q || ''));
+
+/**
+ * Deterministic answers for question shapes the 1.5B selector gets wrong:
+ * "do you sell X?" answered by a "does not sell" line naming X, and contact/phone questions answered by the contact card.
+ */
+export function routeAnswer(question, sources = []) {
+  const q = String(question || '');
+  const lines = candidateLines(sources, { max: 120, perSource: 40, budget: 20000 });
+  const quote = (picked) => finalizeSelection(picked.map((l) => `L${l.n}`).join(', '), lines, sources);
+  const sell = q.match(/\b(?:do|does|can|will)\s+(?:you|y'all|the store|ugm|they)\s+(?:also\s+)?(?:sell|carry|stock|offer|make|have)\s+([^?.!]+)/i);
+  if (sell) {
+    const want = specificTerms(sell[1]);
+    const neg = lines.filter((l) => /\b(?:does not|doesn't|do not|don't|not sold|not offered|no\b)/i.test(l.text) && [...specificTerms(l.text)].some((w) => want.has(w)));
+    if (neg.length) return quote(neg.slice(0, 2));
+  }
+  if (/\b(?:phone|telephone|call (?:you|someone|the store)|contact (?:you|the store|support|customer service)|reach (?:you|someone|support)|customer service|email address)\b/i.test(q)) {
+    const card = sources.findIndex((s) => /^canonical\/contact/.test(String(s.filename || '')));
+    if (card >= 0) return quote(lines.filter((l) => l.source === card).slice(0, 2));
+  }
+  return null;
+}
+
 /**
  * One question → one Answer fragment, shared by KnowBot.ask (browser) and /api/canonical (server).
  * mode 'select' (default): the model only picks knowDrive lines; 'generate': cited free-text answer with support checks.
@@ -537,6 +581,16 @@ export async function answerFromSources({ question, results = [], complete, pers
     const raw = await complete(buildMessages(question, relevant, persona, history, { budget }), { onToken, onProgress, signal, settings });
     return { fin: finalizeAnswer(raw, relevant, { minScore, persona, question, coverage }), generated: true };
   }
+  // Deterministic routes first: questions the knowDrive answers with a fixed kind of line.
+  const routed = routeAnswer(question, relevant);
+  if (routed) return { fin: routed, generated: false };
+  // Non-English questions are selected against an English rendering (lines in the question's language still count).
+  let questionEn = '';
+  if (looksNonEnglish(question)) {
+    const t = await complete([{ role: 'system', content: 'Translate the user message into English. Reply with the English text only.' }, { role: 'user', content: cleanLine(question) }],
+      { onProgress, signal, settings: { ...SELECT_SETTINGS, max_tokens: 80 } });
+    questionEn = cleanLine(String(t || '')).slice(0, 300);
+  }
   // Canonical answer cards first; the rest of the knowDrive only when no card line answers the question.
   const cards = relevant.filter((s) => String(s.filename || '').startsWith('canonical/'));
   const passes = cards.length && cards.length < relevant.length ? [cards, relevant.filter((s) => !cards.includes(s))] : [relevant];
@@ -544,8 +598,9 @@ export async function answerFromSources({ question, results = [], complete, pers
   for (const pool of passes) {
     const lines = candidateLines(pool);
     if (!lines.length) continue;
-    const raw = await complete(buildSelectMessages(question, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
-    fin = finalizeSelection(raw, lines, pool, { question });
+    const ask = questionEn ? `${questionEn} (${cleanLine(question)})` : question;
+    const raw = await complete(buildSelectMessages(ask, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
+    fin = finalizeSelection(raw, lines, pool, { question, questionEn });
     if (!fin.refused) break;
   }
   return { fin, generated: true };

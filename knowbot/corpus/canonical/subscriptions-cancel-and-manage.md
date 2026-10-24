@@ -14,7 +14,7 @@ source: shopify
 
 You can cancel or change a subscription at any time from your order confirmation email. Open the order with the link in that email and manage the subscription there.
 
-- The only subscriptions are weekly seats in the online D&D campaign *The Everlasting Rime*, on Monday, Wednesday or Thursday night. Each costs $50.00 and is billed weekly.
+- The only subscriptions are weekly seats in the online D&D campaign *The Everlasting Rime*, on Monday, Wednesday or Thursday night. Each costs $50.00.
 - The Everlasting Rime Drop-In ($50.00) is a one-time purchase.
 - Screens, accessories and the other products are one-time purchases.
 - Subscriptions can auto-renew. Cancel to stop the renewal.

@@ -14,7 +14,7 @@ source: shopify
 
 *The Everlasting Rime* is an online D&D campaign set in Icewind Dale. A seat costs $50.00, either as a weekly subscription for Monday, Wednesday or Thursday night, or as a one-time Drop-In.
 
-- The Monday, Wednesday and Thursday seats are weekly subscriptions, billed every week.
+- The Monday, Wednesday and Thursday seats are weekly subscriptions.
 - You can cancel any time using the link in your order confirmation email.
 - **Drop-In:** a one-time seat at a session other than your usual one. Check availability with team@theultimategamemaster.com before buying.
 - **Game master:** Jason Azevedo, professional DM and founder of RealmSmith.
