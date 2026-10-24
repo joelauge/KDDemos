@@ -661,7 +661,7 @@ function answerBody(a, { sources = true } = {}) {
   const body = renderMd(a.text || (a.refused ? '(refused)' : '(empty answer)'), a.citations, src.focus);
   return [body, sources && a.citations.length ? [h('div', { class: 'srcs-title' }, 'Sources'), src.ol] : null];
 }
-function engineLabel(e) { return e && (e.model || e.type) ? `${e.type ? e.type + ' · ' : ''}${e.model}` : null; }
+function engineLabel(e) { return e ? [e.type, e.model].filter(Boolean).join(' · ') || null : null; }
 
 function renderConvo() {
   const box = $('#convo');
