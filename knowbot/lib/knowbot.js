@@ -271,7 +271,7 @@ export function guardRequest(question, persona = {}) {
 /* ---------- citations / canonical answer ---------- */
 
 const MARKER_FORMS = /[[【](?:\^|sources?\s*:?\s*|ref\s*)?(\d{1,3}(?:\s*[,;&]\s*(?:and\s+)?(?:sources?\s*)?\d{1,3})*)[\]】](?!\()/gi;
-const DECLINE = /\b(?:(?:do|does|did|can|could)(?:n['’]?t| not)|cannot|unable to|no (?:information|details|mention))\b[^.]{0,80}?\b(?:cover|contain|find|have|include|mention|provide|answer|information|details|say)|\bnot (?:covered|mentioned|included|found|available) in\b/i;
+const DECLINE = /\b(?:(?:do|does|did|can|could)(?:n['’]?t| not)|cannot|unable to|no (?:information|details|mention))\b[^.]{0,80}?\b(?:cover|contain|find|have|include|mention|provide|answer|information|details|say)|\bnot (?:explicitly |specifically |directly )?(?:covered|mentioned|included|found|available|stated|provided|listed|specified)\b|\b(?:knowdrive|sources?)\b[^.]{0,30}\b(?:doesn['’]?t|does not|don['’]?t|do not) (?:cover|say|mention|include|list|state)\b/i;
 const LISTISH = /^\s*(?:[-*•]|\d+[.)]|\[\d+\])\s*/;
 
 function stripTrailingSources(text) {
@@ -315,12 +315,13 @@ const nums = (t) => new Set((String(t).replace(/\[\d+\](?!\()/g, '').match(/\d+(
 function verifySupport(text, sources, question) {
   const srcTerms = sources.map((s) => terms(`${s.title || ''} ${cleanSource(s.text)}`));
   const srcNums = sources.map((s) => nums(`${s.title || ''} ${s.text || ''}`));
-  const qNums = nums(question || '');
+  const qNums = nums(question || ''), qTerms = terms(question || '');
   const ok = (plain, i) => {
     if (!srcTerms[i]) return false;
     for (const n of nums(plain)) if (!qNums.has(n) && !srcNums[i].has(n)) return false;
-    const st = terms(plain);
-    if (st.size < 2) return true;
+    // words merely echoed from the question prove nothing: support must come from what the answer adds
+    const all = terms(plain), st = new Set([...all].filter((w) => !qTerms.has(w)));
+    if (st.size < 2) return all.size < 2 || [...all].some((w) => srcTerms[i].has(w) && !qTerms.has(w)) || st.size === 0;
     let hit = 0;
     for (const w of st) if (srcTerms[i].has(w)) hit++;
     return hit >= 2 && hit / st.size >= 0.34;
