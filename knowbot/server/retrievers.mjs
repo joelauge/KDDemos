@@ -258,6 +258,14 @@ export class LocalRetriever {
     return Math.log(1 + (n - d + 0.5) / (d + 0.5));
   }
 
+  /** Corpus-relative path for a bare file name; ambiguous names are settled by the title found in `text`. */
+  resolveBasename(base, text = '') {
+    const hits = [...this.docs.values()].filter((d) => d.filename.split('/').pop() === base);
+    if (hits.length <= 1) return hits[0]?.filename ?? null;
+    const t = String(text).match(/^title:\s*"?(.+?)"?\s*$/m)?.[1];
+    return (t && hits.find((d) => d.title === t)?.filename) || null;
+  }
+
   /** Lookup frontmatter for a corpus-relative filename. */
   lookup(filename) {
     if (!filename) return null;
@@ -371,14 +379,20 @@ export class KnowDriveRetriever {
 
   mapResult(d) {
     const attrs = { ...(d.metadata || {}), ...(d.attributes || {}) };
-    const full = String(d.filename || attrs.path || attrs.filename || '').replace(/^\/+/, '');
+    const text = Array.isArray(d.content)
+      ? d.content.filter((c) => c && typeof c.text === 'string').map((c) => c.text).join('\n')
+      : typeof d.content === 'string' ? d.content : (d.text || '');
+    let full = String(d.filename || attrs.path || attrs.filename || '').replace(/^\/+/, '');
+    // Production search returns bare file names. The dir: tags in the filter already keep hits inside the
+    // folder, so a bare name is resolved to its corpus path through the local mirror.
+    if (this.prefix && !full.includes('/') && this.allOf.some((t) => t.startsWith('dir:'))) {
+      const rel = this.local?.resolveBasename(full, text);
+      if (rel) full = this.prefix + rel;
+    }
     if (this.prefix && !full.startsWith(this.prefix)) return null;
     const filename = full.slice(this.prefix.length);
     if (!filename) return null;
     const local = this.local?.lookup(filename);
-    const text = Array.isArray(d.content)
-      ? d.content.filter((c) => c && typeof c.text === 'string').map((c) => c.text).join('\n')
-      : typeof d.content === 'string' ? d.content : (d.text || '');
     const title = pickStr(attrs.title) || local?.title || titleFromFilename(filename);
     const url = pickStr(attrs.url) || local?.url || null;
     return { file_id: d.file_id || d.id || `kd:${filename}`, filename, title, url, score: Number(d.score) || 0, text };
