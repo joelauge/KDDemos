@@ -8,6 +8,7 @@
 #   KNOWBOT_MODEL_FILE   full path to a .gguf (default: 1.5B Q4_K_M in models dir)
 #   KNOWBOT_MODEL_ALIAS  default qwen2.5-1.5b-instruct
 #   KNOWBOT_PORT         default 8080      KNOWBOT_CTX  default 8192
+#   KNOWBOT_LOG          default $KNOWBOT_HOME/llama.log
 #   KNOWBOT_FOREGROUND=1 run in the foreground (e.g. under a process manager)
 # Stop: scripts/start-model.sh stop
 set -euo pipefail
@@ -20,7 +21,7 @@ HOST=127.0.0.1
 PORT="${KNOWBOT_PORT:-8080}"
 CTX="${KNOWBOT_CTX:-8192}"
 BIN="$KNOWBOT_HOME/llama.cpp/current/llama-server"
-LOG="$KNOWBOT_HOME/llama.log"
+LOG="${KNOWBOT_LOG:-$KNOWBOT_HOME/llama.log}"
 PIDFILE="$KNOWBOT_HOME/llama-server.$PORT.pid"
 
 log() { printf '[start-model] %s\n' "$*" >&2; }
