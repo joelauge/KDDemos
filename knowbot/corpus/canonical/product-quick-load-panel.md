@@ -12,21 +12,13 @@ source: shopify
 
 # Quick-Load Panel: price, colors in stock and what it does
 
-The Quick-Load Panel costs **$47.99** in every color. You can buy it in **Brown, Black or Blue**. **Red and Green are sold out** (0 in stock), so it can't currently be ordered in green or red.
+The Quick-Load Panel costs $47.99 and is in stock in Brown, Black and Blue. Red and Green are sold out and can't be ordered.
 
-| Color | Available | Stock |
-|---|---|---|
-| Brown | yes | 182 |
-| Black | yes | 216 |
-| Blue | yes | 26 |
-| Red | **no** | 0 |
-| Green | **no** | 0 |
-
-- It's a magnetic expansion panel for the Ultimate Game Master Screen. Four magnetic flaps let you make an extra-wide screen, prep encounters privately, deploy detachable battle maps, or add storage zones.
-- 9.5" x 12.5" premium PU leather, magnetic on both sides.
-- It's not part of the screen. It's sold separately, and one is included in each Ultimate Bundle.
-- It's in the Accessories, Magnetic Accessories and Combat Management collections.
-- No sale price: the compare-at price equals the price.
-- Stock as of 2026-10-24. Variant availability can change.
+- Colors in stock: Brown (182), Black (216), Blue (26).
+- Colors sold out: Red, Green.
+- It's a magnetic expansion panel for the Ultimate Game Master Screen. Its four magnetic flaps can widen the screen, hide encounter prep, carry detachable battle maps, or add storage.
+- It measures 9.5 x 12.5 inches, in PU leather that is magnetic on both sides.
+- It's sold separately, and one comes in each Ultimate Bundle.
+- Stock as of 2026-10-24.
 
 Where this comes from: catalog/products/quick-load-panel-brown-1.md, catalog/inventory-and-pricing.md, catalog/collections/combat-management.md

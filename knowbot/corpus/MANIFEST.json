@@ -221,7 +221,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/magnetic-accessories",
-    "bytes": 2355
+    "bytes": 2026
   },
   {
     "path": "canonical/catalog-stock-and-pricing-status.md",
@@ -229,7 +229,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/all",
-    "bytes": 1973
+    "bytes": 1516
   },
   {
     "path": "canonical/collections-guide.md",
@@ -237,7 +237,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/all",
-    "bytes": 2572
+    "bytes": 2432
   },
   {
     "path": "canonical/competitor-comparisons.md",
@@ -245,7 +245,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/pages/ultimate-game-master-vs-traditional-dm-screens",
-    "bytes": 2113
+    "bytes": 1329
   },
   {
     "path": "canonical/contact-customer-service.md",
@@ -253,7 +253,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/contact-information",
-    "bytes": 1757
+    "bytes": 1174
   },
   {
     "path": "canonical/dice-tray-and-dice-set.md",
@@ -261,7 +261,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/dice-accessories",
-    "bytes": 1857
+    "bytes": 1474
   },
   {
     "path": "canonical/digital-downloads.md",
@@ -269,7 +269,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/twisted-hand-of-fate-full-6-part-module",
-    "bytes": 2192
+    "bytes": 1567
   },
   {
     "path": "canonical/gift-cards.md",
@@ -277,7 +277,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want",
-    "bytes": 1421
+    "bytes": 1048
   },
   {
     "path": "canonical/magnetic-screen-covers.md",
@@ -285,7 +285,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/magnetic-covers",
-    "bytes": 2772
+    "bytes": 2485
   },
   {
     "path": "canonical/map-pack-and-magnetic-tokens.md",
@@ -293,7 +293,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/magnetic-map-pack-1",
-    "bytes": 1616
+    "bytes": 1231
   },
   {
     "path": "canonical/not-offered-products-and-services.md",
@@ -301,7 +301,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/all",
-    "bytes": 2208
+    "bytes": 1570
   },
   {
     "path": "canonical/online-game-sessions-everlasting-rime.md",
@@ -309,7 +309,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/the-endless-rime-monthly-subscription-copy",
-    "bytes": 2264
+    "bytes": 1762
   },
   {
     "path": "canonical/payments-currency-and-taxes.md",
@@ -317,7 +317,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com",
-    "bytes": 1489
+    "bytes": 1031
   },
   {
     "path": "canonical/privacy-rights-and-opt-out.md",
@@ -325,15 +325,15 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/pages/data-sharing-opt-out",
-    "bytes": 1951
+    "bytes": 1442
   },
   {
     "path": "canonical/privacy-selling-sharing-personal-data.md",
-    "title": "Privacy: does the store sell or share personal data with advertisers?",
+    "title": "Privacy: what the privacy policy says about selling or sharing data",
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/privacy-policy",
-    "bytes": 1779
+    "bytes": 1599
   },
   {
     "path": "canonical/product-dungeon-masterclass.md",
@@ -341,7 +341,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/game-master-foundations-online-course",
-    "bytes": 1877
+    "bytes": 1366
   },
   {
     "path": "canonical/product-quick-load-panel.md",
@@ -349,7 +349,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/quick-load-panel-brown-1",
-    "bytes": 1581
+    "bytes": 1238
   },
   {
     "path": "canonical/product-ultimate-game-master-screen.md",
@@ -357,7 +357,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait",
-    "bytes": 1930
+    "bytes": 1571
   },
   {
     "path": "canonical/promotions-active-offers.md",
@@ -365,7 +365,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/ultimate-bundle",
-    "bytes": 2025
+    "bytes": 1679
   },
   {
     "path": "canonical/returns-and-refunds.md",
@@ -373,7 +373,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/refund-policy",
-    "bytes": 2070
+    "bytes": 1738
   },
   {
     "path": "canonical/returns-eu-right-of-withdrawal.md",
@@ -381,7 +381,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/refund-policy",
-    "bytes": 1603
+    "bytes": 1307
   },
   {
     "path": "canonical/rules-packs-and-system-setup.md",
@@ -389,7 +389,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/blank-magnetic-charts",
-    "bytes": 2569
+    "bytes": 2341
   },
   {
     "path": "canonical/screen-portrait-vs-landscape.md",
@@ -397,7 +397,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/pages/avada-faqs",
-    "bytes": 1690
+    "bytes": 1344
   },
   {
     "path": "canonical/shipping-free-shipping-threshold.md",
@@ -405,7 +405,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/shipping-policy",
-    "bytes": 1648
+    "bytes": 1135
   },
   {
     "path": "canonical/shipping-international-countries-carriers.md",
@@ -413,7 +413,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/shipping-policy",
-    "bytes": 1999
+    "bytes": 1491
   },
   {
     "path": "canonical/shipping-processing-and-delivery-times.md",
@@ -421,7 +421,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/shipping-policy",
-    "bytes": 1710
+    "bytes": 1154
   },
   {
     "path": "canonical/subscriptions-cancel-and-manage.md",
@@ -429,7 +429,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/policies/subscription-policy",
-    "bytes": 2142
+    "bytes": 1750
   },
   {
     "path": "canonical/trackers-initiative-vs-creature.md",
@@ -437,7 +437,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/collections/initiative-tracker",
-    "bytes": 1923
+    "bytes": 1620
   },
   {
     "path": "canonical/ultimate-bundle-contents.md",
@@ -445,7 +445,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/ultimate-bundle",
-    "bytes": 2028
+    "bytes": 1526
   },
   {
     "path": "canonical/ultimate-bundle-savings.md",
@@ -453,7 +453,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/products/ultimate-bundle",
-    "bytes": 2000
+    "bytes": 1411
   },
   {
     "path": "canonical/wholesale-program.md",
@@ -461,7 +461,7 @@
     "kind": "canonical",
     "source_id": null,
     "url": "https://theultimategamemaster.com/pages/wholesale",
-    "bytes": 1817
+    "bytes": 1130
   },
   {
     "path": "catalog/collections/5e-accessories.md",

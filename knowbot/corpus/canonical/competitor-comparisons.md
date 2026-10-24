@@ -12,16 +12,11 @@ source: shopify
 
 # Comparing the screen with other DM screens: what the store's own page says
 
-The store compares its screen only with **generic "traditional" cardboard DM screens**. It has no data on any named competitor's screen, price or specs. Never attribute a price or feature to a named brand.
+The store publishes no prices or specs for other brands' screens. Its comparison page sets the Ultimate Game Master Screen against traditional cardboard DM screens in general.
 
-- **Screen price:** $139.99 (the comparison page rounds it to "$140").
-- **The page's 3-year cost example (illustrative, not real prices):**
-  - Traditional: initial cardboard screen $25, replacement $25, basic accessories $30, storage $40, replacement accessories $20, for a total of $140.
-  - UGM: core screen $140, essential accessories $40, optional upgrades $50, $0 replacement, for a total of $230.
-- The page's main claims are modular magnetic panels, accessories that attach anywhere, device holders, durability ("lifetime durability" is the page's wording, not a warranty), and system-agnostic use.
-- The page also says "in over 5,000 sales, fewer than 1% of customers have returned their UGM system". That's a marketing claim.
-- Whether the screen is "better" than another brand is opinion. Present the store's stated features and let the customer compare.
-
-**Conflicting store text.** The page's internal math disagrees: it says both "$90" and "$49 more" over three years. Its "Total Investment: $139 (vs $189 for complete bundle)" doesn't match the real Ultimate Bundle price of $319.99 (catalog/products/ultimate-bundle.md). Quote product prices from the product files.
+- The Ultimate Game Master Screen costs $139.99.
+- **What the page highlights:** modular magnetic panels, accessories that attach anywhere, phone and tablet holders, durable PU leather over a metal core, and use with any game system.
+- Whether one screen is "better" is a matter of preference. The store's own features are listed on the product page.
+- **Comparison page:** /pages/ultimate-game-master-vs-traditional-dm-screens.
 
 Where this comes from: pages/ultimate-game-master-vs-traditional-dm-screens.md, catalog/products/ultimate-game-master-screen-brown-portrait.md

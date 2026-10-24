@@ -12,11 +12,11 @@ source: shopify
 
 # Ultimate Bundle: what's included, price and versions
 
-The Ultimate Bundle costs **$319.99** (compare-at $361.90). It's the screen plus the nine accessories that make up a complete setup. You can buy it in **Brown** or **Black**, each in **Portrait** or **Landscape**. All four versions are in stock (56 each).
+The Ultimate Bundle costs $319.99 and includes the screen plus nine accessories. It comes in Brown or Black, each in Portrait or Landscape, and all four versions are in stock.
 
-**Included (10 items):**
-1. Ultimate Game Master Screen: 4 panels, 12 blank magnetic charts, 4 rivet magnets, magnetic clasp/dice tower
-2. Magnetic Map Pack (dry-erase battle maps)
+**What's in it:**
+1. Ultimate Game Master Screen, with 4 panels, 12 blank magnetic charts, 4 rivet magnets and the magnetic clasp/dice tower
+2. Magnetic Map Pack
 3. Quick-Load Panel
 4. Initiative Trackers (pack of 4)
 5. Creature Trackers (pack of 3)
@@ -24,14 +24,10 @@ The Ultimate Bundle costs **$319.99** (compare-at $361.90). It's the screen plus
 7. Magnetic Phone Holder
 8. Large Magnetic Pouch
 9. Small Magnetic Pouch
-10. Magnetic Bar set (2-pack)
+10. Magnetic Bar Set (2 bars)
 
-**Not included:** rules packs, magnetic screen covers, the Magnetic Tokens set, the dice tray and dice. The description suggests adding system rules packs later.
-
-- Buying a bundle also triggers a free Dungeon Masterclass ($299) automatically at checkout (see the promotions card).
-- The bundle is system-agnostic: D&D 5e, Pathfinder, Savage Worlds, Call of Cthulhu, homebrew.
-- Everything ships together in one shipment, and the bundle qualifies for US free shipping (over $100).
-
-**Store text quirk.** The Black bundle's description still lists the screen as "(Brown)" (catalog/products/ultimate-bundle-black.md). The product title and handle say it's the Black version.
+- Rules packs, screen covers, magnetic tokens, the dice tray and dice are sold separately.
+- An Ultimate Bundle also gets the Dungeon Masterclass ($299) free, applied automatically at checkout.
+- Everything arrives in one shipment, and US orders of this size ship free.
 
 Where this comes from: catalog/products/ultimate-bundle.md, catalog/products/ultimate-bundle-black.md, catalog/collections/game-master-screen.md, pages/avada-faqs.md

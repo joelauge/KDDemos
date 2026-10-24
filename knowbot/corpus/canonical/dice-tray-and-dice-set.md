@@ -12,23 +12,13 @@ source: shopify
 
 # Magnetic Dice Tray and Premium Dice Set: details and price
 
-The store sells one dice tray and one dice set, both limited-quantity Kickstarter exclusives. The **Magnetic Dice Tray** is $29.99, and the **UGMS Premium Dice Set with Leather Case** is $70.00. Both are in stock.
+The Magnetic Dice Tray costs $29.99 and the UGMS Premium Dice Set with Leather Case costs $70.00. Both are in stock.
 
-**Magnetic Dice Tray: $29.99** (16 in stock)
-- Faux black leather with felt lining.
-- Strong magnets at the corners hold it together. It unfolds flat for transport.
-- 9.84 x 7.28 inches. The summary says it holds 7+ dice sets.
-- Black only, no color options. Not on sale.
-
-**UGMS Premium Dice Set with Leather Case: $70.00** (46 in stock)
-- 7 solid-metal polyhedral dice, black finish with red glistening bands, exclusive design.
-- Comes in a PU leather carrying case. Dice are 14 mm to 20 mm.
-
-**Kickstarter Backer Pin: $8.00 (was $10)** (75 in stock)
-- Magnetic pin, 1.9 x 1.57 inches. Wear it on clothing or stick it to the screen.
-
-- The screen's clasp also doubles as a dice tower (included with every screen).
-- These items aren't in the Ultimate Bundle.
+- **Dice tray:** faux black leather with a felt lining. Magnets at the corners hold it together, and it unfolds flat to carry. It measures 9.84 x 7.28 inches.
+- **Dice set:** 7 solid-metal polyhedral dice, black with red bands, in a PU-leather case. The dice are 14–20 mm.
+- **Kickstarter Backer Pin:** $8.00. It's a magnetic pin you can wear or stick to the screen.
+- These are limited-quantity Kickstarter exclusives.
+- The screen's own clasp also works as a dice tower.
 - Stock as of 2026-10-24.
 
 Where this comes from: catalog/products/ugms-magnetic-dice-tray.md, catalog/products/ugms-backer-dice-set-with-leather-case.md, catalog/products/ugms-kickstarter-backer-pin.md, catalog/collections/dice-accessories.md

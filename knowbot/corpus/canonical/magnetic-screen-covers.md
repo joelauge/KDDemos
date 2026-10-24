@@ -12,22 +12,20 @@ source: shopify
 
 # Magnetic screen covers: all 7 designs, variants and stock
 
-There are 7 magnetic screen covers, and each costs **$35.00**. A cover is decorative PU leather with a felt back, 19 x 12 inches. It attaches magnetically to the centre two outside panels of the screen. The covers are accessories, not screens, and the $35 price is never the screen's price.
+There are 7 magnetic screen covers, each $35.00. A cover is a decorative PU-leather panel with a felt back, 19 x 12 inches, that attaches magnetically to the two centre outside panels of the screen.
 
 | Cover | In stock | Sold out |
 |---|---|---|
-| Pathfinder (official Paizo art) | Portrait (2), Landscape (5) | none |
-| Savage Worlds | Portrait (3), Landscape (2) | none |
-| Tales of the Valiant | Portrait (6), Landscape (3) | none |
-| Sci-Fi | Portrait Blue/Black, Landscape Blue/Black (1–5 each) | none |
-| Epic Fantasy | Portrait Brown/Black, Landscape Brown | Landscape Black |
+| Pathfinder (official Paizo art) | Portrait, Landscape | none |
+| Savage Worlds | Portrait, Landscape | none |
+| Tales of the Valiant | Portrait, Landscape | none |
+| Sci-Fi | Portrait and Landscape, in Blue and Black | none |
+| Epic Fantasy | Portrait Brown, Portrait Black, Landscape Brown | Landscape Black |
 | Gothic Horror | Portrait Black, Portrait Red | Landscape Black, Landscape Red |
-| Eldritch Horror | Portrait Brown only | Portrait Green, Landscape Brown, Landscape Green |
+| Eldritch Horror | Portrait Brown | Portrait Green, Landscape Brown, Landscape Green |
 
 - Buy the orientation that matches your screen.
-- Stock is very low on most covers. They're in the Kickstarter Exclusives (Limited Quantity) collection.
-- The Savage Worlds cover is in Magnetic Covers and Kickstarter Exclusives only, not in Accessories.
-- No covers are on sale (no compare-at prices).
+- Covers are limited-quantity Kickstarter exclusives, and most have only a few units left.
 - Stock as of 2026-10-24.
 
 Where this comes from: catalog/collections/magnetic-covers.md, catalog/products/pathfinder-magnetic-screen-cover.md, catalog/products/eldritch-horror-magnetic-screen-cover.md, catalog/products/gothic-horror-magnetic-screen-cover.md, catalog/products/epic-fantasy-magnetic-screen-cover.md, catalog/products/sci-fi-magnetic-screen-cover.md, catalog/products/tales-of-the-valiant-magnetic-screen-cover.md, catalog/products/savage-worlds-magnetic-screen-cover.md, catalog/inventory-and-pricing.md

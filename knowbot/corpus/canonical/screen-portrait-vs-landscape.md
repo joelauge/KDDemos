@@ -12,12 +12,13 @@ source: shopify
 
 # Portrait vs landscape screen: differences, price and availability
 
-Both orientations **cost the same** ($139.99 for the screen, $319.99 in either Ultimate Bundle). The difference is the shape. **Portrait** gives taller coverage and a bigger wall of notes. **Landscape** has a lower profile, so you get better sightlines across the table. The magnetic panels and accessories work either way.
+Portrait and landscape cost the same: $139.99 for the screen and $319.99 for the Ultimate Bundle. Portrait gives taller coverage and more room for notes. Landscape sits lower, so you can see across the table more easily.
 
-- **Color availability differs by orientation.** Portrait is in stock in Brown, Black, Green and Blue. Landscape is in stock only in Brown and Black. Red is sold out in both.
-- Both orientations of the Ultimate Bundle (Brown and Black) are in stock.
-- Magnetic screen covers are sold per orientation, so buy the cover that matches your screen. Some cover orientations are sold out (see the magnetic covers card).
-- All accessories (trackers, pouches, holders, Quick-Load Panel, Map Pack) fit either orientation. They aren't sold by orientation.
+- In stock in portrait: Brown, Black, Green and Blue.
+- In stock in landscape: Brown and Black.
+- Both orientations of the Brown and Black Ultimate Bundle are in stock.
+- Magnetic screen covers are sold by orientation. Buy the cover that matches your screen.
+- Every accessory fits either orientation.
 - Stock as of 2026-10-24.
 
 Where this comes from: pages/avada-faqs.md, catalog/products/ultimate-game-master-screen-brown-portrait.md, catalog/products/ultimate-bundle.md, catalog/collections/magnetic-covers.md

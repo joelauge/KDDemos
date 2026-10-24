@@ -12,19 +12,19 @@ source: shopify
 
 # Setting up the screen for your game system: rules packs, covers and blank charts
 
-The screen works with any system. To tailor it, add that system's **Rules Pack** (magnetic rules charts) and, if you like, its **magnetic cover**. For systems without a pack, use **Blank Magnetic Charts** ($17.99).
+To set the screen up for a game system, add that system's Rules Pack of magnetic rules charts and, if one exists, its $35 magnetic cover. For any system, Blank Magnetic Charts ($17.99) let you write your own references.
 
-| System | Rules Pack | Status | Cover ($35) |
+| System | Rules Pack | Pack stock | Matching cover |
 |---|---|---|---|
-| D&D 5e | $24.99: 38 charts + 10 initiative + 10 creature inserts | in stock | none (try Epic Fantasy) |
-| Pathfinder | $26.00 (was $30) | **sold out** | Pathfinder: in stock, both orientations |
-| Savage Worlds | $26.00 (was $30) | 2 left, not on online store | Savage Worlds: in stock |
-| Starfinder | $30.00 | 1 left, not on online store | none (Sci-Fi cover fits the theme) |
-| Tales of the Valiant | $30.00: charts + 10 + 10 inserts | 5 left | Tales of the Valiant: in stock |
+| D&D 5e | $24.99 | in stock | none |
+| Pathfinder | $26.00 | sold out | Pathfinder cover, in stock |
+| Savage Worlds | $26.00 | in stock (low) | Savage Worlds cover, in stock |
+| Starfinder | $30.00 | in stock (low) | none |
+| Tales of the Valiant | $30.00 | in stock (low) | Tales of the Valiant cover, in stock |
 
-- **Pathfinder setup right now:** screen ($139.99) + Pathfinder cover + Blank Magnetic Charts while the Pathfinder Rules Pack is sold out. Don't substitute the 5e pack for Pathfinder rules.
-- Products marked "not on online store" are active but have no public product page.
-- Blank Magnetic Charts are wet/dry erase, come in small, medium and large, and are system-agnostic. The screen already includes 12 blank charts.
-- No rules packs exist for Call of Cthulhu or other systems. Use blank charts for those.
+- **Pathfinder setup today:** the screen ($139.99), the Pathfinder Magnetic Screen Cover, and Blank Magnetic Charts while the Pathfinder Rules Pack is sold out.
+- The 5e pack has 38 rules charts, 10 initiative inserts and 10 creature inserts.
+- Blank Magnetic Charts come in small, medium and large and are wet/dry erase. The screen already includes 12 of them.
+- No other systems have a Rules Pack. Use Blank Magnetic Charts for them.
 
 Where this comes from: catalog/products/5th-edition-rules-pack.md, catalog/products/pathfinder-rules-pack-1.md, catalog/products/savage-worlds-rules-pack-1.md, catalog/products/starfinder-rules-pack.md, catalog/products/tales-of-the-valiant-rules-pack.md, catalog/products/blank-magnetic-charts.md, catalog/collections/magnetic-covers.md, pages/avada-faqs.md

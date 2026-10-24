@@ -12,14 +12,12 @@ source: shopify
 
 # The Everlasting Rime online D&D sessions: days, price and game master
 
-*The Everlasting Rime* is an online D&D campaign set in Icewind Dale (the Auril the Frostmaiden storyline). Seats cost **$50.00**. Monday, Wednesday and Thursday night seats are **weekly subscriptions**, and a **Drop-In** is a one-off seat.
+*The Everlasting Rime* is an online D&D campaign set in Icewind Dale. A seat costs $50.00, either as a weekly subscription for Monday, Wednesday or Thursday night, or as a one-time Drop-In.
 
-- **Products:** Everlasting Rime (Monday), (Wednesday), (Thursday) and (Drop-In), each $50.00.
-- **Weekly seats** use a subscription plan billed every week. Manage or cancel any time from the link in your order confirmation email.
-- **Drop-In:** for joining a session other than your usual weekly one. Confirm availability with the store (team@theultimategamemaster.com) before buying.
-- **Game master:** Jason, a professional DM and President & Founder of RealmSmith. He also teaches the Dungeon Masterclass. His bio says he has had Matt Mercer, Matthew Lillard, Deborah Ann Woll and others at his table. Those are past players, not hosts of these sessions.
-- Session start times and time zone aren't listed in store data.
-- Delivered online, so nothing ships.
-- The collection is titled "The Endless Rime (Weekly Subscription)". The monthly-subscription collection is empty.
+- The Monday, Wednesday and Thursday seats are weekly subscriptions, billed every week.
+- You can cancel any time using the link in your order confirmation email.
+- **Drop-In:** a one-time seat at a session other than your usual one. Check availability with team@theultimategamemaster.com before buying.
+- **Game master:** Jason Azevedo, professional DM and founder of RealmSmith.
+- Sessions are played online. Nothing ships.
 
 Where this comes from: catalog/products/the-everlasting-rime-monday.md, catalog/products/the-everlasting-rime-wednesday.md, catalog/products/the-everlasting-rime-thursday.md, catalog/products/the-everlasting-rime-drop-in.md, catalog/collections/the-endless-rime-monthly-subscription-copy.md, policies/subscription.md

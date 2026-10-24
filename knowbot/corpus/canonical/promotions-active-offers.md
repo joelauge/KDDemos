@@ -12,15 +12,14 @@ source: shopify
 
 # Current promotions and discounts, and what doesn't exist
 
-Two customer promotions are live. Both apply automatically at checkout, with no code needed.
+Two customer promotions are running, and both apply automatically at checkout. Buy an Ultimate Bundle and the Dungeon Masterclass is free. Buy the Dungeon Masterclass and two digital downloads are free.
 
-1. **Free Dungeon Masterclass with an Ultimate Bundle.** Buy one Ultimate Bundle (Brown or Black, $319.99) and get *Dungeon Masterclass: The Art of Game Mastering* ($299.00) at 100% off, quantity 1. Add both to the cart. Active since 2026-06-27, no end date.
-2. **Free digital bundle with the Masterclass.** Buy the Masterclass and get the *Session Zero Checklist* PDF ($1.00) and *Realmsmith's Twisted Hand of Fate* module ($19.95) free. Active since 2026-06-27, no end date.
-
-- The two can stack: bundle → free Masterclass → free PDFs, as long as all items are in the cart.
-- **Wholesale tiers** (approved wholesale accounts only): 25% off $500+, 40% off $1,000+, 50% off $1,500+, each with free worldwide shipping.
-- **Sale prices** (compare-at above price): Full Color Tracker Set, Pathfinder and Savage Worlds Rules Packs, Session Zero Checklist, Twisted Hand of Fate, Kickstarter Pin, and both Ultimate Bundles.
-- **Not offered:** no loyalty or rewards programme, no member percentage discounts, no published price-matching policy. KnowBot gives out no discount codes. The BFCM20 sale (Nov 2025) has expired.
-- US free shipping over $100 is a shipping rate, not a promotion.
+- **Free Masterclass:** add an Ultimate Bundle (Brown or Black, $319.99) and the Dungeon Masterclass ($299.00) to the cart, and the Masterclass costs nothing.
+- **Free digital bundle:** with the Masterclass, the Session Zero Checklist PDF and the Twisted Hand of Fate module are free.
+- The two promotions stack when all the items are in the cart.
+- Both have run since 2026-06-27 with no end date.
+- **Sale prices on now:** Full Color Tracker Set, Pathfinder and Savage Worlds Rules Packs, Session Zero Checklist, Twisted Hand of Fate, Kickstarter Backer Pin, and both Ultimate Bundles.
+- **Wholesale discounts** are only for approved wholesale accounts.
+- The store has no loyalty or rewards programme and no member discounts.
 
 Where this comes from: operations/promotions.md, catalog/inventory-and-pricing.md, pages/wholesale.md
