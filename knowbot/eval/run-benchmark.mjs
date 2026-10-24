@@ -173,7 +173,7 @@ function check(item, answer, clientMs, error) {
   const incMatchers = (exp.must_include || []).map(toMatcher);
   const quotedFrom = (fname) => {
     const ns = cites.filter((c) => normPath(c.filename) === normPath(fname)).map((c) => Number(c.n));
-    return text.split(/\n+|(?<=[.!?])\s+/).filter((seg) => ns.some((n) => seg.includes(`[${n}]`))).join(' ');
+    return text.split(/\n+|(?<=\])\s+(?=[A-Z-])/).filter((seg) => ns.some((n) => seg.includes(`[${n}]`))).join(' ');
   };
   const cardCredit = new Map(citedFiles.map((c) => [c, !incMatchers.length || incMatchers.some((m) => m.test(quotedFrom(c)))]));
   const citeMatches = (cited, e) => pathMatches(cited, e) || (cardCredit.get(cited) && derivedFrom(cited).some((d) => pathMatches(d, e)));
