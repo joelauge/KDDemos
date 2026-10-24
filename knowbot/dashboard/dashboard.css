@@ -18,16 +18,16 @@
   --accent-soft: rgba(99, 102, 241, 0.10);
   --btn: #4f46e5;             /* white-on-indigo buttons: AA in both themes */
   --btn-hover: #4338ca;
-  --good: #047857;
-  --good-soft: rgba(4, 120, 87, 0.08);
-  --warn: #b45309;
-  --warn-soft: rgba(180, 83, 9, 0.08);
+  --good: #036b4c;
+  --good-soft: rgba(3, 107, 76, 0.08);
+  --warn: #9a4508;
+  --warn-soft: rgba(154, 69, 8, 0.08);
   --bad: #b91c1c;
   --bad-soft: rgba(185, 28, 28, 0.07);
   --k-widget: #4f46e5;
-  --k-inline: #0e7490;
+  --k-inline: #0b6478;
   --k-fullpage: #be185d;
-  --k-api: #b45309;
+  --k-api: #9a4508;
   --k-dashboard: #475569;
   --k-unknown: #5b6779;
   --lat-r: #0891b2;
@@ -398,8 +398,9 @@ button.cite:hover { background: var(--btn); border-color: var(--btn); color: #ff
   .kpi-value { font-size: 22px; }
   .spark { display: none; }
   .brand-sep, .brand-name { display: none; }
-  .top-actions { width: 100%; display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; }
-  .top-actions #sim-btn { justify-self: end; }
+  .top-actions { width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
+  .top-actions #sim-btn { justify-self: end; order: 1; }
+  .top-actions .theme-btn { order: 2; }
   .top-actions .switch { grid-column: 1 / -1; order: 3; }
   .meta-row { font-size: 10.5px; gap: 2px 10px; }
   .kpis .kpi:last-child { grid-column: 1 / -1; }
