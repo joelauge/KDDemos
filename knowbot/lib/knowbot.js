@@ -333,7 +333,7 @@ function sessionIdFor(kind) {
 export class Telemetry {
   constructor(cfg, apiBase) {
     this.on = cfg !== false;
-    this.url = cfg && typeof cfg === 'object' && cfg.url ? cfg.url : apiBase ? `${apiBase}/api/events` : null;
+    this.url = cfg && typeof cfg === 'object' && 'url' in cfg ? cfg.url : apiBase ? `${apiBase}/api/events` : null;
     try { this.bc = this.on && G.BroadcastChannel ? new G.BroadcastChannel('knowbot') : null; } catch { this.bc = null; }
   }
   send(ev) {

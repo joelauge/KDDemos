@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>KnowBot In-Browser</title>
+  <meta name="description" content="KnowBot with the model running in your browser via WebLLM, with server retrieval or a local corpus index fallback." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="./demo.css" />
+  <style>
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; }
+    .info { border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 13px; line-height: 1.6; color: #94a3b8; }
+    .info .wrap { padding-top: 12px; padding-bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; justify-content: space-between; }
+    .info strong { color: #f8fafc; font-weight: 600; }
+    .pill { font: 11.5px 'JetBrains Mono', monospace; padding: 2px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14); color: #cbd5e1; }
+    #chat { flex: 1; min-height: 0; display: flex; }
+    #chat > .kb-root { flex: 1; min-height: 0; height: auto; }
+    #chat .kb-mode-fullpage { min-height: 0; }
+  </style>
+</head>
+<body>
+  <div class="demo-bar" role="note"><div class="wrap">
+    <span><b>DEMO</b> &middot; in-browser model (WebLLM, needs WebGPU) &middot; first load downloads about 1 GB, then it is cached</span>
+    <span><a data-keep-api href="./index.html">All demos</a> &middot; <span data-api-status></span></span>
+  </div></div>
+  <div class="info"><div class="wrap">
+    <span><strong>Engine:</strong> Qwen2.5-1.5B-Instruct running on your GPU. Nothing you type leaves the browser except retrieval queries to the server, if one is up.</span>
+    <span class="pill" id="retr">retrieval: detecting…</span>
+  </div></div>
+  <main id="chat"></main>
+  <script type="module">
+    import { mountFullpage } from '../lib/widget.js';
+    import { API, PERSONA, STARTERS, carryApiParam, showApiStatus } from './demo.js';
+    import { buildLocalIndex } from './local-index.js';
+    carryApiParam();
+    const pill = document.getElementById('retr');
+    const cfg = await showApiStatus();
+    let local = null;
+    const getLocal = () => (local ||= buildLocalIndex(undefined, (p) => { pill.textContent = `retrieval: indexing corpus ${Math.round(p * 100)}%`; })
+      .then((ix) => { pill.textContent = `retrieval: local index (${ix.size} chunks, in-browser BM25)`; return ix; }));
+    if (!cfg) getLocal();
+    else pill.textContent = `retrieval: server (${cfg.retrieval || 'unknown'})`;
+
+    // Custom retriever: try the server's /api/search, fall back to the in-browser index over corpus/.
+    async function search(query, k) {
+      if (cfg) {
+        try {
+          const ctl = new AbortController();
+          const t = setTimeout(() => ctl.abort(), 4000);
+          const res = await fetch(`${API}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query, k }), signal: ctl.signal });
+          clearTimeout(t);
+          if (res.ok) return res.json();
+        } catch { /* fall through */ }
+        pill.textContent = 'retrieval: server failed, using local index';
+      }
+      return (await getLocal()).search(query, k);
+    }
+
+    window.knowbot = mountFullpage('#chat', {
+      apiBase: API, persona: PERSONA, starters: STARTERS,
+      engine: { type: 'webllm' },
+      retriever: { type: 'custom', search },
+      telemetry: cfg ? true : { url: null },   // BroadcastChannel always; POST only when a server is up
+      subtitle: 'Model runs in your browser · answers cite the knowDrive',
+    });
+  </script>
+</body>
+</html>
