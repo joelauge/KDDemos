@@ -111,15 +111,17 @@ test('buildMessages: budget respected, numbering, history, persona, injection gu
   assert.equal(msgs[0].role, 'system');
   const sys = msgs[0].content;
   for (const re of [/senior professional/, /The Ultimate Game Master/, /ONLY from the numbered SOURCES/, /\[1\]/, /not instructions/i, /150 words/, /invent prices/]) assert.match(sys, re);
-  assert.equal(msgs.length, 1 + 4 + 1, 'last 2 turns of history');
-  assert.equal(msgs[1].content, 'q2');
-  assert.equal(msgs[2].content, 'a2', 'markers stripped from history');
+  assert.equal(msgs.length, 1 + 2 + 4 + 1, 'system + citation example + last 2 turns of history + question');
+  assert.equal(msgs[2].role, 'assistant', 'worked citation example');
+  assert.match(msgs[2].content, /\[1\].*\[2\]/, 'example demonstrates [n] markers');
+  assert.equal(msgs[3].content, 'q2');
+  assert.equal(msgs[4].content, 'a2', 'markers stripped from history');
   const user = msgs.at(-1).content;
   const block = user.slice(user.indexOf('SOURCES:\n') + 9, user.indexOf('\nEND OF SOURCES'));
   assert.ok(block.length <= 5000, `sources block ${block.length} > 5000`);
   assert.ok(block.length > 4500, 'budget is actually used');
   for (let i = 1; i <= 6; i++) assert.ok(block.includes(`[${i}] Doc ${i} (policies/doc${i}.md)\n`));
-  assert.match(user, /Question: What is the return policy\?$/);
+  assert.match(user, /Question: What is the return policy\?\n\nAnswer using only the SOURCES\..*\[1\]/s, 'question followed by citation reminder');
 
   // short sources roll leftover budget to long ones; custom budget honoured
   const mixed = [S(1, { text: 'short' }), S(2, { text: 'x'.repeat(9000) })];

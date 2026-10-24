@@ -202,6 +202,12 @@ Rules:
 6. Be concise: about 150 words at most unless the user asks for more. Use short paragraphs or a bulleted list. Do not add a sources list at the end.`;
 }
 
+const CITE_EXAMPLE = [
+  { role: 'user', content: 'SOURCES:\n[1] Gift Card (catalog/products/gift-card.md)\nGift cards come in $25, $50 and $100 values and never expire.\n\n[2] FAQ (pages/faq.md)\nGift cards are valid for one year.\nEND OF SOURCES\n\nQuestion: Do gift cards expire?' },
+  { role: 'assistant', content: 'The sources disagree. The product page says gift cards never expire [1], but the FAQ says they are valid for one year [2]. They come in $25, $50 and $100 values [1].' },
+];
+const CITE_REMINDER = 'Answer using only the SOURCES. Include every relevant price, option and condition. After each fact, write its source number in brackets, e.g. [1]. If sources disagree, say so and cite each.';
+
 /**
  * Build OpenAI chat messages. Sources share `budget` chars (default 5000, fits ~6 sources in a 1.5B model);
  * unused share from short sources rolls over to later ones. History: last 2 turns (4 messages).
@@ -216,12 +222,13 @@ export function buildMessages(question, sources = [], persona = {}, history = []
     left -= block.length + 2;
     blocks.push(block);
   });
-  const msgs = [{ role: 'system', content: systemPrompt(persona) }];
+  // One worked example: small models copy a demonstrated citation format far more reliably than they follow a rule.
+  const msgs = [{ role: 'system', content: systemPrompt(persona) }, ...CITE_EXAMPLE];
   for (const h of (history || []).slice(-4)) {
     if (h && (h.role === 'user' || h.role === 'assistant') && h.content)
       msgs.push({ role: h.role, content: clip(String(h.content).replace(/\s*\[\d+\]/g, ''), 400) });
   }
-  msgs.push({ role: 'user', content: `SOURCES:\n${blocks.join('\n\n') || '(none)'}\nEND OF SOURCES\n\nQuestion: ${String(question).trim()}` });
+  msgs.push({ role: 'user', content: `SOURCES:\n${blocks.join('\n\n') || '(none)'}\nEND OF SOURCES\n\nQuestion: ${String(question).trim()}\n\n${CITE_REMINDER}` });
   return msgs;
 }
 
