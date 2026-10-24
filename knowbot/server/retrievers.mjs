@@ -318,10 +318,11 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = 0.03 }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = 0.03, exclude = [] }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0;
+    this.exclude = (Array.isArray(exclude) ? exclude : String(exclude || '').split(',')).map((t) => t.trim()).filter(Boolean);
     this.tag = tag;
     this.prefix = String(prefix || '').replace(/^\/+/, '');
   }
@@ -332,7 +333,7 @@ export class KnowDriveRetriever {
     const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
-      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.tag ? { filter: { all_of: [this.tag] } } : {}) }),
+      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.tag || this.exclude.length ? { filter: { ...(this.tag ? { all_of: [this.tag] } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -401,6 +402,7 @@ export function createRetriever({ corpusDir, env = process.env, logger, watch = 
       baseUrl: env.KNOWDRIVE_BASE_URL || 'https://knowdrive.ai', apiKey,
       store: env.KNOWDRIVE_STORE || DEFAULT_STORE, tag: env.KNOWDRIVE_TAG ?? DEFAULT_TAG, prefix: env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX, local, logger,
       minSimilarity: Number(env.KNOWDRIVE_MIN_SIMILARITY ?? DEFAULT_MIN_SIMILARITY),
+      exclude: env.KNOWDRIVE_EXCLUDE_TAGS || '', // e.g. kind:canonical to A/B the answer cards
     });
     return { mode: 'knowdrive', retriever: kd, local };
   }
