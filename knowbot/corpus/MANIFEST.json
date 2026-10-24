@@ -216,6 +216,254 @@
     "bytes": 6342
   },
   {
+    "path": "canonical/accessories-colors-and-stock.md",
+    "title": "Color accessories: which colors are sold out (pouches, holders, bars, trackers)",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/magnetic-accessories",
+    "bytes": 2355
+  },
+  {
+    "path": "canonical/catalog-stock-and-pricing-status.md",
+    "title": "What's sold out, on sale or mispriced across the catalog",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/all",
+    "bytes": 1973
+  },
+  {
+    "path": "canonical/collections-guide.md",
+    "title": "Store collections: which products are in each",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/all",
+    "bytes": 2572
+  },
+  {
+    "path": "canonical/competitor-comparisons.md",
+    "title": "Comparing the screen with other DM screens: what the store's own page says",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/pages/ultimate-game-master-vs-traditional-dm-screens",
+    "bytes": 2113
+  },
+  {
+    "path": "canonical/contact-customer-service.md",
+    "title": "Contacting the store: email only, no phone line or published hours",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/contact-information",
+    "bytes": 1757
+  },
+  {
+    "path": "canonical/dice-tray-and-dice-set.md",
+    "title": "Magnetic Dice Tray and Premium Dice Set: details and price",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/dice-accessories",
+    "bytes": 1857
+  },
+  {
+    "path": "canonical/digital-downloads.md",
+    "title": "Digital downloads: Session Zero Checklist and Twisted Hand of Fate",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/twisted-hand-of-fate-full-6-part-module",
+    "bytes": 2192
+  },
+  {
+    "path": "canonical/gift-cards.md",
+    "title": "Gift cards: amounts, delivery and returns",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want",
+    "bytes": 1421
+  },
+  {
+    "path": "canonical/magnetic-screen-covers.md",
+    "title": "Magnetic screen covers: all 7 designs, variants and stock",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/magnetic-covers",
+    "bytes": 2772
+  },
+  {
+    "path": "canonical/map-pack-and-magnetic-tokens.md",
+    "title": "Magnetic Map Pack and Magnetic Tokens: what each includes",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/magnetic-map-pack-1",
+    "bytes": 1616
+  },
+  {
+    "path": "canonical/not-offered-products-and-services.md",
+    "title": "What the store does not sell or offer",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/all",
+    "bytes": 2208
+  },
+  {
+    "path": "canonical/online-game-sessions-everlasting-rime.md",
+    "title": "The Everlasting Rime online D&D sessions: days, price and game master",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/the-endless-rime-monthly-subscription-copy",
+    "bytes": 2264
+  },
+  {
+    "path": "canonical/payments-currency-and-taxes.md",
+    "title": "Paying: currencies, accepted wallets, taxes and order acceptance",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com",
+    "bytes": 1489
+  },
+  {
+    "path": "canonical/privacy-rights-and-opt-out.md",
+    "title": "Privacy rights: opting out, deleting data and who to contact",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/pages/data-sharing-opt-out",
+    "bytes": 1951
+  },
+  {
+    "path": "canonical/privacy-selling-sharing-personal-data.md",
+    "title": "Privacy: does the store sell or share personal data with advertisers?",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/privacy-policy",
+    "bytes": 1779
+  },
+  {
+    "path": "canonical/product-dungeon-masterclass.md",
+    "title": "Dungeon Masterclass online course: instructor, price and how to get it free",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/game-master-foundations-online-course",
+    "bytes": 1877
+  },
+  {
+    "path": "canonical/product-quick-load-panel.md",
+    "title": "Quick-Load Panel: price, colors in stock and what it does",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/quick-load-panel-brown-1",
+    "bytes": 1581
+  },
+  {
+    "path": "canonical/product-ultimate-game-master-screen.md",
+    "title": "Ultimate Game Master Screen: price, colors, orientations and stock",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait",
+    "bytes": 1930
+  },
+  {
+    "path": "canonical/promotions-active-offers.md",
+    "title": "Current promotions and discounts, and what doesn't exist",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/ultimate-bundle",
+    "bytes": 2025
+  },
+  {
+    "path": "canonical/returns-and-refunds.md",
+    "title": "Returns and refunds: the 30-day window, conditions and how to start",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/refund-policy",
+    "bytes": 2070
+  },
+  {
+    "path": "canonical/returns-eu-right-of-withdrawal.md",
+    "title": "EU customers: the 14-day right to cancel or return",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/refund-policy",
+    "bytes": 1603
+  },
+  {
+    "path": "canonical/rules-packs-and-system-setup.md",
+    "title": "Setting up the screen for your game system: rules packs, covers and blank charts",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/blank-magnetic-charts",
+    "bytes": 2569
+  },
+  {
+    "path": "canonical/screen-portrait-vs-landscape.md",
+    "title": "Portrait vs landscape screen: differences, price and availability",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/pages/avada-faqs",
+    "bytes": 1690
+  },
+  {
+    "path": "canonical/shipping-free-shipping-threshold.md",
+    "title": "Free shipping: the $100 US threshold and what qualifies",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/shipping-policy",
+    "bytes": 1648
+  },
+  {
+    "path": "canonical/shipping-international-countries-carriers.md",
+    "title": "Shipping outside the US: countries, carriers and costs",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/shipping-policy",
+    "bytes": 1999
+  },
+  {
+    "path": "canonical/shipping-processing-and-delivery-times.md",
+    "title": "Ship times: when orders leave the warehouse and delivery estimates",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/shipping-policy",
+    "bytes": 1710
+  },
+  {
+    "path": "canonical/subscriptions-cancel-and-manage.md",
+    "title": "Subscriptions: what is sold by subscription and how to cancel",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/policies/subscription-policy",
+    "bytes": 2142
+  },
+  {
+    "path": "canonical/trackers-initiative-vs-creature.md",
+    "title": "Initiative Trackers vs Creature Trackers: differences, price and colors",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/collections/initiative-tracker",
+    "bytes": 1923
+  },
+  {
+    "path": "canonical/ultimate-bundle-contents.md",
+    "title": "Ultimate Bundle: what's included, price and versions",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/ultimate-bundle",
+    "bytes": 2028
+  },
+  {
+    "path": "canonical/ultimate-bundle-savings.md",
+    "title": "Is the Ultimate Bundle cheaper? The real savings, worked out",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/products/ultimate-bundle",
+    "bytes": 2000
+  },
+  {
+    "path": "canonical/wholesale-program.md",
+    "title": "Wholesale and retail partners: tiers, minimums and free shipping",
+    "kind": "canonical",
+    "source_id": null,
+    "url": "https://theultimategamemaster.com/pages/wholesale",
+    "bytes": 1817
+  },
+  {
     "path": "catalog/collections/5e-accessories.md",
     "title": "5E Accessories (collection)",
     "kind": "collection",

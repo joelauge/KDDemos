@@ -89,6 +89,7 @@ function pathMatches(a, b) {
 const LANG_HINTS = {
   es: /\b(el|la|los|las|que|para|con|una?|del|es|está|devoluci[oó]n|días|envío|puede|su|sus)\b/gi,
   fr: /\b(le|la|les|des|est|pour|avec|une?|du|et|vous|votre|prix|en stock|il|elle)\b/gi,
+  de: /\b(der|die|das|und|ist|nicht|sie|ihre?n?|innerhalb|tagen?|versand|bestellung|kann|können|werden|wird|mit|von|zu|für|bei|ein(e|en)?)\b/gi,
   en: /\b(the|and|is|are|for|with|you|your|our|of|to|in)\b/gi,
 };
 function langScore(text, lang) {
