@@ -61,12 +61,10 @@ knowbot/
 | `GET /api/sessions` | – | `[{ sessionId, surface, startedAt, lastAt, turns, groundedRate }]` |
 | `GET /*` | – | static files from `knowbot/` (so `/dashboard/`, `/demo/`, `/lib/` all work) |
 
-Env: `PORT`, `LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`), `LLM_MODEL`, `KNOWDRIVE_BASE_URL` (default `https://dev.knowdrive.ai`), `KNOWDRIVE_API_KEY`, `KNOWDRIVE_STORE` (default `vs_f66318f0dd0e4540b27663b03ea40f40`, the dedicated "knowbot-ugm" store on Dev; quota 500 atoms), `KNOWDRIVE_TAG` (default `knowbot:ugm`), `KNOWDRIVE_PREFIX` (default empty). If no key → local BM25 retriever over `corpus/`.
+Env: `PORT`, `LLM_BASE_URL` (default `http://127.0.0.1:8080/v1`), `LLM_MODEL`, `KNOWDRIVE_BASE_URL` (default `https://dev.knowdrive.ai`), `KNOWDRIVE_API_KEY`, `KNOWDRIVE_STORE` (default `vs_f66318f0dd0e4540b27663b03ea40f40`, the dedicated "knowbot-ugm" store on Dev), `KNOWDRIVE_TAG` (default `knowbot:ugm`), `KNOWDRIVE_PREFIX` (default empty). If no key → local BM25 retriever over `corpus/`.
 
 **Tag windowing:** KnowBot's files live in the dedicated `knowbot-ugm` store at corpus-relative paths, and every file carries the tag `knowbot:ugm` (plus `knowbot`, `kind:<kind>`). Every search is still windowed to that tag, so the same code works if the corpus is ever moved into a shared store under a prefix (set `KNOWDRIVE_PREFIX`), and untagged files (e.g. KnowDrive's auto README) are never cited.
 KnowDrive search call: `POST {base}/api/v1/vector_stores/{store}/search` with `Authorization: Bearer <key>`, body `{ query, max_num_results:k, mode:"hybrid", text:"raw", filter: { all_of: [TAG] } }`; response `data[] = {file_id, filename, score, content:[{type,text}], attributes}`. When `KNOWDRIVE_PREFIX` is set, strip it from `filename` so citations match corpus-relative paths and drop any hit whose filename lacks it (defense in depth).
-
-**Atom budget:** the store holds at most 500 atoms (~150–500 tokens each). The corpus must fit, with headroom: target ≤ 420 atoms total (~ total corpus tokens / 300).
 
 ## Core library API (`lib/knowbot.js`)
 
