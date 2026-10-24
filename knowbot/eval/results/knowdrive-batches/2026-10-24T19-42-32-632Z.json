@@ -1,0 +1,765 @@
+{
+  "meta": {
+    "benchmark": "KnowBot vs Sidekick — The Ultimate Game Master",
+    "version": 1,
+    "api": "http://localhost:8788",
+    "config": {
+      "store": "vs_f66318f0dd0e4540b27663b03ea40f40",
+      "retrieval": "knowdrive",
+      "engine": {
+        "type": "openai",
+        "model": "qwen2.5-1.5b-instruct"
+      },
+      "canonical": {
+        "temperature": 0,
+        "top_p": 1,
+        "max_tokens": 300,
+        "seed": 7,
+        "frequency_penalty": 0.4
+      }
+    },
+    "ran_at": "2026-10-24T19:43:51.830Z",
+    "node": "v22.22.0",
+    "items": 6
+  },
+  "summary": {
+    "n": 6,
+    "errors": 0,
+    "mean_auto_score": 87.83,
+    "categories": {
+      "policy": {
+        "n": 4,
+        "mean_auto_score": 84.75,
+        "errors": 0
+      },
+      "merchant": {
+        "n": 2,
+        "mean_auto_score": 94,
+        "errors": 0
+      }
+    },
+    "latency_ms": {
+      "p50": 11585,
+      "p90": 22128,
+      "max": 22128,
+      "mean": 13197.83,
+      "server_generation_p50": 10944,
+      "server_retrieval_p50": 626,
+      "ttft": "n/a (canonical endpoint is non-streaming)"
+    },
+    "sources": {
+      "mean_recall": 1,
+      "mean_precision": 0.83,
+      "citation_integrity_rate": 1
+    },
+    "gates": {
+      "no_must_not_hits": {
+        "pass": true,
+        "items": [],
+        "note": "auto proxy for severe hallucination; judge confirms severity"
+      },
+      "out_of_scope_refusal_rate_ge_95": {
+        "pass": true,
+        "value": 1
+      },
+      "false_refusal_rate_le_10": {
+        "pass": true,
+        "value": 0
+      },
+      "citation_integrity_100": {
+        "pass": true,
+        "value": 1
+      },
+      "injection_zero_compliance": {
+        "pass": true,
+        "items": []
+      }
+    },
+    "parity": {
+      "quality_parity": 1.05,
+      "answer_coverage": 0.83,
+      "safe_coverage": 1,
+      "latency_ratio": 0.69,
+      "trust_bonus": 0.83,
+      "sidekick_parity": 0.91,
+      "note": "auto-only (helpfulness/tone T excluded). Re-compute after judge pass."
+    }
+  },
+  "results": [
+    {
+      "id": "pol-01",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "What is your return policy?",
+      "answer": {
+        "text": "The Ultimate Game Master's return policy states that every screen is backed by a 30-night risk-free return. [1] If it isn't for you, send it back for a full refund — no questions, no quests. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-oBlbv1rYuyIxT6CevHftUbYc",
+            "filename": "policies/refund.md",
+            "title": "Refund policy",
+            "url": "https://theultimategamemaster.com/policies/refund-policy",
+            "score": 0.032522473,
+            "snippet": "We have a 30-day return policy, which means you have 30 days after receiving your item to request a return. To be eligible for a return, your item must be in the same condition that you received it, unworn or unused,…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 626,
+          "generation": 8182,
+          "total": 8809
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032522473
+        }
+      },
+      "latency": {
+        "client_total_ms": 8823,
+        "server": {
+          "retrieval": 626,
+          "generation": 8182,
+          "total": 8809
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "30",
+            "ok": true
+          },
+          {
+            "spec": "re:original packaging|same condition",
+            "ok": false
+          },
+          {
+            "spec": "team@theultimategamemaster.com",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0.33,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/refund.md"
+          ],
+          "expected": [
+            "policies/refund.md"
+          ],
+          "hit": [
+            "policies/refund.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 1.67,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 71,
+      "judge": null
+    },
+    {
+      "id": "pol-02",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Do you ship outside the US, and what does shipping cost?",
+      "answer": {
+        "text": "The store ships to 29 countries including Australia, Austria, Belgium, Canada, Czech Republic, Denmark, Finland, France, Germany, Hong Kong, Ireland, Israel, Italy, Japan, Malaysia, Mexico, Netherlands, New Zealand, Norway, Poland, Portugal, Singapore, South Korea, Spain and Sweden. [1]\n\nFor orders over $100 USD in the United States (US), free shipping is offered. [1]\n\nFor orders outside the US (International), shipping rates are calculated by weight at checkout. [2]\n\nThe store offers free shipping to anywhere in the United States. [1] Everywhere else, shipping is calculated by weight and is clearly identified on the checkout page. [2]\n\nShipping times are best efforts to ship within 2 business days of the original order. [2] If for some reason, products are missing from the warehouse, and we need to modify the order for whatever reason, we will contact your directly to inform you and coordinate an appropriate shipping solution for everyone. [2] This may include extra shipping charges if an order is required to be split up. [2]\n\nThe store ships to 29 countries including Australia, Austria, Belgium, Canada, Czech Republic, Denmark, Finland, France, Germany, Hong Kong, Ireland, Israel, Italy, Japan, Malaysia, Mexico, Netherlands, New Zealand, Norway, Poland, Portugal, Singapore and Spain. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-nAmkWYhXEcc1mDBvb5drOcUo",
+            "filename": "operations/shipping.md",
+            "title": "Shipping zones, carriers and rates",
+            "url": null,
+            "score": 0.031054404,
+            "snippet": "This describes the store's shipping configuration in Shopify (delivery profile \"General profile\", which covers all 120 product variants). For the customer-facing shipping policy text see policies/shipping.md . Where…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-bmUoWy0ftOMQAShPXQk210Pk",
+            "filename": "policies/shipping.md",
+            "title": "Shipping policy",
+            "url": "https://theultimategamemaster.com/policies/shipping-policy",
+            "score": 0.03201844,
+            "snippet": "FREE SHIPPING TO THE UNITED STATES We off FREE shipping to anywhere in the United States. Everywhere else, shipping is calculated by weight at checkout. SHIPPING EVERYWHERE ELSE We offer weight-based shipping to…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 607,
+          "generation": 21516,
+          "total": 22123
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03226646
+        }
+      },
+      "latency": {
+        "client_total_ms": 22128,
+        "server": {
+          "retrieval": 607,
+          "generation": 21516,
+          "total": 22123
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:free",
+            "ok": true
+          },
+          {
+            "spec": "re:calculated|weight|ups",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "operations/shipping.md",
+            "policies/shipping.md"
+          ],
+          "expected": [
+            "operations/shipping.md",
+            "policies/shipping.md"
+          ],
+          "hit": [
+            "operations/shipping.md",
+            "policies/shipping.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 0,
+        "H_flag": false
+      },
+      "auto_score": 88,
+      "judge": null
+    },
+    {
+      "id": "pol-03",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "How quickly do you ship orders?",
+      "answer": {
+        "text": "Orders ship within 24 hours for in-stock items [1]. Shipping is free on US orders over $99 [1]. The store has two active locations: a physical 2Fold Supply Warehouse in Lee's Summit, Missouri, and an online virtual location for online game sessions [2]. The shipping policy states that free shipping is offered to anywhere in the United States, with calculated rates for other locations [3].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-YydQYWVL0Na20wykXVx4FRBF",
+            "filename": "pages/avada-faqs.md",
+            "title": "Frequently Asked Questions",
+            "url": "https://theultimategamemaster.com/pages/avada-faqs",
+            "score": 0.031318814,
+            "snippet": "Every panel has a steel core, so accessories snap on anywhere and hold firm through the most chaotic combat. Rearrange your whole command center in seconds — no clips, no clutter. Shipping & Returns How fast do orders…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-SDmklhXKUg6AxuDNuvLTFkJY",
+            "filename": "operations/locations.md",
+            "title": "Fulfillment locations",
+            "url": null,
+            "score": 0.027583601,
+            "snippet": "The store has two active locations in Shopify: Location Where Fulfills online orders Ships physical inventory --- --- --- --- 2Fold Supply Warehouse Lee's Summit, MO, United States yes yes Online Sessions (virtual…"
+          },
+          {
+            "n": 3,
+            "file_id": "file-bmUoWy0ftOMQAShPXQk210Pk",
+            "filename": "policies/shipping.md",
+            "title": "Shipping policy",
+            "url": "https://theultimategamemaster.com/policies/shipping-policy",
+            "score": 0.027497195,
+            "snippet": "FREE SHIPPING TO THE UNITED STATES We off FREE shipping to anywhere in the United States. Everywhere else, shipping is calculated by weight at checkout. SHIPPING EVERYWHERE ELSE We offer weight-based shipping to…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 740,
+          "generation": 10944,
+          "total": 11686
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.031318814
+        }
+      },
+      "latency": {
+        "client_total_ms": 11690,
+        "server": {
+          "retrieval": 740,
+          "generation": 10944,
+          "total": 11686
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:2 business days | re:two business days | re:24 hours)",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2,
+            3
+          ],
+          "citation_ns": [
+            1,
+            2,
+            3
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "pages/avada-faqs.md",
+            "operations/locations.md",
+            "policies/shipping.md"
+          ],
+          "expected": [
+            "policies/shipping.md"
+          ],
+          "hit": [
+            "policies/shipping.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "operations/locations.md"
+          ],
+          "recall": 1,
+          "precision": 0.67
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 4.5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 91,
+      "judge": null
+    },
+    {
+      "id": "pol-05",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "I live in Germany. Do I get any extra return rights?",
+      "answer": {
+        "text": "The European Union 14 day cooling off period applies to all orders shipped into the European Union. [1] However, if you live in Germany, you have additional rights under German data protection laws. [2] Specifically, you have the right to lodge a complaint with your local data protection authority if you are not satisfied with our response to your complaint. [2]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-oBlbv1rYuyIxT6CevHftUbYc",
+            "filename": "policies/refund.md",
+            "title": "Refund policy",
+            "url": "https://theultimategamemaster.com/policies/refund-policy",
+            "score": 0.03201844,
+            "snippet": "European Union 14 day cooling off period Notwithstanding the above, if the merchandise is being shipped into the European Union, you have the right to cancel or return your order within 14 days, for any reason and…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-3C3NVqkPlTknrC6aUTFYjjTb",
+            "filename": "policies/privacy.md",
+            "title": "Privacy policy",
+            "url": "https://theultimategamemaster.com/policies/privacy-policy",
+            "score": 0.031054404,
+            "snippet": "If you have complaints about how we process your personal information, please contact us using the contact details provided below. If you are not satisfied with our response to your complaint, depending on where you…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 524,
+          "generation": 11051,
+          "total": 11578
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03201844
+        }
+      },
+      "latency": {
+        "client_total_ms": 11585,
+        "server": {
+          "retrieval": 524,
+          "generation": 11051,
+          "total": 11578
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "14",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/refund.md",
+            "policies/privacy.md"
+          ],
+          "expected": [
+            "policies/refund.md"
+          ],
+          "hit": [
+            "policies/refund.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "policies/privacy.md"
+          ],
+          "recall": 1,
+          "precision": 0.5
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 4.25,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 89,
+      "judge": null
+    },
+    {
+      "id": "mer-03",
+      "category": "merchant",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Draft a short, punchy product blurb for the Magnetic Dice Tray I can use in a newsletter.",
+      "answer": {
+        "text": "The Ultimate Game Master Magnetic Dice Tray is a must-have for any GM or player who wants to organize their dice and accessories with ease. [1] Made of faux leather with felt lining, it folds flat for easy transport to sessions and holds up to 7+ dice sets. [1] The powerful magnets at the corners lock the tray together, ensuring a secure and reliable storage solution. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-yn7sQ8OMZXp8lVXLvNEpKjaE",
+            "filename": "catalog/products/ugms-magnetic-dice-tray.md",
+            "title": "Magnetic Dice Tray",
+            "url": "https://theultimategamemaster.com/products/ugms-magnetic-dice-tray",
+            "score": 0.03226646,
+            "snippet": "- Product: Magnetic Dice Tray - Handle: ugms-magnetic-dice-tray - Price: $29.99 USD - Vendor / brand: Ultimate Game Master - Shopify category: Toys & Games Games Dice Sets & Games - Tags: UGMS - Available for sale: yes…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1350,
+          "generation": 13119,
+          "total": 14471
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03226646
+        }
+      },
+      "latency": {
+        "client_total_ms": 14478,
+        "server": {
+          "retrieval": 1350,
+          "generation": 13119,
+          "total": 14471
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:faux (black )?leather | re:felt)",
+            "ok": true
+          },
+          {
+            "spec": "any(re:magnet | re:fold)",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/ugms-magnetic-dice-tray.md"
+          ],
+          "expected": [
+            "catalog/products/ugms-magnetic-dice-tray.md"
+          ],
+          "hit": [
+            "catalog/products/ugms-magnetic-dice-tray.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "mer-04",
+      "category": "merchant",
+      "subcategory": null,
+      "in_scope": false,
+      "question": "How many orders did we get last month and what was total revenue?",
+      "answer": {
+        "text": "The knowDrive doesn't cover how many orders were received last month or the total revenue generated. However, based on the information provided in the SOURCES:\n\n- The number of orders received last month is not specified.\n- The total revenue generated last month is not specified.\n\nThe SOURCES do not provide the requested information.",
+        "citations": [],
+        "grounded": false,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1021,
+          "generation": 9458,
+          "total": 10479
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.028068138
+        }
+      },
+      "latency": {
+        "client_total_ms": 10483,
+        "server": {
+          "retrieval": 1021,
+          "generation": 9458,
+          "total": 10479
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": true,
+          "refused_flag": false,
+          "grounded": false,
+          "textual": true,
+          "detected": true
+        },
+        "citations": {
+          "markers": [],
+          "citation_ns": [],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [],
+          "recall": null,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    }
+  ]
+}

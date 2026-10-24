@@ -4,13 +4,14 @@
 //   node eval/run-benchmark.mjs [--api http://localhost:8787] [--only id1,id2|category]
 //                               [--timeout 60000] [--out eval/results] [--check-paths]
 //                               [--bench eval/benchmark.json] [--corpus corpus]
+//   node eval/run-benchmark.mjs --merge <dir> [--source knowdrive]   # combine batch runs (e.g. short-lived tokens)
 //
 // Env: KNOWBOT_API (or API) overrides the default http://localhost:8787.
 // Runs every benchmark item against POST {API}/api/canonical, records answer/citations/latency,
 // performs automatic checks, and writes eval/results/<timestamp>.json with an empty `judge`
 // slot per item for a later LLM-judge pass (see eval/rubric.md).
 
-import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, access, readdir } from 'node:fs/promises';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -244,7 +245,33 @@ async function checkPaths(items) {
 }
 
 // ---------- main ----------
+/** Combine batch result files: newest result per item whose retrieval came from --source (guard refusals count). */
+async function merge(dir) {
+  const want = args.source && args.source !== true ? String(args.source) : 'knowdrive';
+  const files = (await readdir(dir)).filter((f) => f.endsWith('.json') && !f.includes('.judged')).sort();
+  const byId = new Map();
+  let meta = null;
+  for (const f of files) {
+    const d = JSON.parse(await readFile(join(dir, f), 'utf8'));
+    meta ||= d.meta;
+    for (const r of d.results || []) {
+      const src = r.answer?.retrieval?.source;
+      if (!r.error && (src === want || src === 'guard')) byId.set(r.id, r);
+    }
+  }
+  const bench = JSON.parse(await readFile(BENCH, 'utf8'));
+  const results = bench.items.map((it) => byId.get(it.id)).filter(Boolean);
+  const missing = bench.items.filter((it) => !byId.has(it.id)).map((it) => it.id);
+  const summary = summarize(results);
+  printSummary(summary);
+  await mkdir(OUTDIR, { recursive: true });
+  const outFile = join(OUTDIR, `${new Date().toISOString().replace(/[:.]/g, '-')}.${want}.json`);
+  await writeFile(outFile, JSON.stringify({ meta: { ...meta, merged_from: files, source: want, items: results.length, missing }, summary, results }, null, 2));
+  console.log(`\nmerged ${files.length} files → ${results.length} items (${missing.length} missing${missing.length ? ': ' + missing.join(',') : ''})\nwrote ${outFile}`);
+}
+
 async function main() {
+  if (args.merge && args.merge !== true) return merge(String(args.merge));
   const bench = JSON.parse(await readFile(BENCH, 'utf8'));
   let items = bench.items;
   if (args.only && args.only !== true) {

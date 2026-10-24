@@ -1,6 +1,6 @@
 // KnowBot retrievers — local BM25 over corpus/ and knowDrive REST search.
 // Node 22, no dependencies.
-import { promises as fsp, watch as fsWatch, existsSync } from 'node:fs';
+import { promises as fsp, watch as fsWatch, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 // ---------------------------------------------------------------- frontmatter
@@ -331,7 +331,7 @@ export class KnowDriveRetriever {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
         body: JSON.stringify({ query, max_num_results: k, mode: 'hybrid', text: 'raw', ...(this.tag ? { filter: { all_of: [this.tag] } } : {}) }),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
@@ -375,9 +375,12 @@ export const DEFAULT_PREFIX = '';
 /** Build the retriever for the given env. */
 export function createRetriever({ corpusDir, env = process.env, logger, watch = true } = {}) {
   const local = new LocalRetriever({ corpusDir, logger, watch });
-  if (env.KNOWDRIVE_API_KEY) {
+  if (env.KNOWDRIVE_API_KEY || env.KNOWDRIVE_API_KEY_FILE) {
+    // A key file is re-read on every search, so a rotated or short-lived credential needs no restart.
+    const file = env.KNOWDRIVE_API_KEY_FILE;
+    const apiKey = file ? () => { try { return readFileSync(file, 'utf8').trim(); } catch { return ''; } } : env.KNOWDRIVE_API_KEY;
     const kd = new KnowDriveRetriever({
-      baseUrl: env.KNOWDRIVE_BASE_URL || 'https://dev.knowdrive.ai', apiKey: env.KNOWDRIVE_API_KEY,
+      baseUrl: env.KNOWDRIVE_BASE_URL || 'https://dev.knowdrive.ai', apiKey,
       store: env.KNOWDRIVE_STORE || DEFAULT_STORE, tag: env.KNOWDRIVE_TAG ?? DEFAULT_TAG, prefix: env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX, local, logger,
     });
     return { mode: 'knowdrive', retriever: kd, local };

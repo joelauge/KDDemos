@@ -54,6 +54,33 @@ What moved, from the automatic scorer:
 - False refusals: 10% → 36% (round 3) → 2%.
 - Citation integrity: 1.00 in every round.
 
+## knowDrive hybrid retrieval (round 6 code, `results/*.knowdrive.json`)
+
+The same code was run with retrieval from the `knowbot-ugm` knowDrive store (hybrid search, windowed to tag
+`knowbot:ugm`) instead of local BM25. With no long-lived key in the session, it ran in 8 batches with short-lived
+read tokens through `KNOWDRIVE_API_KEY_FILE`, and the batches were combined with `run-benchmark.mjs --merge`. Every
+item's retrieval came from knowDrive, apart from guard refusals that never search. These are automatic scores only;
+this run has not been judged.
+
+| | Local BM25 (auto) | knowDrive hybrid (auto) |
+|---|---|---|
+| Parity | 0.85 | 0.78 |
+| Catalog / policy / synthesis | 84.6 / 81.8 / 71.9 | 80.6 / 74.4 / 73.9 |
+| Merchant / out of corpus / adversarial | 84.1 / 82.6 / 72.9 | 81.1 / 61.6 / **79.8** |
+| Retrieval p50 | 1 ms | 765 ms |
+| Generation p50 | 5.4 s | 10.2 s |
+
+**Better:**
+- Spanish (adv-11) is answered in Spanish from the EU returns policy instead of refused.
+- pol-08 is now a safe refusal instead of the false privacy claim.
+- Adversarial questions +7, synthesis +2, source precision 0.73.
+
+**Worse:**
+- **Out-of-corpus refusals.** Hybrid search always returns something semantically close, so the support check carries more of the load, and ooc-03 now gives the store email as the "phone number".
+- **Generation time doubled.** The container restarted between runs (the model was cold), and knowDrive returns fuller passages that fill more of the prompt budget. One run doesn't separate the two causes.
+
+**Takeaway:** knowDrive hybrid fixes the multilingual gap and some synthesis. To win overall it needs a relevance floor on hybrid scores, so weak matches lead to a refusal, plus the claim-agreement work in fix #1.
+
 ## Where KnowBot beats Sidekick
 
 - **Every answer is traceable.** Each claim carries `[n]` linking to a knowDrive file and its public URL. Sidekick's documentation never mentions citations, and merchants report that it "rarely says I don't know".

@@ -55,6 +55,7 @@ KNOWDRIVE_API_KEY=<developer key from dev.knowdrive.ai/developer-keys> knowbot/s
 | `KNOWDRIVE_STORE` | `vs_f66318f0dd0e4540b27663b03ea40f40` |
 | `KNOWDRIVE_TAG` | `knowbot:ugm` |
 | `KNOWDRIVE_PREFIX` | empty; set it to host the corpus in a shared store under a folder |
+| `KNOWDRIVE_API_KEY_FILE` | path to a file holding the key; re-read on every search, so a rotated key needs no restart |
 
 Minted MCP tokens last about 120 seconds, so a long-running server needs a developer key. If knowDrive fails, the
 server falls back to local search and labels results `local-fallback`.

@@ -1,0 +1,1097 @@
+{
+  "meta": {
+    "benchmark": "KnowBot vs Sidekick — The Ultimate Game Master",
+    "version": 1,
+    "api": "http://localhost:8788",
+    "config": {
+      "store": "vs_f66318f0dd0e4540b27663b03ea40f40",
+      "retrieval": "knowdrive",
+      "engine": {
+        "type": "openai",
+        "model": "qwen2.5-1.5b-instruct"
+      },
+      "canonical": {
+        "temperature": 0,
+        "top_p": 1,
+        "max_tokens": 300,
+        "seed": 7,
+        "frequency_penalty": 0.4
+      }
+    },
+    "ran_at": "2026-10-24T19:39:35.128Z",
+    "node": "v22.22.0",
+    "items": 9
+  },
+  "summary": {
+    "n": 9,
+    "errors": 0,
+    "mean_auto_score": 66.33,
+    "categories": {
+      "policy": {
+        "n": 5,
+        "mean_auto_score": 66.2,
+        "errors": 0
+      },
+      "synthesis": {
+        "n": 4,
+        "mean_auto_score": 66.5,
+        "errors": 0
+      }
+    },
+    "latency_ms": {
+      "p50": 11201,
+      "p90": 18314,
+      "max": 18314,
+      "mean": 11497.56,
+      "server_generation_p50": 10323,
+      "server_retrieval_p50": 792,
+      "ttft": "n/a (canonical endpoint is non-streaming)"
+    },
+    "sources": {
+      "mean_recall": 0.56,
+      "mean_precision": 0.63,
+      "citation_integrity_rate": 1
+    },
+    "gates": {
+      "no_must_not_hits": {
+        "pass": true,
+        "items": [],
+        "note": "auto proxy for severe hallucination; judge confirms severity"
+      },
+      "out_of_scope_refusal_rate_ge_95": {
+        "pass": true,
+        "value": null
+      },
+      "false_refusal_rate_le_10": {
+        "pass": false,
+        "value": 0.11
+      },
+      "citation_integrity_100": {
+        "pass": true,
+        "value": 1
+      },
+      "injection_zero_compliance": {
+        "pass": true,
+        "items": []
+      }
+    },
+    "parity": {
+      "quality_parity": 0.83,
+      "answer_coverage": 0.67,
+      "safe_coverage": 0.67,
+      "latency_ratio": 0.71,
+      "trust_bonus": 0.63,
+      "sidekick_parity": 0.72,
+      "note": "auto-only (helpfulness/tone T excluded). Re-compute after judge pass."
+    }
+  },
+  "results": [
+    {
+      "id": "pol-06",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "How can I contact you, and where are you located?",
+      "answer": {
+        "text": "To contact The Ultimate Game Master, you can email team@theultimategamemaster.com [1]. The company's address is 13665 E 42 Terr S, Ste F, Independence Missouri 64055, United States [2].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-3C3NVqkPlTknrC6aUTFYjjTb",
+            "filename": "policies/privacy.md",
+            "title": "Privacy policy",
+            "url": "https://theultimategamemaster.com/policies/privacy-policy",
+            "score": 0.032002047,
+            "snippet": "If you have complaints about how we process your personal information, please contact us using the contact details provided below. If you are not satisfied with our response to your complaint, depending on where you…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-c45mBvxy1nFnlr34HgK85gVQ",
+            "filename": "policies/contact.md",
+            "title": "Contact information",
+            "url": "https://theultimategamemaster.com/policies/contact-information",
+            "score": 0.032522473,
+            "snippet": "Business address: 13665 E 42 Terr S, Ste F, Independence Missouri 64055, United States Email: team@theultimategamemaster.com"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1082,
+          "generation": 9320,
+          "total": 10403
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032522473
+        }
+      },
+      "latency": {
+        "client_total_ms": 10413,
+        "server": {
+          "retrieval": 1082,
+          "generation": 9320,
+          "total": 10403
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "team@theultimategamemaster.com",
+            "ok": true
+          },
+          {
+            "spec": "Independence",
+            "ok": true
+          },
+          {
+            "spec": "64055",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/privacy.md",
+            "policies/contact.md"
+          ],
+          "expected": [
+            "policies/contact.md"
+          ],
+          "hit": [
+            "policies/contact.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "policies/privacy.md"
+          ],
+          "recall": 1,
+          "precision": 0.5
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 4.25,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 89,
+      "judge": null
+    },
+    {
+      "id": "pol-07",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "How do I cancel my subscription?",
+      "answer": {
+        "text": "To cancel a subscription, you can do it at any time [1]. Your order will be charged for each of these deliveries unless you choose to pay in advance [1]. Some subscriptions may auto-renew at the end of their duration, but if you don't want to renew, you can cancel it. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-UHf2nADARtAZz0kamyh3qK97",
+            "filename": "policies/subscription.md",
+            "title": "Cancellation (subscription) policy",
+            "url": "https://theultimategamemaster.com/policies/subscription-policy",
+            "score": 0.032786883,
+            "snippet": "Some items in our store may be offered to you as a subscription, a pre-order or try before you buy. This cancellation policy lays out how you can change or cancel these kinds of purchases. Subscriptions When you…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 920,
+          "generation": 9063,
+          "total": 9984
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032786883
+        }
+      },
+      "latency": {
+        "client_total_ms": 9988,
+        "server": {
+          "retrieval": 920,
+          "generation": 9063,
+          "total": 9984
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:any time|anytime",
+            "ok": true
+          },
+          {
+            "spec": "re:order confirmation|email",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0.5,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/subscription.md"
+          ],
+          "expected": [
+            "policies/subscription.md"
+          ],
+          "hit": [
+            "policies/subscription.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 2.5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 76,
+      "judge": null
+    },
+    {
+      "id": "pol-08",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Do you sell or share my personal information with advertisers?",
+      "answer": {
+        "text": "I couldn't find that in The Ultimate Game Master's knowDrive, so I won't guess. It does cover topics such as **Privacy policy**, **Your Privacy Choices**, **Terms of service policy**.",
+        "citations": [],
+        "grounded": false,
+        "refused": true,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 762,
+          "generation": 6449,
+          "total": 7211
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03201844
+        }
+      },
+      "latency": {
+        "client_total_ms": 7218,
+        "server": {
+          "retrieval": 762,
+          "generation": 6449,
+          "total": 7211
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:advertis | re:third part)",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": true,
+          "grounded": false,
+          "textual": true,
+          "detected": true
+        },
+        "citations": {
+          "markers": [],
+          "citation_ns": [],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [],
+          "expected": [
+            "policies/privacy.md"
+          ],
+          "hit": [],
+          "missing": [
+            "policies/privacy.md"
+          ],
+          "extraneous": [],
+          "recall": 0,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 0,
+        "R": 0,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 6,
+      "judge": null
+    },
+    {
+      "id": "pol-09",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Is shipping free in the US?",
+      "answer": {
+        "text": "Yes, shipping is free in the US for orders over $100 [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-oG2gEQ3XpQYp3Y9go4xH3hwr",
+            "filename": "operations/promotions.md",
+            "title": "Active automatic promotions",
+            "url": null,
+            "score": 0.031778056,
+            "snippet": "Automatic discounts for approved wholesale customers (see the Wholesale page, pages/wholesale.md ): Tier Discount Minimum purchase Shipping --- --- --- --- Wholesale Tier 1 25% off entire order $500.00 Free shipping…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 653,
+          "generation": 7083,
+          "total": 7736
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032002047
+        }
+      },
+      "latency": {
+        "client_total_ms": 7742,
+        "server": {
+          "retrieval": 653,
+          "generation": 7083,
+          "total": 7736
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:\\$?\\s?100|\\$?\\s?99",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "operations/promotions.md"
+          ],
+          "expected": [
+            "operations/shipping.md"
+          ],
+          "hit": [],
+          "missing": [
+            "operations/shipping.md"
+          ],
+          "extraneous": [
+            "operations/promotions.md"
+          ],
+          "recall": 0,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 1,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 66,
+      "judge": null
+    },
+    {
+      "id": "pol-10",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Where do you ship orders from?",
+      "answer": {
+        "text": "The store ships orders from two locations: [1] 2Fold Supply Warehouse in Lee's Summit, Missouri, United States and Online Sessions (virtual location for online game sessions). The 2Fold Supply Warehouse fulfills in-stock orders and ships physical inventory, while the Online Sessions location fulfills non-shipping items such as online game sessions. [1] Local pickup is not configured at either location. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-SDmklhXKUg6AxuDNuvLTFkJY",
+            "filename": "operations/locations.md",
+            "title": "Fulfillment locations",
+            "url": null,
+            "score": 0.031280547,
+            "snippet": "The store has two active locations in Shopify: Location Where Fulfills online orders Ships physical inventory --- --- --- --- 2Fold Supply Warehouse Lee's Summit, MO, United States yes yes Online Sessions (virtual…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 643,
+          "generation": 10889,
+          "total": 11533
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.031280547
+        }
+      },
+      "latency": {
+        "client_total_ms": 11538,
+        "server": {
+          "retrieval": 643,
+          "generation": 10889,
+          "total": 11533
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "Lee's Summit",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "operations/locations.md"
+          ],
+          "expected": [
+            "operations/locations.md"
+          ],
+          "hit": [
+            "operations/locations.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "syn-01",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Should I get the portrait or the landscape screen? What's the difference?",
+      "answer": {
+        "text": "The main difference is in their orientation: portrait gives you taller coverage and a bigger wall of notes; landscape keeps a lower profile for better sightlines across the table [1]. The magnetic panels work either way, so you can choose based on which orientation suits your table best [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-YydQYWVL0Na20wykXVx4FRBF",
+            "filename": "pages/avada-faqs.md",
+            "title": "Frequently Asked Questions",
+            "url": "https://theultimategamemaster.com/pages/avada-faqs",
+            "score": 0.032786883,
+            "snippet": "Both cost the same. Portrait gives you taller coverage and a bigger wall of notes; landscape keeps a lower profile for better sightlines across the table. The magnetic panels work either way. What comes in the box?…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 939,
+          "generation": 10420,
+          "total": 11360
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032786883
+        }
+      },
+      "latency": {
+        "client_total_ms": 11366,
+        "server": {
+          "retrieval": 939,
+          "generation": 10420,
+          "total": 11360
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:same (price|cost) | re:both cost the same | 139.99)",
+            "ok": false
+          },
+          {
+            "spec": "re:taller|height|coverage",
+            "ok": true
+          },
+          {
+            "spec": "re:lower|sightline",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 0.67,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "pages/avada-faqs.md"
+          ],
+          "expected": [
+            "pages/avada-faqs.md"
+          ],
+          "hit": [
+            "pages/avada-faqs.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 3.33,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 82,
+      "judge": null
+    },
+    {
+      "id": "syn-02",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "I run Pathfinder. What should I buy to set up my screen for it?",
+      "answer": {
+        "text": "To set up your Pathfinder GM screen, you should consider purchasing the **Ultimate Game Master Magnetic Modular GM Screen**. [1] This screen is designed for **Pathfinder** and offers a modular design that allows you to rearrange panels based on your campaign's flow. [1] It also has dry-erase surfaces for real-time initiative tracking and stat updates, and map pockets and accessories that clip seamlessly to your screen. [1]\n\nThe Ultimate Game Master Magnetic Modular GM Screen is an ideal pick if you're searching for \"**best GM screen for D&D**\" or \"**modular Pathfinder screen**\" and want maximum utility without a luxury price tag. [1] It comes with **Pathfinder-specific magnetic rules charts**, including action economy charts, condition cards, and Golarion-focused quick references. [1]\n\nThe Ultimate Game Master Magnetic Modular GM Screen is available at [theultimategamemasterscreen.com](https://theultimategamemasterscreen.com). [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-MhWlYHekwkdUC5kEVvjFeegC",
+            "filename": "blog/news/tips-designing-choosing-functional-gm-screens.md",
+            "title": "Tips for Designing or Choosing Functional GM Screens for Gamemasters",
+            "url": "https://theultimategamemaster.com/blogs/news/tips-designing-choosing-functional-gm-screens",
+            "score": 0.03053613,
+            "snippet": "- Feature Ultimate GM Screen WotC Reincarnated Dog Might Custom Paizo Pathfinder --- --- --- --- --- Modular & Magnetic ✅ Yes ❌ No 🔶 Partial ❌ No Cross-System Compatible (D&D/Pathfinder) ✅ Yes ✅ Yes ✅ Yes 🔶…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 716,
+          "generation": 17590,
+          "total": 18308
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032522473
+        }
+      },
+      "latency": {
+        "client_total_ms": 18314,
+        "server": {
+          "retrieval": 716,
+          "generation": 17590,
+          "total": 18308
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:pathfinder (magnetic screen )?cover",
+            "ok": false
+          },
+          {
+            "spec": "re:pathfinder rules pack",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "blog/news/tips-designing-choosing-functional-gm-screens.md"
+          ],
+          "expected": [
+            "catalog/products/pathfinder-magnetic-screen-cover.md",
+            "catalog/products/pathfinder-rules-pack-1.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/products/pathfinder-magnetic-screen-cover.md",
+            "catalog/products/pathfinder-rules-pack-1.md"
+          ],
+          "extraneous": [
+            "blog/news/tips-designing-choosing-functional-gm-screens.md"
+          ],
+          "recall": 0,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 1,
+        "R": 2,
+        "I": null,
+        "L": 0,
+        "H_flag": false
+      },
+      "auto_score": 25,
+      "judge": null
+    },
+    {
+      "id": "syn-03",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Which products are in the Combat Management collection?",
+      "answer": {
+        "text": "The products in the Combat Management collection are:\n- Initiative Trackers (Pack of 4) - Magnetic Turn Order Cards for D&D 5e and TTRPG Combat Management — $17.99 [1]\n- Creature Trackers (Pack of 3) - Magnetic Combat Organizers for D&D & TTRPG Game Master Screen — $17.99 [1]\n- Quick-Load Panel - Magnetic Expansion Accessory for Ultimate Game Master Screen — $47.99 [1]\n- Magnetic Map Pack - Dry-Erase Battle Maps for D&D Combat & Game Master Screen — $54.99 [1]\n- 5th Edition Rules Pack - D&D 5e Magnetic Charts & Trackers for Game Master Screen — $24.99 [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-sGds20J8GNldJfed9Zdtan4H",
+            "filename": "catalog/collections/combat-management.md",
+            "title": "Combat Management (collection)",
+            "url": "https://theultimategamemaster.com/collections/combat-management",
+            "score": 0.030550372,
+            "snippet": "- Initiative Trackers (Pack of 4) - Magnetic Turn Order Cards for D&D 5e and TTRPG Combat Management — $17.99 ( catalog/products/initiative-trackers-brown.md ) - Creature Trackers (Pack of 3) - Magnetic Combat…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 792,
+          "generation": 14896,
+          "total": 15692
+        },
+        "fallback": true,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032786883
+        }
+      },
+      "latency": {
+        "client_total_ms": 15698,
+        "server": {
+          "retrieval": 792,
+          "generation": 14896,
+          "total": 15692
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:map pack",
+            "ok": true
+          },
+          {
+            "spec": "re:quick-load",
+            "ok": true
+          },
+          {
+            "spec": "re:initiative tracker",
+            "ok": true
+          },
+          {
+            "spec": "re:creature tracker",
+            "ok": true
+          },
+          {
+            "spec": "re:5th edition|5e rules",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/collections/combat-management.md"
+          ],
+          "expected": [
+            "catalog/collections/combat-management.md"
+          ],
+          "hit": [
+            "catalog/collections/combat-management.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 0,
+        "H_flag": false
+      },
+      "auto_score": 88,
+      "judge": null
+    },
+    {
+      "id": "syn-04",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Is the Ultimate Bundle actually cheaper than buying everything separately?",
+      "answer": {
+        "text": "The Ultimate Bundle offers a maximum value of over $50 compared to buying components separately, saving you $50 [1]. Additionally, the Ultimate Bundle includes everything you need for professional GM organization, with a total investment of $319.99 [2]. This makes it the most popular choice for serious Game Masters [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-EJNZGtWWKhHGjnVhfzCqJOeg",
+            "filename": "catalog/products/ultimate-bundle-black.md",
+            "title": "Ultimate Bundle (Black) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-bundle-black",
+            "score": 0.031513646,
+            "snippet": "D&D 5th Edition • Pathfinder • Savage Worlds • Call of Cthulhu • Homebrew Systems • Any TTRPG Why GMs Choose the Ultimate Bundle ⏱️ Instant Professional Setup Transform any table into a professional gaming environment…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-kmZiG2Hf38DFIF4neeb0b37m",
+            "filename": "catalog/collections/game-master-screen.md",
+            "title": "Ultimate Bundles (collection)",
+            "url": "https://theultimategamemaster.com/collections/game-master-screen",
+            "score": 0.031498015,
+            "snippet": "Complete Game Master Screen bundles with everything you need for epic campaigns. Our Ultimate Bundles include the magnetic DM screen plus carefully curated accessories - rules packs, trackers, organizers, and storage…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 873,
+          "generation": 10323,
+          "total": 11197
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032522473
+        }
+      },
+      "latency": {
+        "client_total_ms": 11201,
+        "server": {
+          "retrieval": 873,
+          "generation": 10323,
+          "total": 11197
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "319.99",
+            "ok": true
+          },
+          {
+            "spec": "any(361.90 | re:over \\$50 | re:save)",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/ultimate-bundle-black.md",
+            "catalog/collections/game-master-screen.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-bundle.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/products/ultimate-bundle.md"
+          ],
+          "extraneous": [
+            "catalog/collections/game-master-screen.md"
+          ],
+          "recall": 0,
+          "precision": 0.5
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 1.75,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 71,
+      "judge": null
+    }
+  ]
+}

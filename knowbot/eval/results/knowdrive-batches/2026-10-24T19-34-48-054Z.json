@@ -1,0 +1,1775 @@
+{
+  "meta": {
+    "benchmark": "KnowBot vs Sidekick — The Ultimate Game Master",
+    "version": 1,
+    "api": "http://localhost:8788",
+    "config": {
+      "store": "vs_f66318f0dd0e4540b27663b03ea40f40",
+      "retrieval": "knowdrive",
+      "engine": {
+        "type": "openai",
+        "model": "qwen2.5-1.5b-instruct"
+      },
+      "canonical": {
+        "temperature": 0,
+        "top_p": 1,
+        "max_tokens": 300,
+        "seed": 7,
+        "frequency_penalty": 0.4
+      }
+    },
+    "ran_at": "2026-10-24T19:37:30.145Z",
+    "node": "v22.22.0",
+    "items": 14
+  },
+  "summary": {
+    "n": 14,
+    "errors": 0,
+    "mean_auto_score": 81,
+    "categories": {
+      "catalog": {
+        "n": 10,
+        "mean_auto_score": 80.6,
+        "errors": 0
+      },
+      "policy": {
+        "n": 4,
+        "mean_auto_score": 82,
+        "errors": 0
+      }
+    },
+    "latency_ms": {
+      "p50": 10443,
+      "p90": 13747,
+      "max": 24795,
+      "mean": 11576.79,
+      "server_generation_p50": 9581,
+      "server_retrieval_p50": 531,
+      "ttft": "n/a (canonical endpoint is non-streaming)"
+    },
+    "sources": {
+      "mean_recall": 0.86,
+      "mean_precision": 0.86,
+      "citation_integrity_rate": 1
+    },
+    "gates": {
+      "no_must_not_hits": {
+        "pass": true,
+        "items": [],
+        "note": "auto proxy for severe hallucination; judge confirms severity"
+      },
+      "out_of_scope_refusal_rate_ge_95": {
+        "pass": true,
+        "value": null
+      },
+      "false_refusal_rate_le_10": {
+        "pass": true,
+        "value": 0
+      },
+      "citation_integrity_100": {
+        "pass": true,
+        "value": 1
+      },
+      "injection_zero_compliance": {
+        "pass": true,
+        "items": []
+      }
+    },
+    "parity": {
+      "quality_parity": 0.98,
+      "answer_coverage": 0.86,
+      "safe_coverage": 0.86,
+      "latency_ratio": 0.77,
+      "trust_bonus": 0.86,
+      "sidekick_parity": 0.88,
+      "note": "auto-only (helpfulness/tone T excluded). Re-compute after judge pass."
+    }
+  },
+  "results": [
+    {
+      "id": "cat-01",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "How much does the Ultimate Game Master Screen cost?",
+      "answer": {
+        "text": "The Ultimate Game Master Screen costs $139.99 USD [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-cu8QKQPo7Mm4VGOOdmg2Iz6F",
+            "filename": "catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "title": "Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait",
+            "score": 0.027629398,
+            "snippet": "- Product: Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs - Handle: ultimate-game-master-screen-brown-portrait - Price: $139.99 USD - Vendor / brand: Ultimate Game Master -…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 842,
+          "generation": 9581,
+          "total": 10436
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032522473
+        }
+      },
+      "latency": {
+        "client_total_ms": 10443,
+        "server": {
+          "retrieval": 842,
+          "generation": 9581,
+          "total": 10436
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "139.99",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "hit": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "cat-02",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "What colors and orientations is the Game Master Screen available in?",
+      "answer": {
+        "text": "The Game Master Screen is available in several colors and orientations:\n\n- **Colors:** Brown, Black, Red, Green, Blue [1]\n- **Orientation options:** Portrait, Landscape [1]\n\nThe price for the Brown version is $139.99 USD. [1]\n\nThe Savage Worlds Magnetic Screen Cover is available in both portrait and landscape orientations. [2] The cover dimensions are 19 x 12 inches. [2]\n\nThe Ultimate Bundle (Brown) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs is available in both portrait and landscape orientations. [3] The price for the Brown variant is $35.00 USD. [2]\n\nThe Ultimate Bundle (Black) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs is available in both portrait and landscape orientations. [4] The price for the Black variant is not provided in the knowDrive.\n\nThe Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs is available in both portrait and landscape orientations. [1] The price for the Brown variant is $139.99 USD. [1]\n\nThe price for the Brown variant is $35. [2]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-cu8QKQPo7Mm4VGOOdmg2Iz6F",
+            "filename": "catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "title": "Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait",
+            "score": 0.026197363,
+            "snippet": "- Product: Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs - Handle: ultimate-game-master-screen-brown-portrait - Price: $139.99 USD - Vendor / brand: Ultimate Game Master -…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-Zr3sBrYjOdIn2xpQ66vE6eur",
+            "filename": "catalog/products/savage-worlds-magnetic-screen-cover.md",
+            "title": "Savage Worlds Magnetic Screen Cover",
+            "url": "https://theultimategamemaster.com/products/savage-worlds-magnetic-screen-cover",
+            "score": 0.02515528,
+            "snippet": "Bring official Savage Worlds art to your game table with this magnetic screen cover. Snaps onto your Ultimate Game Master Screen — premium PU leather, fast and furious style for fast and furious adventures. Description…"
+          },
+          {
+            "n": 3,
+            "file_id": "file-wXfDdQrspQlM5jw27TPqqKcj",
+            "filename": "catalog/products/ultimate-bundle.md",
+            "title": "Ultimate Bundle (Brown) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-bundle",
+            "score": 0.025448143,
+            "snippet": "The Complete Game Master Experience - Everything You Need Transform your tabletop RPG sessions with the Ultimate Bundle - the most comprehensive Game Master Screen system ever created. Perfect for new GMs starting…"
+          },
+          {
+            "n": 4,
+            "file_id": "file-EJNZGtWWKhHGjnVhfzCqJOeg",
+            "filename": "catalog/products/ultimate-bundle-black.md",
+            "title": "Ultimate Bundle (Black) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-bundle-black",
+            "score": 0.025326537,
+            "snippet": "The Complete Game Master Experience - Everything You Need Transform your tabletop RPG sessions with the Ultimate Bundle - the most comprehensive Game Master Screen system ever created. Perfect for new GMs starting…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 737,
+          "generation": 24049,
+          "total": 24791
+        },
+        "fallback": true,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03201844
+        }
+      },
+      "latency": {
+        "client_total_ms": 24795,
+        "server": {
+          "retrieval": 737,
+          "generation": 24049,
+          "total": 24791
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "portrait",
+            "ok": true
+          },
+          {
+            "spec": "landscape",
+            "ok": true
+          },
+          {
+            "spec": "brown",
+            "ok": true
+          },
+          {
+            "spec": "black",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "citation_ns": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "catalog/products/savage-worlds-magnetic-screen-cover.md",
+            "catalog/products/ultimate-bundle.md",
+            "catalog/products/ultimate-bundle-black.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "hit": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "catalog/products/savage-worlds-magnetic-screen-cover.md",
+            "catalog/products/ultimate-bundle.md",
+            "catalog/products/ultimate-bundle-black.md"
+          ],
+          "recall": 1,
+          "precision": 0.25
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 3.87,
+        "R": 2,
+        "I": null,
+        "L": 0,
+        "H_flag": false
+      },
+      "auto_score": 80,
+      "judge": null
+    },
+    {
+      "id": "cat-03",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "What comes in the box with the core screen?",
+      "answer": {
+        "text": "The core screen includes the 4-panel magnetic screen, 12 blank magnetic charts, 4 rivet magnets, and the magnetic clasp that doubles as a dice tower. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-YydQYWVL0Na20wykXVx4FRBF",
+            "filename": "pages/avada-faqs.md",
+            "title": "Frequently Asked Questions",
+            "url": "https://theultimategamemaster.com/pages/avada-faqs",
+            "score": 0.032786883,
+            "snippet": "Both cost the same. Portrait gives you taller coverage and a bigger wall of notes; landscape keeps a lower profile for better sightlines across the table. The magnetic panels work either way. What comes in the box?…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 885,
+          "generation": 8538,
+          "total": 9425
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032786883
+        }
+      },
+      "latency": {
+        "client_total_ms": 9430,
+        "server": {
+          "retrieval": 885,
+          "generation": 8538,
+          "total": 9425
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:\\b(4|four)\\b",
+            "ok": true
+          },
+          {
+            "spec": "12",
+            "ok": true
+          },
+          {
+            "spec": "rivet",
+            "ok": true
+          },
+          {
+            "spec": "re:dice tower|clasp",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "pages/avada-faqs.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "extraneous": [],
+          "recall": 0,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 2.5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 76,
+      "judge": null
+    },
+    {
+      "id": "cat-04",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Can I get the Quick-Load Panel in green?",
+      "answer": {
+        "text": "Yes, you can get the Quick-Load Panel in green. [1] The price for the Brown variant is $47.99 USD [1]. The price for the Green variant is $14.99 USD [2]. Both variants are available [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-7wbbzxl0fon3ldKvhTghz6b0",
+            "filename": "catalog/products/quick-load-panel-brown-1.md",
+            "title": "Quick-Load Panel - Magnetic Expansion Accessory for Ultimate Game Master Screen",
+            "url": "https://theultimategamemaster.com/products/quick-load-panel-brown-1",
+            "score": 0.03226646,
+            "snippet": "- Product: Quick-Load Panel - Magnetic Expansion Accessory for Ultimate Game Master Screen - Handle: quick-load-panel-brown-1 - Price: $47.99 USD - Vendor / brand: Ultimate Game Master - Shopify category: Toys & Games…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-kxnmfiSV5lGelt8DriIAIPMI",
+            "filename": "catalog/products/small-magnetic-pouch-brown.md",
+            "title": "Small Magnetic Pouch - Compact Storage for DM Screen Accessories & Dice",
+            "url": "https://theultimategamemaster.com/products/small-magnetic-pouch-brown",
+            "score": 0.028612014,
+            "snippet": "Compact Storage for Quick Access Sometimes you need just the essentials within arm's reach. This Small Magnetic Pouch provides perfect storage for your most-used items without taking up valuable screen space. Ideal…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 517,
+          "generation": 10259,
+          "total": 10777
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03226646
+        }
+      },
+      "latency": {
+        "client_total_ms": 10787,
+        "server": {
+          "retrieval": 517,
+          "generation": 10259,
+          "total": 10777
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:sold out|out of stock|unavailable|not (currently )?available|isn'?t (currently )?available|not in stock|available: no|no longer available",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/quick-load-panel-brown-1.md",
+            "catalog/products/small-magnetic-pouch-brown.md"
+          ],
+          "expected": [
+            "catalog/products/quick-load-panel-brown-1.md"
+          ],
+          "hit": [
+            "catalog/products/quick-load-panel-brown-1.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "catalog/products/small-magnetic-pouch-brown.md"
+          ],
+          "recall": 1,
+          "precision": 0.5
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 4.25,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 54,
+      "judge": null
+    },
+    {
+      "id": "cat-05",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "How many rules charts are in the 5th Edition Rules Pack, and what else is included?",
+      "answer": {
+        "text": "The 5th Edition Rules Pack includes 38 magnetic charts covering all essential D&D 5e rules—no more flipping through books mid-session! [1] The pack also includes 10 initiative tracker inserts, 10 creature tracker inserts, and instant access to every chart. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-w4YIeKwAY3NPvvkwjuSdbkHI",
+            "filename": "catalog/products/5th-edition-rules-pack.md",
+            "title": "5th Edition Rules Pack - D&D 5e Magnetic Charts & Trackers for Game Master Screen",
+            "url": "https://theultimategamemaster.com/products/5th-edition-rules-pack",
+            "score": 0.03226646,
+            "snippet": "Master D&D 5e Combat Like a Pro Transform your D&D sessions with this comprehensive 5th Edition Rules Pack designed specifically for the Ultimate Game Master Screen. Never flip through the Player's Handbook mid-combat…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 663,
+          "generation": 10084,
+          "total": 10749
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03226646
+        }
+      },
+      "latency": {
+        "client_total_ms": 10754,
+        "server": {
+          "retrieval": 663,
+          "generation": 10084,
+          "total": 10749
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "38",
+            "ok": true
+          },
+          {
+            "spec": "re:10 initiative",
+            "ok": true
+          },
+          {
+            "spec": "re:10 creature",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/5th-edition-rules-pack.md"
+          ],
+          "expected": [
+            "catalog/products/5th-edition-rules-pack.md"
+          ],
+          "hit": [
+            "catalog/products/5th-edition-rules-pack.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "cat-06",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Will my 13-inch iPad fit the Magnetic Tablet Holder?",
+      "answer": {
+        "text": "The Magnetic Tablet Holder supports tablets up to 12 inches [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-M2CAaJPZbbSnt4RFtwUIA5TN",
+            "filename": "catalog/products/magnetic-tablet-holder-brown.md",
+            "title": "Magnetic Tablet Holder - Digital Display Mount for Game Master Screen & D&D Tools",
+            "url": "https://theultimategamemaster.com/products/magnetic-tablet-holder-brown",
+            "score": 0.032258064,
+            "snippet": "Magnetic Tablet Holder for Game Master Screens - Mount iPad or tablets hands-free. Access digital D&D maps, character sheets & virtual tools during sessions. Description Transform Your Screen into a Digital Command…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 512,
+          "generation": 8885,
+          "total": 9398
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.03226646
+        }
+      },
+      "latency": {
+        "client_total_ms": 9401,
+        "server": {
+          "retrieval": 512,
+          "generation": 8885,
+          "total": 9398
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "12",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/magnetic-tablet-holder-brown.md"
+          ],
+          "expected": [
+            "catalog/products/magnetic-tablet-holder-brown.md"
+          ],
+          "hit": [
+            "catalog/products/magnetic-tablet-holder-brown.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "cat-07",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "What gift card amounts do you offer?",
+      "answer": {
+        "text": "The Ultimate Game Master Gift Card - Let them have the adventure they want! [1] is available in denominations of $10.00, $25.00, $50.00, $100.00, $250.00, and $500.00 [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-w1RueuMWAMPiDs660rWImfXR",
+            "filename": "catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md",
+            "title": "The Ultimate Game Master Gift Card - Let them have the adventure they want!",
+            "url": "https://theultimategamemaster.com/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want",
+            "score": 0.032522473,
+            "snippet": "- Product: The Ultimate Game Master Gift Card - Let them have the adventure they want! - Handle: the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want - Price: $10.00 – $500.00 USD - Vendor / brand:…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 531,
+          "generation": 11938,
+          "total": 12470
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032522473
+        }
+      },
+      "latency": {
+        "client_total_ms": 12474,
+        "server": {
+          "retrieval": 531,
+          "generation": 11938,
+          "total": 12470
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "10",
+            "ok": true
+          },
+          {
+            "spec": "25",
+            "ok": true
+          },
+          {
+            "spec": "50",
+            "ok": true
+          },
+          {
+            "spec": "100",
+            "ok": true
+          },
+          {
+            "spec": "250",
+            "ok": true
+          },
+          {
+            "spec": "500",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md"
+          ],
+          "expected": [
+            "catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md"
+          ],
+          "hit": [
+            "catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "cat-08",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "What's in the Ultimate Bundle and how much is it?",
+      "answer": {
+        "text": "The Ultimate Bundle includes a magnetic DM screen and carefully curated accessories such as rules packs, trackers, organizers, and storage solutions. [1] The price for the Ultimate Bundle is $319.99 USD [2].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-kmZiG2Hf38DFIF4neeb0b37m",
+            "filename": "catalog/collections/game-master-screen.md",
+            "title": "Ultimate Bundles (collection)",
+            "url": "https://theultimategamemaster.com/collections/game-master-screen",
+            "score": 0.032786883,
+            "snippet": "Complete Game Master Screen bundles with everything you need for epic campaigns. Our Ultimate Bundles include the magnetic DM screen plus carefully curated accessories - rules packs, trackers, organizers, and storage…"
+          },
+          {
+            "n": 2,
+            "file_id": "file-EJNZGtWWKhHGjnVhfzCqJOeg",
+            "filename": "catalog/products/ultimate-bundle-black.md",
+            "title": "Ultimate Bundle (Black) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-bundle-black",
+            "score": 0.028949544,
+            "snippet": "Magnetic design means your accessories work with future releases and custom additions. Ideal For: - New Game Masters starting their first campaigns - Veteran GMs upgrading from basic screens - Gift Givers looking for…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 625,
+          "generation": 9506,
+          "total": 10132
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032786883
+        }
+      },
+      "latency": {
+        "client_total_ms": 10137,
+        "server": {
+          "retrieval": 625,
+          "generation": 9506,
+          "total": 10132
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "319.99",
+            "ok": true
+          },
+          {
+            "spec": "re:map pack",
+            "ok": false
+          },
+          {
+            "spec": "re:quick-load",
+            "ok": false
+          },
+          {
+            "spec": "any(re:initiative | re:creature)",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0.25,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/collections/game-master-screen.md",
+            "catalog/products/ultimate-bundle-black.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-bundle.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/products/ultimate-bundle.md"
+          ],
+          "extraneous": [],
+          "recall": 0,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 1.25,
+        "G": 2.5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 50,
+      "judge": null
+    },
+    {
+      "id": "cat-09",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Who teaches the Dungeon Masterclass and what does it cost?",
+      "answer": {
+        "text": "The Dungeon Masterclass is taught by a professional Game Master and costs $299.00 USD [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-5JL4c8ORxSCEeffGKRH3F8dO",
+            "filename": "catalog/products/game-master-foundations-online-course.md",
+            "title": "Dungeon Masterclass: The Art of Game Mastering",
+            "url": "https://theultimategamemaster.com/products/game-master-foundations-online-course",
+            "score": 0.032786883,
+            "snippet": "- Product: Dungeon Masterclass: The Art of Game Mastering - Handle: game-master-foundations-online-course - Price: $299.00 USD - Vendor / brand: The Ultimate Game Master - Product type: Online Course - Shopify…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 795,
+          "generation": 8476,
+          "total": 9273
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.032786883
+        }
+      },
+      "latency": {
+        "client_total_ms": 9277,
+        "server": {
+          "retrieval": 795,
+          "generation": 8476,
+          "total": 9273
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "Jason Azevedo",
+            "ok": false
+          },
+          {
+            "spec": "299",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 0.5,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/game-master-foundations-online-course.md"
+          ],
+          "expected": [
+            "catalog/products/game-master-foundations-online-course.md"
+          ],
+          "hit": [
+            "catalog/products/game-master-foundations-online-course.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 2.5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 76,
+      "judge": null
+    },
+    {
+      "id": "cat-10",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Are rivet magnets in stock? How many come in a pack?",
+      "answer": {
+        "text": "The Rivet Magnets are currently sold out and unavailable [1]. The Rivet Magnets come in a pack of 4 [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "file-nNFMw2pJhA2O8TUpfMa1Pn1R",
+            "filename": "catalog/products/rivet-magnets.md",
+            "title": "Rivet Magnets - Strong Neodymium Hardware for Game Master Screen Accessories",
+            "url": "https://theultimategamemaster.com/products/rivet-magnets",
+            "score": 0.031280547,
+            "snippet": "- Product: Rivet Magnets - Strong Neodymium Hardware for Game Master Screen Accessories - Handle: rivet-magnets - Price: $8.99 USD - Vendor / brand: Ultimate Game Master - Shopify category: Toys & Games Games - Tags:…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 702,
+          "generation": 9309,
+          "total": 10011
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "knowdrive",
+          "count": 6,
+          "topScore": 0.031280547
+        }
+      },
+      "latency": {
+        "client_total_ms": 10015,
+        "server": {
+          "retrieval": 702,
+          "generation": 9309,
+          "total": 10011
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:\\b(4|four)\\b",
+            "ok": true
+          },
+          {
+            "spec": "re:sold out|out of stock|unavailable|not (currently )?available|isn'?t (currently )?available|not in stock|available: no|no longer available",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/rivet-magnets.md"
+          ],
+          "expected": [
+            "catalog/products/rivet-magnets.md"
+          ],
+          "hit": [
+            "catalog/products/rivet-magnets.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "pol-01",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "What is your return policy?",
+      "answer": {
+        "text": "Every screen is backed by a 30-night risk-free return [1]. If it isn't for you, send it back for a full refund — no questions, no quests [2].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:pages/avada-faqs.md",
+            "filename": "pages/avada-faqs.md",
+            "title": "Frequently Asked Questions",
+            "url": "https://theultimategamemaster.com/pages/avada-faqs",
+            "score": 0.4984,
+            "snippet": "Frequently Asked Questions What is your return policy? Every screen is backed by a 30-night risk-free return. If it isn't for you, send it back for a full refund — no questions, no quests. Do you offer wholesale…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:policies/refund.md",
+            "filename": "policies/refund.md",
+            "title": "Refund policy",
+            "url": "https://theultimategamemaster.com/policies/refund-policy",
+            "score": 0.6396,
+            "snippet": "Refund policy Refund policy — The Ultimate Game Master We have a 30-day return policy, which means you have 30 days after receiving your item to request a return. To be eligible for a return, your item must be in the…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 119,
+          "generation": 8416,
+          "total": 8535
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local-fallback",
+          "count": 6,
+          "topScore": 0.6396
+        }
+      },
+      "latency": {
+        "client_total_ms": 8539,
+        "server": {
+          "retrieval": 119,
+          "generation": 8416,
+          "total": 8535
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "30",
+            "ok": true
+          },
+          {
+            "spec": "re:original packaging|same condition",
+            "ok": false
+          },
+          {
+            "spec": "team@theultimategamemaster.com",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0.33,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "pages/avada-faqs.md",
+            "policies/refund.md"
+          ],
+          "expected": [
+            "policies/refund.md"
+          ],
+          "hit": [
+            "policies/refund.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 1.67,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 71,
+      "judge": null
+    },
+    {
+      "id": "pol-02",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Do you ship outside the US, and what does shipping cost?",
+      "answer": {
+        "text": "The Ultimate Game Master Screen ships to 29 countries including Australia, Austria, Belgium, Canada, Czech Republic, Denmark, Finland, France, Germany, Hong Kong, Ireland, Israel, Italy, Japan, Malaysia, Netherlands, New Zealand, Norway, Poland, Portugal, Singapore, South Korea, Spain and Sweden. [1] Shipping costs are calculated by weight and are clearly identified on the checkout page. [2]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:operations/shipping.md",
+            "filename": "operations/shipping.md",
+            "title": "Shipping zones, carriers and rates",
+            "url": null,
+            "score": 0.4891,
+            "snippet": "Shipping zones, carriers and rates Shipping zones, carriers and rates — The Ultimate Game Master This describes the store's shipping configuration in Shopify (delivery profile \"General profile\", which covers all 120…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:policies/shipping.md",
+            "filename": "policies/shipping.md",
+            "title": "Shipping policy",
+            "url": "https://theultimategamemaster.com/policies/shipping-policy",
+            "score": 0.6124,
+            "snippet": "Shipping policy Shipping policy — The Ultimate Game Master FREE SHIPPING TO THE UNITED STATES We off FREE shipping to anywhere in the United States. Everywhere else, shipping is calculated by weight at checkout.…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 221,
+          "generation": 11286,
+          "total": 11508
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local-fallback",
+          "count": 6,
+          "topScore": 0.6124
+        }
+      },
+      "latency": {
+        "client_total_ms": 11511,
+        "server": {
+          "retrieval": 221,
+          "generation": 11286,
+          "total": 11508
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:free",
+            "ok": false
+          },
+          {
+            "spec": "re:calculated|weight|ups",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 0.5,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "operations/shipping.md",
+            "policies/shipping.md"
+          ],
+          "expected": [
+            "operations/shipping.md",
+            "policies/shipping.md"
+          ],
+          "hit": [
+            "operations/shipping.md",
+            "policies/shipping.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 2.5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 76,
+      "judge": null
+    },
+    {
+      "id": "pol-03",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "How quickly do you ship orders?",
+      "answer": {
+        "text": "The shipping policy states that orders shipped to the United States are free [1]. For orders shipped to other countries, shipping is calculated by weight and is clearly identified on the checkout page [2]. The shipping times are as follows: We do our absolute best to ship within 2 business days of the original order. [1] If for some reason, products are missing from the warehouse, and we need to modify the order for whatever reason, we will contact your directly to inform you and coordinate an appropriate shipping solution for everyone. [1] This may include extra shipping charges if an order is required to be split up [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:policies/shipping.md",
+            "filename": "policies/shipping.md",
+            "title": "Shipping policy",
+            "url": "https://theultimategamemaster.com/policies/shipping-policy",
+            "score": 0.599,
+            "snippet": "Shipping policy Shipping policy — The Ultimate Game Master FREE SHIPPING TO THE UNITED STATES We off FREE shipping to anywhere in the United States. Everywhere else, shipping is calculated by weight at checkout.…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:operations/shipping.md",
+            "filename": "operations/shipping.md",
+            "title": "Shipping zones, carriers and rates",
+            "url": null,
+            "score": 0.5694,
+            "snippet": "Shipping zones, carriers and rates \"All International\" zone Countries: Australia, Austria, Belgium, Canada, Czech Republic, Denmark, Finland, France, Germany, Hong Kong, Ireland, Israel, Italy, Japan, Malaysia,…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 123,
+          "generation": 10638,
+          "total": 10762
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local-fallback",
+          "count": 6,
+          "topScore": 0.599
+        }
+      },
+      "latency": {
+        "client_total_ms": 10765,
+        "server": {
+          "retrieval": 123,
+          "generation": 10638,
+          "total": 10762
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:2 business days | re:two business days | re:24 hours)",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/shipping.md",
+            "operations/shipping.md"
+          ],
+          "expected": [
+            "policies/shipping.md"
+          ],
+          "hit": [
+            "policies/shipping.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "pol-05",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "I live in Germany. Do I get any extra return rights?",
+      "answer": {
+        "text": "No, you do not get any extra return rights in Germany [1][2]. states that if the merchandise is being shipped into the European Union, you have the right to cancel or return your order within 14 days, for any reason and without a justification. [2] mentions that if you are not satisfied with our response to your complaint, depending on where you live you may have the right to appeal our decision by contacting us using the contact details set out below, or lodge your complaint with your local data protection authority. [3] For the EEA, you can find a list of the responsible data protection supervisory authorities [here](https://edpb.europa.eu/about-edpb/about-edpb/members). [3]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/products/twisted-hand-of-fate-full-6-part-module.md",
+            "filename": "catalog/products/twisted-hand-of-fate-full-6-part-module.md",
+            "title": "Realmsmith's Twisted Hand of Fate - Full 6-Part Module",
+            "url": "https://theultimategamemaster.com/products/twisted-hand-of-fate-full-6-part-module",
+            "score": 0.4066,
+            "snippet": "Realmsmith's Twisted Hand of Fate - Full 6-Part Module --- Why Game Masters Love It - Plug-and-play prep. Key Plot Points and \"The Bigger Picture\" summaries at the end of each chapter tell you exactly what needs to…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:policies/refund.md",
+            "filename": "policies/refund.md",
+            "title": "Refund policy",
+            "url": "https://theultimategamemaster.com/policies/refund-policy",
+            "score": 0.459,
+            "snippet": "Refund policy You can always contact us for any return question at [team@theultimategamemaster.com](mailto:team@theultimategamemaster.com). Damages and issues Please inspect your order upon reception and contact us…"
+          },
+          {
+            "n": 3,
+            "file_id": "local:policies/privacy.md",
+            "filename": "policies/privacy.md",
+            "title": "Privacy policy",
+            "url": "https://theultimategamemaster.com/policies/privacy-policy",
+            "score": 0.4096,
+            "snippet": "Privacy policy Complaints If you have complaints about how we process your personal information, please contact us using the contact details provided below. If you are not satisfied with our response to your complaint,…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 115,
+          "generation": 13627,
+          "total": 13744
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local-fallback",
+          "count": 6,
+          "topScore": 0.459
+        }
+      },
+      "latency": {
+        "client_total_ms": 13747,
+        "server": {
+          "retrieval": 115,
+          "generation": 13627,
+          "total": 13744
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "14",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2,
+            3
+          ],
+          "citation_ns": [
+            1,
+            2,
+            3
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/twisted-hand-of-fate-full-6-part-module.md",
+            "policies/refund.md",
+            "policies/privacy.md"
+          ],
+          "expected": [
+            "policies/refund.md"
+          ],
+          "hit": [
+            "policies/refund.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "catalog/products/twisted-hand-of-fate-full-6-part-module.md",
+            "policies/privacy.md"
+          ],
+          "recall": 1,
+          "precision": 0.33
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 4,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 87,
+      "judge": null
+    }
+  ]
+}
