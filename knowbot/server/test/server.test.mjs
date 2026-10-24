@@ -245,7 +245,7 @@ describe('server (HTTP)', () => {
     const c = await (await api('/api/config')).json();
     assert.equal(c.retrieval, 'local');
     assert.deepEqual(c.engine, { type: 'openai', model: 'fake-model' });
-    assert.deepEqual(c.canonical, { temperature: 0, top_p: 1, max_tokens: 400, seed: 7 });
+    assert.deepEqual(c.canonical, { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 });
     const h = await (await api('/healthz')).json();
     assert.equal(h.ok, true); assert.equal(h.llm, true); assert.equal(h.retrieval, 'local');
   });
@@ -342,7 +342,7 @@ describe('server (HTTP)', () => {
     assert.equal(a.surface.kind, 'api');
     // canonical LLM settings
     const call = llm.calls.at(-1);
-    assert.equal(call.temperature, 0); assert.equal(call.top_p, 1); assert.equal(call.max_tokens, 400); assert.equal(call.seed, 7);
+    assert.equal(call.temperature, 0); assert.equal(call.top_p, 1); assert.equal(call.max_tokens, 300); assert.equal(call.seed, 7);
     assert.equal(call.messages[0].role, 'system');
     const evs = await live;
     const ce = evs.find((e) => e.type === 'canonical');

@@ -30,7 +30,7 @@ knowbot/
 
 - Server/eval engine: **Qwen2.5-1.5B-Instruct** GGUF Q4_K_M via llama.cpp `llama-server` (OpenAI-compatible) on `http://127.0.0.1:8080`.
 - Browser engine (no server): WebLLM `Qwen2.5-1.5B-Instruct-q4f16_1-MLC` loaded from `https://esm.run/@mlc-ai/web-llm@0.2.79` (pinned).
-- Canonical settings: `temperature: 0`, `top_p: 1`, `max_tokens: 400`, `seed: 7`.
+- Canonical settings: `temperature: 0`, `top_p: 1`, `max_tokens: 300`, `seed: 7`, `frequency_penalty: 0.4`.
 
 ## Corpus / store
 

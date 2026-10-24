@@ -2,7 +2,7 @@
 // Plain ESM, zero dependencies. Runs in browsers and Node 22. See ../SPEC.md (binding contract).
 const G = globalThis;
 export const VERSION = '1.0.0';
-export const CANONICAL = { temperature: 0, top_p: 1, max_tokens: 400, seed: 7 };
+export const CANONICAL = { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
 export const WEBLLM_URL = 'https://esm.run/@mlc-ai/web-llm@0.2.79';
 export const WEBLLM_MODEL = 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC';
 const DEF_PERSONA = { name: 'KnowBot', org: 'this organization' };
@@ -271,7 +271,7 @@ export function guardRequest(question, persona = {}) {
 /* ---------- citations / canonical answer ---------- */
 
 const MARKER_FORMS = /[[【](?:\^|sources?\s*:?\s*|ref\s*)?(\d{1,3}(?:\s*[,;&]\s*(?:and\s+)?(?:sources?\s*)?\d{1,3})*)[\]】](?!\()/gi;
-const DECLINE = /\b(?:(?:do|does|did|can|could)(?:n['’]?t| not)|cannot|unable to|no (?:information|details|mention))\b[^.]{0,80}?\b(?:cover|contain|find|have|include|mention|provide|answer|information|details|say)|\bnot (?:explicitly |specifically |directly )?(?:covered|mentioned|included|found|available|stated|provided|listed|specified)\b|\b(?:knowdrive|sources?)\b[^.]{0,30}\b(?:doesn['’]?t|does not|don['’]?t|do not) (?:cover|say|mention|include|list|state)\b/i;
+const DECLINE = /\b(?:the |these |provided |your |our )?(?:sources?|knowdrive|documents?|information provided|provided information)\b[^.]{0,60}?\b(?:do(?:es)?n['’]?t|do(?:es)? not|cannot|can['’]?t|did not|didn['’]?t)\b[^.]{0,40}?\b(?:cover|contain|mention|include|provide|say|state|specify|list|answer|address|have)\b|\b(?:is|are|isn['’]?t|aren['’]?t)? ?not (?:explicitly |specifically |directly |clearly )?(?:covered|mentioned|stated|provided|listed|specified|included|addressed|found) in (?:the |any )?(?:provided |available )?(?:sources?|knowdrive|documents?)\b|\bI (?:couldn['’]?t|could not|can['’]?t|cannot) find\b|\bthere(?:'s| is) no (?:information|details|mention) (?:about|on|of|regarding|in)\b/i;
 const LISTISH = /^\s*(?:[-*•]|\d+[.)]|\[\d+\])\s*/;
 
 function stripTrailingSources(text) {
@@ -345,6 +345,22 @@ function verifySupport(text, sources, question) {
   return { text: out, kept, dropped };
 }
 
+// Small-model hygiene: never show the prompt's internal labels, collapse repeated sentences (runaway loops)
+// and drop list items left empty once markers are gone.
+function tidy(text) {
+  const seen = new Set();
+  return text
+    .replace(/\b(?:the |provided |these )*SOURCES\b/g, "the knowDrive").replace(/\[?END OF SOURCES\]?/gi, '')
+    .split('\n').map((line) => line.split(/(?<=[.!?](?:\s*\[\d+\])*)\s+(?=[^\s[])/).filter((sen) => {
+      const k = sen.replace(/\s*\[\d+\](?!\()/g, '').toLowerCase().replace(/[^a-z0-9$]+/g, ' ').trim();
+      if (k.length < 12) return true;
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    }).join(' '))
+    .filter((line) => !/^\s*(?:[-*•]|\d+[.)])?\s*(?:\[\d+\]\s*)*$/.test(line) || !line.trim())
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function snippetOf(t) {
   const s = cleanSource(t).replace(/^#[^\n]*\n/, '').replace(/[#*_`>|]+/g, ' ').replace(/\s+/g, ' ').trim();
   return clip(s, 220);
@@ -381,7 +397,7 @@ export function finalizeAnswer(raw, sources = [], opts = {}) {
   // stray [n] (or the rule-2 fallback) dress it up as grounded.
   const sentences = text.replace(/\[\d+\](?!\()/g, '').split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
   if (sentences.length && sentences.every((x) => DECLINE.test(x) || /^(?:i'?m sorry|sorry|therefore|unfortunately)\b[^.]*\.?$/i.test(x))) {
-    return { text: text.replace(/\s*\[\d+\](?!\()/g, '').trim(), citations: [], grounded: false, refused: true, fallback: false };
+    return { text: `I couldn't find that in ${org}'s knowDrive, so I won't guess.${coverageText(titles)}`, citations: [], grounded: false, refused: true, fallback: false };
   }
   const hasValid = [...text.matchAll(/\[(\d+)\](?!\()/g)].some((m) => valid(+m[1]));
   let fallback = false;
@@ -401,6 +417,7 @@ export function finalizeAnswer(raw, sources = [], opts = {}) {
     if (!attached) return { text, citations: [], grounded: false, refused: false, fallback: false };
     fallback = true;
   }
+  text = tidy(text);
   const v = verifySupport(text, sources, opts.question);
   if (!v.kept) {
     return { text: `I couldn't find support for that in ${org}'s knowDrive, so I won't guess.${coverageText(titles)}`,

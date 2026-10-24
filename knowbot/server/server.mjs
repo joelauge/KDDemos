@@ -11,7 +11,7 @@ import { createRetriever, DEFAULT_STORE } from './retrievers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const CANONICAL = Object.freeze({ temperature: 0, top_p: 1, max_tokens: 400, seed: 7 });
+export const CANONICAL = Object.freeze({ temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 });
 const DEFAULT_PERSONA = Object.freeze({ name: 'KnowBot', org: 'The Ultimate Game Master' });
 const BODY_LIMIT = 256 * 1024;
 const REPLAY = 200;
@@ -250,7 +250,7 @@ export function createKnowBotServer(opts = {}) {
     });
     if (chars > 24000) throw new HttpError(413, 'messages too long (max 24000 chars)');
     const out = { model: llmModel, messages, stream: body.stream === true };
-    for (const k of ['temperature', 'top_p', 'seed']) if (typeof body[k] === 'number' && Number.isFinite(body[k])) out[k] = body[k];
+    for (const k of ['temperature', 'top_p', 'seed', 'frequency_penalty', 'presence_penalty']) if (typeof body[k] === 'number' && Number.isFinite(body[k])) out[k] = body[k];
     const mt = Math.floor(Number(body.max_tokens));
     out.max_tokens = Math.min(maxTokens, mt > 0 ? mt : CANONICAL.max_tokens);
     return out;
