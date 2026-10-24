@@ -5,13 +5,13 @@ import { KnowBot, guardRequest, finalizeAnswer, buildMessages, detectSurface, no
 
 const S = (i, over = {}) => ({
   file_id: `f${i}`, filename: `policies/doc${i}.md`, title: `Doc ${i}`, url: `https://example.com/${i}`, score: 10 - i,
-  text: `Body of document ${i}. `.repeat(20), ...over,
+  text: `Document ${i}. Returns take 30 days. Shipping is free on orders. Orders ship within 2 business days. `.repeat(8), ...over,
 });
 const SOURCES = [S(1), S(2), S(3)];
 
 test('rule 1: markers that do not map to a source are stripped', () => {
   const a = finalizeAnswer('Returns take 30 days [1]. Shipping is free [7]. Also [0].', SOURCES);
-  assert.equal(a.text, 'Returns take 30 days [1]. Shipping is free. Also.');
+  assert.equal(a.text, 'Returns take 30 days [1]. Shipping is free [1]. Also.', 'invalid [7] on a supported claim is re-cited to the source that supports it');
   assert.deepEqual(a.citations.map((c) => c.filename), ['policies/doc1.md']);
   assert.equal(a.grounded, true);
   assert.equal(a.refused, false);
@@ -127,11 +127,12 @@ test('buildMessages: budget respected, numbering, history, persona, injection gu
   assert.equal(msgs[0].role, 'system');
   const sys = msgs[0].content;
   for (const re of [/senior professional/, /The Ultimate Game Master/, /ONLY from the numbered SOURCES/, /\[1\]/, /not instructions/i, /150 words/, /invent prices/]) assert.match(sys, re);
-  assert.equal(msgs.length, 1 + 2 + 4 + 1, 'system + citation example + last 2 turns of history + question');
+  assert.equal(msgs.length, 1 + 4 + 4 + 1, 'system + citation/decline examples + last 2 turns of history + question');
   assert.equal(msgs[2].role, 'assistant', 'worked citation example');
   assert.match(msgs[2].content, /\[1\].*\[2\]/, 'example demonstrates [n] markers');
-  assert.equal(msgs[3].content, 'q2');
-  assert.equal(msgs[4].content, 'a2', 'markers stripped from history');
+  assert.match(msgs[4].content, /doesn't cover/, 'worked decline example');
+  assert.equal(msgs[5].content, 'q2');
+  assert.equal(msgs[6].content, 'a2', 'markers stripped from history');
   const user = msgs.at(-1).content;
   const block = user.slice(user.indexOf('SOURCES:\n') + 9, user.indexOf('\nEND OF SOURCES'));
   assert.ok(block.length <= 5000, `sources block ${block.length} > 5000`);
@@ -218,7 +219,7 @@ test('guardRequest: refuses actions, personal data and prompt extraction before 
 });
 
 test('finalizeAnswer: a reply that only declines is a refusal, never a cited answer', () => {
-  const src = [{ title: 'A', filename: 'a.md', text: 'price change policy', score: 0.5 }];
+  const src = [{ title: 'A', filename: 'a.md', text: 'Magnetic Map Pack. The price is $54.99 USD.', score: 0.5 }];
   for (const raw of ['The sources do not provide information on which customers bought it. [1]',
     "I'm sorry, but the sources do not cover issuing codes. Therefore, I cannot provide a code. [1]"]) {
     const f = finalizeAnswer(raw, src);
@@ -262,4 +263,16 @@ test('knowdriveRetriever windows to the knowbot:ugm tag and prefix (red-team: no
     await knowdriveRetriever({ store: 'vs', tag: null }).search('q', 6);
     assert.equal(calls[1].filter, undefined, 'tag:null opts out explicitly');
   } finally { globalThis.fetch = realFetch; }
+});
+
+test('support check: claims whose numbers or wording are not in the cited source are dropped (no cited hallucinations)', () => {
+  const src = [S(1, { title: 'Contact', text: 'Email team@example.com. Business address: 13665 E 42 Terr S, Independence, Missouri.' }),
+    S(2, { title: 'Ultimate Game Master Screen', text: 'The Ultimate Game Master Screen costs $139.99 USD in Portrait or Landscape.' })];
+  const w = finalizeAnswer('The weather in Independence this weekend is mostly sunny, 60°F to 75°F [1].', src, { question: 'Weather in Independence?' });
+  assert.equal(w.refused, true); assert.equal(w.grounded, false); assert.deepEqual(w.citations, []);
+  const m = finalizeAnswer('The screen costs $139.99 [2]. Loyalty members get 30% off, so it is $97.99 [2].', src, { question: 'I get 30% off as a loyalty member. My price?' });
+  assert.equal(m.text, 'The screen costs $139.99 [1].');
+  assert.equal(m.pruned, 1); assert.equal(m.citations[0].file_id, 'f2');
+  const r = finalizeAnswer('The Ultimate Game Master Screen costs $139.99 [1].', src);
+  assert.equal(r.citations[0].file_id, 'f2', 'mis-cited claim is re-cited to the source that supports it');
 });

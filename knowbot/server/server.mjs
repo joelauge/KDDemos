@@ -219,7 +219,7 @@ export function createKnowBotServer(opts = {}) {
       raw = await llmComplete(messages, settings);
       tGen = performance.now();
     }
-    const fin = guard || lib.finalizeAnswer(raw, relevant.length ? relevant : results, { minScore, persona });
+    const fin = guard || lib.finalizeAnswer(raw, relevant.length ? relevant : results, { minScore, persona, question });
     const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
     const answer = {
       ...fin,

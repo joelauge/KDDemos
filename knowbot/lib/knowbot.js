@@ -221,8 +221,10 @@ Rules:
 const CITE_EXAMPLE = [
   { role: 'user', content: 'SOURCES:\n[1] Gift Card (catalog/products/gift-card.md)\nGift cards come in $25, $50 and $100 values and never expire.\n\n[2] Contact (policies/contact.md)\nQuestions about a gift card? Email the team.\nEND OF SOURCES\n\nQuestion: Do gift cards expire, and who do I ask about one?' },
   { role: 'assistant', content: 'No, gift cards never expire [1]. They come in $25, $50 and $100 values [1]. For questions about a card, email the team [2].' },
+  { role: 'user', content: 'SOURCES:\n[1] Gift Card (catalog/products/gift-card.md)\nGift cards come in $25, $50 and $100 values and never expire.\nEND OF SOURCES\n\nQuestion: What time does your shop open on Saturdays?' },
+  { role: 'assistant', content: "The knowDrive doesn't cover opening hours. I can help with gift cards, which come in $25, $50 and $100 values [1]." },
 ];
-const CITE_REMINDER = 'Answer using only the SOURCES. Include every relevant price, option and condition. After each fact, write its source number in brackets, e.g. [1]. If two sources state different values for the same thing, say they differ and cite both; otherwise do not mention disagreement.';
+const CITE_REMINDER = `Answer using only the SOURCES. Include every relevant price, option and condition. After each fact, write its source number in brackets, e.g. [1]. If the SOURCES don't answer the question, say the knowDrive doesn't cover it; never answer from general knowledge. If two sources state different values for the same thing, say they differ and cite both.`;
 
 /**
  * Build OpenAI chat messages. Sources share `budget` chars (default 5000, fits ~6 sources in a 1.5B model);
@@ -309,6 +311,41 @@ function bestSource(sentence, srcTerms) {
   return best;
 }
 
+// Every number a claim states must appear in the source it cites (or in the question), and its wording must
+// overlap that source. Unsupported sentences are re-cited to a source that does support them, or dropped.
+const nums = (t) => new Set((String(t).replace(/\[\d+\](?!\()/g, '').match(/\d+(?:[.,]\d+)*/g) || []).map((n) => String(parseFloat(n.replace(/,/g, '')))));
+function verifySupport(text, sources, question) {
+  const srcTerms = sources.map((s) => terms(`${s.title || ''} ${cleanSource(s.text)}`));
+  const srcNums = sources.map((s) => nums(`${s.title || ''} ${s.text || ''}`));
+  const qNums = nums(question || '');
+  const ok = (plain, i) => {
+    if (!srcTerms[i]) return false;
+    for (const n of nums(plain)) if (!qNums.has(n) && !srcNums[i].has(n)) return false;
+    const st = terms(plain);
+    if (st.size < 2) return true;
+    let hit = 0;
+    for (const w of st) if (srcTerms[i].has(w)) hit++;
+    return hit >= 2 && hit / st.size >= 0.34;
+  };
+  let kept = 0, dropped = 0;
+  const out = text.split('\n').map((line) => {
+    if (!line.trim() || /^\s*#/.test(line) || /:\s*(?:\*\*)?\s*$/.test(line)) return line;
+    return line.split(/(?<=[.!?](?:\s*\[\d+\])*)\s+(?=[^\s[])/).map((sen) => {
+      const plain = sen.replace(/\s*\[\d+\](?!\()/g, '');
+      if (DECLINE.test(plain)) return plain;
+      if (!nums(plain).size && terms(plain).size < 2) { if (/\[\d+\](?!\()/.test(sen)) kept++; return sen; }
+      const cited = [...sen.matchAll(/\[(\d+)\](?!\()/g)].map((m) => +m[1] - 1);
+      let good = cited.filter((i) => ok(plain, i));
+      if (!good.length) { const alt = sources.findIndex((_, i) => ok(plain, i)); if (alt >= 0) good = [alt]; }
+      if (!good.length) { dropped++; return ''; }
+      kept++;
+      const marks = [...new Set(good)].map((i) => `[${i + 1}]`).join(''), at = sen.search(/\s*\[\d+\](?!\()/);
+      return at >= 0 ? `${plain.slice(0, at)} ${marks}${plain.slice(at)}` : `${plain} ${marks}`;
+    }).filter(Boolean).join(' ');
+  }).filter((l, i, a) => l.trim() || (i > 0 && a[i - 1].trim())).join('\n').trim();
+  return { text: out, kept, dropped };
+}
+
 function snippetOf(t) {
   const s = cleanSource(t).replace(/^#[^\n]*\n/, '').replace(/[#*_`>|]+/g, ' ').replace(/\s+/g, ' ').trim();
   return clip(s, 220);
@@ -365,6 +402,12 @@ export function finalizeAnswer(raw, sources = [], opts = {}) {
     if (!attached) return { text, citations: [], grounded: false, refused: false, fallback: false };
     fallback = true;
   }
+  const v = verifySupport(text, sources, opts.question);
+  if (!v.kept) {
+    return { text: `I couldn't find support for that in ${org}'s knowDrive, so I won't guess.${coverageText(titles)}`,
+      citations: [], grounded: false, refused: true, fallback: false, pruned: v.dropped };
+  }
+  text = v.text;
   const map = new Map(), citations = [];
   text = text.replace(/\s*\[(\d+)\](?!\()/g, (m, d) => {
     const n = +d;
@@ -378,7 +421,7 @@ export function finalizeAnswer(raw, sources = [], opts = {}) {
     return `${/^\s/.test(m) ? ' ' : ''}[${map.get(key)}]`;
   });
   text = text.replace(/(\[\d+\])(?:\s*\1)+/g, '$1').replace(/(\S) +([.,;:!?])(?=\s|$)/g, '$1$2').replace(/(\S)[ \t]{2,}/g, '$1 ').trim();
-  return { text, citations, grounded: citations.length > 0, refused: false, fallback };
+  return { text, citations, grounded: citations.length > 0, refused: false, fallback, ...(v.dropped ? { pruned: v.dropped } : {}) };
 }
 
 /* ---------- surface ---------- */
@@ -476,7 +519,7 @@ export class KnowBot {
         { onToken: o.onToken, onProgress: o.onProgress, signal: o.signal, settings: this.opts.settings });
       t2 = now();
     }
-    const fin = guard || finalizeAnswer(raw, relevant.length ? relevant : results, { minScore: this.minScore, persona: this.persona,
+    const fin = guard || finalizeAnswer(raw, relevant.length ? relevant : results, { minScore: this.minScore, persona: this.persona, question: q,
       coverage: results.length ? undefined : this.opts.coverage });
     const answer = {
       ...fin,
