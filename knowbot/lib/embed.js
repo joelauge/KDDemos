@@ -10,7 +10,18 @@ const script = [...document.querySelectorAll('script[src]')].find((s) => s.src =
 const d = script?.dataset || {};
 const q = new URLSearchParams(location.search);
 
-const apiBase = q.get('api') || d.api || (me.port === '8787' ? me.origin : location.port === '8787' ? location.origin : 'http://localhost:8787');
+// ?api= on the host page would let anyone craft a link that repoints this site's assistant at their own server
+// (phishing answers, exfiltrated questions). Honour it only for loopback dev servers or when the host opts in.
+const apiParam = (() => {
+  const v = q.get('api');
+  if (!v) return null;
+  try {
+    const u = new URL(v);
+    if (!/^https?:$/.test(u.protocol)) return null;
+    return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname) || 'allowApiParam' in d ? u.href.replace(/\/+$/, '') : null;
+  } catch { return null; }
+})();
+const apiBase = apiParam || d.api || (me.port === '8787' ? me.origin : location.port === '8787' ? location.origin : 'http://localhost:8787');
 const engine = d.engine === 'webllm' ? { type: 'webllm', ...(d.model ? { model: d.model } : {}) } : d.engine === 'openai'
   ? { type: 'openai', baseUrl: d.llm, model: d.model } : { type: 'server' };
 

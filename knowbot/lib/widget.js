@@ -11,7 +11,7 @@ export const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESC[
 
 function inline(s, cite) {
   return escapeHtml(s)
-    .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer nofollow">$1</a>')
+    .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s()[\]]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer nofollow">$1</a>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
@@ -203,7 +203,8 @@ class ChatView {
       const c = byN.get(n);
       return c ? `<sup><a class="kb-cite" href="#${mid}-s${n}" data-n="${n}" aria-label="Source ${n}: ${escapeHtml(c.title)}">${n}</a></sup>` : '';
     };
-    const badge = a.refused ? '<div class="kb-badge">Not in the knowDrive</div>' : !a.grounded ? '<div class="kb-badge">No supporting source</div>' : '';
+    const badge = a.refused ? '<div class="kb-badge">Not in the knowDrive</div>' : !a.grounded ? '<div class="kb-badge">No supporting source</div>'
+      : a.fallback ? '<div class="kb-badge">Sources matched automatically</div>' : '';
     let html = `<div class="kb-bubble">${badge}<div class="kb-md">${renderMarkdown(a.text, cite)}</div></div>`;
     if (a.citations.length) {
       html += `<div class="kb-sources"><div class="kb-sources-h" id="${mid}-sh">Sources</div><ol aria-labelledby="${mid}-sh">${a.citations.map((c) => {

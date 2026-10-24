@@ -285,6 +285,9 @@ function compare(surfaceAns, canonAns) {
 }
 
 /* ------------------------------------------------------------------ connection */
+// Optional operator token (server env KNOWBOT_DASHBOARD_TOKEN): open the dashboard with ?token=<it>.
+const TOKEN = new URLSearchParams(location.search).get('token');
+const withToken = (u) => (TOKEN ? `${u}${u.includes('?') ? '&' : '?'}token=${encodeURIComponent(TOKEN)}` : u);
 async function fetchJSON(url, ms = 3000) {
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
   try { const r = await fetch(url, { signal: ctl.signal }); if (!r.ok) throw new Error(String(r.status)); return await r.json(); }
@@ -318,7 +321,7 @@ function setConfig(cfg) {
 }
 async function seedSessions() {
   try {
-    const list = await fetchJSON(`${S.apiBase}/api/sessions`, 4000);
+    const list = await fetchJSON(withToken(`${S.apiBase}/api/sessions`), 4000);
     if (!Array.isArray(list)) return;
     for (const r of list.slice(0, 1000)) {
       if (!r || typeof r !== 'object') continue;
@@ -350,7 +353,7 @@ function connect() {
   if (typeof EventSource === 'undefined') { setConn('offline', 'No EventSource'); return; }
   setConn('connecting');
   let opened = false;
-  try { es = new EventSource(`${S.apiBase}/api/stream`); } catch { scheduleRetry(); return; }
+  try { es = new EventSource(withToken(`${S.apiBase}/api/stream`)); } catch { scheduleRetry(); return; }
   es.addEventListener('open', () => {
     opened = true; attempts = 0; setConn('live');
     if (!S.config) fetchJSON(`${S.apiBase}/api/config`).then(setConfig).catch(() => {});

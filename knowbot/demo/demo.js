@@ -1,7 +1,14 @@
 // Shared helpers for the KnowBot demo pages.
 // apiBase: ?api=... override, else same origin when served by the KnowBot server (:8787), else http://localhost:8787.
 const q = new URLSearchParams(location.search);
-export const API = (q.get('api') || (location.port === '8787' ? location.origin : 'http://localhost:8787')).replace(/\/+$/, '');
+// ?api= is limited to loopback or same-origin servers so a crafted link can't point the demos at a hostile server.
+const apiParam = (() => {
+  try {
+    const u = new URL(q.get('api'));
+    return /^https?:$/.test(u.protocol) && (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname) || u.origin === location.origin) ? u.href : null;
+  } catch { return null; }
+})();
+export const API = (apiParam || (location.port === '8787' ? location.origin : 'http://localhost:8787')).replace(/\/+$/, '');
 export const PERSONA = { name: 'KnowBot', org: 'The Ultimate Game Master' };
 // Topics the corpus really covers; shown when a question matches nothing (refusal hint).
 export const COVERAGE = ['Products and bundles', 'Shipping policy', 'Refund policy', 'Game master guides'];
@@ -14,10 +21,10 @@ export const STARTERS = [
 
 /** Keep ?api= on internal links so the override survives navigation. */
 export function carryApiParam(root = document) {
-  if (!q.get('api')) return;
+  if (!apiParam) return;
   root.querySelectorAll('a[data-keep-api]').forEach((a) => {
     const u = new URL(a.getAttribute('href'), location.href);
-    u.searchParams.set('api', q.get('api'));
+    u.searchParams.set('api', apiParam);
     a.href = u.href;
   });
 }

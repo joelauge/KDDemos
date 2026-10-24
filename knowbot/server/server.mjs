@@ -4,9 +4,9 @@
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { promises as fsp, createReadStream, existsSync, mkdirSync, appendFile, readFileSync } from 'node:fs';
+import { promises as fsp, createReadStream, existsSync, mkdirSync, appendFile, readFileSync, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createRetriever, DEFAULT_STORE } from './retrievers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +15,9 @@ export const CANONICAL = Object.freeze({ temperature: 0, top_p: 1, max_tokens: 4
 const DEFAULT_PERSONA = Object.freeze({ name: 'KnowBot', org: 'The Ultimate Game Master' });
 const BODY_LIMIT = 256 * 1024;
 const REPLAY = 200;
+const EVENT_MAX = 32 * 1024;       // one telemetry event, serialized
+const MAX_SESSIONS = 5000;         // in-memory aggregation cap (oldest evicted)
+const CHAT_ROLES = new Set(['system', 'user', 'assistant']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
@@ -48,6 +51,12 @@ export function createKnowBotServer(opts = {}) {
   const llmBase = String(env.LLM_BASE_URL || 'http://127.0.0.1:8080/v1').replace(/\/+$/, '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
   const rateLimit = Number(opts.rateLimit ?? env.KNOWBOT_RATE_LIMIT ?? 30);
+  const eventsRateLimit = Number(opts.eventsRateLimit ?? env.KNOWBOT_EVENTS_RATE_LIMIT ?? 240);
+  const trustProxy = !!(opts.trustProxy ?? /^(1|true|yes)$/i.test(env.KNOWBOT_TRUST_PROXY || ''));
+  const maxTokens = Number(env.KNOWBOT_MAX_TOKENS || 1024);
+  const maxSse = Number(opts.maxSse ?? env.KNOWBOT_MAX_SSE ?? 100);
+  const eventsMaxBytes = Number(opts.eventsMaxBytes ?? env.KNOWBOT_EVENTS_MAX_BYTES ?? 50 * 1024 * 1024);
+  const readToken = String(opts.dashboardToken ?? env.KNOWBOT_DASHBOARD_TOKEN ?? '');
   const quiet = opts.quiet ?? false;
   const log = (...a) => { if (!quiet) console.log(...a); };
 
@@ -69,6 +78,7 @@ export function createKnowBotServer(opts = {}) {
     if (!s) {
       s = { sessionId: ev.sessionId, surface: null, startedAt: ev.ts, lastAt: ev.ts, _start: t, _last: t, turns: 0, _bot: 0, _grounded: 0, _canonical: 0 };
       sessions.set(ev.sessionId, s);
+      if (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value); // bound memory under flooding
     }
     if (ev.surface && ev.type !== 'canonical' && (!s.surface || ev.type === 'session.start')) s.surface = ev.surface;
     if (t && t < s._start) { s._start = t; s.startedAt = ev.ts; }
@@ -96,12 +106,21 @@ export function createKnowBotServer(opts = {}) {
   }
 
   let writeQueue = Promise.resolve();
+  let eventsBytes = 0;
+  try { eventsBytes = existsSync(eventsFile) ? statSync(eventsFile).size : 0; } catch {}
   function persist(evs) {
     const chunk = evs.map((e) => JSON.stringify(e)).join('\n') + '\n';
-    writeQueue = writeQueue.then(() => new Promise((resolve) => appendFile(eventsFile, chunk, (err) => {
-      if (err) log(`[events] append failed: ${err.message}`);
-      resolve();
-    })));
+    writeQueue = writeQueue.then(async () => {
+      if (eventsMaxBytes && eventsBytes + chunk.length > eventsMaxBytes) { // rotate: keep one previous file, bound disk use
+        try { await fsp.rename(eventsFile, eventsFile + '.1'); } catch {}
+        eventsBytes = 0;
+      }
+      eventsBytes += Buffer.byteLength(chunk);
+      await new Promise((resolve) => appendFile(eventsFile, chunk, (err) => {
+        if (err) log(`[events] append failed: ${err.message}`);
+        resolve();
+      }));
+    });
     return writeQueue;
   }
 
@@ -117,12 +136,16 @@ export function createKnowBotServer(opts = {}) {
     return persist(evs);
   }
 
-  const EVENT_TYPES = new Set(['session.start', 'message.user', 'message.bot', 'canonical', 'feedback']);
+  // 'canonical' is server-only (emitted by /api/canonical): clients must not be able to forge the operator's reference answer.
+  const CLIENT_EVENT_TYPES = new Set(['session.start', 'message.user', 'message.bot', 'feedback']);
   function normalizeEvent(ev) {
     if (!ev || typeof ev !== 'object' || Array.isArray(ev)) throw new HttpError(400, 'event must be an object');
     if (typeof ev.type !== 'string' || !ev.type) throw new HttpError(400, 'event.type is required');
-    if (!EVENT_TYPES.has(ev.type)) throw new HttpError(400, `unknown event.type "${ev.type}"`);
-    return { v: 1, ...ev, ts: ev.ts ?? Date.now() };
+    if (ev.type === 'canonical') throw new HttpError(403, 'canonical events are emitted by the server only');
+    if (!CLIENT_EVENT_TYPES.has(ev.type)) throw new HttpError(400, `unknown event.type "${ev.type}"`);
+    const out = { v: 1, ...ev, ts: ev.ts ?? Date.now() };
+    if (JSON.stringify(out).length > EVENT_MAX) throw new HttpError(413, `event exceeds ${EVENT_MAX} bytes`);
+    return out;
   }
 
   const pingTimer = setInterval(() => { for (const c of clients) { try { c.write(': ping\n\n'); } catch {} } }, opts.pingMs || 15000);
@@ -130,12 +153,12 @@ export function createKnowBotServer(opts = {}) {
 
   // ------------------------------------------------------------ rate limit
   const hits = new Map();
-  function rateLimited(ip) {
-    if (!rateLimit) return false;
-    const now = Date.now();
-    const arr = (hits.get(ip) || []).filter((t) => now - t < 60000);
-    if (arr.length >= rateLimit) { hits.set(ip, arr); return true; }
-    arr.push(now); hits.set(ip, arr);
+  function rateLimited(ip, bucket = 'llm', limit = rateLimit) {
+    if (!limit) return false;
+    const now = Date.now(), key = `${bucket} ${ip}`;
+    const arr = (hits.get(key) || []).filter((t) => now - t < 60000);
+    if (arr.length >= limit) { hits.set(key, arr); return true; }
+    arr.push(now); hits.set(key, arr);
     return false;
   }
   const rlSweep = setInterval(() => { const now = Date.now(); for (const [ip, a] of hits) if (!a.some((t) => now - t < 60000)) hits.delete(ip); }, 60000);
@@ -213,6 +236,34 @@ export function createKnowBotServer(opts = {}) {
     return { ...answer, retrieval };
   }
 
+  /** /api/chat is a KnowBot engine, not an open LLM relay: allow-list fields, force the model, cap size and output. */
+  function chatBody(body) {
+    const msgs = body.messages;
+    if (!Array.isArray(msgs) || !msgs.length) throw new HttpError(400, 'messages[] is required');
+    if (msgs.length > 16) throw new HttpError(400, 'too many messages (max 16)');
+    let chars = 0;
+    const messages = msgs.map((m) => {
+      if (!m || !CHAT_ROLES.has(m.role) || typeof m.content !== 'string') throw new HttpError(400, 'each message needs role system|user|assistant and string content');
+      chars += m.content.length;
+      return { role: m.role, content: m.content };
+    });
+    if (chars > 24000) throw new HttpError(413, 'messages too long (max 24000 chars)');
+    const out = { model: llmModel, messages, stream: body.stream === true };
+    for (const k of ['temperature', 'top_p', 'seed']) if (typeof body[k] === 'number' && Number.isFinite(body[k])) out[k] = body[k];
+    const mt = Math.floor(Number(body.max_tokens));
+    out.max_tokens = Math.min(maxTokens, mt > 0 ? mt : CANONICAL.max_tokens);
+    return out;
+  }
+
+  /** Optional operator token (KNOWBOT_DASHBOARD_TOKEN) for endpoints that expose other users' conversations. */
+  function requireReader(req, url) {
+    if (!readToken) return;
+    const auth = String(req.headers.authorization || '');
+    const got = Buffer.from(url.searchParams.get('token') || (auth.startsWith('Bearer ') ? auth.slice(7) : ''));
+    const want = Buffer.from(readToken);
+    if (got.length !== want.length || !timingSafeEqual(got, want)) throw new HttpError(401, 'operator token required');
+  }
+
   // ------------------------------------------------------------ helpers
   function send(res, status, body, headers = {}) {
     const data = typeof body === 'string' ? body : JSON.stringify(body);
@@ -243,8 +294,9 @@ export function createKnowBotServer(opts = {}) {
   }
 
   function clientIp(req) {
-    const xf = req.headers['x-forwarded-for'];
-    return (typeof xf === 'string' && xf.split(',')[0].trim()) || req.socket.remoteAddress || 'unknown';
+    // X-Forwarded-For is client-controlled: only honour it behind a trusted proxy, else it bypasses rate limits.
+    const xf = trustProxy ? req.headers['x-forwarded-for'] : null;
+    return (typeof xf === 'string' && xf.split(',').pop().trim()) || req.socket.remoteAddress || 'unknown';
   }
 
   async function llmReachable() {
@@ -314,15 +366,14 @@ export function createKnowBotServer(opts = {}) {
         }
 
         case 'POST /api/reindex': {
+          requireReader(req, url);
           const r = await local.reindex();
           return send(res, 200, { ok: true, ...r });
         }
 
         case 'POST /api/chat': {
           if (rateLimited(clientIp(req))) throw new HttpError(429, 'rate limit exceeded (30/min)');
-          const body = await readJson(req);
-          if (!Array.isArray(body.messages)) throw new HttpError(400, 'messages[] is required');
-          if (!body.model) body.model = llmModel;
+          const body = chatBody(await readJson(req));
           const ac = new AbortController();
           res.on('close', () => { if (!res.writableFinished) ac.abort(); });
           let up;
@@ -357,6 +408,7 @@ export function createKnowBotServer(opts = {}) {
         }
 
         case 'POST /api/events': {
+          if (rateLimited(clientIp(req), 'events', eventsRateLimit)) throw new HttpError(429, 'rate limit exceeded (events)');
           const body = await readJson(req);
           const list = Array.isArray(body) ? body : [body];
           if (!list.length) return send(res, 200, { ok: true, count: 0 });
@@ -367,6 +419,8 @@ export function createKnowBotServer(opts = {}) {
         }
 
         case 'GET /api/stream': {
+          requireReader(req, url);
+          if (maxSse && clients.size >= maxSse) throw new HttpError(503, 'too many live subscribers');
           res.writeHead(200, {
             'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform',
             connection: 'keep-alive', 'x-accel-buffering': 'no',
@@ -382,6 +436,7 @@ export function createKnowBotServer(opts = {}) {
         }
 
         case 'GET /api/sessions': {
+          requireReader(req, url);
           const list = [...sessions.values()]
             .sort((a, b) => b._last - a._last)
             .map((s) => ({
@@ -392,6 +447,7 @@ export function createKnowBotServer(opts = {}) {
         }
 
         case 'GET /api/events': // convenience: recent buffer
+          requireReader(req, url);
           return send(res, 200, replay);
 
         default:
@@ -413,15 +469,16 @@ export function createKnowBotServer(opts = {}) {
     res.setHeader('access-control-allow-headers', req.headers['access-control-request-headers'] || 'content-type, authorization');
     res.setHeader('access-control-expose-headers', 'content-type');
     const isStream = req.url.startsWith('/api/stream');
-    if (isStream) log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${req.url} SSE open`);
+    const logUrl = req.url.replace(/([?&]token=)[^&]*/g, '$1***').slice(0, 200); // never log the operator token
+    if (isStream) log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${logUrl} SSE open`);
     res.on('finish', () => {
-      log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${req.url.slice(0, 200)} ${res.statusCode} ${Math.round(performance.now() - t0)}ms`);
+      log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${logUrl} ${res.statusCode} ${Math.round(performance.now() - t0)}ms`);
     });
     try {
       await handle(req, res);
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
-      if (status === 500) log(`[error] ${req.method} ${req.url}: ${e.stack || e}`);
+      if (status === 500) log(`[error] ${req.method} ${logUrl}: ${e.stack || e}`);
       if (!res.headersSent) send(res, status, { error: { status, message: e.message || 'internal error', ...(e.extra || {}) } });
       else { try { res.end(); } catch {} }
     }
