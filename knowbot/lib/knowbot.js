@@ -522,12 +522,13 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
   // Product table rows carry their product name, so they're judged on the row alone; a card's prose may lean on
   // its title. Words like "store" or "item" don't count.
   const q = specificTerms(`${opts.question || ''} ${opts.questionEn || ''}`);
-  if (q.size) picks = picks.filter((n) => { const l = lines[n - 1]; return [...specificTerms(l.row ? l.text : `${l.lead || l.row ? '' : l.title} ${l.text}`)].some((w) => q.has(w)); });
+  const onTopic = (l) => !q.size || [...specificTerms(l.row ? l.text : `${l.lead || l.row ? '' : l.title} ${l.text}`)].some((w) => q.has(w));
+  picks = picks.filter((n) => onTopic(lines[n - 1]));
   if (!picks.length) return none;
-  // A card's headline line is its direct answer: always lead with it when the card is used.
+  // A card's headline line is its direct answer: lead with it when the card is used and the headline itself is on topic.
   for (const si of [...new Set(picks.map((n) => lines[n - 1].source))].reverse()) {
     const lead = lines.find((l) => l.source === si && l.lead);
-    if (lead && !picks.includes(lead.n)) picks.unshift(lead.n);
+    if (lead && !picks.includes(lead.n) && onTopic(lead)) picks.unshift(lead.n);
   }
   const listy = /\b(?:what(?:'s| is| are| comes)? in(?:cluded)?|which|all|every|list|contents?|includes?|in the box)\b/i.test(`${opts.question || ''} ${opts.questionEn || ''}`);
   picks = picks.slice(0, listy ? 10 : 5);
