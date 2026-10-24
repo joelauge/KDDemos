@@ -12,6 +12,7 @@ export const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESC[
 function inline(s, cite) {
   return escapeHtml(s)
     .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s()[\]]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer nofollow">$1</a>')
+    .replace(/\[([^\]\n]{1,200})\]\(mailto:([\w.+-]+@[\w-]+(?:\.[\w-]+)+)\)/g, '<a href="mailto:$2">$1</a>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
