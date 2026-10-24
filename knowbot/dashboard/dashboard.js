@@ -261,7 +261,7 @@ async function requestCanonical(sessionId, turnId, question, opts = {}) {
 }
 async function postCanonical(body) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 90000);
+  const timer = setTimeout(() => ctl.abort(), 180000); // CPU inference can be slow
   try {
     const r = await fetch(`${S.apiBase}/api/canonical`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal,

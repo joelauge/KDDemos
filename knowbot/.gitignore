@@ -1,1 +1,11 @@
+# Model weights / runtime (normally live in $HOME/.cache/knowbot, outside the repo)
+*.gguf
+*.gguf.part
+*.sha256-ok
+models/
+llama.cpp/
+# Logs / pid files
+*.log
+*.pid
+# Server runtime data (events.jsonl etc.)
 server/data/
