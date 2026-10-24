@@ -282,19 +282,21 @@ test('select mode: the model only names lines; KnowBot quotes them with citation
     S(2, { filename: 'catalog/products/screen.md', title: 'Screen', text: '# Screen\n| Variant | Price | Available |\n|---|---|---|\n| Red | $139.99 | no |\n| Brown | $139.99 | yes |' })];
   const lines = candidateLines(src);
   assert.deepEqual(lines.map((l) => l.text), ['Returns are accepted within 30 days of receipt.', 'After 30 days a return is not accepted.',
-    'Sale items and gift cards cannot be returned.', 'Variant: Red; Price: $139.99; Available: no', 'Variant: Brown; Price: $139.99; Available: yes']);
+    'Sale items and gift cards cannot be returned.', 'Screen: Variant: Red; Price: $139.99; Available: no', 'Screen: Variant: Brown; Price: $139.99; Available: yes']);
   const msgs = buildSelectMessages('Can I return after 5 weeks?', lines, { org: 'Acme' });
   assert.match(msgs.at(-1).content, /^LINES:\nL1 Returns are accepted/);
   const a = finalizeSelection('L2, L1', lines, src, { question: 'Can I return after 5 weeks?' });
   assert.equal(a.text, '- After 30 days a return is not accepted. [1]\n- Returns are accepted within 30 days of receipt. [1]');
   assert.deepEqual(a.citations.map((c) => c.filename), ['canonical/returns.md']);
   const red = finalizeSelection('L4', lines, src);
-  assert.equal(red.text, 'Variant: Red; Price: $139.99; Available: no. [1]'); assert.equal(red.citations[0].filename, 'catalog/products/screen.md');
+  assert.equal(red.text, 'Screen: Variant: Red; Price: $139.99; Available: no. [1]'); assert.equal(red.citations[0].filename, 'catalog/products/screen.md');
   for (const raw of ['NONE', 'none of these', '']) {
     const n = finalizeSelection(raw, raw ? lines : [], src, { question: 'weather on Saturday?' });
     assert.equal(n.text, NOT_IN_DATA); assert.equal(n.refused, true); assert.deepEqual(n.citations, []);
   }
   assert.equal(finalizeSelection('L99', lines, src, { question: 'opening hours on Saturday' }).text, NOT_IN_DATA, 'invalid picks never invent text');
+  assert.equal(finalizeSelection('L5', lines, src, { question: 'Can I return my order after 5 weeks?' }).text, NOT_IN_DATA, 'an off-topic pick is dropped');
+  assert.match(finalizeSelection('L4', lines, src, { question: 'Is the red screen available?' }).text, /Red/, 'table rows carry the product name, so stock picks stay on topic');
 
   const bot = new KnowBot({ telemetry: false, retriever: { type: 'custom', search: async () => src },
     engine: { type: 'stub', complete: async (m, o) => { assert.equal(o.settings.max_tokens, 24); return 'L3'; } } });

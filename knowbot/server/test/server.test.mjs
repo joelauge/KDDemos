@@ -222,16 +222,17 @@ describe('retrievers (unit)', () => {
     try {
       const r = new KnowDriveRetriever({ baseUrl: `http://127.0.0.1:${port}`, apiKey: 'k', store: 's', local, minSimilarity: 0.745 });
       const on = await r.search('how do returns work', 4);
-      assert.deepEqual(calls.map((c) => c.mode).sort(), ['hybrid', 'vector']);
+      assert.deepEqual(calls.map((c) => c.mode).sort(), ['hybrid', 'vector', 'vector']);
+      assert.equal(calls.filter((c) => c.filter.all_of.includes('kind:canonical')).length, 1, 'one card-only query');
       assert.ok(calls.every((c) => c.filter?.all_of?.[0] === 'knowbot:ugm'), 'both queries stay in the tag window');
       assert.deepEqual(on.results.map((x) => x.filename), ['canonical/returns.md', 'policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
       vectorTop = 0.70;
       const off = await r.search('weather this weekend', 4);
       assert.equal(off.results.length, 0, 'below the floor => no sources => refusal');
       assert.equal(off.floor.top, 0.70);
-      vectorTop = 0.76; // above the floor but below floor + canonical margin: card not promoted
+      vectorTop = 0.74; // just under the floor, but an answer card within the margin keeps the question in scope
       const mid = await r.search('returns', 4);
-      assert.equal(mid.results[0].filename, 'policies/refund-policy.md');
+      assert.equal(mid.results[0].filename, 'canonical/returns.md');
     } finally { await close(srv); }
   });
 

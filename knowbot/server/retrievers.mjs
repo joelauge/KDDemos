@@ -326,7 +326,7 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = 0.03, exclude = [] }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, exclude = [] }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0;
@@ -340,11 +340,11 @@ export class KnowDriveRetriever {
 
   get name() { return 'knowdrive'; }
 
-  async query(query, k, mode) {
+  async query(query, k, mode, extraAllOf = []) {
     const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
-      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.allOf.length || this.exclude.length ? { filter: { ...(this.allOf.length ? { all_of: this.allOf } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
+      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.allOf.length || this.exclude.length || extraAllOf.length ? { filter: { ...(this.allOf.length || extraAllOf.length ? { all_of: [...this.allOf, ...extraAllOf] } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -358,16 +358,23 @@ export class KnowDriveRetriever {
       // Hybrid ranks; a parallel vector query supplies an absolute similarity (hybrid scores are rank fusion and
       // ignore max_distance), used for the relevance floor and to surface canonical answer cards first.
       const floor = this.minSimilarity > 0;
-      const [hybrid, vector] = await Promise.all([this.query(query, k, 'hybrid'), floor ? this.query(query, 5, 'vector') : []]);
+      // A third, card-only query: there are few answer cards, so the right one ranks well there even when
+      // general hybrid results would crowd it out.
+      const wantCards = floor && !this.exclude.includes('kind:canonical');
+      const [hybrid, vector, cardHits] = await Promise.all([this.query(query, k, 'hybrid'), floor ? this.query(query, 5, 'vector') : [],
+        wantCards ? this.query(query, 3, 'vector', ['kind:canonical']) : []]);
       await this.local?.ready; // title/url lookups need the local frontmatter index
       // defense in depth: when a prefix is configured, only hits under it (tag window is the primary guard)
       const results = hybrid.map((d) => this.mapResult(d)).filter((r) => r && r.text);
       results.sort((a, b) => b.score - a.score);
       if (!floor) return { source: 'knowdrive', results };
       const near = vector.map((d) => this.mapResult(d)).filter((r) => r && r.text);
+      // Similarities on this embedding sit in a narrow band (~0.70–0.88), so an answer card close to the floor
+      // still counts: a card that clears floor + canonicalMargin (default −0.01) keeps the question in scope.
+      const cards = [...cardHits.map((d) => this.mapResult(d)), ...near].filter((r, i, a) => r && r.text && r.filename.startsWith('canonical/')
+        && r.score >= this.minSimilarity + this.canonicalMargin && a.findIndex((x) => x && x.filename === r.filename) === i);
       const top = near.reduce((m, r) => Math.max(m, r.score), 0);
-      if (top < this.minSimilarity) return { source: 'knowdrive', results: [], floor: { top, min: this.minSimilarity } };
-      const cards = near.filter((r) => r.filename.startsWith('canonical/') && r.score >= this.minSimilarity + this.canonicalMargin);
+      if (top < this.minSimilarity && !cards.length) return { source: 'knowdrive', results: [], floor: { top, min: this.minSimilarity } };
       const merged = [...cards, ...results.filter((r) => !cards.some((c) => c.filename === r.filename))].slice(0, k);
       return { source: 'knowdrive', results: merged, floor: { top, min: this.minSimilarity, canonical: cards.map((c) => c.filename) } };
     } catch (e) {

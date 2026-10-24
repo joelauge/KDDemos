@@ -463,7 +463,7 @@ export function candidateLines(sources = [], { max = 45, perSource = 12, budget 
         const tbl = [];
         while (i < raw.length && /^\s*\|.*\|\s*$/.test(raw[i])) tbl.push(raw[i++]);
         i--;
-        if (tbl.length > 2) lines.push(...tableLines(tbl));
+        if (tbl.length > 2) lines.push(...tableLines(tbl).map((r) => (s.title ? `${String(s.title).split(' - ')[0].trim()}: ${r}` : r)));
         continue;
       }
       const l = raw[i].replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').replace(/\*\*/g, '').trim();
@@ -472,7 +472,7 @@ export function candidateLines(sources = [], { max = 45, perSource = 12, budget 
     }
     for (const text of lines.slice(0, perSource)) {
       if (out.length >= max || used + text.length > budget) return;
-      out.push({ n: out.length + 1, source: si, text: clip(text, 320) });
+      out.push({ n: out.length + 1, source: si, text: clip(text, 320), title: String(s.title || '') });
       used += text.length;
     }
   });
@@ -506,6 +506,10 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
     fallback = true;
     if (!picks.length) return none;
   }
+  // A pick must be on topic: share a real word with the question (the line's source title counts).
+  const q = terms(opts.question || '');
+  if (q.size) picks = picks.filter((n) => [...terms(`${lines[n - 1].title || ''} ${lines[n - 1].text}`)].some((w) => q.has(w)));
+  if (!picks.length) return none;
   picks = picks.slice(0, 5);
   const citations = [], idx = new Map();
   const cite = (si) => {
@@ -533,10 +537,18 @@ export async function answerFromSources({ question, results = [], complete, pers
     const raw = await complete(buildMessages(question, relevant, persona, history, { budget }), { onToken, onProgress, signal, settings });
     return { fin: finalizeAnswer(raw, relevant, { minScore, persona, question, coverage }), generated: true };
   }
-  const lines = candidateLines(relevant);
-  if (!lines.length) return { fin: finalizeSelection('', [], relevant), generated: false };
-  const raw = await complete(buildSelectMessages(question, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
-  return { fin: finalizeSelection(raw, lines, relevant, { question }), generated: true };
+  // Canonical answer cards first; the rest of the knowDrive only when no card line answers the question.
+  const cards = relevant.filter((s) => String(s.filename || '').startsWith('canonical/'));
+  const passes = cards.length && cards.length < relevant.length ? [cards, relevant.filter((s) => !cards.includes(s))] : [relevant];
+  let fin = finalizeSelection('', [], relevant);
+  for (const pool of passes) {
+    const lines = candidateLines(pool);
+    if (!lines.length) continue;
+    const raw = await complete(buildSelectMessages(question, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
+    fin = finalizeSelection(raw, lines, pool, { question });
+    if (!fin.refused) break;
+  }
+  return { fin, generated: true };
 }
 
 /* ---------- surface ---------- */
