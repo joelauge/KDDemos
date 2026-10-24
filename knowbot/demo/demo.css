@@ -1,17 +1,67 @@
-/* Shared chrome for KnowBot demo host pages (not part of the library). */
+/* Shared chrome for KnowBot demo host pages (not part of the library).
+   Light is the default; :root[data-theme="dark"] is the KnowDrive dark theme (set in <head> before paint,
+   toggled by [data-theme-toggle], remembered in localStorage 'knowbot-theme'). */
+:root {
+  color-scheme: light;
+  --d-bg: #f8fafc;
+  --d-surface: #ffffff;
+  --d-line: #e2e8f0;
+  --d-line-2: #cbd5e1;
+  --d-text: #1e293b;
+  --d-head: #0f172a;
+  --d-muted: #475569;
+  --d-accent: #6366f1;
+  --d-accent-text: #4f46e5;
+  --d-bar-bg: #eef2f7;
+  --d-bar-text: #475569;
+  --d-bar-flag: #b45309;
+  --d-ok: #047857;
+  --d-down: #b91c1c;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --d-bg: #020617;
+  --d-surface: #0b1224;
+  --d-line: rgba(255, 255, 255, 0.08);
+  --d-line-2: rgba(255, 255, 255, 0.14);
+  --d-text: #cbd5e1;
+  --d-head: #f8fafc;
+  --d-muted: #94a3b8;
+  --d-accent: #6366f1;
+  --d-accent-text: #818cf8;
+  --d-bar-bg: #0b1224;
+  --d-bar-text: #94a3b8;
+  --d-bar-flag: #fbbf24;
+  --d-ok: #86efac;
+  --d-down: #fca5a5;
+}
 *, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; background: #020617; color: #cbd5e1; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+html { background: var(--d-bg); }
+body { margin: 0; background: var(--d-bg); color: var(--d-text); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 a { color: inherit; text-decoration: none; }
+:focus-visible { outline: 2px solid var(--d-accent-text); outline-offset: 2px; }
 .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
-.display { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #f8fafc; letter-spacing: -0.5px; }
+.display { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: var(--d-head); letter-spacing: -0.5px; }
 .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-.kicker { color: #818cf8; font-size: 12px; letter-spacing: 2.5px; text-transform: uppercase; }
+.kicker { color: var(--d-accent-text); font-size: 12px; letter-spacing: 2.5px; text-transform: uppercase; }
 .demo-bar {
-  background: #0b1224; border-bottom: 1px solid rgba(255,255,255,0.08); font: 12px/1.5 'JetBrains Mono', ui-monospace, monospace; color: #94a3b8;
+  background: var(--d-bar-bg); border-bottom: 1px solid var(--d-line); font: 12px/1.5 'JetBrains Mono', ui-monospace, monospace; color: var(--d-bar-text);
 }
 .demo-bar .wrap { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; justify-content: space-between; padding-top: 8px; padding-bottom: 8px; }
-.demo-bar b { color: #fbbf24; font-weight: 500; }
-.demo-bar a { color: #818cf8; }
-[data-api-status][data-state='ok'] { color: #86efac; }
-[data-api-status][data-state='down'] { color: #fca5a5; }
+.demo-bar b { color: var(--d-bar-flag); font-weight: 500; }
+.demo-bar a { color: var(--d-accent-text); }
+.demo-bar-end { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+[data-api-status][data-state='ok'] { color: var(--d-ok); }
+[data-api-status][data-state='down'] { color: var(--d-down); }
+
+/* theme toggle (sun/moon) */
+.theme-btn {
+  width: 28px; height: 28px; padding: 0; flex: none; display: inline-grid; place-items: center; cursor: pointer;
+  border-radius: 8px; border: 1px solid var(--d-line-2); background: var(--d-surface); color: var(--d-muted);
+}
+.theme-btn:hover { color: var(--d-head); border-color: var(--d-accent-text); }
+.theme-btn svg { width: 15px; height: 15px; display: block; }
+.theme-btn .i-sun { display: none; }
+:root[data-theme="dark"] .theme-btn .i-sun { display: block; }
+:root[data-theme="dark"] .theme-btn .i-moon { display: none; }
 @media (max-width: 720px) { .wrap { padding: 0 16px; } }

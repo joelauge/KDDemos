@@ -485,8 +485,8 @@ function sparkline(buckets) {
   const w = 76, hgt = 26;
   const pts = buckets.map((v, i) => `${(i / (buckets.length - 1)) * w},${hgt - 2 - (v / max) * (hgt - 4)}`).join(' ');
   const svg = svgEl('svg', { class: 'spark', viewBox: `0 0 ${w} ${hgt}`, 'aria-hidden': 'true' });
-  svg.append(svgEl('polyline', { points: `0,${hgt} ${pts} ${w},${hgt}`, fill: 'rgba(129,140,248,0.14)', stroke: 'none' }));
-  svg.append(svgEl('polyline', { points: pts, fill: 'none', stroke: '#818cf8', 'stroke-width': '1.5', 'stroke-linejoin': 'round' }));
+  svg.append(svgEl('polyline', { points: `0,${hgt} ${pts} ${w},${hgt}`, stroke: 'none', style: 'fill: var(--accent-soft)' }));
+  svg.append(svgEl('polyline', { points: pts, fill: 'none', style: 'stroke: var(--accent-2)', 'stroke-width': '1.5', 'stroke-linejoin': 'round' }));
   return svg;
 }
 function renderKpis() {
@@ -656,8 +656,8 @@ function latencyView(l) {
   return h('span', { class: 'lat', title: `retrieval ${fmtMs(l.retrieval)} · generation ${fmtMs(l.generation)} · total ${fmtMs(l.total)}` },
     h('span', { class: 'lat-bar', 'aria-hidden': 'true' }, h('span', { class: 'r', style: { width: `${(r / tot) * 100}%` } }), h('span', { class: 'g', style: { width: `${(g / tot) * 100}%` } })),
     h('span', { class: 'lat-legend' }, fmtMs(l.total),
-      h('i', { style: { background: '#22d3ee' } }), `ret ${fmtMs(l.retrieval)}`,
-      h('i', { style: { background: '#818cf8' } }), `gen ${fmtMs(l.generation)}`));
+      h('i', { style: { background: 'var(--lat-r)' } }), `ret ${fmtMs(l.retrieval)}`,
+      h('i', { style: { background: 'var(--accent-2)' } }), `gen ${fmtMs(l.generation)}`));
 }
 function answerBadges(a) {
   if (a.refused) return h('span', { class: 'badge badge-bad' }, 'refused · not in knowDrive');
@@ -744,8 +744,8 @@ function turnView(s, t, i) {
 function overlapRing(j) {
   const svg = svgEl('svg', { class: 'overlap-ring', viewBox: '0 0 36 36', 'aria-hidden': 'true' });
   const C = 2 * Math.PI * 15;
-  svg.append(svgEl('circle', { cx: 18, cy: 18, r: 15, fill: 'none', stroke: '#101a33', 'stroke-width': 5 }));
-  svg.append(svgEl('circle', { cx: 18, cy: 18, r: 15, fill: 'none', stroke: j >= 0.5 ? '#34d399' : '#fbbf24', 'stroke-width': 5, 'stroke-linecap': 'round', 'stroke-dasharray': `${C * j} ${C}`, transform: 'rotate(-90 18 18)' }));
+  svg.append(svgEl('circle', { cx: 18, cy: 18, r: 15, fill: 'none', style: 'stroke: var(--raise)', 'stroke-width': 5 }));
+  svg.append(svgEl('circle', { cx: 18, cy: 18, r: 15, fill: 'none', style: `stroke: var(${j >= 0.5 ? '--good' : '--warn'})`, 'stroke-width': 5, 'stroke-linecap': 'round', 'stroke-dasharray': `${C * j} ${C}`, transform: 'rotate(-90 18 18)' }));
   return svg;
 }
 function filesList(a, other, shared) {
@@ -785,8 +785,8 @@ function canonView(t, cs) {
       answerBody(c, { sources: true }),
       filesList(c, 'canonically', shared)));
   box.append(head, cols, h('div', { class: 'canon-foot' },
-    h('span', null, h('i', { class: 'legend-sq', style: { background: '#34d399' } }), 'cited by both'),
-    h('span', null, h('i', { class: 'legend-sq', style: { background: '#fbbf24' } }), 'cited by one side'),
+    h('span', null, h('i', { class: 'legend-sq', style: { background: 'var(--good)' } }), 'cited by both'),
+    h('span', null, h('i', { class: 'legend-sq', style: { background: 'var(--warn)' } }), 'cited by one side'),
     c.latencyMs ? h('span', null, `canonical ${fmtMs(c.latencyMs.total)}`) : null,
     engineLabel(c.engine) ? h('span', null, engineLabel(c.engine)) : null,
     h('span', null, 'match = same grounded/refused outcome and overlap ≥ 0.5')));
@@ -958,6 +958,22 @@ function syncSimBtn() {
   b.querySelector('.sim-label').textContent = on ? 'Simulating — stop' : 'Simulate traffic';
 }
 
+/* ------------------------------------------------------------------ theme */
+// Light by default; the <head> script already applied the saved choice before first paint.
+function syncThemeBtn() {
+  const b = $('#theme-btn');
+  if (!b) return;
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+  b.setAttribute('aria-label', label); b.title = label;
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('knowbot-theme', next); } catch { /* storage blocked: theme lasts this page view */ }
+  syncThemeBtn();
+}
+
 /* ------------------------------------------------------------------ keyboard */
 function onSessionsKey(ev) {
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) return;
@@ -973,6 +989,8 @@ function onSessionsKey(ev) {
 async function boot() {
   $('#conn').addEventListener('click', () => { attempts = 0; connect(); });
   $('#sim-btn').addEventListener('click', toggleSim);
+  $('#theme-btn')?.addEventListener('click', toggleTheme);
+  syncThemeBtn();
   $('#sim-btn-hero').addEventListener('click', toggleSim);
   $('#ask-form').addEventListener('submit', onAsk);
   $('#ask-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#ask-form').requestSubmit(); } });

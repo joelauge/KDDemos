@@ -46,3 +46,20 @@ export async function showApiStatus(el = document.querySelector('[data-api-statu
     return null;
   }
 }
+
+/** Light/dark toggle for [data-theme-toggle] buttons. The <head> script applies the saved theme before paint. */
+export function wireThemeToggle(root = document) {
+  const sync = () => {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+    root.querySelectorAll('[data-theme-toggle]').forEach((b) => { b.setAttribute('aria-label', label); b.title = label; });
+  };
+  root.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', () => {
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('knowbot-theme', next); } catch { /* storage blocked: lasts this page view */ }
+    sync();
+  }));
+  sync();
+}
+wireThemeToggle();

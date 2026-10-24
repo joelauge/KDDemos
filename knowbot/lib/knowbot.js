@@ -265,6 +265,8 @@ const GUARDS = [
     text: (org) => `I can't share customer or order details. The knowDrive I work from holds ${org}'s catalog, policies, pages and articles, not personal records.` },
   { kind: 'action', re: /\b(?:issue|process|give|send|approve)\b.{0,25}\brefund\b|\brefund\b.{0,20}\border\s*#?\s*\d{2,}|\b(?:from|at|with)\s+(?:ugm|the store|support|customer service)\b[^.?!]{0,20}\b(?:here|team|speaking)\b/i,
     text: (org) => `I can't make changes or process refunds. I'm a read-only assistant for ${org}'s knowDrive. I can tell you what the current catalog, prices and policies say, with sources.` },
+  { kind: 'analytics', re: /\b(?:how many|number of|total|count of)\b.{0,30}\b(?:orders|sales|revenue|visitors|sessions|customers)\b.{0,40}\b(?:did we|have we|we (?:got|had|made)|last|this|per|today|yesterday|month|week|year)\b|\b(?:revenue|sales figures|conversion rate|aov|average order value|traffic)\b.{0,40}\b(?:last|this|per|month|week|year|today)\b/i,
+    text: () => NOT_IN_DATA },
   { kind: 'platform', re: /\bhow (?:do|can|should|would) (?:i|we)\b.{0,40}\b(?:set ?up|configure|install|connect|enable|turn on|add)\b.{0,40}\b(?:shopify|payments?|my (?:store|shop)|theme|domain|app|checkout)\b/i,
     text: () => NOT_IN_DATA },
   { kind: 'action', re: /^\s*(?:please\s+)?(?:can you\s+|could you\s+)?(?:change|set|update|edit|delete|remove|cancel|refund|issue|apply|create|generate|make)\b.{0,60}\b(?:price|order|inventory|stock|discount|coupon|promo|code|refund)\b|\b(?:give|send|issue) me\b.{0,30}\b(?:discount|coupon|promo)?\s*codes?\b|\band confirm (?:when|once) (?:done|it'?s done)\b/i,

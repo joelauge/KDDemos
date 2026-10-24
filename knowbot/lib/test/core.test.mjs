@@ -312,6 +312,8 @@ test('judge fixes: third-party/refund/platform guards, do-you-sell and contact r
     ['How do I set up Shopify Payments on my store?', 'platform'],
   ]) assert.equal(guardRequest(q)?.guard, kind, q);
   assert.equal(guardRequest('How do I set up Shopify Payments on my store?').text, NOT_IN_DATA);
+  assert.equal(guardRequest('How many orders did we get last month and what was total revenue?')?.text, NOT_IN_DATA, 'store analytics are not in the knowDrive');
+  for (const q of ['How many items are in the Ultimate Bundle?', 'How many days do I have to return an order?']) assert.equal(guardRequest(q), null, q);
   for (const q of ['How do I set up the screen in landscape?', 'Can I get a refund on a sale item?', 'Do you ship to my friend in Canada?'])
     assert.equal(guardRequest(q), null, q);
 

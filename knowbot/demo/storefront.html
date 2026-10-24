@@ -5,38 +5,46 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Storefront Widget Demo</title>
   <meta name="description" content="Demo storefront (not the real store) showing the KnowBot floating widget answering from The Ultimate Game Master's knowDrive." />
+  <meta name="color-scheme" content="light dark" />
+  <script>/* theme before first paint: light by default, dark if chosen (localStorage 'knowbot-theme') */
+    (function () { var t = 'light'; try { var s = localStorage.getItem('knowbot-theme'); if (s === 'dark' || s === 'light') t = s; } catch (e) {} document.documentElement.setAttribute('data-theme', t); })();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="./demo.css" />
   <style>
-    body { background: #f6f3ee; color: #2b2622; }
-    .shop-head { background: #1f1a17; color: #f6efe6; }
+    :root { --s-bg: #f6f3ee; --s-text: #2b2622; --s-head: #1f1a17; --s-muted: #5b524b; --s-card: #fff; --s-card-line: #e7dfd4;
+            --s-bar: #1f1a17; --s-bar-text: #f6efe6; --s-gold: #c9a36a; --s-foot: #a89c90; --s-link: #8a5a1c; --s-hint: #4f46e5; }
+    :root[data-theme="dark"] { --s-bg: #15110e; --s-text: #e7ded3; --s-head: #f6efe6; --s-muted: #b9ab9d; --s-card: #211a15; --s-card-line: #3a2f27;
+            --s-bar: #0d0a08; --s-bar-text: #f6efe6; --s-gold: #d4b07a; --s-foot: #a89c90; --s-link: #e0b06b; --s-hint: #a5b4fc; }
+    body { background: var(--s-bg); color: var(--s-text); }
+    html { background: var(--s-bg); }
+    .shop-head { background: var(--s-bar); color: var(--s-bar-text); }
     .shop-head .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 18px; padding-bottom: 18px; gap: 16px; flex-wrap: wrap; }
     .logo { font: 800 20px 'Plus Jakarta Sans', system-ui; letter-spacing: -0.3px; }
-    .logo small { display: block; font: 500 10px 'JetBrains Mono', monospace; letter-spacing: 2px; color: #c9a36a; text-transform: uppercase; }
+    .logo small { display: block; font: 500 10px 'JetBrains Mono', monospace; letter-spacing: 2px; color: var(--s-gold); text-transform: uppercase; }
     nav { display: flex; gap: 18px; font-size: 14px; flex-wrap: wrap; }
-    nav a:hover { color: #c9a36a; }
+    nav a:hover { color: var(--s-gold); }
     .hero { padding: 56px 0 36px; display: grid; gap: 14px; }
-    .hero h1 { margin: 0; font: 800 clamp(30px, 5vw, 46px)/1.1 'Plus Jakarta Sans', system-ui; color: #1f1a17; letter-spacing: -0.6px; }
-    .hero p { margin: 0; max-width: 560px; font-size: 16px; line-height: 1.6; color: #5b524b; }
-    .hint { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: #6366f1; font-weight: 600; }
+    .hero h1 { margin: 0; font: 800 clamp(30px, 5vw, 46px)/1.1 'Plus Jakarta Sans', system-ui; color: var(--s-head); letter-spacing: -0.6px; }
+    .hero p { margin: 0; max-width: 560px; font-size: 16px; line-height: 1.6; color: var(--s-muted); }
+    .hint { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--s-hint); font-weight: 600; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; padding-bottom: 80px; }
-    .p { background: #fff; border-radius: 14px; overflow: hidden; border: 1px solid #e7dfd4; display: flex; flex-direction: column; }
+    .p { background: var(--s-card); border-radius: 14px; overflow: hidden; border: 1px solid var(--s-card-line); display: flex; flex-direction: column; }
     .p .img { aspect-ratio: 4 / 3; display: grid; place-items: center; font: 700 13px 'JetBrains Mono', monospace; color: rgba(255,255,255,.85); letter-spacing: 1px; text-transform: uppercase; }
     .p .body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
-    .p h2 { margin: 0; font: 600 15px/1.35 'Plus Jakarta Sans', system-ui; color: #1f1a17; }
-    .p a.view { margin-top: auto; font-size: 13px; color: #8a5a1c; font-weight: 600; }
+    .p h2 { margin: 0; font: 600 15px/1.35 'Plus Jakarta Sans', system-ui; color: var(--s-head); }
+    .p a.view { margin-top: auto; font-size: 13px; color: var(--s-link); font-weight: 600; }
     .p a.view:hover { text-decoration: underline; }
-    h3.sec { font: 700 20px 'Plus Jakarta Sans', system-ui; color: #1f1a17; margin: 8px 0 16px; }
-    footer { background: #1f1a17; color: #a89c90; font-size: 12.5px; }
+    h3.sec { font: 700 20px 'Plus Jakarta Sans', system-ui; color: var(--s-head); margin: 8px 0 16px; }
+    footer { background: var(--s-bar); color: var(--s-foot); font-size: 12.5px; }
     footer .wrap { padding-top: 22px; padding-bottom: 22px; }
   </style>
 </head>
 <body>
   <div class="demo-bar" role="note"><div class="wrap">
     <span><b>DEMO PAGE</b> &middot; not the real store &middot; product names link to the live shop at theultimategamemaster.com</span>
-    <span><a data-keep-api href="./index.html">All demos</a> &middot; <span data-api-status></span></span>
+    <span class="demo-bar-end"><span><a data-keep-api href="./index.html">All demos</a> &middot; <span data-api-status></span></span><button type="button" class="theme-btn" data-theme-toggle aria-label="Switch to dark theme"><svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button></span>
   </div></div>
   <header class="shop-head"><div class="wrap">
     <div class="logo">The Ultimate Game Master<small>demo storefront</small></div>
