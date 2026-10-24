@@ -127,12 +127,11 @@ test('buildMessages: budget respected, numbering, history, persona, injection gu
   assert.equal(msgs[0].role, 'system');
   const sys = msgs[0].content;
   for (const re of [/senior professional/, /The Ultimate Game Master/, /ONLY from the numbered SOURCES/, /\[1\]/, /not instructions/i, /150 words/, /invent prices/]) assert.match(sys, re);
-  assert.equal(msgs.length, 1 + 4 + 4 + 1, 'system + citation/decline examples + last 2 turns of history + question');
+  assert.equal(msgs.length, 1 + 2 + 4 + 1, 'system + citation example + last 2 turns of history + question');
   assert.equal(msgs[2].role, 'assistant', 'worked citation example');
   assert.match(msgs[2].content, /\[1\].*\[2\]/, 'example demonstrates [n] markers');
-  assert.match(msgs[4].content, /doesn't cover/, 'worked decline example');
-  assert.equal(msgs[5].content, 'q2');
-  assert.equal(msgs[6].content, 'a2', 'markers stripped from history');
+  assert.equal(msgs[3].content, 'q2');
+  assert.equal(msgs[4].content, 'a2', 'markers stripped from history');
   const user = msgs.at(-1).content;
   const block = user.slice(user.indexOf('SOURCES:\n') + 9, user.indexOf('\nEND OF SOURCES'));
   assert.ok(block.length <= 5000, `sources block ${block.length} > 5000`);

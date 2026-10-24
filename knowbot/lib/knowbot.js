@@ -221,8 +221,6 @@ Rules:
 const CITE_EXAMPLE = [
   { role: 'user', content: 'SOURCES:\n[1] Gift Card (catalog/products/gift-card.md)\nGift cards come in $25, $50 and $100 values and never expire.\n\n[2] Contact (policies/contact.md)\nQuestions about a gift card? Email the team.\nEND OF SOURCES\n\nQuestion: Do gift cards expire, and who do I ask about one?' },
   { role: 'assistant', content: 'No, gift cards never expire [1]. They come in $25, $50 and $100 values [1]. For questions about a card, email the team [2].' },
-  { role: 'user', content: 'SOURCES:\n[1] Gift Card (catalog/products/gift-card.md)\nGift cards come in $25, $50 and $100 values and never expire.\nEND OF SOURCES\n\nQuestion: What time does your shop open on Saturdays?' },
-  { role: 'assistant', content: "The knowDrive doesn't cover opening hours. I can help with gift cards, which come in $25, $50 and $100 values [1]." },
 ];
 const CITE_REMINDER = `Answer using only the SOURCES. Include every relevant price, option and condition. After each fact, write its source number in brackets, e.g. [1]. If the SOURCES don't answer the question, say the knowDrive doesn't cover it; never answer from general knowledge. If two sources state different values for the same thing, say they differ and cite both.`;
 

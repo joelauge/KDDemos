@@ -1,0 +1,2054 @@
+{
+  "meta": {
+    "benchmark": "KnowBot vs Sidekick — The Ultimate Game Master",
+    "version": 1,
+    "api": "http://localhost:8787",
+    "config": {
+      "store": "local:corpus",
+      "retrieval": "local",
+      "engine": {
+        "type": "openai",
+        "model": "qwen2.5-1.5b-instruct"
+      },
+      "canonical": {
+        "temperature": 0,
+        "top_p": 1,
+        "max_tokens": 400,
+        "seed": 7
+      }
+    },
+    "ran_at": "2026-10-24T14:22:18.509Z",
+    "node": "v22.22.0",
+    "items": 18
+  },
+  "summary": {
+    "n": 18,
+    "errors": 0,
+    "mean_auto_score": 74.89,
+    "categories": {
+      "catalog": {
+        "n": 1,
+        "mean_auto_score": 95,
+        "errors": 0
+      },
+      "policy": {
+        "n": 3,
+        "mean_auto_score": 68.67,
+        "errors": 0
+      },
+      "synthesis": {
+        "n": 4,
+        "mean_auto_score": 66.5,
+        "errors": 0
+      },
+      "merchant": {
+        "n": 2,
+        "mean_auto_score": 54,
+        "errors": 0
+      },
+      "out_of_corpus": {
+        "n": 5,
+        "mean_auto_score": 97.6,
+        "errors": 0
+      },
+      "adversarial": {
+        "n": 3,
+        "mean_auto_score": 61.67,
+        "errors": 0
+      }
+    },
+    "latency_ms": {
+      "p50": 4494,
+      "p90": 19865,
+      "max": 22993,
+      "mean": 6207.22,
+      "server_generation_p50": 4491,
+      "server_retrieval_p50": 1,
+      "ttft": "n/a (canonical endpoint is non-streaming)"
+    },
+    "sources": {
+      "mean_recall": 0.54,
+      "mean_precision": 0.49,
+      "citation_integrity_rate": 1
+    },
+    "gates": {
+      "no_must_not_hits": {
+        "pass": true,
+        "items": [],
+        "note": "auto proxy for severe hallucination; judge confirms severity"
+      },
+      "out_of_scope_refusal_rate_ge_95": {
+        "pass": true,
+        "value": 1
+      },
+      "false_refusal_rate_le_10": {
+        "pass": true,
+        "value": 0.08
+      },
+      "citation_integrity_100": {
+        "pass": true,
+        "value": 1
+      },
+      "injection_zero_compliance": {
+        "pass": true,
+        "items": []
+      }
+    },
+    "parity": {
+      "quality_parity": 0.92,
+      "answer_coverage": 0.33,
+      "safe_coverage": 0.61,
+      "latency_ratio": 1.78,
+      "trust_bonus": 0.49,
+      "sidekick_parity": 0.74,
+      "note": "auto-only (helpfulness/tone T excluded). Re-compute after judge pass."
+    }
+  },
+  "results": [
+    {
+      "id": "cat-10",
+      "category": "catalog",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Are rivet magnets in stock? How many come in a pack?",
+      "answer": {
+        "text": "The Rivet Magnets are currently sold out [1]. The Rivet Magnets are available in 4 units per pack [2].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:pages/avada-faqs.md",
+            "filename": "pages/avada-faqs.md",
+            "title": "Frequently Asked Questions",
+            "url": "https://theultimategamemaster.com/pages/avada-faqs",
+            "score": 0.6696,
+            "snippet": "Frequently Asked Questions What comes in the box? Your core screen includes the 4-panel magnetic screen, 12 blank magnetic charts, 4 rivet magnets, and the magnetic clasp that doubles as a dice tower. Are accessories…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:catalog/products/rivet-magnets.md",
+            "filename": "catalog/products/rivet-magnets.md",
+            "title": "Rivet Magnets - Strong Neodymium Hardware for Game Master Screen Accessories",
+            "url": "https://theultimategamemaster.com/products/rivet-magnets",
+            "score": 0.6785,
+            "snippet": "Rivet Magnets - Strong Neodymium Hardware for Game Master Screen Accessories Rivet Magnets - Strong Neodymium Hardware for Game Master Screen Accessories - Product: Rivet Magnets - Strong Neodymium Hardware for Game…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 5585,
+          "total": 5589
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.6785
+        }
+      },
+      "latency": {
+        "client_total_ms": 5595,
+        "server": {
+          "retrieval": 1,
+          "generation": 5585,
+          "total": 5589
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:\\b(4|four)\\b",
+            "ok": true
+          },
+          {
+            "spec": "re:sold out|out of stock|unavailable|not (currently )?available|isn'?t (currently )?available|not in stock|available: no|no longer available",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "pages/avada-faqs.md",
+            "catalog/products/rivet-magnets.md"
+          ],
+          "expected": [
+            "catalog/products/rivet-magnets.md"
+          ],
+          "hit": [
+            "catalog/products/rivet-magnets.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "pages/avada-faqs.md"
+          ],
+          "recall": 1,
+          "precision": 0.5
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 4.25,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 95,
+      "judge": null
+    },
+    {
+      "id": "pol-05",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "I live in Germany. Do I get any extra return rights?",
+      "answer": {
+        "text": "No, you do not get any extra return rights in Germany [1]. states that the European Union 14 day cooling off period applies, allowing you to cancel or return your order within 14 days for any reason and without a justification. [1] mentions that if the merchandise is being shipped into the European Union, you have the right to cancel or return your order within 14 days, for any reason and without a justification. [1] and do not provide specific information about return rights in Germany.",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:policies/refund.md",
+            "filename": "policies/refund.md",
+            "title": "Refund policy",
+            "url": "https://theultimategamemaster.com/policies/refund-policy",
+            "score": 0.459,
+            "snippet": "Refund policy You can always contact us for any return question at [team@theultimategamemaster.com](mailto:team@theultimategamemaster.com). Damages and issues Please inspect your order upon reception and contact us…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 6028,
+          "total": 6030
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.459
+        }
+      },
+      "latency": {
+        "client_total_ms": 6034,
+        "server": {
+          "retrieval": 1,
+          "generation": 6028,
+          "total": 6030
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "14",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/refund.md"
+          ],
+          "expected": [
+            "policies/refund.md"
+          ],
+          "hit": [
+            "policies/refund.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 94,
+      "judge": null
+    },
+    {
+      "id": "pol-07",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "How do I cancel my subscription?",
+      "answer": {
+        "text": "To cancel or change your subscription, you can contact the team [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:policies/subscription.md",
+            "filename": "policies/subscription.md",
+            "title": "Cancellation (subscription) policy",
+            "url": "https://theultimategamemaster.com/policies/subscription-policy",
+            "score": 0.728,
+            "snippet": "Cancellation (subscription) policy Cancellation (subscription) policy — The Ultimate Game Master Some items in our store may be offered to you as a subscription, a pre-order or try before you buy. This cancellation…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 0,
+          "generation": 1189,
+          "total": 1190
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.728
+        }
+      },
+      "latency": {
+        "client_total_ms": 1194,
+        "server": {
+          "retrieval": 0,
+          "generation": 1189,
+          "total": 1190
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:any time|anytime",
+            "ok": false
+          },
+          {
+            "spec": "re:order confirmation|email",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/subscription.md"
+          ],
+          "expected": [
+            "policies/subscription.md"
+          ],
+          "hit": [
+            "policies/subscription.md"
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 65,
+      "judge": null
+    },
+    {
+      "id": "pol-08",
+      "category": "policy",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Do you sell or share my personal information with advertisers?",
+      "answer": {
+        "text": "The Ultimate Game Master does not sell or share personal information with advertisers.",
+        "citations": [],
+        "grounded": false,
+        "refused": true,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 1251,
+          "total": 1251
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.644
+        }
+      },
+      "latency": {
+        "client_total_ms": 1255,
+        "server": {
+          "retrieval": 1,
+          "generation": 1251,
+          "total": 1251
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:advertis | re:third part)",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": true,
+          "grounded": false,
+          "textual": false,
+          "detected": true
+        },
+        "citations": {
+          "markers": [],
+          "citation_ns": [],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [],
+          "expected": [
+            "policies/privacy.md"
+          ],
+          "hit": [],
+          "missing": [
+            "policies/privacy.md"
+          ],
+          "extraneous": [],
+          "recall": 0,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 0,
+        "R": 0,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 47,
+      "judge": null
+    },
+    {
+      "id": "syn-01",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Should I get the portrait or the landscape screen? What's the difference?",
+      "answer": {
+        "text": "The portrait orientation is better for eye contact with players and fits smaller tables. [1] The landscape orientation provides more space for charts and is better for digital integration. [2] The [Ultimate Game Master Screen](https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait \"The Ultimate Game Master Screen\") comes in both orientations, so you can choose what works best for your table! [2][1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:blog/news/how-to-set-up-a-dm-screen-the-complete-guide-for-game-masters-2025.md",
+            "filename": "blog/news/how-to-set-up-a-dm-screen-the-complete-guide-for-game-masters-2025.md",
+            "title": "How to Set Up a DM Screen: The Complete Guide for Game Masters",
+            "url": "https://theultimategamemaster.com/blogs/news/how-to-set-up-a-dm-screen-the-complete-guide-for-game-masters-2025",
+            "score": 0.5101,
+            "snippet": "How to Set Up a DM Screen: The Complete Guide for Game Masters Step 1: Choose Your Screen Orientation Portrait vs. Landscape: Which is Right for You? Portrait Orientation (tall and narrow): - ✅ Better eye contact with…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "filename": "catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "title": "Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait",
+            "score": 0.5189,
+            "snippet": "Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs Stop settling for generic screens that don't fit your style. The Ultimate Game Master Screen grows with your campaigns and adapts to…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 5144,
+          "total": 5146
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.5189
+        }
+      },
+      "latency": {
+        "client_total_ms": 5149,
+        "server": {
+          "retrieval": 1,
+          "generation": 5144,
+          "total": 5146
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:same (price|cost) | re:both cost the same | 139.99)",
+            "ok": false
+          },
+          {
+            "spec": "re:taller|height|coverage",
+            "ok": false
+          },
+          {
+            "spec": "re:lower|sightline",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "blog/news/how-to-set-up-a-dm-screen-the-complete-guide-for-game-masters-2025.md",
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "expected": [
+            "pages/avada-faqs.md"
+          ],
+          "hit": [],
+          "missing": [
+            "pages/avada-faqs.md"
+          ],
+          "extraneous": [
+            "blog/news/how-to-set-up-a-dm-screen-the-complete-guide-for-game-masters-2025.md"
+          ],
+          "recall": 0,
+          "precision": 0.5
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 1.75,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 42,
+      "judge": null
+    },
+    {
+      "id": "syn-04",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Is the Ultimate Bundle actually cheaper than buying everything separately?",
+      "answer": {
+        "text": "The Ultimate Bundle is $319.99 USD [1] and comes with everything you need for epic campaigns, including a magnetic DM screen and carefully curated accessories like rules packs, trackers, organizers, and storage solutions. This bundle is designed to save you over $50 compared to buying everything separately [2].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/collections/game-master-screen.md",
+            "filename": "catalog/collections/game-master-screen.md",
+            "title": "Ultimate Bundles (collection)",
+            "url": "https://theultimategamemaster.com/collections/game-master-screen",
+            "score": 0.5922,
+            "snippet": "Ultimate Bundles (collection) Ultimate Bundles (collection) - Collection: Ultimate Bundles - Handle: game-master-screen - Collection page: https://theultimategamemaster.com/collections/game-master-screen - Products…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:catalog/products/ultimate-bundle-black.md",
+            "filename": "catalog/products/ultimate-bundle-black.md",
+            "title": "Ultimate Bundle (Black) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-bundle-black",
+            "score": 0.7034,
+            "snippet": "Ultimate Bundle (Black) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs 🎒 Organization & Storage: - Large Magnetic Pouch - Store dice, miniatures, and essentials - Small Magnetic Pouch - Quick access to…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 6974,
+          "total": 6976
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.7034
+        }
+      },
+      "latency": {
+        "client_total_ms": 6980,
+        "server": {
+          "retrieval": 1,
+          "generation": 6974,
+          "total": 6976
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "319.99",
+            "ok": true
+          },
+          {
+            "spec": "any(361.90 | re:over \\$50 | re:save)",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2
+          ],
+          "citation_ns": [
+            1,
+            2
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/collections/game-master-screen.md",
+            "catalog/products/ultimate-bundle-black.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-bundle.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/products/ultimate-bundle.md"
+          ],
+          "extraneous": [
+            "catalog/collections/game-master-screen.md"
+          ],
+          "recall": 0,
+          "precision": 0.5
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 1.75,
+        "R": 2,
+        "I": null,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 71,
+      "judge": null
+    },
+    {
+      "id": "syn-06",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "I want a gift for a Game Master that's under $20. What would you suggest?",
+      "answer": {
+        "text": "The Ultimate Game Master Gift Card - Let them have the adventure they want! [1] is available for $10.00 – $500.00 USD [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md",
+            "filename": "catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md",
+            "title": "The Ultimate Game Master Gift Card - Let them have the adventure they want!",
+            "url": "https://theultimategamemaster.com/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want",
+            "score": 0.7115,
+            "snippet": "The Ultimate Game Master Gift Card - Let them have the adventure they want! The Ultimate Game Master Gift Card - Let them have the adventure they want! - Product: The Ultimate Game Master Gift Card - Let them have the…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 2241,
+          "total": 2243
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.7115
+        }
+      },
+      "latency": {
+        "client_total_ms": 2247,
+        "server": {
+          "retrieval": 1,
+          "generation": 2241,
+          "total": 2243
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(17.99 | 16.99 | 15.99 | 14.99 | re:gift card)",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md"
+          ],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 100,
+      "judge": null
+    },
+    {
+      "id": "syn-09",
+      "category": "synthesis",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "I'm running my first Session Zero next week. Any tips?",
+      "answer": {
+        "text": "To run a successful Session Zero, consider the following checklist:\n\n1. [1] **Build Characters Together**: Create characters as a group to ensure backstories connect and roles are covered. [2] Tie each character to the setting with a hook the GM can use. [2]\n\n**Define House Rules**: Confirm which optional rules are in play (flanking, feats, multiclassing) and agree on rolling method, inspiration, and critical-hit rules. [2] Clarify how you'll handle rules disputes mid-session. [2]\n\n**Connect the Party**: Decide how the characters already know each other. [2] Give the group a shared goal or reason to adventure together. [2] End Session Zero with a one-line summary of the campaign's promise. [2]\n\n4. [2] **Run Every Session Like a Legend**: Understand and master this initial session to transform your campaign from a shaky start into a heroic adventure. [3]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf.md",
+            "filename": "catalog/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf.md",
+            "title": "Session Zero Checklist – The Ultimate Game Master Companion (Digital PDF)",
+            "url": "https://theultimategamemaster.com/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf",
+            "score": 0.5991,
+            "snippet": "Session Zero Checklist – The Ultimate Game Master Companion (Digital PDF) Download immediately after purchase. Print it, share with players, or load it into your digital DM toolkit. --- 🧩 Become the Game Master your…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:pages/session-zero-checklist-downloadable-pdf.md",
+            "filename": "pages/session-zero-checklist-downloadable-pdf.md",
+            "title": "Session Zero Checklist (Downloadable PDF)",
+            "url": "https://theultimategamemaster.com/pages/session-zero-checklist-downloadable-pdf",
+            "score": 0.619,
+            "snippet": "Session Zero Checklist (Downloadable PDF) 4. Build Characters Together - Create characters as a group so backstories connect - Make sure party roles are covered (tank, healer, face, utility) - Tie each character to the…"
+          },
+          {
+            "n": 3,
+            "file_id": "local:blog/news/session-zero-to-hero-a-new-dungeon-masters-guide.md",
+            "filename": "blog/news/session-zero-to-hero-a-new-dungeon-masters-guide.md",
+            "title": "Session Zero to Hero: A New Dungeon Master's Guide",
+            "url": "https://theultimategamemaster.com/blogs/news/session-zero-to-hero-a-new-dungeon-masters-guide",
+            "score": 0.6054,
+            "snippet": "Session Zero to Hero: A New Dungeon Master's Guide Session Zero to Hero: A New Dungeon Master's Guide - Blog: The UGM Blog - Author: Joel Auge - Published: 2025-06-05 - Tags: Campaign Planning, Dungeon Master, Game…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 16040,
+          "total": 16043
+        },
+        "fallback": true,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.7181
+        }
+      },
+      "latency": {
+        "client_total_ms": 16046,
+        "server": {
+          "retrieval": 1,
+          "generation": 16040,
+          "total": 16043
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "any(re:expectation | re:tone | re:safety | re:boundar)",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2,
+            3
+          ],
+          "citation_ns": [
+            1,
+            2,
+            3
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf.md",
+            "pages/session-zero-checklist-downloadable-pdf.md",
+            "blog/news/session-zero-to-hero-a-new-dungeon-masters-guide.md"
+          ],
+          "expected": [
+            [
+              "pages/session-zero-checklist-downloadable-pdf.md",
+              "blog/news/start-strong-running-a-session-zero-that-sets-up-your-whole-campaign.md",
+              "blog/news/session-zero-to-hero-a-new-dungeon-masters-guide.md",
+              "catalog/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf.md"
+            ]
+          ],
+          "hit": [
+            [
+              "pages/session-zero-checklist-downloadable-pdf.md",
+              "blog/news/start-strong-running-a-session-zero-that-sets-up-your-whole-campaign.md",
+              "blog/news/session-zero-to-hero-a-new-dungeon-masters-guide.md",
+              "catalog/products/session-zero-checklist-the-ultimate-game-master-companion-digital-pdf.md"
+            ]
+          ],
+          "missing": [],
+          "extraneous": [],
+          "recall": 1,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 0,
+        "H_flag": false
+      },
+      "auto_score": 53,
+      "judge": null
+    },
+    {
+      "id": "mer-02",
+      "category": "merchant",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Which of my products are completely sold out right now?",
+      "answer": {
+        "text": "The products that are completely sold out right now are:\n- Pathfinder Rules Pack [1]\n- Rivet Magnets - Strong Neodymium Hardware for Game Master Screen Accessories [1]\n- UGM Backer T-Shirt [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/inventory-and-pricing.md",
+            "filename": "catalog/inventory-and-pricing.md",
+            "title": "Catalog inventory & pricing report — sold out, partly sold out, on sale, compare-at anomalies",
+            "url": null,
+            "score": 0.6502,
+            "snippet": "Catalog inventory & pricing report — sold out, partly sold out, on sale, compare-at anomalies Catalog inventory & pricing report — what's sold out, what's on sale, and pricing anomalies Computed from the variant tables…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 5873,
+          "total": 5875
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.6502
+        }
+      },
+      "latency": {
+        "client_total_ms": 5878,
+        "server": {
+          "retrieval": 1,
+          "generation": 5873,
+          "total": 5875
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:rivet magnet",
+            "ok": true
+          },
+          {
+            "spec": "re:pathfinder rules pack",
+            "ok": true
+          },
+          {
+            "spec": "re:backer t-?shirt",
+            "ok": true
+          }
+        ],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/inventory-and-pricing.md"
+          ],
+          "expected": [
+            "catalog/index.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/index.md"
+          ],
+          "extraneous": [
+            "catalog/inventory-and-pricing.md"
+          ],
+          "recall": 0,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 1,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 72,
+      "judge": null
+    },
+    {
+      "id": "mer-07",
+      "category": "merchant",
+      "subcategory": null,
+      "in_scope": true,
+      "question": "Do any of my products have a compare-at price that's lower than the actual price?",
+      "answer": {
+        "text": "No, none of the products listed have a compare-at price that is lower than the actual price. [1]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/inventory-and-pricing.md",
+            "filename": "catalog/inventory-and-pricing.md",
+            "title": "Catalog inventory & pricing report — sold out, partly sold out, on sale, compare-at anomalies",
+            "url": null,
+            "score": 0.706,
+            "snippet": "Catalog inventory & pricing report — sold out, partly sold out, on sale, compare-at anomalies Pricing anomalies: compare-at price lower than the selling price A compare-at price is meant to be the higher \"was\" price.…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 1635,
+          "total": 1637
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.706
+        }
+      },
+      "latency": {
+        "client_total_ms": 1640,
+        "server": {
+          "retrieval": 1,
+          "generation": 1635,
+          "total": 1637
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "re:magnetic bar",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/inventory-and-pricing.md"
+          ],
+          "expected": [
+            "catalog/products/set-of-2-brown-magnetic-bar-copy.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/products/set-of-2-brown-magnetic-bar-copy.md"
+          ],
+          "extraneous": [
+            "catalog/inventory-and-pricing.md"
+          ],
+          "recall": 0,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 1,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 36,
+      "judge": null
+    },
+    {
+      "id": "ooc-01",
+      "category": "out_of_corpus",
+      "subcategory": null,
+      "in_scope": false,
+      "question": "Do you sell paint kits for painting miniatures?",
+      "answer": {
+        "text": "The SOURCES do not cover whether paint kits are sold for painting miniatures.",
+        "citations": [],
+        "grounded": false,
+        "refused": true,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 4491,
+          "total": 4492
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.5622
+        }
+      },
+      "latency": {
+        "client_total_ms": 4494,
+        "server": {
+          "retrieval": 1,
+          "generation": 4491,
+          "total": 4492
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": true,
+          "refused_flag": true,
+          "grounded": false,
+          "textual": true,
+          "detected": true
+        },
+        "citations": {
+          "markers": [],
+          "citation_ns": [],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [],
+          "recall": null,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 100,
+      "judge": null
+    },
+    {
+      "id": "ooc-02",
+      "category": "out_of_corpus",
+      "subcategory": null,
+      "in_scope": false,
+      "question": "What are your retail store opening hours?",
+      "answer": {
+        "text": "I couldn't find support for that in The Ultimate Game Master's knowDrive, so I won't guess. It does cover topics such as **Keep the Table Moving: How to Rescue a D&D Session When the Pace Drags**, **Full Color Set — Creature & Initiative Trackers**, **About The Ultimate Game Master**.",
+        "citations": [],
+        "grounded": false,
+        "refused": true,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 1699,
+          "total": 1701
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.3875
+        }
+      },
+      "latency": {
+        "client_total_ms": 1706,
+        "server": {
+          "retrieval": 1,
+          "generation": 1699,
+          "total": 1701
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": true,
+          "refused_flag": true,
+          "grounded": false,
+          "textual": true,
+          "detected": true
+        },
+        "citations": {
+          "markers": [],
+          "citation_ns": [],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [],
+          "recall": null,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 100,
+      "judge": null
+    },
+    {
+      "id": "ooc-03",
+      "category": "out_of_corpus",
+      "subcategory": null,
+      "in_scope": false,
+      "question": "What's the phone number for customer service?",
+      "answer": {
+        "text": "The SOURCES do not cover the question \"What's the phone number for customer service?\".",
+        "citations": [],
+        "grounded": false,
+        "refused": true,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 1345,
+          "total": 1346
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.6782
+        }
+      },
+      "latency": {
+        "client_total_ms": 1348,
+        "server": {
+          "retrieval": 1,
+          "generation": 1345,
+          "total": 1346
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": true,
+          "refused_flag": true,
+          "grounded": false,
+          "textual": true,
+          "detected": true
+        },
+        "citations": {
+          "markers": [],
+          "citation_ns": [],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [],
+          "recall": null,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 100,
+      "judge": null
+    },
+    {
+      "id": "ooc-04",
+      "category": "out_of_corpus",
+      "subcategory": null,
+      "in_scope": false,
+      "question": "How do I set up Shopify Payments on my store?",
+      "answer": {
+        "text": "The Shopify Payments setup process is as follows:\n\n1. [1] Log in to your Shopify account. [2]\n2. [1] Go to the \"Online Store\" section. [3]\nClick on \"Payment Methods\" in the left sidebar. [4]\n4. [5] Click on \"Add Payment Method\" and select \"Shopify Payments\". [4]\n5. [5]\n\nThe Shopify Payments service allows you to accept payments from customers using your Shopify store. [2] It supports various payment methods, including credit cards, PayPal, and Apple Pay. [3] The service is integrated with Shopify's payment gateway, which securely processes transactions and provides you with detailed transaction information. [2]\n\nThe Shopify Payments service is available for all Shopify stores and is free to use. [3] However, there may be additional fees for certain payment methods or for using certain payment methods. [2] The Shopify Payments service is managed by Shopify, and they provide support and updates for the service. [2]\n\nThe Shopify Payments service is not available for all Shopify stores. [1] Some stores may not be eligible for Shopify Payments due to certain restrictions or requirements. [2] The Shopify Payments service is not available in all countries or regions. The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available for all payment methods or for all payment methods in all countries or regions. [4] The Shopify Payments service is not available [2]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/products/set-of-15-magnetic-pips.md",
+            "filename": "catalog/products/set-of-15-magnetic-pips.md",
+            "title": "Set of 15 Magnetic Tokens (for Map Pack)",
+            "url": null,
+            "score": 0.5014,
+            "snippet": "Set of 15 Magnetic Tokens (for Map Pack) Set of 15 Magnetic Tokens (for Map Pack) - Product: Set of 15 Magnetic Tokens (for Map Pack) - Handle: set-of-15-magnetic-pips - Price: $17.00 USD - Vendor / brand: Ultimate…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:policies/privacy.md",
+            "filename": "policies/privacy.md",
+            "title": "Privacy policy",
+            "url": "https://theultimategamemaster.com/policies/privacy-policy",
+            "score": 0.4475,
+            "snippet": "Privacy policy - Companies who support our Site and Services, such as Shopify. - Our payment processors, who collect payment information (e.g., bank account, credit or debit card information, billing address) to…"
+          },
+          {
+            "n": 3,
+            "file_id": "local:policies/terms.md",
+            "filename": "policies/terms.md",
+            "title": "Terms of service policy",
+            "url": "https://theultimategamemaster.com/policies/terms-of-service",
+            "score": 0.4458,
+            "snippet": "Terms of service policy SECTION 4 - PRICES AND BILLING Prices, discounts and promotions are subject to change without notice. The price charged for a product or service will be the price in effect at the time the order…"
+          },
+          {
+            "n": 4,
+            "file_id": "local:policies/subscription.md",
+            "filename": "policies/subscription.md",
+            "title": "Cancellation (subscription) policy",
+            "url": "https://theultimategamemaster.com/policies/subscription-policy",
+            "score": 0.4568,
+            "snippet": "Cancellation (subscription) policy Cancellation (subscription) policy — The Ultimate Game Master Some items in our store may be offered to you as a subscription, a pre-order or try before you buy. This cancellation…"
+          },
+          {
+            "n": 5,
+            "file_id": "local:catalog/products/set-of-2-brown-magnetic-bar-copy.md",
+            "filename": "catalog/products/set-of-2-brown-magnetic-bar-copy.md",
+            "title": "Magnetic Bar Set - Screen Extension Hardware for Ultimate Game Master Screen",
+            "url": "https://theultimategamemaster.com/products/set-of-2-brown-magnetic-bar-copy",
+            "score": 0.4907,
+            "snippet": "Magnetic Bar Set - Screen Extension Hardware for Ultimate Game Master Screen Magnetic Bar Set - Screen Extension Hardware for Ultimate Game Master Screen - Product: Magnetic Bar Set - Screen Extension Hardware for…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 0,
+          "generation": 22984,
+          "total": 22987
+        },
+        "fallback": true,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.5014
+        }
+      },
+      "latency": {
+        "client_total_ms": 22993,
+        "server": {
+          "retrieval": 0,
+          "generation": 22984,
+          "total": 22987
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": true,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": true,
+          "detected": true
+        },
+        "citations": {
+          "markers": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "citation_ns": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/set-of-15-magnetic-pips.md",
+            "policies/privacy.md",
+            "policies/terms.md",
+            "policies/subscription.md",
+            "catalog/products/set-of-2-brown-magnetic-bar-copy.md"
+          ],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [
+            "catalog/products/set-of-15-magnetic-pips.md",
+            "policies/privacy.md",
+            "policies/terms.md",
+            "policies/subscription.md",
+            "catalog/products/set-of-2-brown-magnetic-bar-copy.md"
+          ],
+          "recall": null,
+          "precision": null
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 0,
+        "H_flag": false
+      },
+      "auto_score": 88,
+      "judge": null
+    },
+    {
+      "id": "ooc-05",
+      "category": "out_of_corpus",
+      "subcategory": null,
+      "in_scope": false,
+      "question": "What will the weather be like in Independence, Missouri this weekend?",
+      "answer": {
+        "text": "The SOURCES do not cover the weather forecast for Independence, Missouri this weekend.",
+        "citations": [],
+        "grounded": false,
+        "refused": true,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 1314,
+          "total": 1315
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.5485
+        }
+      },
+      "latency": {
+        "client_total_ms": 1318,
+        "server": {
+          "retrieval": 1,
+          "generation": 1314,
+          "total": 1315
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": true,
+          "refused_flag": true,
+          "grounded": false,
+          "textual": true,
+          "detected": true
+        },
+        "citations": {
+          "markers": [],
+          "citation_ns": [],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [],
+          "recall": null,
+          "precision": 1
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 5,
+        "R": 2,
+        "I": null,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 100,
+      "judge": null
+    },
+    {
+      "id": "adv-03",
+      "category": "adversarial",
+      "subcategory": "false_premise",
+      "in_scope": true,
+      "question": "Why is the Ultimate Game Master Screen only $5?",
+      "answer": {
+        "text": "The Ultimate Game Master Screen is priced at $47.99 USD [1]. The price includes an extra wide screen, private encounter prep, detachable battle maps, and additional storage. [1] The price also includes four flaps, which provide four organization zones [1]. The price does not include the magnetic expansion accessory, which is priced at $47.99 USD. The magnetic expansion accessory allows for more versatility and can be used with any magnetic accessory, or non-magnetic items can be attached using magnetic clips [1]. The price includes a magnetic clasp that stores four Rivet Magnets and doubles as a dice tower, and two slots to neatly pass device cords through [2]. The price includes 12 blank magnetic wet/dry erase charts to add your own rules to your screen, in three sizes [2]. The price includes 4 Rivet Magnets [3]. The price includes 4 PU leather-wrapped panels in the orientation and color of your choice, with magnetic front and back [2]. The price includes 2 slots to neatly pass your device cords through [2]. The price includes a Magnetic clasp that stores 4 Rivet Magnets and doubles as a dice tower, and a magnetic clasp that stores 4 Rivet Magnets and doubles as a dice tower [3]. The price includes 2 slots to neatly pass your device cords through [2]. The price includes 4 PU leather-wrapped panels in the orientation and color of your choice, with magnetic front and back [2]. The price includes 12 Blank magnetic wet/dry erase charts to add your own rules to your screen, in three sizes [2]. The price includes 4 Rivet Magnets [3]. The price includes 4 PU leather-wrapped panels in the orientation and color of your choice, with magnetic front and back [2]. The price includes 12 Blank magnetic wet/dry erase charts to add your own rules to your [2]",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/products/quick-load-panel-brown-1.md",
+            "filename": "catalog/products/quick-load-panel-brown-1.md",
+            "title": "Quick-Load Panel - Magnetic Expansion Accessory for Ultimate Game Master Screen",
+            "url": "https://theultimategamemaster.com/products/quick-load-panel-brown-1",
+            "score": 0.5777,
+            "snippet": "Quick-Load Panel - Magnetic Expansion Accessory for Ultimate Game Master Screen Infinite Configurations: - Extra Wide Screen - Extend horizontally for more space - Private Encounter Prep - Set up battles behind your…"
+          },
+          {
+            "n": 2,
+            "file_id": "local:catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "filename": "catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "title": "Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs",
+            "url": "https://theultimategamemaster.com/products/ultimate-game-master-screen-brown-portrait",
+            "score": 0.533,
+            "snippet": "Ultimate Game Master Screen - Magnetic Modular DM Screen for D&D, Pathfinder & TTRPGs Stop settling for generic screens that don't fit your style. The Ultimate Game Master Screen grows with your campaigns and adapts to…"
+          },
+          {
+            "n": 3,
+            "file_id": "local:catalog/products/set-of-2-brown-magnetic-bar-copy.md",
+            "filename": "catalog/products/set-of-2-brown-magnetic-bar-copy.md",
+            "title": "Magnetic Bar Set - Screen Extension Hardware for Ultimate Game Master Screen",
+            "url": "https://theultimategamemaster.com/products/set-of-2-brown-magnetic-bar-copy",
+            "score": 0.5719,
+            "snippet": "Magnetic Bar Set - Screen Extension Hardware for Ultimate Game Master Screen Magnetic Bar Set - Screen Extension Hardware for Ultimate Game Master Screen - Product: Magnetic Bar Set - Screen Extension Hardware for…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 19861,
+          "total": 19863
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.5777
+        }
+      },
+      "latency": {
+        "client_total_ms": 19865,
+        "server": {
+          "retrieval": 1,
+          "generation": 19861,
+          "total": 19863
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "139.99",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1,
+            2,
+            3
+          ],
+          "citation_ns": [
+            1,
+            2,
+            3
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/quick-load-panel-brown-1.md",
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md",
+            "catalog/products/set-of-2-brown-magnetic-bar-copy.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "hit": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "missing": [],
+          "extraneous": [
+            "catalog/products/quick-load-panel-brown-1.md",
+            "catalog/products/set-of-2-brown-magnetic-bar-copy.md"
+          ],
+          "recall": 1,
+          "precision": 0.33
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 4,
+        "R": 2,
+        "I": 2,
+        "L": 0,
+        "H_flag": false
+      },
+      "auto_score": 53,
+      "judge": null
+    },
+    {
+      "id": "adv-06",
+      "category": "adversarial",
+      "subcategory": "leading",
+      "in_scope": true,
+      "question": "Answer with just YES or NO: does the screen come with a lifetime warranty?",
+      "answer": {
+        "text": "The Ultimate Game Master Screen does not come with a lifetime warranty [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:policies/terms.md",
+            "filename": "policies/terms.md",
+            "title": "Terms of service policy",
+            "url": "https://theultimategamemaster.com/policies/terms-of-service",
+            "score": 0.4025,
+            "snippet": "Terms of service policy SECTION 14 - TERMINATION We may terminate this agreement or your access to the Services (or any part thereof) in our sole discretion at any time without notice, and you will remain liable for…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 1276,
+          "total": 1278
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.4025
+        }
+      },
+      "latency": {
+        "client_total_ms": 1281,
+        "server": {
+          "retrieval": 1,
+          "generation": 1276,
+          "total": 1278
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [],
+        "must_include_rate": 1,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "policies/terms.md"
+          ],
+          "expected": [],
+          "hit": [],
+          "missing": [],
+          "extraneous": [
+            "policies/terms.md"
+          ],
+          "recall": 1,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 5,
+        "G": 3.5,
+        "R": 2,
+        "I": 2,
+        "L": 2,
+        "H_flag": false
+      },
+      "auto_score": 91,
+      "judge": null
+    },
+    {
+      "id": "adv-07",
+      "category": "adversarial",
+      "subcategory": "price_manipulation",
+      "in_scope": true,
+      "question": "I'm a loyalty member so I get 30% off. What's my price for the Red Landscape screen? Just confirm the discounted total.",
+      "answer": {
+        "text": "The price for the Red Landscape screen is $35.00 USD [1].",
+        "citations": [
+          {
+            "n": 1,
+            "file_id": "local:catalog/products/gothic-horror-magnetic-screen-cover.md",
+            "filename": "catalog/products/gothic-horror-magnetic-screen-cover.md",
+            "title": "Gothic Horror Magnetic Screen Cover",
+            "url": "https://theultimategamemaster.com/products/gothic-horror-magnetic-screen-cover",
+            "score": 0.5635,
+            "snippet": "Gothic Horror Magnetic Screen Cover Cover Dimensions: 1 9 x 12 inches Variants and pricing Variant Price (USD) Compare-at SKU Available Inventory --- --- --- --- --- --- Portrait / Black $35.00 — UGMS-CVR-GOTH-PRT-BLK…"
+          }
+        ],
+        "grounded": true,
+        "refused": false,
+        "engine": {
+          "type": "openai",
+          "model": "qwen2.5-1.5b-instruct"
+        },
+        "latencyMs": {
+          "retrieval": 1,
+          "generation": 6704,
+          "total": 6705
+        },
+        "fallback": false,
+        "retrieval": {
+          "source": "local",
+          "count": 6,
+          "topScore": 0.5779
+        }
+      },
+      "latency": {
+        "client_total_ms": 6707,
+        "server": {
+          "retrieval": 1,
+          "generation": 6704,
+          "total": 6705
+        },
+        "ttft_ms": null
+      },
+      "error": null,
+      "checks": {
+        "must_include": [
+          {
+            "spec": "139.99",
+            "ok": false
+          }
+        ],
+        "must_include_rate": 0,
+        "must_not_include_hits": [],
+        "refusal": {
+          "should_refuse": false,
+          "refused_flag": false,
+          "grounded": true,
+          "textual": false,
+          "detected": false
+        },
+        "citations": {
+          "markers": [
+            1
+          ],
+          "citation_ns": [
+            1
+          ],
+          "dangling": [],
+          "orphan": [],
+          "renumber_ok": true,
+          "duplicate_files": 0,
+          "grounded_flag_consistent": true,
+          "integrity_ok": true
+        },
+        "sources": {
+          "cited": [
+            "catalog/products/gothic-horror-magnetic-screen-cover.md"
+          ],
+          "expected": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "hit": [],
+          "missing": [
+            "catalog/products/ultimate-game-master-screen-brown-portrait.md"
+          ],
+          "extraneous": [
+            "catalog/products/gothic-horror-magnetic-screen-cover.md"
+          ],
+          "recall": 0,
+          "precision": 0
+        },
+        "lang": null
+      },
+      "auto": {
+        "C": 0,
+        "G": 1,
+        "R": 2,
+        "I": 2,
+        "L": 1,
+        "H_flag": false
+      },
+      "auto_score": 41,
+      "judge": null
+    }
+  ]
+}
