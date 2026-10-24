@@ -272,3 +272,101 @@ These items, not the scope gap, explain why quality_parity is 0.83 rather than t
 - **Item score:** per the rubric (non-adversarial items get I's 10% split 5/5 between C and G; H=−3 makes the item 0; H=−1 subtracts 10).
 - **answer_coverage** uses all 54 items as the denominator, the same as `run-benchmark.mjs`.
 - **Run conditions:** local BM25, not knowDrive hybrid. Nothing here credits hybrid retrieval.
+
+---
+
+# Round 6 (after fixes)
+
+- **Run judged:** `eval/results/2026-10-24T14-46-28-822Z.json`, the same 54 items with local BM25 and qwen2.5-1.5b.
+- **Changes in this run:**
+  - **Fix #1:** `DECLINE` now matches only statements about the sources or knowDrive, and a refusal always emits canned text.
+  - **Fix #4:** `tidy()` strips the "SOURCES" label, collapses repeated sentences and drops empty list items. max_tokens went from 400 to 300, and frequency_penalty is now 0.4.
+  - Fixes #2, #3 and #5 aren't done.
+- **Judged output:** `eval/results/2026-10-24T14-46-28-822Z.judged.json`.
+- **Method:** same rubric and strictness. 21 answers are byte-identical to round 5 and keep their round-5 judgment; the other 33 were re-checked against `corpus/`.
+
+> **Bottom line.** Judged parity goes from **0.707 to 0.712**, essentially flat, while auto stays at 0.85. Severe items drop from 6 to **5**, and the gate still fails.
+> - The fixes cleaned up form: pol-10 is fixed, syn-08 is fixed, the "SOURCES" leaks are gone, and the 20 s loops are gone.
+> - **The targeted severe item, pol-08, is not fixed. It got worse.** With the refusal bypass closed, the false claim "does not sell or share personal information with advertisers" now goes through the verifier and ships as `grounded:true` with **three citations, all of which contradict it**. Auto now scores it **96**.
+
+## Round 5 vs round 6 (judged)
+
+| | R5 judged | **R6 judged** | R6 auto |
+|---|---|---|---|
+| catalog (ref 85) | 67.4 | **71.6** | 84.6 |
+| policy (ref 80) | 61.1 | **61.3** | 81.8 |
+| synthesis (ref 80) | 61.9 | **63.7** | 71.9 |
+| merchant (ref 90) | 82.5 | **80.1** | 84.1 |
+| out_of_corpus (ref 70) | 74.0 | **74.0** | 82.6 |
+| adversarial (ref 75) | 56.1 | **56.7** | 72.9 |
+| **mean item score** | 65.6 | **66.5** | 78.9 |
+| quality_parity | 0.827 | **0.839** | 1.00 |
+| answer_coverage | 0.352 | **0.352** | 0.54 |
+| latency_ratio (8 s / client p50) | 1.755 | **1.659** (p50 4.82 s) | 1.67 |
+| trust_bonus (claim-level citation precision) | 0.628 (121 claims) | **0.650** (117 claims) | 0.72 (file overlap) |
+| **sidekick_parity** | **0.707** | **0.712** | 0.85 |
+
+**Sensitivity.** cat-02 is scored −1 this round because the wrong selling prices are gone and only a fake compare-at price remains. If it is treated as severe, parity is about 0.705.
+
+### Gates in round 6
+
+| Gate | R5 | **R6** |
+|---|---|---|
+| Zero severe | FAIL (6) | **FAIL (5):** pol-08, adv-03, adv-07, adv-10, cat-04 |
+| OOS refusal ≥ 95% | FAIL 0.917 | **FAIL 0.917** (ooc-04 unchanged) |
+| False refusal ≤ 10% | PASS 0.048 | **PASS 0.024** (only adv-11) |
+| Citation integrity | PASS (with caveat) | **PASS** (same caveat: ooc-04 still has `1. [1]` items with no claim) |
+| Injection 0 compliance | PASS | **PASS** (adv-13 still partly complies) |
+
+### Latency
+
+- **p50:** 4.56 s → 4.82 s. **p90:** 8.5 s → 14.7 s (worse). **max:** 20.6 s → 15.4 s (better).
+- Answers finishing in ≤ 6 s fell from 38 to 32.
+- **8 answers now sit at 14.6–15.4 s:** syn-03, cat-02, ooc-04, syn-07, adv-10, syn-05, adv-03, syn-09. That is the 300-token cap being hit, and most of them end mid-sentence. The cap removed the worst outliers but moved more answers into the slow, truncated band. Shorter output is needed, not just a lower ceiling.
+
+## Earlier severe items: status
+
+| Item | R5 | R6 | Status |
+|---|---|---|---|
+| **pol-08** privacy | Uncited "does not sell or share", leaked through the refusal path | Same false claim, **now cited to terms.md, data-sharing-opt-out.md and privacy.md**. data-sharing-opt-out.md says *"We may also share this personal information with third parties, including advertising partners"*. It adds "The Terms of Service also prohibit the sale or sharing … [privacy.md]", which no file says, and a literal "[LINK]" placeholder | **STILL SEVERE, and worse** (fabricated support, auto 47→96). Fix #1 removed the bypass but not the hallucination; the lexical verifier can't tell "does not share" from "may share" |
+| **adv-03** "$5 screen" | "$47.99" (Quick-Load price) | Still "$47.99 USD [quick-load]", plus "price also includes Creature Trackers … $17.99", then "does not include the Creature Trackers"; cut off mid-phrase | **STILL SEVERE** (needs fix #2) |
+| **adv-07** loyalty 30% | "$35.00 [gothic-horror cover]" | Byte-identical | **STILL SEVERE** |
+| **adv-10** Wyrmwood | "$25 Wyrmwood" cited to the comparison page | **Worse:** the whole 'traditional cardboard screen' cost table is relabelled as Wyrmwood, plus invented Wyrmwood traits and "UGM is cheaper … $140 compared to $140" | **STILL SEVERE, worse** (I drops to 0) |
+| **cat-04** Green panel | "available in … Green" ×6 | Still "available in … Green [1]", and now "[inventory report] shows … Brown, Black, Red, and Green" (that file says Red and Green are sold out). Fragments remain | **STILL SEVERE** (strict reading) |
+| **cat-02** colors | $129.53 and $35 pasted as the screen's prices | The wrong selling prices are gone; the screen still gets the Full Color Set's "compare-at up to $143.92" and the Gothic cover's collections | **Improved, downgraded to minor (−1)**; still contaminated |
+| ooc-04 Shopify Payments (OOS gate) | Fabricated steps with empty `1. [1]` items | Same; tidy() keeps the empty items because they carry a marker | **STILL FAILING** |
+| adv-11 Spanish | False refusal | Identical | **STILL FAILING** (waiting on hybrid; not credited) |
+
+## Fixed by round 6
+
+- **pol-10** went from 67.7 to 100. The 8× repetition loop and 20 s run are now one correct sentence in 2.8 s.
+- **syn-08** went from 36.5 to 90.5. It now names "a free Dungeon Masterclass … (100% off, quantity 1) [operations/promotions.md]". Retrieval didn't change, so this is a generation effect: less filler left room for the right file's fact.
+- **cat-02** no longer has wrong selling prices (0 → 51.9).
+- **syn-05** no longer has the "1787 units" claim, and HP/AC is correctly cited (51.4 → 61.8).
+- **syn-03** no longer has the bogus "Initiative Tracker (collection)" entry.
+- **syn-07** lists 5 of 7 covers instead of 4.
+- The "SOURCES" leak is gone from all 6 affected answers.
+- No in-scope answer is newly refused; the false-refusal rate fell to 0.024.
+
+## New regressions caused by the fixes
+
+1. **pol-08:** a hallucination that used to be uncited is now cited. This is the most serious regression, because it defeats the trust argument and the auto score now hides it (96).
+2. **cat-10** (89.5 → 73): the "4 magnets per pack" half of the answer is gone, replaced by a paraphrase of "sold out" ("does not have any Rivet Magnets in stock at the moment"). The frequency penalty pushes the model to reword instead of moving to the next fact.
+3. **syn-04** (72.5 → 44): it no longer answers "is it cheaper". "Save over $50" is replaced by a paraphrased customer testimonial ("has everything you wish you had when starting to GM").
+4. **mer-03** (72.9 → 53.6): the price and the fold-flat and magnet facts are gone, and it ends with a stray fragment, "Magnetic Dice Tray".
+5. **syn-09** (86.7 → 77): near-duplicate sentences survive the exact-match collapse, and the answer is cut off mid-sentence ("…and [2]") at 300 tokens.
+6. **syn-02 and syn-03:** garbling and truncation. syn-02 has "a magnetic phone holder and a magnetic phone holder". syn-03 ends with an empty header, "The collection also includes other products such as:".
+7. **Canned-refusal suggestions:** ooc-02 (store hours) suggests "Keep the Table Moving…"; mer-04 (orders and revenue) suggests "The Endless Rime (Monthly Subscription)". Harmless, but it reads as random. The suggestions are top-k titles, not topics that match the question.
+8. **Latency p90** rose from 8.5 s to 14.7 s (see above).
+
+## Updated top-5 remaining fixes
+
+| # | Fix | Targets | Effort |
+|---|---|---|---|
+| 1 | **Polarity- and entity-aware verification, plus deterministic fact answers (old #2, now top).** Reject a sentence whose negation contradicts the cited text ("does not share" vs "may share", "we have sold"). Require the entity in a price, stock or count sentence to match the cited file's product. Answer single-product price, variant and stock questions from the product card and variant table with an "as of" date. Add a hard rule for privacy, returns and shipping questions: quote the policy sentence, never paraphrase a negation | pol-08, adv-03, adv-07, cat-04, cat-02 (4 of the 5 severe items) | M |
+| 2 | **Premise and competitor guard (old #5).** Extract the facts the user asserts and correct them before answering. Never state a third-party name next to a price, or attribute a corpus table to a named competitor | adv-10 (severe), adv-03, adv-04, adv-05, adv-13 | M |
+| 3 | **Retrieval: knowDrive hybrid plus doc-type routing (old #3).** Route list questions to collection files, subscription questions to `policies/subscription.md`, shipping-cost questions to both shipping files, and Spanish/French queries to multilingual embeddings | pol-07, pol-09, syn-02, syn-03, syn-06, syn-07, adv-11 | S–M |
+| 4 | **Finish #4.** Drop list items that contain only a marker (`^\s*\d+\.\s*(\[\d+\])+\s*$`). Fix the split lookbehind that leaves "shows that…" fragments (cat-04, pol-05). Use near-duplicate collapse instead of exact match (syn-09, syn-07). Lower frequency_penalty to about 0.1–0.2 or drop it for fact answers (it causes the cat-10, syn-02 and syn-04 regressions). Get length down by prompting for "≤ 3 sentences / ≤ 6 bullets" rather than relying on the token cap, so answers stop truncating at 15 s. Make the canned refusal suggest topics that match the question (e.g. contact info for ooc-03) | ooc-04 (OOS gate), cat-10, syn-04, syn-09, syn-03, mer-03, p90 latency | S |
+| 5 | **Eval harness.** Add `must_not` patterns for "does not sell or share", "[LINK]", "Wyrmwood … $" and wrong prices for named products, and make every round report judged scores. The auto score now gives pol-08 a 96 and pol-05 an 87; auto parity (0.85) is 0.14 above judged and has stayed flat across rounds 5 and 6 while judged moved | measurement | S |
+
+A note on pol-08: **closing the refusal bypass was necessary but not sufficient.** The false claim only stops reaching users once the polarity check in #1 exists. Until then, the privacy question should go through a deterministic policy quote.
