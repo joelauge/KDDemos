@@ -292,6 +292,7 @@ export function mountBots(ctx) {
     drawer.hidden = false; document.body.classList.add('drawer-open');
     for (const el of document.body.children) if (el !== drawer && el.id !== 'sr-status') el.inert = true;
     $('#flow-btn').setAttribute('aria-expanded', 'true');
+    I.sheet = !matchMedia('(max-width: 760px)').matches; // phones: canvas first, details on demand
     paintToken(); render(); syncSheet();
     $('#flow-title').focus();
     ensureCanvas();
