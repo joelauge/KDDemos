@@ -130,15 +130,19 @@ max_tokens 400, seed 7.
 - **Deploy:** `.github/workflows/deploy-cloudflare.yml` runs on push to `main` (or manually) once the repo secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `KNOWDRIVE_API_KEY` exist. Locally: `cd cloudflare && npm install && npx wrangler deploy` (needs Docker).
 - **Wire the pages to it:** put the deployed Worker URL in `lib/site-config.js` (`HOSTED_APIS['knowbot.knowdrive.ai']`). The dashboard and demos then use it by default.
 
-## Chat instances (one knowDrive folder each)
+## Bots and buckets
 
-Each chat instance answers **only** from one knowDrive folder: search is filtered to the folder's `dir:` tags, and any hit whose path is outside the folder is dropped before it can be quoted or cited. Create and fill them from the dashboard's **Instances** panel.
+A **bucket** is one knowDrive folder of files. A **bot** (chat instance) is linked to any number of buckets, and each link can be switched on or off. A bot answers **only** from its enabled buckets. Each bucket is searched on its own, filtered to its folder's `dir:` tags, and any hit whose path is outside that folder is dropped before it can be quoted or cited. Several bots can share a bucket, and a bot with no enabled links answers nothing. Wire them on the dashboard's **Bots & buckets** canvas.
 
-- **Registry:** `knowbot/_config/instances.json` in the same store, tagged `kind:config` and never searchable. The built-in instance (`ugm`, `knowbot/ugm/`) comes from the server config and is read-only.
-- **Uploads:** any file type knowDrive accepts. One file per request, up to 95 MB (the Cloudflare request limit), stored at `<folder><relative path>` with tags `knowbot`, `knowbot:<id>` and `kind:upload`. Names can't climb out of the folder.
-- **Relevance floor:** new instances start at 0.70 (`KNOWBOT_INSTANCE_MIN_SIMILARITY`). Raise it if an instance answers off-topic questions; lower it if it refuses questions its files do answer.
+- **Registry:** `knowbot/_config/instances.json` in the same store, tagged `kind:config` and never searchable. The built-in bot and bucket (`ugm`, `knowbot/ugm/`) come from the server config; only the built-in bot's links can change.
+- **Uploads:** any file type knowDrive accepts. One file per request, up to 95 MB (the Cloudflare request limit), stored at `<bucket folder><relative path>` with tags `knowbot`, `bucket:<id>` and `kind:upload`. Names can't climb out of the folder.
+- **Relevance floor:** a bot's floor (default 0.70, `KNOWBOT_INSTANCE_MIN_SIMILARITY`) applies to its uploaded buckets; the built-in bucket keeps its calibrated 0.745. Raise the floor if a bot answers off-topic questions; lower it if it refuses questions its files do answer.
 - **Guards:** `general` (prompt-injection, personal data, actions) or `store`, which adds the retail-only platform and analytics refusals.
-- **Admin:** creating, editing, uploading and deleting require `KNOWBOT_ADMIN_TOKEN`, sent as `Authorization: Bearer …`; the dashboard keeps it in this browser only. Without a token set, only loopback requests can manage instances (local development).
-- **Using an instance:** `demo/chat.html?instance=<id>`, or `<script type="module" src=".../lib/embed.js" data-instance="<id>" data-api="<api>"></script>`. Its name, greeting and starter questions come from the instance settings.
+- **Admin:** creating, editing, linking, uploading and deleting require `KNOWBOT_ADMIN_TOKEN`, sent as `Authorization: Bearer …`; the dashboard keeps it in this browser only. Without a token set, only loopback requests can manage bots and buckets (local development).
+- **Using a bot:** `demo/chat.html?instance=<bot id>`, or `<script type="module" src=".../lib/embed.js" data-instance="<bot id>" data-api="<api>"></script>`. Its name, greeting and starter questions come from the bot settings.
 
-API: `GET/POST /api/instances`, `GET/PATCH/DELETE /api/instances/:id`, `GET/POST /api/instances/:id/files` (raw body with an `x-filename` header), `DELETE /api/instances/:id/files/:fileId`. `/api/search`, `/api/canonical` and `/api/config` take `instance`.
+API:
+- `GET /api/graph` returns bots, buckets and `canManage`.
+- Buckets: `GET/POST /api/buckets`, `GET/PATCH/DELETE /api/buckets/:id`, `GET/POST /api/buckets/:id/files` (raw body with an `x-filename` header), `DELETE /api/buckets/:id/files/:fileId`.
+- Bots: `GET/POST /api/instances`, `GET/PATCH/DELETE /api/instances/:id`; `buckets: [{id, enabled}]` replaces the bot's links.
+- `/api/search`, `/api/canonical` and `/api/config` take `instance` (a bot id).
