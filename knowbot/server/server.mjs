@@ -312,31 +312,40 @@ export function createKnowBotServer(opts = {}) {
 
   async function instanceRoutes(req, res, url, p, m) {
     await registry.ready;
-    const parts = p.split('/').filter(Boolean).slice(2).map(decodeURIComponent); // after /api/instances
-    const [id, sub, fileId] = parts;
-    if (!id) {
-      if (m === 'GET') return send(res, 200, { instances: registry.list(), canManage: registry.canWrite });
-      if (m === 'POST') { requireAdmin(req); return send(res, 201, await registry.create(await readJson(req))); }
-    } else if (!sub) {
-      if (m === 'GET') return send(res, 200, registry.list().find((x) => x.id === registry.get(id).id));
-      if (m === 'PATCH') { requireAdmin(req); return send(res, 200, await registry.update(id, await readJson(req))); }
-      if (m === 'DELETE') { requireAdmin(req); const it = await registry.remove(id); return send(res, 200, { ok: true, id: it.id }); }
-    } else if (sub === 'files') {
-      requireAdmin(req);
-      if (!fileId && m === 'GET') return send(res, 200, { files: await registry.listFiles(id) });
-      if (!fileId && m === 'POST') {
-        const it = registry.get(id);
-        if (it.builtin) throw new HttpError(403, 'the built-in instance is managed by the corpus sync script');
-        const name = decodeURIComponent(String(req.headers['x-filename'] || url.searchParams.get('name') || ''));
-        const bytes = await readRaw(req, MAX_UPLOAD_BYTES);
-        return send(res, 201, await registry.upload(id, name, String(req.headers['content-type'] || '').split(';')[0].trim(), bytes));
-      }
-      if (fileId && m === 'DELETE') {
-        if (registry.get(id).builtin) throw new HttpError(403, 'the built-in instance is managed by the corpus sync script');
-        return send(res, 200, await registry.deleteFile(id, fileId));
+    const [kind, id, sub, fileId] = p.split('/').filter(Boolean).slice(1).map(decodeURIComponent); // after /api
+    const graph = () => ({ bots: registry.list(), buckets: registry.bucketList(), canManage: registry.canWrite });
+    if (kind === 'graph' && !id && m === 'GET') return send(res, 200, graph());
+    if (kind === 'instances') {
+      if (!id) {
+        if (m === 'GET') return send(res, 200, { instances: registry.list(), canManage: registry.canWrite });
+        if (m === 'POST') { requireAdmin(req); return send(res, 201, await registry.create(await readJson(req))); }
+      } else if (!sub) {
+        if (m === 'GET') return send(res, 200, registry.list().find((x) => x.id === registry.get(id).id));
+        if (m === 'PATCH') { requireAdmin(req); return send(res, 200, await registry.update(id, await readJson(req))); }
+        if (m === 'DELETE') { requireAdmin(req); const it = await registry.remove(id); return send(res, 200, { ok: true, id: it.id }); }
       }
     }
-    throw new HttpError(m === 'GET' || m === 'POST' || m === 'PATCH' || m === 'DELETE' ? 404 : 405, `no such endpoint ${m} ${p}`);
+    if (kind === 'buckets') {
+      if (!id) {
+        if (m === 'GET') return send(res, 200, { buckets: registry.bucketList(), canManage: registry.canWrite });
+        if (m === 'POST') { requireAdmin(req); return send(res, 201, await registry.createBucket(await readJson(req))); }
+      } else if (!sub) {
+        if (m === 'GET') return send(res, 200, registry.bucketList().find((x) => x.id === registry.bucket(id).id));
+        if (m === 'PATCH') { requireAdmin(req); return send(res, 200, await registry.updateBucket(id, await readJson(req))); }
+        if (m === 'DELETE') { requireAdmin(req); const b = await registry.removeBucket(id); return send(res, 200, { ok: true, id: b.id }); }
+      } else if (sub === 'files') {
+        requireAdmin(req);
+        if (!fileId && m === 'GET') return send(res, 200, { files: await registry.listFiles(id) });
+        if (!fileId && m === 'POST') {
+          registry.bucket(id); // 404 before reading a large body
+          const name = decodeURIComponent(String(req.headers['x-filename'] || url.searchParams.get('name') || ''));
+          const bytes = await readRaw(req, MAX_UPLOAD_BYTES);
+          return send(res, 201, await registry.upload(id, name, String(req.headers['content-type'] || '').split(';')[0].trim(), bytes));
+        }
+        if (fileId && m === 'DELETE') return send(res, 200, await registry.deleteFile(id, fileId));
+      }
+    }
+    throw new HttpError(['GET', 'POST', 'PATCH', 'DELETE'].includes(m) ? 404 : 405, `no such endpoint ${m} ${p}`);
   }
 
   // ------------------------------------------------------------ helpers
@@ -426,7 +435,7 @@ export function createKnowBotServer(opts = {}) {
       return send(res, 200, { ok: true, retrieval: mode, files: local.fileCount, chunks: local.chunkCount, llm: await llmReachable(), llmBase, sseClients: clients.size });
     }
 
-    if (p === '/api/instances' || p.startsWith('/api/instances/')) return instanceRoutes(req, res, url, p, m);
+    if (/^\/api\/(?:instances|buckets|graph)(?:\/|$)/.test(p)) return instanceRoutes(req, res, url, p, m);
 
     if (p.startsWith('/api/')) {
       switch (`${m} ${p}`) {

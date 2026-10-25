@@ -87,50 +87,78 @@ describe('chat instances', () => {
     assert.equal(slugify('Sunrise Bakery & Café!'), 'sunrise-bakery-cafe');
   });
 
-  test('creating an instance needs the admin token and saves the registry to knowDrive', async () => {
-    assert.equal((await api('/api/instances', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"name":"Acme"}' })).status, 401);
-    assert.equal((await api('/api/instances', { method: 'POST', headers: { ...admin, authorization: 'Bearer wrong!' }, body: '{"name":"Acme"}' })).status, 401);
-    const r = await api('/api/instances', { method: 'POST', headers: admin, body: JSON.stringify({ name: 'Acme', starters: ['Hours?'] }) });
-    assert.equal(r.status, 201);
-    const it = await r.json();
-    assert.equal(it.id, 'acme'); assert.equal(it.folder, 'knowbot/acme/'); assert.equal(it.guards, 'general');
+  const post = (p, body, h = admin) => api(p, { method: 'POST', headers: h, body: JSON.stringify(body) });
+  const patch = (p, body) => api(p, { method: 'PATCH', headers: admin, body: JSON.stringify(body) });
+  const search = async (instance) => (await (await api('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'hours', instance }) })).json());
+  const lastSearches = (n) => kd.calls.filter((c) => c.url.endsWith('/search')).slice(-n).map((c) => JSON.parse(c.raw));
+
+  test('buckets and bots need the admin token; the registry is saved to knowDrive', async () => {
+    assert.equal((await post('/api/buckets', { name: 'Acme' }, { 'content-type': 'application/json' })).status, 401);
+    assert.equal((await post('/api/buckets', { name: 'Acme' }, { ...admin, authorization: 'Bearer wrong!' })).status, 401);
+    const b = await post('/api/buckets', { name: 'Acme' });
+    assert.equal(b.status, 201);
+    assert.deepEqual(await b.json(), { ...(await (await api('/api/buckets/acme')).json()) });
+    assert.equal((await post('/api/buckets', { name: 'Menus', folder: 'shared/menus' })).status, 201);
+    assert.equal((await post('/api/buckets', { name: 'Acme' })).status, 409);
     assert.ok(kd.calls.some((c) => c.url === '/api/v1/ingest' && c.raw.includes('filename="knowbot/_config/instances.json"')));
-    assert.equal((await api('/api/instances', { method: 'POST', headers: admin, body: '{"name":"Acme"}' })).status, 409);
-    const list = await (await api('/api/instances')).json();
-    assert.deepEqual(list.instances.map((x) => x.id), ['ugm', 'acme']);
+    assert.equal((await post('/api/instances', { name: 'Bad', buckets: [{ id: 'nope' }] })).status, 400, 'links must name real buckets');
+    const bot = await (await post('/api/instances', { name: 'Front desk', buckets: [{ id: 'acme' }, { id: 'menus', enabled: false }] })).json();
+    assert.deepEqual(bot.buckets, [{ id: 'acme', enabled: true }, { id: 'menus', enabled: false }]);
+    assert.equal(bot.guards, 'general');
+    const g = await (await api('/api/graph')).json();
+    assert.deepEqual(g.buckets.map((x) => x.id), ['ugm', 'acme', 'menus']);
+    assert.deepEqual(g.bots.map((x) => x.id), ['ugm', 'front-desk']);
   });
 
-  test('search for an instance is filtered to its folder tags, and hits outside the folder are dropped', async () => {
-    const j = await (await api('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'hours', instance: 'acme' }) })).json();
-    const searches = kd.calls.filter((c) => c.url.endsWith('/search')).map((c) => JSON.parse(c.raw));
-    assert.ok(!searches.some((b) => b.filter.all_of.includes('kind:canonical')), 'no answer-card query for uploaded folders');
-    const call = { raw: JSON.stringify(searches.find((b) => b.mode === 'hybrid')) };
-    const body = JSON.parse(call.raw);
-    assert.deepEqual(body.filter.all_of, ['dir:knowbot', 'dir:acme'], 'no knowbot:ugm tag, only the folder');
+  test('a bot searches only its enabled buckets, and hits outside each folder are dropped', async () => {
+    const j = await search('front-desk');
+    const [body] = lastSearches(1);
+    assert.deepEqual(body.filter.all_of, ['dir:knowbot', 'dir:acme'], 'only the enabled bucket, no knowbot:ugm tag');
     assert.deepEqual(body.filter.none_of, ['kind:config'], 'the registry file is never a source');
-    assert.deepEqual(j.results.map((r) => r.filename), ['hours.md', 'sub/menu.pdf'], 'other folders never come back, even with matching tags');
+    assert.deepEqual(j.results.map((r) => [r.bucket, r.filename]), [['acme', 'hours.md'], ['acme', 'sub/menu.pdf']], 'other folders never come back, even with matching tags');
+    await patch('/api/instances/front-desk', { buckets: [{ id: 'acme', enabled: false }, { id: 'menus' }] });
+    const before = kd.calls.length;
+    const j2 = await search('front-desk');
+    const searched = kd.calls.slice(before).filter((c) => c.url.endsWith('/search')).map((c) => JSON.parse(c.raw).filter.all_of.join(' '));
+    assert.ok(searched.every((f) => f === 'dir:shared dir:menus'), 'a switched-off link is not searched');
+    assert.deepEqual(j2.results, [], 'nothing in the fake store sits under shared/menus/');
     assert.equal((await api('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"query":"x","instance":"nope"}' })).status, 404);
   });
 
-  test('uploads land inside the instance folder with its tag; the built-in instance and other folders are off limits', async () => {
-    const up = await api('/api/instances/acme/files', { method: 'POST', headers: { authorization: admin.authorization, 'content-type': 'text/markdown', 'x-filename': encodeURIComponent('../../ugm/evil.md') }, body: '# hi' });
+  test('several bots can share one bucket; a bot with no enabled links answers from nothing', async () => {
+    await post('/api/instances', { name: 'Kiosk', buckets: ['acme'] });
+    await patch('/api/instances/front-desk', { buckets: [{ id: 'acme' }] });
+    for (const id of ['kiosk', 'front-desk']) assert.deepEqual((await search(id)).results.map((r) => r.filename), ['hours.md', 'sub/menu.pdf']);
+    await patch('/api/instances/kiosk', { buckets: [] });
+    const before = kd.calls.length;
+    assert.deepEqual((await search('kiosk')).results, []);
+    assert.equal(kd.calls.length, before, 'no knowDrive search at all');
+  });
+
+  test('uploads land inside the bucket folder with its tag; the built-in bucket and other folders are off limits', async () => {
+    const up = await api('/api/buckets/acme/files', { method: 'POST', headers: { authorization: admin.authorization, 'content-type': 'text/markdown', 'x-filename': encodeURIComponent('../../ugm/evil.md') }, body: '# hi' });
     assert.equal(up.status, 201);
     const ingest = kd.calls.filter((c) => c.url === '/api/v1/ingest').at(-1);
     assert.match(ingest.raw, /filename="knowbot\/acme\/ugm\/evil\.md"/);
-    assert.match(ingest.raw, /knowbot:acme/);
-    assert.equal((await api('/api/instances/acme/files', { method: 'POST', headers: { 'x-filename': 'a.md' }, body: 'x' })).status, 401);
-    assert.equal((await api('/api/instances/ugm/files', { method: 'POST', headers: { authorization: admin.authorization, 'x-filename': 'a.md' }, body: 'x' })).status, 403);
-    const files = await (await api('/api/instances/acme/files', { headers: admin })).json();
+    assert.match(ingest.raw, /bucket:acme/);
+    assert.equal((await api('/api/buckets/acme/files', { method: 'POST', headers: { 'x-filename': 'a.md' }, body: 'x' })).status, 401);
+    assert.equal((await api('/api/buckets/ugm/files', { method: 'POST', headers: { authorization: admin.authorization, 'x-filename': 'a.md' }, body: 'x' })).status, 403);
+    const files = await (await api('/api/buckets/acme/files', { headers: admin })).json();
     assert.deepEqual(files.files.map((f) => f.path), ['ugm/evil.md']);
-    assert.equal((await api('/api/instances/acme/files/file-out', { method: 'DELETE', headers: admin })).status, 403, 'a file in another folder cannot be deleted through this instance');
-    assert.equal((await api(`/api/instances/acme/files/${files.files[0].id}`, { method: 'DELETE', headers: admin })).status, 200);
+    assert.equal((await api('/api/buckets/acme/files/file-out', { method: 'DELETE', headers: admin })).status, 403, 'a file in another folder cannot be deleted through this bucket');
+    assert.equal((await api(`/api/buckets/acme/files/${files.files[0].id}`, { method: 'DELETE', headers: admin })).status, 200);
   });
 
-  test('instances can be edited and deleted, but not the built-in one', async () => {
-    const r = await api('/api/instances/acme', { method: 'PATCH', headers: admin, body: JSON.stringify({ minSimilarity: 0.66, greeting: 'Hello!' }) });
-    assert.equal((await r.json()).minSimilarity, 0.66);
-    assert.equal((await api('/api/instances/ugm', { method: 'DELETE', headers: admin })).status, 403);
-    assert.equal((await api('/api/instances/acme', { method: 'DELETE', headers: admin })).status, 200);
-    assert.equal((await api('/api/config?instance=acme')).status, 404);
+  test('the built-in bot can only change its links; deleting a bucket unlinks it everywhere', async () => {
+    assert.equal((await patch('/api/instances/ugm', { name: 'x' })).status, 403);
+    const u = await (await patch('/api/instances/ugm', { buckets: [{ id: 'ugm' }, { id: 'acme' }] })).json();
+    assert.deepEqual(u.buckets.map((l) => l.id), ['ugm', 'acme']);
+    assert.equal((await api('/api/buckets/ugm', { method: 'DELETE', headers: admin })).status, 403);
+    assert.equal((await api('/api/buckets/acme', { method: 'DELETE', headers: admin })).status, 200);
+    const g = await (await api('/api/graph')).json();
+    assert.ok(g.bots.every((b) => !b.buckets.some((l) => l.id === 'acme')), 'no dangling links');
+    await patch('/api/instances/ugm', { buckets: [{ id: 'ugm' }] });
+    assert.equal((await api('/api/instances/front-desk', { method: 'DELETE', headers: admin })).status, 200);
+    assert.equal((await api('/api/config?instance=front-desk')).status, 404);
   });
 });
