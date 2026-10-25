@@ -398,6 +398,7 @@ export function mountBots(ctx) {
     }
     if (I.view === 'overview') paintOverview();
     paintLinks();
+    setTimeout(() => { if (I.open && !panel.contains(document.activeElement)) $('#flow-title').focus({ preventScroll: true }); }, 50);
   }
 
   /* ---------------------------------------------------------------- side panel */
@@ -486,7 +487,7 @@ export function mountBots(ctx) {
     if (!el || !b) return;
     const on = b.buckets.filter((l) => l.enabled).map((l) => bucket(l.id)).filter(Boolean);
     rc(el, on.length
-      ? h('p', { class: 'inst-scope' }, h('span', null, 'Answers come only from ', on.map((k, i) => [i ? ', ' : '', h('b', { class: 'mono' }, k.folder)]), ' — nothing outside these folders is searched or cited.'))
+      ? h('p', { class: 'inst-scope' }, h('span', null, 'Answers come only from ', on.map((k, i) => [i ? ', ' : '', h('b', { class: 'mono' }, k.folder)]), on.length === 1 ? ' — nothing outside this folder is searched or cited.' : ' — nothing outside these folders is searched or cited.'))
       : h('p', { class: 'inst-scope warn' }, h('span', null, 'No enabled buckets: this bot searches nothing and answers “I don’t know” to every question.')));
   }
 
@@ -500,15 +501,21 @@ export function mountBots(ctx) {
     const err = errBox();
     const idNote = h('span', { class: 'inst-help mono', id: 'bf-name-help' });
     const name = h('input', { id: 'bf-name', required: true, maxlength: 80, autocomplete: 'off', 'aria-describedby': 'bf-name-help', 'data-autofocus': true });
+    const idIn = h('input', { id: 'bf-id', maxlength: 40, autocomplete: 'off', spellcheck: 'false', class: 'mono', 'aria-describedby': 'bf-id-help' });
     const folder = h('input', { id: 'bf-folder', maxlength: 300, autocomplete: 'off', spellcheck: 'false', class: 'mono', 'aria-describedby': 'bf-folder-help' });
-    const sync = () => { const s = slugify(name.value); folder.placeholder = `knowbot/${s || '<id>'}/`; rc(idNote, s ? `id ${s}` : 'id is derived from the name'); };
-    name.addEventListener('input', sync); sync();
+    const sync = () => {
+      const s = slugify(idIn.value) || slugify(name.value);
+      idIn.placeholder = slugify(name.value) || 'derived from the name'; folder.placeholder = `knowbot/${s || '<id>'}/`;
+      rc(idNote, s ? `id ${s}` : 'id is derived from the name');
+    };
+    name.addEventListener('input', sync); idIn.addEventListener('input', sync); sync();
     const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Create bucket');
     const onSubmit = async (ev) => {
       ev.preventDefault(); err.hidden = true;
       const nm = name.value.trim();
       if (!nm) return fail(err, 'Name is required.', name);
       const body = { name: nm }; if (folder.value.trim()) body.folder = folder.value.trim();
+      if (idIn.value.trim()) body.id = slugify(idIn.value);
       save.disabled = true; rc(save, 'Creating…');
       try {
         const r = normBucket(await api('/api/buckets', { method: 'POST', json: body }));
@@ -519,6 +526,7 @@ export function mountBots(ctx) {
     return h('div', { class: 'flow-view' }, back(), kicker('New bucket'), h('h3', { class: 'display inst-h' }, 'Create a bucket'),
       h('form', { class: 'inst-form', novalidate: true, onsubmit: onSubmit },
         field('Name', name, null, 'bf-name'), idNote,
+        field('Id', idIn, 'Optional. Lowercase letters, digits and dashes; fixed once created.', 'bf-id'),
         field('Folder', folder, 'Optional. The knowDrive folder that holds this bucket’s files.', 'bf-folder'),
         err, h('div', { class: 'inst-actions' }, save, h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => go('overview') }, 'Cancel'))));
   }
@@ -627,8 +635,13 @@ export function mountBots(ctx) {
     const idNote = h('span', { class: 'inst-help mono', id: 'if-name-help' });
     const name = h('input', { id: 'if-name', required: true, maxlength: 80, autocomplete: 'off', 'aria-describedby': 'if-name-help', 'data-autofocus': !edit || null });
     name.value = v.name;
-    const sync = () => { const s = slugify(name.value); rc(idNote, edit ? `id ${b.id} (fixed)` : s ? `id ${s} · chat link ?instance=${s}` : 'id is derived from the name'); };
-    name.addEventListener('input', sync); sync();
+    const idIn = edit ? null : h('input', { id: 'if-id', maxlength: 40, autocomplete: 'off', spellcheck: 'false', class: 'mono', 'aria-describedby': 'if-id-help' });
+    const sync = () => {
+      const s = (idIn && slugify(idIn.value)) || slugify(name.value);
+      if (idIn) idIn.placeholder = slugify(name.value) || 'derived from the name';
+      rc(idNote, edit ? `id ${b.id} (fixed)` : s ? `id ${s} · chat link ?instance=${s}` : 'id is derived from the name');
+    };
+    name.addEventListener('input', sync); if (idIn) idIn.addEventListener('input', sync); sync();
     const org = h('input', { id: 'if-org', maxlength: 80, autocomplete: 'organization' }); org.value = v.org || '';
     const bn = h('input', { id: 'if-bot', maxlength: 80, autocomplete: 'off', placeholder: 'KnowBot' }); bn.value = v.botName || '';
     const greet = h('textarea', { id: 'if-greet', rows: 2, maxlength: 300, placeholder: 'Hi! Ask me anything about …' }); greet.value = v.greeting || '';
@@ -651,7 +664,7 @@ export function mountBots(ctx) {
       if (fl && !(Number(fl) >= 0 && Number(fl) < 1)) return fail(err, 'Relevance floor must be a number from 0 to 0.99.', floor);
       const body = { name: nm, org: org.value.trim(), botName: bn.value.trim(), greeting: greet.value.trim(), starters: starters.map((x) => x.value.trim()).filter(Boolean), guards: guards.value };
       if (fl) body.minSimilarity = Number(fl);
-      if (!edit) { for (const k of ['org', 'botName', 'greeting']) if (!body[k]) delete body[k]; body.buckets = picks.filter((p) => p.cb.checked).map((p) => ({ id: p.k.id, enabled: true })); }
+      if (!edit) { for (const k of ['org', 'botName', 'greeting']) if (!body[k]) delete body[k]; if (idIn.value.trim()) body.id = slugify(idIn.value); body.buckets = picks.filter((p) => p.cb.checked).map((p) => ({ id: p.k.id, enabled: true })); }
       save.disabled = true; rc(save, edit ? 'Saving…' : 'Creating…');
       try {
         const r = normBot(await api(edit ? `/api/instances/${encodeURIComponent(b.id)}` : '/api/instances', { method: edit ? 'PATCH' : 'POST', json: body }));
@@ -664,6 +677,7 @@ export function mountBots(ctx) {
     return h('form', { class: 'inst-form', novalidate: true, onsubmit: onSubmit, 'aria-label': 'Bot settings' },
       b && b.builtin ? h('p', { class: 'note' }, 'The built-in bot’s settings come from the server; only its bucket links can change here.') : null,
       field('Name', name, null, 'if-name'), idNote,
+      idIn ? field('Id', idIn, 'Optional. Used in the chat link and embed code; fixed once created.', 'if-id') : null,
       h('div', { class: 'inst-row2' }, field('Organisation / brand name', org, null, 'if-org'), field('Bot name', bn, null, 'if-bot')),
       field('Greeting', greet, null, 'if-greet'),
       h('fieldset', { class: 'inst-field inst-starters' }, h('legend', null, 'Starter questions ', h('span', { class: 'inst-help' }, 'up to 6')), h('div', { class: 'inst-starter-grid' }, starters)),
@@ -731,7 +745,7 @@ export function mountBots(ctx) {
   $('#flow-add-bucket').addEventListener('click', () => go('new-bucket'));
   $('#flow-add-bot').addEventListener('click', () => go('new-bot'));
   $('#flow-sheet-btn').addEventListener('click', () => { I.sheet = !I.sheet; syncSheet(); });
-  drawer.addEventListener('keydown', onKey);
+  document.addEventListener('keydown', (e) => { if (I.open) onKey(e); }); // also when focus fell to <body> (a focused control was re-rendered away)
   const tok = $('#flow-token');
   tok.addEventListener('change', () => { saveToken(tok.value.trim()); I.auth = 'unknown'; paintToken(); refresh(); loadCounts(); if (I.view === 'bucket') loadFiles(); });
   tok.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); tok.dispatchEvent(new Event('change')); } });
