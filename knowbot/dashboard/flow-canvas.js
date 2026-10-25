@@ -9,8 +9,8 @@ const URLS = {
 };
 export const FLOW_CSS = 'https://cdn.jsdelivr.net/npm/@xyflow/react@12.3.6/dist/style.css';
 const POS_KEY = 'knowbot-flow-positions';
-const COL_X = { bucket: 0, bot: 460 };
-const ROW_H = { bucket: 132, bot: 120 };
+const COL_X = { bucket: 0, bot: 480 };
+const ROW_H = { bucket: 140, bot: 140 };
 
 function readPositions() { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}') || {}; } catch { return {}; } }
 function writePositions(nodes) {
@@ -39,19 +39,31 @@ export async function createCanvas(el) {
     if (c.processing) return `${plural(c.n, 'file')} · ${c.processing} processing`;
     return c.n ? `${plural(c.n, 'file')} · ready` : 'empty';
   }
+  // Node icons: a folder of documents for a bucket, a bot head with a speech tail for a bot.
+  const svg = (...kids) => e('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' }, ...kids);
+  const BucketIcon = () => e('span', { className: 'fnode-icon fnode-icon-bucket' }, svg(
+    e('path', { d: 'M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z' }),
+    e('path', { d: 'M8 12h8M8 15.5h5' })));
+  const BotIcon = () => e('span', { className: 'fnode-icon fnode-icon-bot' }, svg(
+    e('path', { d: 'M12 3.5v3' }), e('circle', { cx: 12, cy: 2.8, r: 0.9, fill: 'currentColor', stroke: 'none' }),
+    e('path', { d: 'M7 6.5h10a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-6l-3.5 2.5v-2.5H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3z' }),
+    e('circle', { cx: 9.3, cy: 12, r: 1.1, fill: 'currentColor', stroke: 'none' }), e('circle', { cx: 14.7, cy: 12, r: 1.1, fill: 'currentColor', stroke: 'none' }),
+    e('path', { d: 'M1.8 11v3M22.2 11v3' })));
   const BucketNode = memo(({ data: d }) => e('div', { className: `fnode fnode-bucket${d.active ? ' is-active' : ''}${d.count && d.count.failed ? ' has-failed' : ''}` },
+    e(BucketIcon), e('div', { className: 'fnode-body' },
     e('div', { className: 'fnode-kicker' }, e('span', null, 'bucket'), d.item.builtin ? e('span', { className: 'flag flag-inst' }, 'built-in') : null,
       e('span', { className: 'fnode-out', title: 'Bots this bucket feeds' }, `→ ${plural(d.out, 'bot')}`)),
     e('div', { className: 'fnode-name' }, d.item.name),
     e('div', { className: 'fnode-folder' }, d.item.folder),
-    e('div', { className: 'fnode-meta' }, filesLabel(d)),
+    e('div', { className: 'fnode-meta' }, filesLabel(d))),
     e(Handle, { type: 'source', position: Position.Right, isConnectable: d.editable, className: 'fhandle', title: d.editable ? 'Drag to a bot to link' : undefined })));
   const BotNode = memo(({ data: d }) => e('div', { className: `fnode fnode-bot${d.active ? ' is-active' : ''}${d.enabled ? '' : ' is-empty'}` },
     e(Handle, { type: 'target', position: Position.Left, isConnectable: d.editable, className: 'fhandle' }),
+    e(BotIcon), e('div', { className: 'fnode-body' },
     e('div', { className: 'fnode-kicker' }, e('span', null, 'bot'), d.item.builtin ? e('span', { className: 'flag flag-inst' }, 'built-in') : null),
     e('div', { className: 'fnode-name' }, d.item.name),
     e('div', { className: 'fnode-folder' }, d.item.id),
-    e('div', { className: `fnode-meta${d.enabled ? '' : ' warn'}` }, d.enabled ? `${plural(d.enabled, 'bucket')} on${d.linked > d.enabled ? ` · ${d.linked - d.enabled} off` : ''}` : d.linked ? 'all buckets off — answers nothing' : 'no buckets — answers nothing')));
+    e('div', { className: `fnode-meta${d.enabled ? '' : ' warn'}` }, d.enabled ? `${plural(d.enabled, 'bucket')} on${d.linked > d.enabled ? ` · ${d.linked - d.enabled} off` : ''}` : d.linked ? 'all buckets off — answers nothing' : 'no buckets — answers nothing'))));
 
   function LinkEdge(p) {
     const [path, lx, ly] = getBezierPath(p);
