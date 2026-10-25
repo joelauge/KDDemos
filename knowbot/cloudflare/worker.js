@@ -19,6 +19,30 @@ export class KnowBotContainer extends Container {
       ...(env.KNOWBOT_SECRET_KEY ? { KNOWBOT_SECRET_KEY: env.KNOWBOT_SECRET_KEY } : {}),
     };
   }
+
+  // A running container keeps the env it started with. When a deploy or `wrangler secret put` changes the secrets
+  // (rotated admin token, new knowDrive key) the same image can stay up with the old values, so compare a
+  // fingerprint of the env on every request and restart the container once when it changed.
+  async fetch(request) {
+    const fp = await fingerprint(this.envVars);
+    let started = null;
+    try { started = this.ctx.storage.kv.get(ENV_FP_KEY) ?? null; } catch { /* storage unavailable: no restart check */ }
+    if (started !== fp) {
+      if (this.container.running) {
+        await this.destroy();
+        for (let i = 0; i < 50 && this.container.running; i++) await new Promise((r) => setTimeout(r, 100));
+      }
+      try { this.ctx.storage.kv.put(ENV_FP_KEY, fp); } catch { /* ignore */ }
+    }
+    return super.fetch(request);
+  }
+}
+
+const ENV_FP_KEY = 'knowbot-env-fingerprint';
+async function fingerprint(vars) {
+  const data = new TextEncoder().encode(JSON.stringify(Object.entries(vars || {}).sort()));
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return [...hash.slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, authorization, x-filename', 'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS' };
