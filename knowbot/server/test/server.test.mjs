@@ -95,7 +95,8 @@ function fakeKnowDrive({ fail = false, data = null } = {}) {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      calls.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body || '{}') });
+      let parsed = {}; try { parsed = JSON.parse(body || '{}'); } catch { parsed = { raw: body }; } // the registry is saved as multipart
+      calls.push({ url: req.url, auth: req.headers.authorization, body: parsed });
       if (fail) { res.writeHead(500); return res.end('boom'); }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({

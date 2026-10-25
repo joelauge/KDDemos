@@ -1,6 +1,8 @@
 // KnowBot bots and buckets.
-// A BUCKET is one knowDrive folder of files. A BOT (chat instance) links to any number of buckets, each link on or
-// off, and answers only from its enabled buckets: nothing outside those folders can be searched or cited.
+// A BUCKET is a tag (bucket:<id>): every file carrying it is in the bucket, wherever knowDrive stores it. Folders are
+// tags too (f1:<name>, f2:<name>, … one per level), so people organise files in folders without ever seeing a path.
+// A BOT (chat instance) links to any number of buckets, each link on or off and optionally MASKED by tags (required
+// and excluded tags narrow what that bot sees of the bucket). A bot answers only from its enabled, masked buckets.
 // The registry lives in the knowDrive store itself (knowbot/_config/instances.json) so it survives container
 // restarts; without a knowDrive key it falls back to a JSON file in the data dir (local development).
 import path from 'node:path';
@@ -39,9 +41,30 @@ export function safeRelPath(name) {
   return rel;
 }
 
+// ---------------------------------------------------------------- tags
+const TAG_RE = /^[a-z0-9][a-z0-9._-]*(?::[a-z0-9._-]+)?$/;
+export const tagSafe = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[^a-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'untitled';
+/** Folder chain → level tags: ['family', '04'] → ['f1:family', 'f2:04']. */
+export const folderTags = (folders) => folders.map((f, i) => `f${i + 1}:${tagSafe(f)}`);
+/** Level tags → folder chain (null when the file has none). */
+export function foldersOf(tags = []) {
+  const lv = tags.map((t) => /^f(\d{1,2}):(.+)$/.exec(String(t))).filter(Boolean).map((m) => [Number(m[1]), m[2]]).sort((a, b) => a[0] - b[0]);
+  return lv.length ? lv.map((x) => x[1]) : null;
+}
+const isFolderTag = (t) => /^f\d{1,2}:/.test(String(t));
+// Tags people never pick in a mask: bookkeeping, and the bucket tag itself.
+const HIDDEN_TAG = /^(?:knowbot|kind:upload|kind:config|bucket:.*|knowbot:.*|dir:.*|mime:.*|charset:.*)$/;
+function cleanMask(m) {
+  if (!m || typeof m !== 'object') return undefined;
+  const list = (v) => [...new Set((Array.isArray(v) ? v : []).map((t) => String(t).trim().toLowerCase()).filter(Boolean))];
+  const require = list(m.require), exclude = list(m.exclude);
+  for (const t of [...require, ...exclude]) if (!TAG_RE.test(t) || t.length > 80) throw new InstanceError(400, `"${t}" is not a tag`);
+  return require.length || exclude.length ? { require: require.slice(0, 12), exclude: exclude.slice(0, 12) } : undefined;
+}
+
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
 const BOT_KEYS = ['id', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
-const BUCKET_KEYS = ['id', 'name', 'folder', 'builtin', 'createdAt', 'updatedAt'];
+const BUCKET_KEYS = ['id', 'name', 'tag', 'builtin', 'createdAt', 'updatedAt'];
 const now = () => new Date().toISOString();
 
 function cleanName(v) {
@@ -158,7 +181,9 @@ export class InstanceRegistry {
     this.kd = kd; this.dataDir = dataDir; this.log = logger; this.models = models; this.secret = secret;
     this.providerKeys = {}; // provider id → { sealed, last4, updatedAt }
     // The built-in bot and bucket come from the server config. Only the bot's bucket links can be changed.
-    this.builtinBucket = { id: builtin.id, name: builtin.name, folder: builtin.folder, builtin: true };
+    // root: where knowDrive stores a bucket's uploads. Never shown; membership is the tag.
+    this.builtinBucket = { id: builtin.id, name: builtin.name, tag: builtin.tag || `knowbot:${builtin.id}`, root: builtin.folder, builtin: true };
+    this.migrated = {}; // bucket id → ISO time its files were given bucket + folder tags
     this.builtinBotBase = { id: builtin.id, name: builtin.name, org: builtin.org, guards: builtin.guards || 'store', builtin: true };
     this.builtinLinks = [{ id: builtin.id, enabled: true }];
     this.builtinSettings = {}; // operator overrides for the built-in bot (model, instructions, greeting, …)
@@ -193,20 +218,71 @@ export class InstanceRegistry {
     let buckets = doc.buckets || [], bots = doc.bots || [];
     if (!doc.bots && Array.isArray(doc.instances)) {
       // v1 registry: one folder per instance → one bucket per instance, linked to a bot of the same id.
-      buckets = doc.instances.map((x) => ({ id: x.id, name: x.name, folder: x.folder, createdAt: x.createdAt, updatedAt: x.updatedAt }));
+      buckets = doc.instances.map((x) => ({ id: x.id, name: x.name, root: x.folder, createdAt: x.createdAt, updatedAt: x.updatedAt }));
       bots = doc.instances.map(({ folder, ...x }) => ({ ...x, buckets: [{ id: x.id, enabled: true }] }));
     }
     const builtinId = this.builtinBucket.id;
-    this.buckets = new Map(buckets.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map((x) => [x.id, x]));
+    // v2 buckets named a folder; now a bucket is its tag, and the old folder is just where its uploads live.
+    this.buckets = new Map(buckets.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map(({ folder, ...x }) => [x.id,
+      { ...x, tag: x.tag || `bucket:${x.id}`, root: x.root || folder || `knowbot/${x.id}/` }]));
+    this.migrated = doc.migrated && typeof doc.migrated === 'object' ? doc.migrated : {};
     this.bots = new Map(bots.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map((x) => [x.id, { ...x, buckets: this.cleanLinks(x.buckets, { strict: false }) }]));
     if (Array.isArray(doc.builtinBot?.buckets)) this.builtinLinks = this.cleanLinks(doc.builtinBot.buckets, { strict: false });
     if (doc.builtinBot?.settings && typeof doc.builtinBot.settings === 'object') this.builtinSettings = doc.builtinBot.settings;
     this.providerKeys = Object.fromEntries(Object.entries(doc.providers || {}).filter(([k, v]) => PROVIDERS[k] && v && v.sealed));
     this.log(`[instances] ${this.bots.size} bot(s), ${this.buckets.size} bucket(s) loaded`);
+    if (this.kd) this.migration = this.migrateTags().catch((e) => this.log(`[instances] tag migration failed: ${e.message}`));
+  }
+
+  /**
+   * One-time per bucket: files stored under its folder get the bucket tag and folder tags (f1:, f2:, …) derived from
+   * their path, so membership, the folder tree and masks all work from tags. Files that already have them are skipped.
+   */
+  async migrateTags() {
+    let changed = false;
+    for (const b of [this.builtinBucket, ...this.buckets.values()]) {
+      if (this.migrated[b.id] || !b.root) continue;
+      const rows = await this.listRows({ prefix: b.root });
+      const groups = new Map(); // tag set → file ids
+      for (const r of rows) {
+        if ((r.tags || []).includes('kind:config')) continue;
+        const want = [...(r.tags || []).includes(b.tag) ? [] : [b.tag]];
+        if (!foldersOf(r.tags)) want.push(...folderTags(r.filename.slice(b.root.length).split('/').slice(0, -1)));
+        if (!want.length) continue;
+        const k = want.join(',');
+        (groups.get(k) || groups.set(k, []).get(k)).push(r.id);
+      }
+      for (const [k, ids] of groups) {
+        for (let i = 0; i < ids.length; i += 500) {
+          const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ file_ids: ids.slice(i, i + 500), tags_add: k.split(',') }), timeout: 120000 });
+          if (!res.ok) throw new Error(`knowDrive HTTP ${res.status} tagging files of ${b.id}`);
+        }
+      }
+      this.migrated[b.id] = now(); changed = true;
+      this.log(`[instances] tagged ${[...groups.values()].reduce((a, x) => a + x.length, 0)} file(s) in bucket ${b.id}`);
+    }
+    if (changed) await this.save();
+  }
+
+  async listRows(params) {
+    const rows = [];
+    let after = '';
+    for (let page = 0; page < 200; page++) {
+      const qs = new URLSearchParams({ limit: '1000', ...params });
+      if (after) qs.set('after', after);
+      const res = await this.kdFetch(`/api/v1/vector_stores/${encodeURIComponent(this.kd.store)}/files?${qs}`, { timeout: 60000 });
+      if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status} listing files`);
+      const j = await res.json();
+      rows.push(...(j.data || []));
+      after = j.next_after || j.last_id || (j.data?.length ? j.data[j.data.length - 1].id : '');
+      if (!j.has_more || !after) break;
+    }
+    return rows;
   }
 
   async save() {
-    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: { buckets: this.builtinLinks, settings: this.builtinSettings }, providers: this.providerKeys }, null, 2);
+    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: { buckets: this.builtinLinks, settings: this.builtinSettings }, providers: this.providerKeys, migrated: this.migrated }, null, 2);
     this.writeChain = this.writeChain.catch(() => {}).then(async () => {
       if (!this.kd) {
         await fsp.mkdir(this.dataDir, { recursive: true });
@@ -246,7 +322,8 @@ export class InstanceRegistry {
         continue;
       }
       seen.add(id);
-      out.push({ id, enabled: typeof l === 'object' && l ? l.enabled !== false : true });
+      const mask = typeof l === 'object' && l ? cleanMask(l.mask) : undefined;
+      out.push({ id, enabled: typeof l === 'object' && l ? l.enabled !== false : true, ...(mask ? { mask } : {}) });
     }
     return out;
   }
@@ -272,17 +349,18 @@ export class InstanceRegistry {
     return b;
   }
 
-  bucketRetriever(b, minSimilarity) {
-    if (b.builtin) return this.builtinRetriever;
+  /** A bucket's retriever, narrowed by the link's mask. Scope is the bucket tag (enforced by knowDrive's filter). */
+  bucketRetriever(b, minSimilarity, mask) {
+    if (b.builtin) return this.builtinRetriever.withMask ? this.builtinRetriever.withMask(mask || {}) : this.builtinRetriever;
     if (!this.kd) throw new InstanceError(503, 'bucket search needs a knowDrive key (KNOWDRIVE_API_KEY)');
-    const key = `${b.id}@${b.folder}@${minSimilarity}`;
+    const key = `${b.id}@${b.tag}@${minSimilarity}`;
     if (!this.retrievers.has(key)) {
       this.retrievers.set(key, new KnowDriveRetriever({
-        baseUrl: this.kd.baseUrl, apiKey: this.kd.apiKey, store: this.kd.store, tag: '', prefix: b.folder, local: null,
-        minSimilarity, exclude: ['kind:config'], cards: false, logger: this.log,
+        baseUrl: this.kd.baseUrl, apiKey: this.kd.apiKey, store: this.kd.store, tag: b.tag, prefix: b.root, dirFilter: false, prefixFilter: false,
+        local: null, minSimilarity, exclude: ['kind:config'], cards: false, logger: this.log,
       }));
     }
-    return this.retrievers.get(key);
+    return this.retrievers.get(key).withMask(mask || {});
   }
 
   /** The retriever for a bot: its enabled buckets are the whole world it can search or cite. */
@@ -290,7 +368,7 @@ export class InstanceRegistry {
     const bot = this.get(id);
     const floor = bot.minSimilarity ?? this.defaultMinSimilarity;
     const parts = bot.buckets.filter((l) => l.enabled).map((l) => {
-      try { const b = this.bucket(l.id); return { bucket: b.id, retriever: this.bucketRetriever(b, floor) }; } catch { return null; }
+      try { const b = this.bucket(l.id); return { bucket: b.id, retriever: this.bucketRetriever(b, floor, l.mask) }; } catch { return null; }
     }).filter(Boolean);
     return new LinkedRetriever(parts);
   }
@@ -334,10 +412,11 @@ export class InstanceRegistry {
   async createBucket(body) {
     this.needWrite();
     const name = cleanName(body.name);
-    const id = newId(body, name, (x) => x === this.builtinBucket.id || this.buckets.has(x));
-    const folder = normalizeFolder(body.folder || `knowbot/${id}/`);
+    // The bucket IS its tag: "Access to Justice" → bucket:access-to-justice. (body.tag may name it explicitly.)
+    const id = newId({ id: body.tag ? String(body.tag).replace(/^bucket:/, '') : body.id }, name, (x) => x === this.builtinBucket.id || this.buckets.has(x));
     const t = now();
-    const b = { id, name, folder, createdAt: t, updatedAt: t };
+    const b = { id, name, tag: `bucket:${id}`, root: `knowbot/${id}/`, createdAt: t, updatedAt: t };
+    this.migrated[id] = t; // new: every file gets its tags at upload
     return this.commit(() => { this.buckets.set(id, b); return pick(b, BUCKET_KEYS); });
   }
 
@@ -345,7 +424,7 @@ export class InstanceRegistry {
     this.needWrite();
     const b = this.bucket(id);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
-    if (body.folder !== undefined && normalizeFolder(body.folder) !== b.folder) throw new InstanceError(400, "a bucket's folder can't change; create a new bucket instead");
+    if (body.tag !== undefined && `bucket:${String(body.tag).replace(/^bucket:/, '')}` !== b.tag) throw new InstanceError(400, "a bucket's tag can't change; create a new bucket instead");
     const next = { ...b, ...(body.name !== undefined ? { name: cleanName(body.name) } : {}), updatedAt: now() };
     return this.commit(() => { this.buckets.set(b.id, next); return pick(next, BUCKET_KEYS); });
   }
@@ -405,23 +484,31 @@ export class InstanceRegistry {
   // ---------------------------------------------------------------- files (knowDrive only)
   needKd() { if (!this.kd) throw new InstanceError(503, 'file management needs a knowDrive key (KNOWDRIVE_API_KEY)'); }
 
+  /** A file belongs to a bucket by its tag. */
+  async memberFile(b, fileId) {
+    const res = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}`);
+    if (res.status === 404) throw new InstanceError(404, 'no such file');
+    if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status}`);
+    const f = await res.json();
+    if (!(f.tags || []).includes(b.tag)) throw new InstanceError(403, 'that file is not in this bucket');
+    return f;
+  }
+
+  /** How people see a file: its name and folder chain (from folder tags; from the stored path for older files). */
+  view(b, r) {
+    const name = String(r.filename || '').split('/').pop();
+    const rel = b.root && String(r.filename).startsWith(b.root) ? String(r.filename).slice(b.root.length) : name;
+    const folders = foldersOf(r.tags) || rel.split('/').slice(0, -1);
+    return { name, folders, path: [...folders, name].join('/'), tags: (r.tags || []).filter((t) => !HIDDEN_TAG.test(t) && !isFolderTag(t)) };
+  }
+
   async listFiles(bucketId) {
     this.needKd();
     const b = this.bucket(bucketId);
-    const rows = [];
-    let after = '';
-    for (let page = 0; page < 20; page++) {
-      const qs = new URLSearchParams({ limit: '500', prefix: b.folder });
-      if (after) qs.set('after', after);
-      const res = await this.kdFetch(`/api/v1/vector_stores/${encodeURIComponent(this.kd.store)}/files?${qs}`);
-      if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status} listing files`);
-      const j = await res.json();
-      rows.push(...(j.data || []));
-      after = j.next_after || j.last_id || (j.data?.length ? j.data[j.data.length - 1].id : '');
-      if (!j.has_more || !after) break;
-    }
-    return rows.filter((r) => String(r.filename || '').startsWith(b.folder) && !(r.tags || []).includes('kind:config')).map((r) => ({
-      id: r.id, path: r.filename.slice(b.folder.length), bytes: r.bytes ?? r.size ?? null, mime: r.mime_type || null,
+    await this.migration;
+    const rows = await this.listRows({ tags_all: b.tag });
+    return rows.filter((r) => !(r.tags || []).includes('kind:config')).map((r) => ({
+      id: r.id, ...this.view(b, r), bytes: r.bytes ?? r.size ?? null, mime: r.mime_type || null,
       status: r.status || null, phase: r.phase || null, stage: fileStage(r),
       chunks: r.chunk_count ?? null, atoms: r.atom_count ?? null, vectorized: r.atoms_vectorized ?? null,
       error: r.status_details || r.last_error?.message || null,
@@ -429,32 +516,50 @@ export class InstanceRegistry {
     })).sort((a, c) => a.path.localeCompare(c.path));
   }
 
+  /** The tags in a bucket with their file counts: what a mask can require or exclude. Folders come back as f1:…/f2:…. */
+  async bucketTags(bucketId) {
+    this.needKd();
+    const b = this.bucket(bucketId);
+    await this.migration;
+    const out = [];
+    let after = '';
+    for (let page = 0; page < 20; page++) {
+      const qs = new URLSearchParams({ tags_all: b.tag, limit: '500' });
+      if (after) qs.set('after', after);
+      const res = await this.kdFetch(`/api/v1/vector_stores/${encodeURIComponent(this.kd.store)}/tags?${qs}`);
+      if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status} listing tags`);
+      const j = await res.json();
+      out.push(...(j.data || []));
+      after = j.next_after || '';
+      if (!j.has_more || !after) break;
+    }
+    return out.filter((t) => !HIDDEN_TAG.test(t.tag)).map((t) => ({ tag: t.tag, count: t.count })).sort((a, c) => a.tag.localeCompare(c.tag));
+  }
+
   /** The first atoms of a file in this bucket: what knowDrive actually extracted and will cite. */
   async fileAtoms(bucketId, fileId, limit = 5) {
     this.needKd();
     const b = this.bucket(bucketId);
-    const res = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}`);
-    if (res.status === 404) throw new InstanceError(404, 'no such file');
-    if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status}`);
-    const f = await res.json();
-    if (!String(f.filename || '').startsWith(b.folder)) throw new InstanceError(403, "that file is outside this bucket's folder");
+    const f = await this.memberFile(b, fileId);
     const n = Math.max(1, Math.min(20, Number(limit) || 5));
     const ar = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}/atoms?limit=${n}`);
     if (!ar.ok) throw new InstanceError(502, `knowDrive HTTP ${ar.status} reading atoms`);
     const j = await ar.json();
     const atoms = (j.data || j.atoms || []).map((a) => ({ seq: a.sequence_index ?? null, tokens: a.metadata?.text_tokens ?? null, kind: a.metadata?.node_kind || a.metadata?.type || null, text: String(a.text || '').slice(0, 800) }));
-    return { id: fileId, path: f.filename.slice(b.folder.length), stage: fileStage(f), atoms: f.atom_count ?? atoms.length, shown: atoms.length, items: atoms };
+    return { id: fileId, path: this.view(b, f).path, stage: fileStage(f), atoms: f.atom_count ?? atoms.length, shown: atoms.length, items: atoms };
   }
 
+  /** name may carry folders ("menus/lunch/specials.md"): they become folder tags. */
   async upload(bucketId, name, contentType, bytes) {
     this.needKd();
     const b = this.bucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
     const rel = safeRelPath(name);
     if (!bytes?.length) throw new InstanceError(400, 'empty file');
-    const storePath = `${b.folder}${rel}`;
+    const folders = rel.split('/').slice(0, -1);
+    const storePath = `${b.root}${rel}`; // where knowDrive keeps it; people only ever see the folder tags
     const fd = new FormData();
-    fd.append('tags', ['knowbot', `bucket:${b.id}`, 'kind:upload'].join(','));
+    fd.append('tags', ['knowbot', b.tag, 'kind:upload', ...folderTags(folders)].join(','));
     if (contentType && contentType !== 'application/octet-stream') fd.append('mime_type', contentType);
     fd.append('file', new Blob([bytes], { type: contentType || 'application/octet-stream' }), storePath);
     const res = await this.kdFetch('/api/v1/ingest', { method: 'POST', headers: { 'x-vector-store-id': this.kd.store }, body: fd, timeout: 120000 });
@@ -463,21 +568,31 @@ export class InstanceRegistry {
     if (!res.ok) throw new InstanceError([413, 415, 422].includes(res.status) ? res.status : 502, `knowDrive rejected ${rel}: ${j.error?.message || text.slice(0, 200)}`);
     const f = j.files?.[0] ?? j;
     if (f.filename && f.filename !== storePath) throw new InstanceError(502, `knowDrive stored ${rel} at an unexpected path`);
-    return { id: f.id || f.file_id, path: rel, status: f.status || 'in_progress', bytes: bytes.length };
+    return { id: f.id || f.file_id, path: rel, folders, status: f.status || 'in_progress', bytes: bytes.length };
+  }
+
+  /** Moving a file between folders only changes its folder tags. */
+  async moveFile(bucketId, fileId, folders) {
+    this.needKd();
+    const b = this.bucket(bucketId);
+    if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
+    if (!Array.isArray(folders) || folders.length > 12) throw new InstanceError(400, 'folders must be a list of folder names');
+    const clean = folders.map((x) => String(x).trim()).filter(Boolean);
+    const f = await this.memberFile(b, fileId);
+    const add = folderTags(clean), remove = (f.tags || []).filter((t) => isFolderTag(t) && !add.includes(t));
+    const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file_ids: [fileId], tags_add: add, tags_remove: remove }) });
+    if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status} moving the file`);
+    return { ok: true, id: fileId, folders: clean.map(tagSafe) };
   }
 
   async deleteFile(bucketId, fileId) {
     this.needKd();
     const b = this.bucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
-    const res = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}`);
-    if (res.status === 404) throw new InstanceError(404, 'no such file');
-    if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status}`);
-    const f = await res.json();
-    // Only files inside the bucket's folder can be deleted through it.
-    if (!String(f.filename || '').startsWith(b.folder)) throw new InstanceError(403, "that file is outside this bucket's folder");
+    const f = await this.memberFile(b, fileId); // only files carrying this bucket's tag
     const del = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
     if (!del.ok) throw new InstanceError(502, `knowDrive HTTP ${del.status} deleting the file`);
-    return { ok: true, id: fileId, path: f.filename.slice(b.folder.length) };
+    return { ok: true, id: fileId, path: this.view(b, f).path };
   }
 }

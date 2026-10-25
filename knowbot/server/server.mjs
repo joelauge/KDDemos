@@ -89,7 +89,7 @@ export function createKnowBotServer(opts = {}) {
     models: models.map((x) => x.id),
     // Seals the operator's OpenAI/Anthropic keys in the registry. Changing it means re-entering those keys.
     secret: env.KNOWBOT_SECRET_KEY || adminToken || 'knowbot-local-dev',
-    builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
+    builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', tag: env.KNOWDRIVE_TAG || 'knowbot:ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
   });
 
   // ------------------------------------------------------------ events / SSE
@@ -362,6 +362,8 @@ export function createKnowBotServer(opts = {}) {
         if (m === 'GET') return send(res, 200, registry.bucketList().find((x) => x.id === registry.bucket(id).id));
         if (m === 'PATCH') { requireAdmin(req); return send(res, 200, await registry.updateBucket(id, await readJson(req))); }
         if (m === 'DELETE') { requireAdmin(req); const b = await registry.removeBucket(id); return send(res, 200, { ok: true, id: b.id }); }
+      } else if (sub === 'tags' && m === 'GET') {
+        return send(res, 200, { tags: await registry.bucketTags(id) });
       } else if (sub === 'files') {
         requireAdmin(req);
         if (!fileId && m === 'GET') return send(res, 200, { files: await registry.listFiles(id) });
@@ -372,6 +374,7 @@ export function createKnowBotServer(opts = {}) {
           return send(res, 201, await registry.upload(id, name, String(req.headers['content-type'] || '').split(';')[0].trim(), bytes));
         }
         if (fileId && m === 'DELETE') return send(res, 200, await registry.deleteFile(id, fileId));
+        if (fileId && !parts4 && m === 'PATCH') return send(res, 200, await registry.moveFile(id, fileId, (await readJson(req)).folders));
         if (fileId && m === 'GET' && parts4 === 'atoms') return send(res, 200, await registry.fileAtoms(id, fileId, url.searchParams.get('limit')));
       }
     }

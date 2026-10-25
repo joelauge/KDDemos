@@ -11,6 +11,7 @@ const POLL_MS = 4000;
 const MAX_BATCH = 2000;
 const SKIP = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']); // OS litter from folder picks
 const ID_RE = /^[a-z0-9-]{1,40}$/;
+const TAG_RE = /^[a-z0-9][a-z0-9._-]*(?::[a-z0-9._-]+)?$/; // same rule as the server
 
 // Same rule as server/instances.mjs, so placeholders show the id the server will assign.
 export const slugify = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim()
@@ -105,8 +106,18 @@ export function mountBots(ctx) {
   function normLinks(arr) {
     const seen = new Set();
     return (Array.isArray(arr) ? arr : []).map((l) => (typeof l === 'string' ? { id: l, enabled: true } : l))
-      .filter((l) => l && ID_RE.test(String(l.id || '')) && !seen.has(l.id) && seen.add(l.id)).map((l) => ({ id: l.id, enabled: l.enabled !== false }));
+      .filter((l) => l && ID_RE.test(String(l.id || '')) && !seen.has(l.id) && seen.add(l.id)).map((l) => ({ id: l.id, enabled: l.enabled !== false, ...(normMask(l.mask) ? { mask: normMask(l.mask) } : {}) }));
   }
+  // A mask narrows a link by tags: files must carry every "require" tag and none of the "exclude" tags.
+  function normMask(m) {
+    if (!m || typeof m !== 'object') return null;
+    const list = (v) => [...new Set((Array.isArray(v) ? v : []).map((t) => str(t, 80).toLowerCase()).filter((t) => TAG_RE.test(t)))].slice(0, 12);
+    const o = { require: list(m.require), exclude: list(m.exclude) };
+    return o.require.length || o.exclude.length ? o : null;
+  }
+  // Folder tags (f1:menus, f2:lunch) read as folders; everything else as the tag itself.
+  const tagLabel = (t) => { const m = /^f(\d+):(.+)$/.exec(t); return m ? `${m[1] === '1' ? 'folder' : 'sub-folder'} ${m[2]}` : t; };
+  const maskText = (m) => (m ? [...m.require.map((t) => `only ${tagLabel(t)}`), ...m.exclude.map((t) => `not ${tagLabel(t)}`)].join(' · ') : '');
   function normBot(x) {
     if (!x || typeof x !== 'object' || !ID_RE.test(String(x.id || ''))) return null;
     return {
@@ -120,11 +131,12 @@ export function mountBots(ctx) {
   }
   function normBucket(x) {
     if (!x || typeof x !== 'object' || !ID_RE.test(String(x.id || ''))) return null;
-    return { id: x.id, name: str(x.name, 80) || x.id, folder: str(x.folder, 300), builtin: x.builtin === true, updatedAt: x.updatedAt ? parseTs(x.updatedAt) : null };
+    return { id: x.id, name: str(x.name, 80) || x.id, tag: str(x.tag, 80), builtin: x.builtin === true, updatedAt: x.updatedAt ? parseTs(x.updatedAt) : null };
   }
   function normFile(f) {
     if (!f || typeof f !== 'object') return null;
-    const o = { id: str(f.id, 200), path: str(f.path, 400), bytes: num(f.bytes), status: str(f.status, 40), phase: str(f.phase, 40),
+    // path is virtual: the folders a file's folder tags (f1:, f2:, …) put it in, plus its name. There are no real paths.
+    const o = { id: str(f.id, 200), path: str(f.path, 400), folders: Array.isArray(f.folders) ? f.folders.map((x) => str(x, 80)).filter(Boolean) : [], bytes: num(f.bytes), status: str(f.status, 40), phase: str(f.phase, 40),
       mime: str(f.mime, 120), atoms: num(f.atoms), vectorized: num(f.vectorized), chunks: num(f.chunks), error: str(f.error, 400),
       stage: STAGES.some(([k]) => k === f.stage) || f.stage === 'failed' ? f.stage : null, createdAt: f.createdAt ? parseTs(f.createdAt) : null };
     o.state = fileState(o);
@@ -191,7 +203,7 @@ export function mountBots(ctx) {
     const b = bot(botId);
     if (!b || !editable()) return;
     b.buckets = normLinks(next); G.version++; refresh();
-    const body = b.buckets.map((l) => ({ id: l.id, enabled: l.enabled }));
+    const body = b.buckets.map((l) => ({ id: l.id, enabled: l.enabled, ...(l.mask ? { mask: l.mask } : {}) }));
     const run = (chains.get(botId) || Promise.resolve()).then(async () => {
       try { await api(`/api/instances/${encodeURIComponent(botId)}`, { method: 'PATCH', json: { buckets: body } }); announce(what); }
       catch (e) { toast(`Couldn’t update ${b.name}: ${e.message}`, true); await load(); }
@@ -229,7 +241,7 @@ export function mountBots(ctx) {
       I.queue.push(q); n++;
     }
     if (entries.length > MAX_BATCH) announce(`Only the first ${MAX_BATCH} files were queued.`);
-    if (n) announce(`${n} file${n === 1 ? '' : 's'} queued for ${k.folder}${into ? `${into.replace(/\/+$/, '')}/` : ''}`);
+    if (n) announce(`${n} file${n === 1 ? '' : 's'} queued for ${k.name}${into ? ` › ${into.replace(/\/+$/, '').split('/').join(' › ')}` : ''}`);
     paintQueue(); pump();
   }
   function pump() {
@@ -422,11 +434,11 @@ export function mountBots(ctx) {
     if (canvas || canvasErr === 'loading') return;
     canvasErr = 'loading'; paintCanvasState();
     if (!document.querySelector('link[data-flow-css]')) {
-      const { FLOW_CSS } = await import('./flow-canvas.js?v=202610251959').catch(() => ({ FLOW_CSS: null }));
-      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=202610251959"]'));
+      const { FLOW_CSS } = await import('./flow-canvas.js?v=e98cc5f').catch(() => ({ FLOW_CSS: null }));
+      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=e98cc5f"]'));
     }
     try {
-      const { createCanvas } = await import('./flow-canvas.js?v=202610251959');
+      const { createCanvas } = await import('./flow-canvas.js?v=e98cc5f');
       const el = $('#flow-canvas'); rc(el);
       canvas = await createCanvas(el);
       canvasErr = '';
@@ -447,7 +459,7 @@ export function mountBots(ctx) {
     $('#flow-add-bucket').disabled = !editable(); $('#flow-add-bot').disabled = !editable();
     if (canvas) {
       canvas.render({
-        buckets: G.buckets, bots: G.bots.map((b) => ({ ...b, modelLabel: modelLabel(b) })), counts: G.counts, canCount: G.canManage && editable(), editable: editable(), colorMode: colorMode(),
+        buckets: G.buckets, bots: G.bots.map((b) => ({ ...b, modelLabel: modelLabel(b) })), counts: G.counts, maskText, canCount: G.canManage && editable(), editable: editable(), colorMode: colorMode(),
         active: I.view === 'bucket' || I.view === 'bot' ? `${I.view}:${I.id}` : null, version: G.version,
         onSelect: (kind, id) => { if (!kind) { if (I.view === 'bucket' || I.view === 'bot') go('overview'); return; } go(kind, id); },
         onLink: link, onToggle: toggle, onUnlink: unlink,
@@ -493,14 +505,14 @@ export function mountBots(ctx) {
       if (!G.loaded) { rc(el, h('p', { class: 'pending' }, h('span', { class: 'spinner' }), 'Loading bots and buckets…')); return; }
       if (G.error) { rc(el, h('div', { class: 'inst-alert bad', role: 'alert' }, G.error)); return; }
       rc(el,
-        h('p', { class: 'flow-lede' }, 'A ', h('b', null, 'bucket'), ' is one knowDrive folder of files. A ', h('b', null, 'bot'), ' answers and cites only from its ', h('b', null, 'enabled'),
+        h('p', { class: 'flow-lede' }, 'A ', h('b', null, 'bucket'), ' is a set of knowDrive files that share one tag, organised in folders. A ', h('b', null, 'bot'), ' answers and cites only from its ', h('b', null, 'enabled'),
           ' buckets — one bucket can feed many bots, and a bot can draw on many buckets. Nothing outside them is searched.'),
         h('h3', { class: 'inst-sub' }, `Buckets · ${G.buckets.length}`),
         h('ul', { class: 'flow-list', 'aria-label': 'Buckets' }, G.buckets.map((k) => {
           const n = feeds(k.id);
           return h('li', null, h('button', { type: 'button', class: 'flow-item', 'data-fk': `bk:${k.id}`, onclick: () => go('bucket', k.id) },
             h('span', { class: 'flow-item-top' }, h('span', { class: 'inst-name' }, k.name), k.builtin ? h('span', { class: 'flag flag-inst' }, 'built-in') : null),
-            h('span', { class: 'inst-card-meta mono' }, h('span', null, k.folder), filesLabel(k) ? h('span', null, filesLabel(k)) : null, h('span', null, `feeds ${plural(n.length, 'bot')}`))));
+            h('span', { class: 'inst-card-meta mono' }, h('span', null, k.tag), filesLabel(k) ? h('span', null, filesLabel(k)) : null, h('span', null, `feeds ${plural(n.length, 'bot')}`))));
         })),
         h('h3', { class: 'inst-sub' }, `Bots · ${G.bots.length}`),
         h('ul', { class: 'flow-list', 'aria-label': 'Bots' }, G.bots.map((b) => {
@@ -568,16 +580,20 @@ export function mountBots(ctx) {
       : feeds(I.id).map((b) => ({ b, k: bucket(I.id), l: b.buckets.find((x) => x.id === I.id) }));
     const others = isBot ? G.buckets.filter((k) => !rows.some((r) => r.k.id === k.id)) : G.bots.filter((b) => !rows.some((r) => r.b.id === b.id));
     const sel = h('select', { 'aria-label': isBot ? 'Bucket to link' : 'Bot to link', 'data-fk': 'link-sel' },
-      others.map((x) => h('option', { value: x.id }, isBot ? `${x.name} (${x.folder})` : `${x.name} (${x.id})`)));
+      others.map((x) => h('option', { value: x.id }, isBot ? `${x.name} (${x.tag})` : `${x.name} (${x.id})`)));
     keepFocus(el, () => rc(el,
       h('div', { class: 'inst-files-head' }, h('h4', { class: 'inst-sub', id: 'flow-links-h' }, isBot ? 'Buckets feeding this bot' : 'Bots this bucket feeds'),
         h('span', { class: 'panel-count mono' }, `${rows.filter((r) => r.l.enabled).length} on · ${rows.length} linked`)),
       rows.length ? h('ul', { class: 'flow-links', 'aria-labelledby': 'flow-links-h' }, rows.map(({ l, b, k }) => h('li', { class: `flow-link${l.enabled ? ' on' : ' off'}` },
-        h('span', { class: 'flow-link-name' }, h('b', null, isBot ? k.name : b.name), h('span', { class: 'mono' }, isBot ? k.folder : b.id)),
+        h('span', { class: 'flow-link-name' }, h('b', null, isBot ? k.name : b.name), h('span', { class: 'mono' }, isBot ? k.tag : b.id),
+          l.mask ? h('span', { class: 'flow-mask-sum mono' }, `mask: ${maskText(l.mask)}`) : null),
         h('button', { type: 'button', class: 'flow-switch', role: 'switch', 'aria-checked': String(l.enabled), disabled: !ed, 'data-fk': `tg:${b.id}:${k.id}`,
           'aria-label': `${k.name} feeding ${b.name}`, onclick: () => toggle(b.id, k.id) },
           h('span', { class: 'switch-track', 'aria-hidden': 'true' }, h('span', { class: 'switch-thumb' })), h('span', null, l.enabled ? 'on' : 'off')),
-        ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': `ul:${b.id}:${k.id}`, 'aria-label': `Unlink ${k.name} from ${b.name}`, onclick: () => unlink(b.id, k.id) }, 'Unlink') : null)))
+        ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': `ul:${b.id}:${k.id}`, 'aria-label': `Unlink ${k.name} from ${b.name}`, onclick: () => unlink(b.id, k.id) }, 'Unlink') : null,
+        ed || l.mask ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': `mk:${b.id}:${k.id}`, 'aria-expanded': String(I.mask === `${b.id}:${k.id}`),
+          onclick: () => { I.mask = I.mask === `${b.id}:${k.id}` ? '' : `${b.id}:${k.id}`; paintLinks(); } }, l.mask ? (ed ? 'Edit mask' : 'Mask') : 'Add mask') : null,
+        I.mask === `${b.id}:${k.id}` ? maskEditor(b, k, l, ed) : null)))
         : h('p', { class: 'note' }, isBot ? 'No buckets linked — this bot answers “I don’t know” to everything.' : 'Not linked to any bot yet.'),
       ed && others.length ? h('form', { class: 'flow-link-add', onsubmit: (ev) => { ev.preventDefault(); if (isBot) link(I.id, sel.value); else link(sel.value, I.id); } },
         sel, h('button', { type: 'submit', class: 'btn btn-sm', 'data-fk': 'link-add' }, isBot ? 'Link bucket' : 'Link to bot')) : null));
@@ -588,7 +604,7 @@ export function mountBots(ctx) {
     if (!el || !b) return;
     const on = b.buckets.filter((l) => l.enabled).map((l) => bucket(l.id)).filter(Boolean);
     rc(el, on.length
-      ? h('p', { class: 'inst-scope' }, h('span', null, 'Answers come only from ', on.map((k, i) => [i ? ', ' : '', h('b', { class: 'mono' }, k.folder)]), on.length === 1 ? ' — nothing outside this folder is searched or cited.' : ' — nothing outside these folders is searched or cited.'))
+      ? h('p', { class: 'inst-scope' }, h('span', null, 'Answers come only from ', on.map((k, i) => [i ? ', ' : '', h('b', null, k.name)]), on.length === 1 ? ' — nothing outside this bucket is searched or cited.' : ' — nothing outside these buckets is searched or cited.'))
       : h('p', { class: 'inst-scope warn' }, h('span', null, 'No enabled buckets: this bot searches nothing and answers “I don’t know” to every question.')));
   }
 
@@ -603,10 +619,10 @@ export function mountBots(ctx) {
     const idNote = h('span', { class: 'inst-help mono', id: 'bf-name-help' });
     const name = h('input', { id: 'bf-name', required: true, maxlength: 80, autocomplete: 'off', 'aria-describedby': 'bf-name-help', 'data-autofocus': true });
     const idIn = h('input', { id: 'bf-id', maxlength: 40, autocomplete: 'off', spellcheck: 'false', class: 'mono', 'aria-describedby': 'bf-id-help' });
-    const folder = h('input', { id: 'bf-folder', maxlength: 300, autocomplete: 'off', spellcheck: 'false', class: 'mono', 'aria-describedby': 'bf-folder-help' });
+    const tagIn = h('input', { id: 'bf-tag', maxlength: 60, autocomplete: 'off', spellcheck: 'false', class: 'mono', 'aria-describedby': 'bf-tag-help' });
     const sync = () => {
       const s = slugify(idIn.value) || slugify(name.value);
-      idIn.placeholder = slugify(name.value) || 'derived from the name'; folder.placeholder = `knowbot/${s || '<id>'}/`;
+      idIn.placeholder = slugify(name.value) || 'derived from the name'; tagIn.placeholder = `bucket:${s || '<id>'}`;
       rc(idNote, s ? `id ${s}` : 'id is derived from the name');
     };
     name.addEventListener('input', sync); idIn.addEventListener('input', sync); sync();
@@ -615,12 +631,12 @@ export function mountBots(ctx) {
       ev.preventDefault(); err.hidden = true;
       const nm = name.value.trim();
       if (!nm) return fail(err, 'Name is required.', name);
-      const body = { name: nm }; if (folder.value.trim()) body.folder = folder.value.trim();
+      const body = { name: nm }; if (tagIn.value.trim()) body.tag = tagIn.value.trim();
       if (idIn.value.trim()) body.id = slugify(idIn.value);
       save.disabled = true; rc(save, 'Creating…');
       try {
         const r = normBucket(await api('/api/buckets', { method: 'POST', json: body }));
-        announce(`Created bucket ${r.name} for ${r.folder}`);
+        announce(`Created bucket ${r.name} (tag ${r.tag})`);
         await load(); go('bucket', r.id);
       } catch (e) { save.disabled = false; rc(save, 'Create bucket'); fail(err, e.message); }
     };
@@ -628,7 +644,7 @@ export function mountBots(ctx) {
       h('form', { class: 'inst-form', novalidate: true, onsubmit: onSubmit },
         field('Name', name, null, 'bf-name'), idNote,
         field('Id', idIn, 'Optional. Lowercase letters, digits and dashes; fixed once created.', 'bf-id'),
-        field('Folder', folder, 'Optional. The knowDrive folder that holds this bucket’s files.', 'bf-folder'),
+        field('Tag', tagIn, 'Optional. The knowDrive tag every file in this bucket carries; fixed once created. Folders inside the bucket are tags too.', 'bf-tag'),
         err, h('div', { class: 'inst-actions' }, save, h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => go('overview') }, 'Cancel'))));
   }
 
@@ -638,7 +654,7 @@ export function mountBots(ctx) {
     const kids = [back(),
       kicker('Bucket', k.builtin ? h('span', { class: 'flag flag-inst' }, 'built-in') : null),
       h('h3', { class: 'display inst-h', tabindex: -1, 'data-autofocus': true }, k.name),
-      h('div', { class: 'inst-card-meta mono' }, h('span', null, k.folder), h('span', null, `feeds ${plural(n, 'bot')}`), k.updatedAt ? h('span', null, `updated ${ago(k.updatedAt)}`) : null)];
+      h('div', { class: 'inst-card-meta mono' }, h('span', null, k.tag), h('span', null, `feeds ${plural(n, 'bot')}`), k.updatedAt ? h('span', null, `updated ${ago(k.updatedAt)}`) : null)];
     if (!G.canManage || !editable()) {
       kids.push(h('div', { class: 'inst-alert' }, hint()), h('section', { id: 'flow-links', class: 'flow-sec' }));
       return h('div', { class: 'flow-view' }, kids);
@@ -674,10 +690,10 @@ export function mountBots(ctx) {
     const dir = h('input', { type: 'file', multiple: true, webkitdirectory: true, class: 'sr-only', tabindex: -1, 'aria-hidden': 'true' });
     files.addEventListener('change', () => { enqueue(picked(files)); files.value = ''; });
     dir.addEventListener('change', () => { enqueue(picked(dir)); dir.value = ''; });
-    const zone = h('div', { class: 'inst-drop', role: 'group', 'aria-label': `Upload files into ${k.folder}` },
+    const zone = h('div', { class: 'inst-drop', role: 'group', 'aria-label': `Upload files into ${k.name}` },
       h('div', { class: 'inst-drop-title' }, 'Drop files or folders here'),
       h('div', { id: 'kdi-target', class: 'kdi-target' }),
-      h('div', { class: 'inst-help' }, `Any type knowDrive accepts — documents, PDFs, slides, sheets, images, audio — up to 95 MB each. Sub-folders are kept under ${k.folder}`),
+      h('div', { class: 'inst-help' }, `Any type knowDrive accepts — documents, PDFs, slides, sheets, images, audio — up to 95 MB each. Sub-folders are kept as folders in ${k.name}.`),
       h('div', { class: 'inst-actions' },
         h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-fk': 'pick-files', onclick: () => files.click() }, 'Choose files'),
         h('button', { type: 'button', class: 'btn btn-sm', 'data-fk': 'pick-dir', onclick: () => dir.click() }, 'Choose folder')),
@@ -753,7 +769,7 @@ export function mountBots(ctx) {
       a.items.map((x) => h('blockquote', { class: 'kdi-atom' }, h('span', { class: 'mono kdi-atom-n' }, `#${x.seq ?? '?'}`), x.text)));
   }
 
-  /* Folders: knowDrive paths are folder paths, so the corpus reads like a file explorer. */
+  /* Folders: each file's folder tags (f1:, f2:, …) place it in a virtual folder, so the corpus reads like a file explorer. */
   function folderTree(files) {
     const root = { name: '', path: '', dirs: new Map(), files: [] };
     const dirAt = (path) => {
@@ -781,11 +797,11 @@ export function mountBots(ctx) {
     const k = bucket(I.id); if (!k) return;
     const dirs = allDirs(tree || folderTree(I.files || []));
     const sel = h('select', { 'aria-label': 'Upload into folder', class: 'mono' },
-      h('option', { value: '' }, `${k.folder} (top level)`), dirs.map((d) => h('option', { value: d }, `${k.folder}${d}`)));
+      h('option', { value: '' }, `${k.name} (top level)`), dirs.map((d) => h('option', { value: d }, `${k.name} › ${d.replace(/\/$/, '').split('/').join(' › ')}`)));
     sel.value = I.target;
     sel.addEventListener('change', () => { I.target = sel.value; });
     const add = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': 'new-dir', onclick: () => {
-      const raw = prompt(`New folder inside ${k.folder}${I.target}\n(use / for nested folders, e.g. menus/2026)`);
+      const raw = prompt(`New folder inside ${k.name}${I.target ? ` › ${I.target.replace(/\/$/, '').split('/').join(' › ')}` : ''}\n(use / for nested folders, e.g. menus/2026)`);
       const rel = String(raw || '').split('/').map((x) => x.trim()).filter((x) => x && x !== '.' && x !== '..').join('/');
       if (!rel) return;
       const path = `${I.target}${rel}/`;
@@ -836,6 +852,7 @@ export function mountBots(ctx) {
         h('button', { type: 'button', class: 'kdi-file-name mono', 'data-fk': `f:${f.id}`, 'aria-expanded': String(open), title: `${f.path} — show what knowDrive extracted`, onclick: () => toggleAtoms(f) },
           h('span', { class: 'kdi-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'), h('span', { class: 'kdi-file-icon', 'aria-hidden': 'true' }), name),
         h('span', { class: 'kdi-file-meta mono' }, [fmtBytes(f.bytes), f.mime ? f.mime.split(';')[0] : null].filter(Boolean).join(' · ')),
+        ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': `mv:${f.id}`, 'aria-label': `Move ${f.path} to another folder`, onclick: () => moveFile(f) }, 'Move') : null,
         ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm inst-f-del', 'data-fk': `del:${f.id}`, 'aria-label': `Delete ${f.path}`, onclick: () => deleteFile(f) }, 'Delete') : null),
       h('div', { class: 'kdi-file-status' }, track(f),
         h('span', { class: `badge ${f.state === 'ready' ? 'badge-good' : f.state === 'failed' ? 'badge-bad' : 'badge-warn'}` }, stageLabel(f.stage || f.state)),
@@ -859,8 +876,8 @@ export function mountBots(ctx) {
     if (!I.files.length && !tree.dirs.size) { rc(el, h('p', { class: 'note' }, 'No files yet — bots linked to this bucket find nothing in it.')); return; }
     const ed = editable() && !k.builtin;
     keepFocus(el, () => rc(el, h('div', { class: 'kdi-tree' },
-      h('div', { class: 'kdi-root mono' }, h('span', { class: 'kdi-dir-icon', 'aria-hidden': 'true' }), k.folder || ''),
-      h('ul', { class: 'kdi-files', role: 'tree', 'aria-label': `Files in ${k.folder}` }, treeItems(tree, ed, 0)))));
+      h('div', { class: 'kdi-root mono' }, h('span', { class: 'kdi-dir-icon', 'aria-hidden': 'true' }), k.name),
+      h('ul', { class: 'kdi-files', role: 'tree', 'aria-label': `Files in ${k.name}` }, treeItems(tree, ed, 0)))));
   }
 
   function botForm(b) {
@@ -952,7 +969,7 @@ export function mountBots(ctx) {
         field('Relevance floor', floor, 'Higher = refuses more, lower = answers more loosely. Blank = server default (0.70).', 'if-floor'),
         field('Guards', guards, 'Retail store adds shopping-specific refusals (prices, orders, stock).', 'if-guards')),
       picks.length ? h('fieldset', { class: 'inst-field flow-picks' }, h('legend', null, 'Answer from these buckets ', h('span', { class: 'inst-help' }, 'change any time on the canvas')),
-        picks.map(({ k, cb }) => h('label', { class: 'flow-pick' }, cb, h('span', null, k.name), h('span', { class: 'mono inst-help' }, k.folder)))) : null,
+        picks.map(({ k, cb }) => h('label', { class: 'flow-pick' }, cb, h('span', null, k.name), h('span', { class: 'mono inst-help' }, k.tag)))) : null,
       err, ro ? null : h('div', { class: 'inst-actions' }, save, edit ? null : h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => go('overview') }, 'Cancel')));
   }
 
@@ -981,11 +998,80 @@ export function mountBots(ctx) {
   }
 
   /* ---------------------------------------------------------------- deletes */
+  // Moving a file only changes its folder tags; nothing is re-uploaded or re-processed.
+  async function moveFile(f) {
+    const k = bucket(I.id);
+    if (!k) return;
+    const name = f.path.split('/').pop();
+    const raw = prompt(`Move “${name}” to which folder in ${k.name}?\n(use / for nested folders, e.g. menus/2026; leave empty for the top level)`, f.folders.join('/'));
+    if (raw === null) return;
+    const folders = raw.split('/').map((x) => x.trim()).filter(Boolean);
+    try {
+      const r = await api(`/api/buckets/${encodeURIComponent(k.id)}/files/${encodeURIComponent(f.id)}`, { method: 'PATCH', json: { folders } });
+      const now = Array.isArray(r && r.folders) ? r.folders : folders;
+      announce(`Moved ${name} to ${now.length ? now.join(' › ') : 'the top level'}`);
+      if (now.length) openDir(`${now.join('/')}/`, true);
+      tagCache.delete(k.id);
+      await loadFiles();
+    } catch (e) { toast(`Couldn’t move ${name}: ${e.message}`, true); }
+  }
+
+  // Mask editor for one link: pick tags the bucket's files carry (folders first), or type any tag.
+  const tagCache = new Map();
+  function bucketTags(id) {
+    if (!tagCache.has(id)) {
+      tagCache.set(id, api(`/api/buckets/${encodeURIComponent(id)}/tags`).then(
+        (j) => (Array.isArray(j && j.tags) ? j.tags : []).map((t) => ({ tag: str(t.tag, 80), count: num(t.count) })).filter((t) => t.tag),
+        (e) => { tagCache.delete(id); throw e; }));
+    }
+    return tagCache.get(id);
+  }
+  function maskEditor(b, k, l, ed) {
+    const draft = { require: [...((l.mask && l.mask.require) || [])], exclude: [...((l.mask && l.mask.exclude) || [])] };
+    const list = h('datalist', { id: `mask-tags-${b.id}-${k.id}` });
+    const err = errBox();
+    const isFolder = (t) => /^f\d+:/.test(t);
+    bucketTags(k.id).then((tags) => rc(list, tags.slice().sort((x, y) => (isFolder(y.tag) - isFolder(x.tag)) || x.tag.localeCompare(y.tag))
+      .map((t) => h('option', { value: t.tag }, `${tagLabel(t.tag)} (${t.count})`))), () => {});
+    const row = (key, label, help) => {
+      const chips = h('span', { class: 'mask-chips' });
+      const input = h('input', { class: 'mono', list: list.id, maxlength: 80, placeholder: 'f1:family-law', 'aria-label': `${label}: add a tag`, spellcheck: 'false', autocomplete: 'off' });
+      const paintChips = () => rc(chips, draft[key].length
+        ? draft[key].map((t) => h('span', { class: `mask-chip ${key}`, title: t }, tagLabel(t),
+          ed ? h('button', { type: 'button', 'aria-label': `Remove ${t}`, onclick: () => { draft[key] = draft[key].filter((x) => x !== t); paintChips(); } }, '×') : null))
+        : h('span', { class: 'inst-help' }, 'none'));
+      const add = () => {
+        const t = input.value.trim().toLowerCase();
+        if (!t) return;
+        if (!TAG_RE.test(t)) return fail(err, `“${t}” is not a tag (letters, digits and : . _ - only).`, input);
+        if (!draft[key].includes(t)) draft[key].push(t);
+        input.value = ''; err.hidden = true; paintChips();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+      paintChips();
+      return h('div', { class: 'mask-row' }, h('span', { class: 'mask-label' }, h('b', null, label), h('span', { class: 'inst-help' }, help)), chips,
+        ed ? h('span', { class: 'mask-add' }, input, h('button', { type: 'button', class: 'btn btn-sm', onclick: add }, 'Add')) : null);
+    };
+    const save = (mask) => {
+      I.mask = '';
+      setLinks(b.id, b.buckets.map((x) => (x.id === k.id ? { id: x.id, enabled: x.enabled, ...(mask ? { mask } : {}) } : x)),
+        mask ? `Mask on ${k.name} → ${b.name}: ${maskText(mask)}` : `Mask removed from ${k.name} → ${b.name}`);
+      paintLinks();
+    };
+    return h('div', { class: 'mask-edit', role: 'group', 'aria-label': `Mask for ${k.name} feeding ${b.name}` }, list,
+      h('p', { class: 'inst-help' }, 'A mask narrows what this bot may cite from this bucket. Folders are tags, so a mask can keep a bot to one folder, or leave one out.'),
+      row('require', 'Only files tagged', 'all of these'), row('exclude', 'Never files tagged', 'any of these'), err,
+      ed ? h('div', { class: 'inst-actions' },
+        h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: () => save(normMask(draft)) }, 'Save mask'),
+        l.mask ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => save(null) }, 'Remove mask') : null,
+        h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => { I.mask = ''; paintLinks(); } }, 'Cancel')) : null);
+  }
+
   async function deleteFile(f) {
     const k = bucket(I.id);
     if (!k) return;
     const n = feeds(k.id).length;
-    if (!confirm(`Delete “${f.path}” from ${k.folder}?\n\nIt is removed from the knowDrive store${n ? ` and the ${plural(n, 'bot')} using this bucket can no longer cite it` : ''}.`)) return;
+    if (!confirm(`Delete “${f.path}” from ${k.name}?\n\nIt is removed from the knowDrive store${n ? ` and the ${plural(n, 'bot')} using this bucket can no longer cite it` : ''}.`)) return;
     try {
       await api(`/api/buckets/${encodeURIComponent(k.id)}/files/${encodeURIComponent(f.id)}`, { method: 'DELETE' });
       announce(`Deleted ${f.path}`);
@@ -996,7 +1082,7 @@ export function mountBots(ctx) {
   }
   async function deleteBucket(k) {
     const n = feeds(k.id), c = G.counts.get(k.id);
-    if (!confirm(`Delete the bucket “${k.name}”?\n\nIt is unlinked from ${n.length ? n.map((b) => b.name).join(', ') : 'every bot'}. This removes the bucket only: ${c && c.n ? `the ${plural(c.n, 'file')} in` : 'files in'} ${k.folder} stay in the knowDrive store — delete them first if you want them gone.`)) return;
+    if (!confirm(`Delete the bucket “${k.name}”?\n\nIt is unlinked from ${n.length ? n.map((b) => b.name).join(', ') : 'every bot'}. This removes the bucket only: ${c && c.n ? `the ${plural(c.n, 'file')} in` : 'files tagged'} ${k.tag} stay in the knowDrive store — delete them first if you want them gone.`)) return;
     try { await api(`/api/buckets/${encodeURIComponent(k.id)}`, { method: 'DELETE' }); G.counts.delete(k.id); toast(`Deleted bucket ${k.name}`); await load(); go('overview'); }
     catch (e) { toast(`Couldn’t delete ${k.name}: ${e.message}`, true); }
   }

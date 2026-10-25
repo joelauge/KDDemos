@@ -326,7 +326,7 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0; this.rescueMargin = Number(rescueMargin) || 0; this.cards = cards !== false;
@@ -335,16 +335,27 @@ export class KnowDriveRetriever {
     this.prefix = String(prefix || '').replace(/^\/+/, '');
     // KnowDrive tags every file with its folders (dir:<segment>), so the prefix is enforced in the search itself:
     // a same-named file outside the folder can't take a result slot.
-    this.allOf = [...(this.tag ? [this.tag] : []), ...this.prefix.split('/').filter(Boolean).map((d) => `dir:${d}`)];
+    // Tag-scoped buckets (dirFilter/prefixFilter off) are defined by tags alone; the prefix then only shortens names.
+    this.dirFilter = dirFilter !== false; this.prefixFilter = prefixFilter !== false;
+    this.allOf = [...(this.tag ? [this.tag] : []), ...(this.dirFilter ? this.prefix.split('/').filter(Boolean).map((d) => `dir:${d}`) : []),
+      ...(Array.isArray(include) ? include : []).filter(Boolean)];
   }
 
   get name() { return 'knowdrive'; }
+
+  /** The same retriever narrowed by a mask: extra required tags and extra excluded tags. */
+  withMask({ require = [], exclude = [] } = {}) {
+    if (!require.length && !exclude.length) return this;
+    const r = Object.create(Object.getPrototypeOf(this));
+    Object.assign(r, this, { allOf: [...this.allOf, ...require], exclude: [...this.exclude, ...exclude] });
+    return r;
+  }
 
   async query(query, k, mode, extraAllOf = []) {
     const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
-      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.allOf.length || this.exclude.length || extraAllOf.length ? { filter: { ...(this.allOf.length || extraAllOf.length ? { all_of: [...this.allOf, ...extraAllOf] } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
+      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.prefixFilter ? {} : { fields: 'tags,uri,score,text,file_id,metadata' }), ...(this.allOf.length || this.exclude.length || extraAllOf.length ? { filter: { ...(this.allOf.length || extraAllOf.length ? { all_of: [...this.allOf, ...extraAllOf] } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -414,15 +425,20 @@ export class KnowDriveRetriever {
     const text = Array.isArray(d.content)
       ? d.content.filter((c) => c && typeof c.text === 'string').map((c) => c.text).join('\n')
       : typeof d.content === 'string' ? d.content : (d.text || '');
+    // Tag-scoped buckets: knowDrive filters by tag, and every hit is checked again here (fail closed without tags).
+    if (!this.prefixFilter) {
+      const tags = Array.isArray(d.tags) ? d.tags.map((t) => String(t).toLowerCase()) : null;
+      if (!tags || !this.allOf.every((t) => tags.includes(t)) || this.exclude.some((t) => tags.includes(t))) return null;
+    }
     let full = String(d.filename || attrs.path || attrs.filename || '').replace(/^\/+/, '');
     // Production search returns bare file names. The dir: tags in the filter already keep hits inside the
     // folder, so a bare name is resolved to its corpus path through the local mirror.
-    if (this.prefix && !full.includes('/') && this.allOf.some((t) => t.startsWith('dir:'))) {
+    if (this.prefix && this.dirFilter && !full.includes('/') && this.allOf.some((t) => t.startsWith('dir:'))) {
       const rel = this.local?.resolveBasename(full, text);
       if (rel) full = this.prefix + rel;
     }
-    if (this.prefix && !full.startsWith(this.prefix)) return null;
-    const filename = full.slice(this.prefix.length);
+    if (this.prefix && !full.startsWith(this.prefix) && this.prefixFilter) return null;
+    const filename = this.prefix && full.startsWith(this.prefix) ? full.slice(this.prefix.length) : full;
     if (!filename) return null;
     const local = this.local?.lookup(filename);
     const title = pickStr(attrs.title) || local?.title || titleFromFilename(filename);

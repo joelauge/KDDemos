@@ -1,5 +1,5 @@
 // Shared helpers for the KnowBot demo pages.
-import { hostedApi } from '../lib/site-config.js?v=202610251959';
+import { hostedApi } from '../lib/site-config.js?v=e98cc5f';
 // apiBase: ?api=... override, else same origin when served by the KnowBot server (:8787), else http://localhost:8787.
 const q = new URLSearchParams(location.search);
 // ?api= is limited to loopback or same-origin servers so a crafted link can't point the demos at a hostile server.

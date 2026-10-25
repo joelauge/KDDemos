@@ -28,10 +28,10 @@ try {
   ok(prov.status === 200, `admin token accepted (providers: ${(prov.data.providers || []).map((p) => `${p.id}${p.configured ? '✓' : ''}`).join(', ')})`);
 
   const b = await call('/api/buckets', { method: 'POST', json: { name: `KB live check ${id}`, id } });
-  ok(b.status === 201 && b.data.folder === `knowbot/${id}/`, `bucket created at ${b.data.folder}`);
+  ok(b.status === 201 && b.data.tag === `bucket:${id}` && b.data.folder === undefined, `bucket created with tag ${b.data.tag}`);
   const doc = '# Lighthouse Café\n\nThe Lighthouse Café serves breakfast from 6:30am to 10:45am every day.\nThe café\'s signature dish is the harbour pancake stack.\n';
   const up = await call(`/api/buckets/${id}/files`, { method: 'POST', body: doc, headers: { 'content-type': 'text/markdown', 'x-filename': 'menu/breakfast.md' } });
-  ok(up.status === 201 && up.data.path === 'menu/breakfast.md', `uploaded ${up.data.path}`);
+  ok(up.status === 201 && up.data.path === 'menu/breakfast.md' && String(up.data.folders) === 'menu', `uploaded ${up.data.path} (folder tags: ${up.data.folders})`);
 
   let stage = '', seen = [];
   for (let i = 0; i < 60 && stage !== 'ready' && stage !== 'failed'; i++) {
@@ -50,6 +50,14 @@ try {
   ok(/6:30am/.test(a1.text || '') && (a1.citations || []).some((c) => c.filename === 'menu/breakfast.md'), `answers from the bucket: ${JSON.stringify((a1.text || '').slice(0, 90))}`);
   const a2 = await ask(`${id}-bot`, 'Do you ship to Canada?');
   ok(a2.refused === true, 'does not answer from other buckets (UGM shipping)');
+  const tags = ((await call(`/api/buckets/${id}/tags`)).data.tags || []).map((t) => t.tag);
+  ok(tags.includes('f1:menu'), `folder is a tag (${tags.join(', ')})`);
+  await call(`/api/instances/${id}-bot`, { method: 'PATCH', json: { buckets: [{ id, mask: { exclude: ['f1:menu'] } }] } });
+  ok((await ask(`${id}-bot`, 'When is breakfast served?')).refused === true, 'a mask excluding the folder removes the source');
+  const mv = await call(`/api/buckets/${id}/files/${up.data.id}`, { method: 'PATCH', json: { folders: ['Mornings'] } });
+  ok(mv.status === 200 && String(mv.data.folders) === 'mornings', 'moving a file retags it');
+  const a4 = await ask(`${id}-bot`, 'When is breakfast served?');
+  ok(/6:30am/.test(a4.text || ''), 'after the move the mask no longer excludes it');
   await call(`/api/instances/${id}-bot`, { method: 'PATCH', json: { buckets: [{ id, enabled: false }] } });
   const a3 = await ask(`${id}-bot`, 'When is breakfast served?');
   ok(a3.refused === true, 'switching the link off removes the source');

@@ -54,7 +54,7 @@ export async function createCanvas(el) {
     e('div', { className: 'fnode-kicker' }, e('span', null, 'bucket'), d.item.builtin ? e('span', { className: 'flag flag-inst' }, 'built-in') : null,
       e('span', { className: 'fnode-out', title: 'Bots this bucket feeds' }, `→ ${plural(d.out, 'bot')}`)),
     e('div', { className: 'fnode-name' }, d.item.name),
-    e('div', { className: 'fnode-folder' }, d.item.folder),
+    e('div', { className: 'fnode-folder' }, d.item.tag),
     e('div', { className: 'fnode-meta' }, filesLabel(d))),
     e(Handle, { type: 'source', position: Position.Right, isConnectable: d.editable, className: 'fhandle', title: d.editable ? 'Drag to a bot to link' : undefined })));
   const BotNode = memo(({ data: d }) => e('div', { className: `fnode fnode-bot${d.active ? ' is-active' : ''}${d.enabled ? '' : ' is-empty'}` },
@@ -81,6 +81,7 @@ export async function createCanvas(el) {
           title: d.editable ? `Turn ${d.enabled ? 'off' : 'on'}: ${d.botName} ${d.enabled ? 'stops' : 'starts'} citing ${d.bucketName}` : `${d.enabled ? 'On' : 'Off'} (read-only)`,
           onClick: (ev) => { ev.stopPropagation(); d.onToggle(); },
         }, e('span', { className: 'fedge-dot', 'aria-hidden': 'true' }), d.enabled ? 'on' : 'off'),
+        d.mask ? e('span', { className: 'fedge-mask', title: `Mask: ${d.mask}`, 'aria-label': `Mask: ${d.mask}` }, 'mask') : null,
         d.editable ? e('button', { type: 'button', className: 'fedge-x', 'aria-label': `Unlink ${d.bucketName} from ${d.botName}`, title: 'Unlink', onClick: (ev) => { ev.stopPropagation(); d.onUnlink(); } }, '×') : null)));
   }
   const nodeTypes = { bucket: BucketNode, bot: BotNode };
@@ -96,7 +97,7 @@ export async function createCanvas(el) {
     p.buckets.forEach((b, i) => {
       const id = nodeId('bucket', b.id);
       out.push({ id, type: 'bucket', position: place('bucket', i, id), selected: !!(old.get(id) || {}).selected, deletable: false,
-        ariaLabel: `Bucket ${b.name}, folder ${b.folder}`,
+        ariaLabel: `Bucket ${b.name}, tag ${b.tag}`,
         data: { kind: 'bucket', item: b, count: p.counts.get(b.id), canCount: p.canCount, out: outCount.get(b.id) || 0, editable: p.editable, active: p.active === id } });
     });
     p.bots.forEach((b, i) => {
@@ -115,8 +116,8 @@ export async function createCanvas(el) {
       if (!names.has(l.id)) continue;
       const id = `${l.id}->${bot.id}`;
       out.push({ id, type: 'link', source: nodeId('bucket', l.id), target: nodeId('bot', bot.id), selected: sel.has(id), deletable: p.editable,
-        ariaLabel: `${names.get(l.id)} feeds ${bot.name}, ${l.enabled ? 'on' : 'off'}`,
-        data: { enabled: l.enabled, editable: p.editable, bucketName: names.get(l.id), botName: bot.name,
+        ariaLabel: `${names.get(l.id)} feeds ${bot.name}, ${l.enabled ? 'on' : 'off'}${l.mask ? ', masked' : ''}`,
+        data: { enabled: l.enabled, mask: l.mask ? p.maskText(l.mask) : '', editable: p.editable, bucketName: names.get(l.id), botName: bot.name,
           onToggle: () => ref.current.onToggle(bot.id, l.id), onUnlink: () => ref.current.onUnlink(bot.id, l.id) } });
     }
     return out;

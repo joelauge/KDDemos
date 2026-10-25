@@ -2,7 +2,7 @@
 // <script type="module" src=".../lib/embed.js" data-api="http://localhost:8787" data-mode="widget|inline|fullpage"
 //         data-target="#id" data-engine="server|webllm" data-org="..." data-name="KnowBot" data-starters="Q1|Q2"
 //         data-instance="acme"></script>   (data-instance: answer only from that chat instance's knowDrive folder)
-import { mount, ensureCss } from './widget.js?v=202610251959';
+import { mount, ensureCss } from './widget.js?v=e98cc5f';
 
 const me = new URL(import.meta.url);
 const script = [...document.querySelectorAll('script[src]')].find((s) => s.src === me.href)
@@ -26,7 +26,7 @@ const apiBase = apiParam || d.api || (me.port === '8787' ? me.origin : location.
 const engine = d.engine === 'webllm' ? { type: 'webllm', ...(d.model ? { model: d.model } : {}) } : d.engine === 'openai'
   ? { type: 'openai', baseUrl: d.llm, model: d.model } : { type: 'server' };
 
-ensureCss(d.css || new URL('./knowbot.css?v=202610251959', me).href);
+ensureCss(d.css || new URL('./knowbot.css?v=e98cc5f', me).href);
 const instance = /^[a-z0-9-]{1,40}$/.test(d.instance || '') ? d.instance : null;
 // An instance's name, greeting and starter questions come from the server unless the page sets them.
 const instanceConfig = async () => {

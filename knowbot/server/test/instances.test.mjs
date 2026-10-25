@@ -7,7 +7,7 @@ import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
-import { normalizeFolder, safeRelPath, slugify } from '../instances.mjs';
+import { normalizeFolder, safeRelPath, slugify, folderTags, foldersOf } from '../instances.mjs';
 import { sealKey, openKey } from '../providers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,9 +40,20 @@ function fakeKnowDrive() {
         files.set(id, { id, filename: name, tags: tags.split(','), status: 'in_progress' });
         return json(200, { files: [{ id, filename: name, status: 'in_progress' }] });
       }
+      const having = (f) => (url.searchParams.get('tags_all') || '').split(',').filter(Boolean).every((t) => (f.tags || []).includes(t));
       if (/\/vector_stores\/[^/]+\/files$/.test(url.pathname)) {
         const prefix = url.searchParams.get('prefix') || '';
-        return json(200, { data: [...files.values()].filter((f) => f.filename.startsWith(prefix)), has_more: false });
+        return json(200, { data: [...files.values()].filter((f) => f.filename.startsWith(prefix) && having(f)), has_more: false });
+      }
+      if (/\/vector_stores\/[^/]+\/tags$/.test(url.pathname)) {
+        const counts = new Map();
+        for (const f of files.values()) if (having(f)) for (const t of f.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+        return json(200, { data: [...counts].map(([tag, count]) => ({ tag, count })), has_more: false });
+      }
+      if (url.pathname === '/api/v1/files/batch_tags') {
+        const b = JSON.parse(raw);
+        for (const id of b.file_ids) { const f = files.get(id); if (f) f.tags = [...new Set([...(f.tags || []).filter((t) => !(b.tags_remove || []).includes(t)), ...(b.tags_add || [])])]; }
+        return json(200, { updated: b.file_ids.length });
       }
       const fm = /^\/api\/v1\/files\/([^/]+)$/.exec(url.pathname);
       if (fm) {
@@ -52,11 +63,13 @@ function fakeKnowDrive() {
         return json(200, f);
       }
       if (url.pathname.endsWith('/search')) {
+        // Deliberately ignores the filter: KnowBot must drop every hit whose tags don't match the bucket and mask.
         return json(200, { data: [
-          { file_id: 'a', filename: 'knowbot/acme/hours.md', score: 0.9, content: [{ type: 'text', text: 'Open 9 to 5.' }] },
-          { file_id: 'b', filename: 'knowbot/ugm/policies/refund.md', score: 0.95, content: [{ type: 'text', text: 'another folder' }] },
-          { file_id: 'c', filename: 'other/knowbot/acme/x.md', score: 0.93, content: [{ type: 'text', text: 'same tags, wrong folder' }] },
-          { file_id: 'd', filename: 'knowbot/acme/sub/menu.pdf', score: 0.8, content: [{ type: 'text', text: 'Menu.' }] },
+          { file_id: 'a', filename: 'knowbot/acme/hours.md', score: 0.9, content: [{ type: 'text', text: 'Open 9 to 5.' }], tags: ['bucket:acme'] },
+          { file_id: 'b', filename: 'knowbot/ugm/policies/refund.md', score: 0.95, content: [{ type: 'text', text: 'another bucket' }], tags: ['knowbot:ugm'] },
+          { file_id: 'c', filename: 'elsewhere/lunch.md', score: 0.93, content: [{ type: 'text', text: 'tagged in, stored elsewhere' }], tags: ['bucket:acme', 'f1:menus'] },
+          { file_id: 'd', filename: 'knowbot/acme/menus/menu.pdf', score: 0.8, content: [{ type: 'text', text: 'Menu.' }], tags: ['bucket:acme', 'f1:menus', 'format:pdf'] },
+          { file_id: 'e', filename: 'knowbot/acme/untagged.md', score: 0.99, content: [{ type: 'text', text: 'no tags returned' }] },
         ] });
       }
       json(404, {});
@@ -79,6 +92,9 @@ describe('chat instances', () => {
   after(async () => { await close(kb.server); await close(kd.srv); });
 
   test('helpers: folders normalise, upload names cannot leave the folder, ids slugify', () => {
+    assert.deepEqual(folderTags(['Family Law', '04']), ['f1:family-law', 'f2:04']);
+    assert.deepEqual(foldersOf(['bucket:x', 'f2:04', 'f1:family-law']), ['family-law', '04']);
+    assert.equal(foldersOf(['bucket:x']), null);
     assert.equal(normalizeFolder('/knowbot//acme'), 'knowbot/acme/');
     assert.throws(() => normalizeFolder('knowbot/../ugm/'), /\.\./);
     assert.throws(() => normalizeFolder(''), /required/);
@@ -93,61 +109,77 @@ describe('chat instances', () => {
   const search = async (instance) => (await (await api('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'hours', instance }) })).json());
   const lastSearches = (n) => kd.calls.filter((c) => c.url.endsWith('/search')).slice(-n).map((c) => JSON.parse(c.raw));
 
-  test('buckets and bots need the admin token; the registry is saved to knowDrive', async () => {
+  test('buckets are tags: created by name, no folder, and saved to the registry in knowDrive', async () => {
     assert.equal((await post('/api/buckets', { name: 'Acme' }, { 'content-type': 'application/json' })).status, 401);
     assert.equal((await post('/api/buckets', { name: 'Acme' }, { ...admin, authorization: 'Bearer wrong!' })).status, 401);
     const b = await post('/api/buckets', { name: 'Acme' });
     assert.equal(b.status, 201);
-    assert.deepEqual(await b.json(), { ...(await (await api('/api/buckets/acme')).json()) });
-    assert.equal((await post('/api/buckets', { name: 'Menus', folder: 'shared/menus' })).status, 201);
+    const bucket = await b.json();
+    assert.equal(bucket.tag, 'bucket:acme');
+    assert.equal(bucket.folder, undefined, 'no paths in the API');
+    assert.equal((await post('/api/buckets', { name: 'Lunch Menus', tag: 'menus' })).status, 201);
     assert.equal((await post('/api/buckets', { name: 'Acme' })).status, 409);
     assert.ok(kd.calls.some((c) => c.url === '/api/v1/ingest' && c.raw.includes('filename="knowbot/_config/instances.json"')));
     assert.equal((await post('/api/instances', { name: 'Bad', buckets: [{ id: 'nope' }] })).status, 400, 'links must name real buckets');
     const bot = await (await post('/api/instances', { name: 'Front desk', buckets: [{ id: 'acme' }, { id: 'menus', enabled: false }] })).json();
     assert.deepEqual(bot.buckets, [{ id: 'acme', enabled: true }, { id: 'menus', enabled: false }]);
-    assert.equal(bot.guards, 'general');
     const g = await (await api('/api/graph')).json();
-    assert.deepEqual(g.buckets.map((x) => x.id), ['ugm', 'acme', 'menus']);
-    assert.deepEqual(g.bots.map((x) => x.id), ['ugm', 'front-desk']);
+    assert.deepEqual(g.buckets.map((x) => [x.id, x.tag]), [['ugm', 'knowbot:ugm'], ['acme', 'bucket:acme'], ['menus', 'bucket:menus']]);
   });
 
-  test('a bot searches only its enabled buckets, and hits outside each folder are dropped', async () => {
+  test('a bot searches by its enabled buckets\' tags, and every hit must carry them', async () => {
     const j = await search('front-desk');
     const [body] = lastSearches(1);
-    assert.deepEqual(body.filter.all_of, ['dir:knowbot', 'dir:acme'], 'only the enabled bucket, no knowbot:ugm tag');
+    assert.deepEqual(body.filter.all_of, ['bucket:acme'], 'scope is the bucket tag only');
     assert.deepEqual(body.filter.none_of, ['kind:config'], 'the registry file is never a source');
-    assert.deepEqual(j.results.map((r) => [r.bucket, r.filename]), [['acme', 'hours.md'], ['acme', 'sub/menu.pdf']], 'other folders never come back, even with matching tags');
-    await patch('/api/instances/front-desk', { buckets: [{ id: 'acme', enabled: false }, { id: 'menus' }] });
-    const before = kd.calls.length;
-    const j2 = await search('front-desk');
-    const searched = kd.calls.slice(before).filter((c) => c.url.endsWith('/search')).map((c) => JSON.parse(c.raw).filter.all_of.join(' '));
-    assert.ok(searched.every((f) => f === 'dir:shared dir:menus'), 'a switched-off link is not searched');
-    assert.deepEqual(j2.results, [], 'nothing in the fake store sits under shared/menus/');
+    assert.equal(body.fields, 'tags,uri,score,text,file_id,metadata', 'tags are requested so hits can be checked');
+    assert.deepEqual(j.results.map((r) => [r.bucket, r.filename]), [['acme', 'elsewhere/lunch.md'], ['acme', 'hours.md'], ['acme', 'menus/menu.pdf']],
+      'hits from another bucket or without tags are dropped; where a file is stored does not matter');
     assert.equal((await api('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"query":"x","instance":"nope"}' })).status, 404);
+  });
+
+  test('masks narrow a link by tags: required tags and excluded tags', async () => {
+    await patch('/api/instances/front-desk', { buckets: [{ id: 'acme', mask: { require: ['f1:menus'], exclude: ['format:pdf'] } }] });
+    const j = await search('front-desk');
+    const [body] = lastSearches(1);
+    assert.deepEqual(body.filter.all_of, ['bucket:acme', 'f1:menus']);
+    assert.deepEqual(body.filter.none_of, ['kind:config', 'format:pdf']);
+    assert.deepEqual(j.results.map((r) => r.filename), ['elsewhere/lunch.md'], 'only the menus folder, no PDFs');
+    const g = await (await api('/api/graph')).json();
+    assert.deepEqual(g.bots.find((b) => b.id === 'front-desk').buckets[0].mask, { require: ['f1:menus'], exclude: ['format:pdf'] });
+    assert.equal((await patch('/api/instances/front-desk', { buckets: [{ id: 'acme', mask: { require: ['not a tag!'] } }] })).status, 400);
+    await patch('/api/instances/front-desk', { buckets: [{ id: 'acme' }] });
   });
 
   test('several bots can share one bucket; a bot with no enabled links answers from nothing', async () => {
     await post('/api/instances', { name: 'Kiosk', buckets: ['acme'] });
-    await patch('/api/instances/front-desk', { buckets: [{ id: 'acme' }] });
-    for (const id of ['kiosk', 'front-desk']) assert.deepEqual((await search(id)).results.map((r) => r.filename), ['hours.md', 'sub/menu.pdf']);
+    for (const id of ['kiosk', 'front-desk']) assert.equal((await search(id)).results.length, 3);
     await patch('/api/instances/kiosk', { buckets: [] });
     const before = kd.calls.length;
     assert.deepEqual((await search('kiosk')).results, []);
     assert.equal(kd.calls.length, before, 'no knowDrive search at all');
   });
 
-  test('uploads land inside the bucket folder with its tag; the built-in bucket and other folders are off limits', async () => {
-    const up = await api('/api/buckets/acme/files', { method: 'POST', headers: { authorization: admin.authorization, 'content-type': 'text/markdown', 'x-filename': encodeURIComponent('../../ugm/evil.md') }, body: '# hi' });
+  test('uploads: folders become tags; moving a file only retags it; other buckets are off limits', async () => {
+    const up = await api('/api/buckets/acme/files', { method: 'POST', headers: { authorization: admin.authorization, 'content-type': 'text/markdown', 'x-filename': encodeURIComponent('../../Menus/Lunch Specials/today.md') }, body: '# hi' });
     assert.equal(up.status, 201);
+    assert.deepEqual((await up.json()).folders, ['Menus', 'Lunch Specials']);
     const ingest = kd.calls.filter((c) => c.url === '/api/v1/ingest').at(-1);
-    assert.match(ingest.raw, /filename="knowbot\/acme\/ugm\/evil\.md"/);
     assert.match(ingest.raw, /bucket:acme/);
+    assert.match(ingest.raw, /f1:menus,f2:lunch-specials/);
     assert.equal((await api('/api/buckets/acme/files', { method: 'POST', headers: { 'x-filename': 'a.md' }, body: 'x' })).status, 401);
     assert.equal((await api('/api/buckets/ugm/files', { method: 'POST', headers: { authorization: admin.authorization, 'x-filename': 'a.md' }, body: 'x' })).status, 403);
-    const files = await (await api('/api/buckets/acme/files', { headers: admin })).json();
-    assert.deepEqual(files.files.map((f) => f.path), ['ugm/evil.md']);
-    assert.equal((await api('/api/buckets/acme/files/file-out', { method: 'DELETE', headers: admin })).status, 403, 'a file in another folder cannot be deleted through this bucket');
-    assert.equal((await api(`/api/buckets/acme/files/${files.files[0].id}`, { method: 'DELETE', headers: admin })).status, 200);
+    let files = (await (await api('/api/buckets/acme/files', { headers: admin })).json()).files;
+    assert.deepEqual(files.map((f) => [f.name, f.folders, f.path]), [['today.md', ['menus', 'lunch-specials'], 'menus/lunch-specials/today.md']]);
+    assert.equal(files[0].folder, undefined);
+    const mv = await api(`/api/buckets/acme/files/${files[0].id}`, { method: 'PATCH', headers: admin, body: JSON.stringify({ folders: ['Archive'] }) });
+    assert.equal(mv.status, 200);
+    files = (await (await api('/api/buckets/acme/files', { headers: admin })).json()).files;
+    assert.deepEqual(files[0].folders, ['archive'], 'moved by retagging');
+    const tags = (await (await api('/api/buckets/acme/tags')).json()).tags.map((t) => t.tag);
+    assert.ok(tags.includes('f1:archive') && !tags.includes('bucket:acme') && !tags.includes('knowbot'), 'mask picker gets folder tags, not bookkeeping');
+    assert.equal((await api('/api/buckets/acme/files/file-out', { method: 'DELETE', headers: admin })).status, 403, 'a file without the bucket tag cannot be deleted through it');
+    assert.equal((await api(`/api/buckets/acme/files/${files[0].id}`, { method: 'DELETE', headers: admin })).status, 200);
   });
 
   test('the built-in bot can only change its links; deleting a bucket unlinks it everywhere', async () => {

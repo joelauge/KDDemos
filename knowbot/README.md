@@ -132,10 +132,13 @@ max_tokens 400, seed 7.
 
 ## Bots and buckets
 
-A **bucket** is one knowDrive folder of files. A **bot** (chat instance) is linked to any number of buckets, and each link can be switched on or off. A bot answers **only** from its enabled buckets. Each bucket is searched on its own, filtered to its folder's `dir:` tags, and any hit whose path is outside that folder is dropped before it can be quoted or cited. Several bots can share a bucket, and a bot with no enabled links answers nothing. Wire them on the dashboard's **Bots & buckets** canvas.
+A **bucket** is a tag: every file carrying `bucket:<id>` belongs to it, wherever knowDrive stores it. A **bot** (chat instance) is linked to any number of buckets, and each link can be switched on or off. A bot answers **only** from its enabled buckets. Each bucket is searched on its own, filtered to its tag (plus the link's mask), and any hit whose tags don't match is dropped before it can be quoted or cited. Several bots can share a bucket, and a bot with no enabled links answers nothing. Wire them on the dashboard's **Bots & buckets** canvas.
 
+- **Folders are tags too.** A file in `Menus/Lunch` carries `f1:menus` and `f2:lunch`; the inspector draws the folder tree from those tags, uploads keep their sub-folders as tags, and **Move** just retags a file (nothing is re-uploaded). There are no user-facing paths. Files still get a storage location (`knowbot/<bucket id>/…`) because knowDrive needs one, but nothing reads it.
+- **Masks:** a link can carry a mask, `{ require: [tags], exclude: [tags] }`, which narrows what that bot may cite from that bucket: only files with every `require` tag and none of the `exclude` tags. Use folder tags to keep a bot to one folder or to leave one out, or any other tag (`format:pdf`, `status:archived`). Edit masks under a bot's linked buckets; masked links show a **mask** badge on the canvas.
+- **Migration:** buckets from the folder era are converted on first load. Their files get the bucket tag and folder tags derived from their paths, once per bucket.
 - **Registry:** `knowbot/_config/instances.json` in the same store, tagged `kind:config` and never searchable. The built-in bot and bucket (`ugm`, `knowbot/ugm/`) come from the server config; only the built-in bot's links can change.
-- **Uploads:** any file type knowDrive accepts. One file per request, up to 95 MB (the Cloudflare request limit), stored at `<bucket folder><relative path>` with tags `knowbot`, `bucket:<id>` and `kind:upload`. Names can't climb out of the folder.
+- **Uploads:** any file type knowDrive accepts. One file per request, up to 95 MB (the Cloudflare request limit), tagged `knowbot`, `bucket:<id>`, `kind:upload` and the folder tags of its relative path.
 - **Relevance floor:** a bot's floor (default 0.70, `KNOWBOT_INSTANCE_MIN_SIMILARITY`) applies to its uploaded buckets; the built-in bucket keeps its calibrated 0.745. Raise the floor if a bot answers off-topic questions; lower it if it refuses questions its files do answer.
 - **Guards:** `general` (prompt-injection, personal data, actions) or `store`, which adds the retail-only platform and analytics refusals.
 - **Admin:** creating, editing, linking, uploading and deleting require `KNOWBOT_ADMIN_TOKEN`, sent as `Authorization: Bearer …`; the dashboard keeps it in this browser only. Without a token set, only loopback requests can manage bots and buckets (local development).
@@ -147,7 +150,7 @@ A **bucket** is one knowDrive folder of files. A **bot** (chat instance) is link
 
 API:
 - `GET /api/graph` returns bots, buckets and `canManage`.
-- Buckets: `GET/POST /api/buckets`, `GET/PATCH/DELETE /api/buckets/:id`, `GET/POST /api/buckets/:id/files` (raw body with an `x-filename` header), `DELETE /api/buckets/:id/files/:fileId`.
+- Buckets: `GET/POST /api/buckets`, `GET/PATCH/DELETE /api/buckets/:id`, `GET/POST /api/buckets/:id/files` (raw body with an `x-filename` header; its folders become tags), `PATCH /api/buckets/:id/files/:fileId` `{folders}` (move = retag), `DELETE /api/buckets/:id/files/:fileId`, `GET /api/buckets/:id/tags` (tags in the bucket, for masks). Create a bucket with `{name, tag?}`; links are `{id, enabled, mask?}`.
 - Bots: `GET/POST /api/instances`, `GET/PATCH/DELETE /api/instances/:id`; `buckets: [{id, enabled}]` replaces the bot's links.
 - Platforms (admin): `GET /api/providers`, `PUT/DELETE /api/providers/:id` (`{apiKey}`), `GET /api/providers/:id/models`.
 - Files: `GET /api/buckets/:id/files/:fileId/atoms?limit=3` previews a file's first atoms.
