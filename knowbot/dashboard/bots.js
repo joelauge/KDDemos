@@ -40,7 +40,7 @@ export function mountBots(ctx) {
   const $ = (s, r = document) => r.querySelector(s);
   const G = { bots: [], buckets: [], models: [], providers: [], keys: null, canManage: false, loaded: false, error: '', counts: new Map(), version: 0 };
   const I = { token: readToken(), auth: 'unknown', authMsg: '', open: false, opener: null, view: 'overview', id: null,
-    files: null, filesError: '', atoms: new Map(), queue: [], running: 0, sheet: true };
+    files: null, filesError: '', atoms: new Map(), dirs: null, target: '', newDirs: new Set(), queue: [], running: 0, sheet: true };
   let pollTimer = 0, paintRaf = 0, canvas = null, canvasErr = '', toastTimer = 0;
 
   /* ---------------------------------------------------------------- token + api */
@@ -217,19 +217,19 @@ export function mountBots(ctx) {
   }
 
   /* ---------------------------------------------------------------- uploads */
-  function enqueue(entries) {
+  function enqueue(entries, into = I.target) {
     const k = bucket(I.id);
     if (!k || k.builtin || !editable()) return;
     let n = 0;
     for (const { file, rel } of entries.slice(0, MAX_BATCH)) {
       if (SKIP.has(rel.split('/').pop())) continue;
-      const q = { key: Math.random().toString(36).slice(2, 10), bucket: k.id, file, rel: rel.replace(/^\/+/, ''), state: 'queued', pct: 0, msg: '', fileId: '' };
+      const q = { key: Math.random().toString(36).slice(2, 10), bucket: k.id, file, rel: (into ? `${into.replace(/\/+$/, '')}/` : '') + rel.replace(/^\/+/, ''), state: 'queued', pct: 0, msg: '', fileId: '' };
       if (file.size > MAX_BYTES) { q.state = 'failed'; q.msg = `${fmtBytes(file.size)} is over the 95 MB per-file limit`; }
       else if (!file.size) { q.state = 'failed'; q.msg = 'Empty file'; }
       I.queue.push(q); n++;
     }
     if (entries.length > MAX_BATCH) announce(`Only the first ${MAX_BATCH} files were queued.`);
-    if (n) announce(`${n} file${n === 1 ? '' : 's'} queued for ${k.folder}`);
+    if (n) announce(`${n} file${n === 1 ? '' : 's'} queued for ${k.folder}${into ? `${into.replace(/\/+$/, '')}/` : ''}`);
     paintQueue(); pump();
   }
   function pump() {
@@ -273,6 +273,51 @@ export function mountBots(ctx) {
     return out;
   }
   const picked = (input) => [...(input.files || [])].map((f) => ({ file: f, rel: f.webkitRelativePath || f.name }));
+
+  /* ---------------------------------------------------------------- resizable details panel */
+  const SIDE_KEY = 'knowbot-flow-side-w', SIDE_MIN = 300;
+  function wireResize() {
+    const grip = $('#flow-resize'), body = grip && grip.parentElement;
+    if (!grip || !body) return;
+    const max = () => Math.max(SIDE_MIN, Math.min(960, body.clientWidth - 320)); // the canvas keeps at least 320px
+    const apply = (w, save = true) => {
+      if (w == null) { body.style.removeProperty('--side-w'); grip.setAttribute('aria-valuenow', String(Math.round($('#flow-side').getBoundingClientRect().width))); }
+      else {
+        const v = Math.round(Math.min(max(), Math.max(SIDE_MIN, w)));
+        body.style.setProperty('--side-w', `${v}px`);
+        grip.setAttribute('aria-valuenow', String(v));
+      }
+      grip.setAttribute('aria-valuemin', String(SIDE_MIN)); grip.setAttribute('aria-valuemax', String(max()));
+      if (save) try { w == null ? localStorage.removeItem(SIDE_KEY) : localStorage.setItem(SIDE_KEY, String(Math.round(w))); } catch { /* per-browser nicety only */ }
+    };
+    let saved = null; try { saved = Number(localStorage.getItem(SIDE_KEY)) || null; } catch { /* none */ }
+    if (saved) apply(saved, false);
+    const width = () => $('#flow-side').getBoundingClientRect().width;
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); grip.setPointerCapture(e.pointerId);
+      const x0 = e.clientX, w0 = width();
+      grip.classList.add('dragging'); body.classList.add('resizing');
+      const move = (ev) => apply(w0 + (x0 - ev.clientX), false);
+      const up = (ev) => {
+        grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+        grip.classList.remove('dragging'); body.classList.remove('resizing');
+        apply(w0 + (x0 - ev.clientX));
+      };
+      grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+    });
+    grip.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 80 : 24;
+      if (e.key === 'ArrowLeft') apply(width() + step);
+      else if (e.key === 'ArrowRight') apply(width() - step);
+      else if (e.key === 'Home') apply(max());
+      else if (e.key === 'End') apply(SIDE_MIN);
+      else return;
+      e.preventDefault();
+    });
+    grip.addEventListener('dblclick', () => apply(null));
+    window.addEventListener('resize', () => { const w = parseFloat(body.style.getPropertyValue('--side-w')); if (w) apply(w, false); });
+  }
 
   /* ---------------------------------------------------------------- links out */
   function chatUrl(id) {
@@ -331,7 +376,7 @@ export function mountBots(ctx) {
   function go(view, id = null) {
     I.view = view; I.id = id;
     clearTimeout(pollTimer);
-    if (view === 'bucket') { I.files = null; I.filesError = ''; I.atoms = new Map(); }
+    if (view === 'bucket') { I.files = null; I.filesError = ''; I.atoms = new Map(); I.dirs = null; I.target = ''; I.newDirs = new Set(); }
     I.sheet = true; syncSheet();
     render();
     side.scrollTop = 0;
@@ -377,11 +422,11 @@ export function mountBots(ctx) {
     if (canvas || canvasErr === 'loading') return;
     canvasErr = 'loading'; paintCanvasState();
     if (!document.querySelector('link[data-flow-css]')) {
-      const { FLOW_CSS } = await import('./flow-canvas.js?v=202610250139').catch(() => ({ FLOW_CSS: null }));
-      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=202610250139"]'));
+      const { FLOW_CSS } = await import('./flow-canvas.js?v=202610250338').catch(() => ({ FLOW_CSS: null }));
+      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=202610250338"]'));
     }
     try {
-      const { createCanvas } = await import('./flow-canvas.js?v=202610250139');
+      const { createCanvas } = await import('./flow-canvas.js?v=202610250338');
       const el = $('#flow-canvas'); rc(el);
       canvas = await createCanvas(el);
       canvasErr = '';
@@ -625,12 +670,13 @@ export function mountBots(ctx) {
   }
 
   function dropZone(k) {
-    const files = h('input', { type: 'file', multiple: true, class: 'sr-only', tabindex: -1, 'aria-hidden': 'true' });
+    const files = h('input', { id: 'inst-pick-files', type: 'file', multiple: true, class: 'sr-only', tabindex: -1, 'aria-hidden': 'true' });
     const dir = h('input', { type: 'file', multiple: true, webkitdirectory: true, class: 'sr-only', tabindex: -1, 'aria-hidden': 'true' });
     files.addEventListener('change', () => { enqueue(picked(files)); files.value = ''; });
     dir.addEventListener('change', () => { enqueue(picked(dir)); dir.value = ''; });
     const zone = h('div', { class: 'inst-drop', role: 'group', 'aria-label': `Upload files into ${k.folder}` },
       h('div', { class: 'inst-drop-title' }, 'Drop files or folders here'),
+      h('div', { id: 'kdi-target', class: 'kdi-target' }),
       h('div', { class: 'inst-help' }, `Any type knowDrive accepts — documents, PDFs, slides, sheets, images, audio — up to 95 MB each. Sub-folders are kept under ${k.folder}`),
       h('div', { class: 'inst-actions' },
         h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-fk': 'pick-files', onclick: () => files.click() }, 'Choose files'),
@@ -707,6 +753,97 @@ export function mountBots(ctx) {
       a.items.map((x) => h('blockquote', { class: 'kdi-atom' }, h('span', { class: 'mono kdi-atom-n' }, `#${x.seq ?? '?'}`), x.text)));
   }
 
+  /* Folders: knowDrive paths are folder paths, so the corpus reads like a file explorer. */
+  function folderTree(files) {
+    const root = { name: '', path: '', dirs: new Map(), files: [] };
+    const dirAt = (path) => {
+      let node = root;
+      for (const seg of path.split('/').filter(Boolean)) {
+        if (!node.dirs.has(seg)) node.dirs.set(seg, { name: seg, path: `${node.path}${seg}/`, dirs: new Map(), files: [] });
+        node = node.dirs.get(seg);
+      }
+      return node;
+    };
+    for (const d of I.newDirs) dirAt(d);
+    for (const f of files) { const cut = f.path.lastIndexOf('/'); dirAt(cut < 0 ? '' : f.path.slice(0, cut)).files.push(f); }
+    const tally = (n) => {
+      n.n = n.files.length; n.proc = n.files.filter((f) => f.state === 'processing').length; n.failed = n.files.filter((f) => f.state === 'failed').length;
+      for (const d of n.dirs.values()) { tally(d); n.n += d.n; n.proc += d.proc; n.failed += d.failed; }
+    };
+    tally(root);
+    return root;
+  }
+  const allDirs = (node, out = []) => { for (const d of [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name))) { out.push(d.path); allDirs(d, out); } return out; };
+  function setTarget(path) { I.target = path; paintTarget(); }
+  function paintTarget(tree) {
+    const el = I.open && $('#kdi-target');
+    if (!el) return;
+    const k = bucket(I.id); if (!k) return;
+    const dirs = allDirs(tree || folderTree(I.files || []));
+    const sel = h('select', { 'aria-label': 'Upload into folder', class: 'mono' },
+      h('option', { value: '' }, `${k.folder} (top level)`), dirs.map((d) => h('option', { value: d }, `${k.folder}${d}`)));
+    sel.value = I.target;
+    sel.addEventListener('change', () => { I.target = sel.value; });
+    const add = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': 'new-dir', onclick: () => {
+      const raw = prompt(`New folder inside ${k.folder}${I.target}\n(use / for nested folders, e.g. menus/2026)`);
+      const rel = String(raw || '').split('/').map((x) => x.trim()).filter((x) => x && x !== '.' && x !== '..').join('/');
+      if (!rel) return;
+      const path = `${I.target}${rel}/`;
+      I.newDirs.add(path); openDir(path, true); I.target = path;
+      paintFiles();
+      announce(`New folder ${path} — files you add now go there`);
+    } }, '+ New folder');
+    keepFocus(el, () => rc(el, h('span', { class: 'inst-help' }, 'Upload into'), sel, add));
+  }
+  // Which folders are open: top-level ones by default for a small corpus; explicit once the user toggles any.
+  const defaultOpen = () => new Set((I.files || []).length <= 40 ? [...folderTree(I.files || []).dirs.values()].map((d) => d.path) : []);
+  const isOpen = (path) => (I.dirs || defaultOpen()).has(path);
+  function openDir(path, on) {
+    if (!I.dirs) I.dirs = defaultOpen();
+    if (on) { let p = ''; for (const seg of path.split('/').filter(Boolean)) { p += `${seg}/`; I.dirs.add(p); } } // and its parents
+    else I.dirs.delete(path);
+  }
+  function dirRow(d, ed, depth) {
+    const open = isOpen(d.path);
+    const meta = [plural(d.n, 'file'), d.proc ? `${d.proc} processing` : null, d.failed ? `${d.failed} failed` : null].filter(Boolean).join(' · ');
+    const row = h('li', { class: `kdi-dir${open ? ' open' : ''}`, 'data-dir': d.path },
+      h('div', { class: 'kdi-dir-top' },
+        h('button', { type: 'button', class: 'kdi-dir-name', 'data-fk': `d:${d.path}`, 'aria-expanded': String(open), onclick: () => { openDir(d.path, !open); paintFiles(); } }, h('span', { class: 'kdi-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'), h('span', { class: 'kdi-dir-icon', 'aria-hidden': 'true' }), d.name),
+        h('span', { class: `kdi-dir-meta mono${d.failed ? ' bad' : d.proc ? ' warn' : ''}` }, d.n ? meta : 'empty'),
+        ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': `up:${d.path}`, 'aria-label': `Upload files into ${d.path}`, onclick: () => { setTarget(d.path); $('#inst-pick-files')?.click(); } }, 'Upload here') : null),
+      open ? h('ul', { class: 'kdi-files kdi-sub' }, treeItems(d, ed, depth + 1)) : null);
+    if (ed) {
+      // Drop onto a folder row to upload into that folder.
+      let n = 0;
+      row.addEventListener('dragenter', (e) => { e.preventDefault(); e.stopPropagation(); n++; row.classList.add('over'); });
+      row.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; });
+      row.addEventListener('dragleave', (e) => { e.stopPropagation(); if (--n <= 0) { n = 0; row.classList.remove('over'); } });
+      row.addEventListener('drop', async (e) => { e.preventDefault(); e.stopPropagation(); n = 0; row.classList.remove('over'); if (e.dataTransfer) enqueue(await dropped(e.dataTransfer), d.path); });
+    }
+    return row;
+  }
+  function treeItems(node, ed, depth) {
+    const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name)).map((d) => dirRow(d, ed, depth));
+    const files = node.files.slice().sort((a, b) => a.path.localeCompare(b.path)).map((f) => fileItem(f, ed));
+    if (!dirs.length && !files.length && depth > 0) return [h('li', { class: 'kdi-empty inst-help' }, ed ? 'Empty — drop files here or use Upload here.' : 'Empty')];
+    return [...dirs, ...files];
+  }
+  function fileItem(f, ed) {
+    const open = I.atoms.has(f.id);
+    const name = f.path.split('/').pop();
+    return h('li', { class: `kdi-file st-${f.stage || f.state}` },
+      h('div', { class: 'kdi-file-top' },
+        h('button', { type: 'button', class: 'kdi-file-name mono', 'data-fk': `f:${f.id}`, 'aria-expanded': String(open), title: `${f.path} — show what knowDrive extracted`, onclick: () => toggleAtoms(f) },
+          h('span', { class: 'kdi-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'), h('span', { class: 'kdi-file-icon', 'aria-hidden': 'true' }), name),
+        h('span', { class: 'kdi-file-meta mono' }, [fmtBytes(f.bytes), f.mime ? f.mime.split(';')[0] : null].filter(Boolean).join(' · ')),
+        ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm inst-f-del', 'data-fk': `del:${f.id}`, 'aria-label': `Delete ${f.path}`, onclick: () => deleteFile(f) }, 'Delete') : null),
+      h('div', { class: 'kdi-file-status' }, track(f),
+        h('span', { class: `badge ${f.state === 'ready' ? 'badge-good' : f.state === 'failed' ? 'badge-bad' : 'badge-warn'}` }, stageLabel(f.stage || f.state)),
+        stageDetail(f) ? h('span', { class: 'mono kdi-detail' }, stageDetail(f)) : null),
+      f.error ? h('span', { class: 'err inst-q-msg' }, f.error) : null,
+      open ? atomBox(f) : null);
+  }
+
   function paintFiles() {
     const el = I.open && $('#inst-files');
     if (!el) return;
@@ -716,22 +853,14 @@ export function mountBots(ctx) {
     const proc = I.files.filter((f) => f.state === 'processing').length;
     rc(count, `${plural(I.files.length, 'file')}${proc ? ` · ${proc} processing` : ''}`);
     paintSummary();
-    if (!I.files.length) { rc(el, h('p', { class: 'note' }, 'No files yet — bots linked to this bucket find nothing in it.')); return; }
-    const ed = editable() && !(bucket(I.id) || {}).builtin;
-    keepFocus(el, () => rc(el, h('ul', { class: 'kdi-files', 'aria-label': 'Files and their pipeline status' }, I.files.map((f) => {
-      const open = I.atoms.has(f.id);
-      return h('li', { class: `kdi-file st-${f.stage || f.state}` },
-        h('div', { class: 'kdi-file-top' },
-          h('button', { type: 'button', class: 'kdi-file-name mono', 'data-fk': `f:${f.id}`, 'aria-expanded': String(open), title: `${f.path} — show what knowDrive extracted`, onclick: () => toggleAtoms(f) },
-            h('span', { class: 'kdi-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'), f.path),
-          h('span', { class: 'kdi-file-meta mono' }, [fmtBytes(f.bytes), f.mime ? f.mime.split(';')[0] : null].filter(Boolean).join(' · ')),
-          ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm inst-f-del', 'data-fk': `del:${f.id}`, 'aria-label': `Delete ${f.path}`, onclick: () => deleteFile(f) }, 'Delete') : null),
-        h('div', { class: 'kdi-file-status' }, track(f),
-          h('span', { class: `badge ${f.state === 'ready' ? 'badge-good' : f.state === 'failed' ? 'badge-bad' : 'badge-warn'}` }, stageLabel(f.stage || f.state)),
-          stageDetail(f) ? h('span', { class: 'mono kdi-detail' }, stageDetail(f)) : null),
-        f.error ? h('span', { class: 'err inst-q-msg' }, f.error) : null,
-        open ? atomBox(f) : null);
-    }))));
+    const tree = folderTree(I.files);
+    paintTarget(tree);
+    const k = bucket(I.id) || {};
+    if (!I.files.length && !tree.dirs.size) { rc(el, h('p', { class: 'note' }, 'No files yet — bots linked to this bucket find nothing in it.')); return; }
+    const ed = editable() && !k.builtin;
+    keepFocus(el, () => rc(el, h('div', { class: 'kdi-tree' },
+      h('div', { class: 'kdi-root mono' }, h('span', { class: 'kdi-dir-icon', 'aria-hidden': 'true' }), k.folder || ''),
+      h('ul', { class: 'kdi-files', role: 'tree', 'aria-label': `Files in ${k.folder}` }, treeItems(tree, ed, 0)))));
   }
 
   function botForm(b) {
@@ -880,6 +1009,7 @@ export function mountBots(ctx) {
   /* ---------------------------------------------------------------- wiring */
   $('#flow-btn').addEventListener('click', (e) => open(e.currentTarget));
   $('#flow-close').addEventListener('click', close);
+  wireResize();
   $('#flow-add-bucket').addEventListener('click', () => go('new-bucket'));
   $('#flow-add-bot').addEventListener('click', () => go('new-bot'));
   $('#flow-sheet-btn').addEventListener('click', () => { I.sheet = !I.sheet; syncSheet(); });

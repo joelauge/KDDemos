@@ -1,6 +1,6 @@
 // Tiny in-browser BM25 over the corpus/ markdown files (via corpus/MANIFEST.json), used by browser-only.html
 // when the KnowBot server is unreachable. Filenames match store paths, so citations are identical to server retrieval.
-import { parseFrontmatter } from '../lib/knowbot.js?v=202610250139';
+import { parseFrontmatter } from '../lib/knowbot.js?v=202610250338';
 
 const STOP = new Set('a an and are as at be by can do does for from has have how i in is it its me my of on or our so that the this to was we what when where which who why will with you your'.split(' '));
 const tok = (s) => (s.toLowerCase().match(/[a-z0-9]+/g) || []).filter((w) => w.length > 1 && !STOP.has(w));

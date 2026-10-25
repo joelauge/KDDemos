@@ -28,13 +28,20 @@ body.drawer-open { overflow: hidden; }
 .flow-head input:focus, .inst-form input:focus, .inst-form textarea:focus, .inst-form select:focus, .flow-sec select:focus, .flow-rename input:focus {
   outline: none; border-color: var(--accent-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
 
-.flow-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 420px; }
+.flow-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 7px var(--side-w, 420px); }
+/* Drag (or arrow keys) to resize the details panel; the width is remembered per browser. */
+.flow-resize { cursor: col-resize; background: transparent; position: relative; z-index: 3; touch-action: none; margin: 0 -3px 0 0; }
+.flow-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: var(--line); transition: background .15s, width .15s; }
+.flow-resize:hover::after, .flow-resize:focus-visible::after, .flow-resize.dragging::after { width: 3px; left: 2px; background: var(--accent-2); }
+.flow-resize:focus-visible { outline: none; }
+.flow-body.resizing { cursor: col-resize; user-select: none; }
+.flow-body.resizing .flow-canvas-wrap { pointer-events: none; }
 .flow-canvas-wrap { position: relative; min-width: 0; min-height: 0; }
 .flow-canvas, .flow-rf { position: absolute; inset: 0; }
 .flow-canvas-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; color: var(--dim); }
 .flow-toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 6; max-width: calc(100% - 24px); padding: 7px 14px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line-2); color: var(--strong); font-size: 12.5px; box-shadow: 0 6px 24px rgba(2, 6, 23, .15); }
 .flow-toast[data-state="bad"] { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
-.flow-side { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
+.flow-side { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
 .flow-side-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 28px; }
 .flow-sheet-btn { display: none; }
 
@@ -172,7 +179,7 @@ body.drawer-open { overflow: hidden; }
 .inst-q-msg { grid-column: 1 / -1; font-size: 11.5px; overflow-wrap: anywhere; }
 
 /* ---------- responsive ---------- */
-@media (max-width: 1100px) { .flow-body { grid-template-columns: minmax(0, 1fr) 360px; } .flow-token input { width: 150px; } }
+@media (max-width: 1100px) { .flow-body { grid-template-columns: minmax(0, 1fr) 7px var(--side-w, 360px); } .flow-token input { width: 150px; } }
 @media (max-width: 760px) {
   .flow-overlay { padding: 0; }
   .flow-panel { border-radius: 0; border: 0; }
@@ -186,6 +193,7 @@ body.drawer-open { overflow: hidden; }
   .flow-title { font-size: 17px; }
   .flow-token input { flex: 1; width: auto; }
   .flow-body { grid-template-columns: minmax(0, 1fr); position: relative; }
+  .flow-resize { display: none; }
   /* details become a bottom sheet over the canvas */
   .flow-side { position: absolute; left: 0; right: 0; bottom: 0; max-height: 58%; border-left: 0; border-top: 1px solid var(--line-2); border-radius: 14px 14px 0 0; box-shadow: 0 -10px 30px rgba(2, 6, 23, .18); z-index: 7; }
   .flow-side.collapsed .flow-side-body { display: none; }
@@ -251,3 +259,22 @@ body.drawer-open { overflow: hidden; }
 .kdi-atom { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text, inherit); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow: auto; border-left: 2px solid var(--line-2); padding-left: 8px; }
 .kdi-atom-n { font-size: 10px; color: var(--dim); margin-right: 6px; }
 @media (max-width: 760px) { .kdi-step { display: none; } .kdi-chip.s-atoms { grid-column: span 2; } }
+
+/* Folder tree (bucket corpus) */
+.kdi-target { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0 4px; }
+.kdi-target select { max-width: 100%; min-width: 0; flex: 1 1 200px; font-size: 11.5px; }
+.kdi-tree { display: flex; flex-direction: column; gap: 6px; }
+.kdi-root { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.kdi-sub { margin: 6px 0 0 14px !important; padding-left: 10px !important; border-left: 1px dashed var(--line-2); }
+.kdi-dir { list-style: none; border-radius: 10px; }
+.kdi-dir.over > .kdi-dir-top { outline: 2px dashed var(--accent-2); outline-offset: 2px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.kdi-dir-top { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--panel-2, var(--panel)); }
+.kdi-dir-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; background: none; border: 0; padding: 0; font-weight: 600; color: var(--strong); cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kdi-dir-meta { font-size: 10.5px; color: var(--dim); white-space: nowrap; }
+.kdi-dir-meta.warn { color: var(--warn); } .kdi-dir-meta.bad { color: var(--bad); }
+.kdi-empty { list-style: none; padding: 4px 2px; font-size: 11.5px; }
+/* Folder and file glyphs (CSS masks, so they follow the theme colour) */
+.kdi-dir-icon, .kdi-file-icon { flex: none; width: 15px; height: 15px; background: currentColor; -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
+.kdi-dir-icon { color: var(--k-inline); --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 6.5A2.5 2.5 0 0 1 5.5 4H9l2 2h7.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z'/%3E%3C/svg%3E"); }
+.kdi-file-icon { color: var(--dim); width: 13px; height: 13px; margin-right: 2px; --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V8h4.5z'/%3E%3C/svg%3E"); }
+.kdi-file-name { display: flex; align-items: center; gap: 2px; }
