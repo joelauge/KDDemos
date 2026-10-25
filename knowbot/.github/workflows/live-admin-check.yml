@@ -1,0 +1,22 @@
+# Manually run an end-to-end check of the live bots & buckets admin API with the admin token secret.
+name: Live admin check
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: Keep the test bucket and bot afterwards
+        type: boolean
+        default: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: github-pages # holds KNOWBOT_ADMIN_TOKEN
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Run the check against the live API
+        env:
+          KNOWBOT_API: https://knowbot-api.joelauge.workers.dev
+          KNOWBOT_ADMIN_TOKEN: ${{ secrets.KNOWBOT_ADMIN_TOKEN }}
+        run: node scripts/live-admin-check.mjs ${{ inputs.keep && '--keep' || '' }}
