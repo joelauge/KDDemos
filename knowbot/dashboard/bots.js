@@ -356,7 +356,7 @@ export function mountBots(ctx) {
     if (!G.loaded) return 'Loading…';
     if (G.error) return '';
     if (!G.canManage) return 'Read-only — this server has no knowDrive key, so buckets and links can’t be changed here.';
-    if (I.auth === 'bad' || I.auth === 'off') return `Read-only — ${I.authMsg}`;
+    if (I.auth === 'bad' || I.auth === 'off') return I.token ? 'Read-only until the token is fixed.' : 'Read-only — paste the admin token to link, toggle, upload and edit.';
     if (!editable()) return 'Read-only — add the admin token above to link, toggle, upload and edit.';
     return 'Drag from a bucket’s handle to a bot to link it. Click on/off on a link to toggle it; × or Delete unlinks.';
   }
