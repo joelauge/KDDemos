@@ -18,8 +18,12 @@ export const slugify = (s) => String(s || '').toLowerCase().normalize('NFKD').re
 export const fmtBytes = (n) => (n == null ? '—' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`
   : `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`);
 
+/** knowDrive's pipeline, as the server reports it per file (file.stage). */
+export const STAGES = [['uploaded', 'Uploaded'], ['extracted', 'Extracted'], ['chunked', 'Chunked'], ['vectorizing', 'Vectorized'], ['ready', 'Ready']];
 /** knowDrive file status → ready | processing | failed. */
 export function fileState(f) {
+  if (f.stage === 'ready' || f.stage === 'failed') return f.stage;
+  if (f.stage) return 'processing';
   const s = String(f.status || '').toLowerCase(), p = String(f.phase || '').toLowerCase();
   if (f.error || /fail|error|cancel|reject/.test(s) || /fail|error/.test(p)) return 'failed';
   if (/^(processed|completed|ready|succeeded|done)$/.test(s) || p === 'completed') return 'ready';
@@ -34,9 +38,9 @@ class ApiError extends Error { constructor(status, message) { super(message); th
 export function mountBots(ctx) {
   const { S, h, rc, str, num, parseTs, ago, announce, onList } = ctx;
   const $ = (s, r = document) => r.querySelector(s);
-  const G = { bots: [], buckets: [], canManage: false, loaded: false, error: '', counts: new Map(), version: 0 };
+  const G = { bots: [], buckets: [], models: [], providers: [], keys: null, canManage: false, loaded: false, error: '', counts: new Map(), version: 0 };
   const I = { token: readToken(), auth: 'unknown', authMsg: '', open: false, opener: null, view: 'overview', id: null,
-    files: null, filesError: '', queue: [], running: 0, sheet: true };
+    files: null, filesError: '', atoms: new Map(), queue: [], running: 0, sheet: true };
   let pollTimer = 0, paintRaf = 0, canvas = null, canvasErr = '', toastTimer = 0;
 
   /* ---------------------------------------------------------------- token + api */
@@ -110,6 +114,8 @@ export function mountBots(ctx) {
       starters: Array.isArray(x.starters) ? x.starters.map((s) => str(s, 120)).filter(Boolean).slice(0, 6) : [],
       guards: x.guards === 'store' ? 'store' : 'general', minSimilarity: num(x.minSimilarity), builtin: x.builtin === true,
       buckets: normLinks(x.buckets), updatedAt: x.updatedAt ? parseTs(x.updatedAt) : null,
+      provider: ['openai', 'anthropic'].includes(x.provider) ? x.provider : 'local', model: str(x.model, 100),
+      answerMode: x.answerMode === 'generate' ? 'generate' : 'select', instructions: str(x.instructions, 800),
     };
   }
   function normBucket(x) {
@@ -119,7 +125,8 @@ export function mountBots(ctx) {
   function normFile(f) {
     if (!f || typeof f !== 'object') return null;
     const o = { id: str(f.id, 200), path: str(f.path, 400), bytes: num(f.bytes), status: str(f.status, 40), phase: str(f.phase, 40),
-      mime: str(f.mime, 120), atoms: num(f.atoms), error: str(f.error, 400) };
+      mime: str(f.mime, 120), atoms: num(f.atoms), vectorized: num(f.vectorized), chunks: num(f.chunks), error: str(f.error, 400),
+      stage: STAGES.some(([k]) => k === f.stage) || f.stage === 'failed' ? f.stage : null, createdAt: f.createdAt ? parseTs(f.createdAt) : null };
     o.state = fileState(o);
     return o.id ? o : null;
   }
@@ -130,6 +137,9 @@ export function mountBots(ctx) {
       const j = await api('/api/graph', { admin: false, timeout: 15000 });
       G.bots = (Array.isArray(j && j.bots) ? j.bots : []).map(normBot).filter(Boolean);
       G.buckets = (Array.isArray(j && j.buckets) ? j.buckets : []).map(normBucket).filter(Boolean);
+      G.models = (Array.isArray(j && j.models) ? j.models : []).map((m) => ({ id: str(m.id, 100), label: str(m.label, 120) || str(m.id, 100) })).filter((m) => m.id);
+      G.providers = (Array.isArray(j && j.providers) ? j.providers : []).map((p) => ({ id: str(p.id, 20), label: str(p.label, 60), needsKey: !!p.needsKey, configured: !!p.configured,
+        keyHint: str(p.keyHint, 20), docs: str(p.docs, 200), defaultModel: str(p.defaultModel, 100) })).filter((p) => p.id);
       G.canManage = !!(j && j.canManage); G.error = '';
     } catch (e) { G.error = e.status === 404 ? 'This KnowBot server has no bots & buckets API (GET /api/graph). Update the server.' : e.message; }
     G.loaded = true; G.version++;
@@ -142,7 +152,7 @@ export function mountBots(ctx) {
   }
   async function loadCounts() {
     if (!G.canManage) return;
-    await Promise.all(G.buckets.filter((b) => !b.builtin).map(async (b) => {
+    await Promise.all(G.buckets.map(async (b) => {
       try { const j = await api(`/api/buckets/${encodeURIComponent(b.id)}/files`); G.counts.set(b.id, countOf((j.files || []).map(normFile).filter(Boolean))); }
       catch { G.counts.delete(b.id); }
     }));
@@ -159,6 +169,7 @@ export function mountBots(ctx) {
       for (const q of I.queue) {
         if (q.bucket !== id || q.state !== 'processing' || !q.fileId) continue;
         const f = map.get(q.fileId);
+        if (f) q.stage = f.stage;
         if (f && f.state !== 'processing') { q.state = f.state; q.msg = f.error || ''; announce(`${q.rel} ${f.state === 'ready' ? 'is ready' : 'failed: ' + (f.error || 'processing failed')}`); }
       }
     } catch (e) { if (I.id === id) I.filesError = e.message; }
@@ -320,12 +331,12 @@ export function mountBots(ctx) {
   function go(view, id = null) {
     I.view = view; I.id = id;
     clearTimeout(pollTimer);
-    if (view === 'bucket') { I.files = null; I.filesError = ''; }
+    if (view === 'bucket') { I.files = null; I.filesError = ''; I.atoms = new Map(); }
     I.sheet = true; syncSheet();
     render();
     side.scrollTop = 0;
     const t = side.querySelector('[data-autofocus]'); if (t) t.focus({ preventScroll: true });
-    if (view === 'bucket' && !bucket(id).builtin && G.canManage) loadFiles();
+    if (view === 'bucket' && G.canManage && editable()) loadFiles();
     refresh();
   }
   function syncSheet() {
@@ -366,11 +377,11 @@ export function mountBots(ctx) {
     if (canvas || canvasErr === 'loading') return;
     canvasErr = 'loading'; paintCanvasState();
     if (!document.querySelector('link[data-flow-css]')) {
-      const { FLOW_CSS } = await import('./flow-canvas.js?v=202610250120').catch(() => ({ FLOW_CSS: null }));
-      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=202610250120"]'));
+      const { FLOW_CSS } = await import('./flow-canvas.js?v=202610250139').catch(() => ({ FLOW_CSS: null }));
+      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=202610250139"]'));
     }
     try {
-      const { createCanvas } = await import('./flow-canvas.js?v=202610250120');
+      const { createCanvas } = await import('./flow-canvas.js?v=202610250139');
       const el = $('#flow-canvas'); rc(el);
       canvas = await createCanvas(el);
       canvasErr = '';
@@ -391,7 +402,7 @@ export function mountBots(ctx) {
     $('#flow-add-bucket').disabled = !editable(); $('#flow-add-bot').disabled = !editable();
     if (canvas) {
       canvas.render({
-        buckets: G.buckets, bots: G.bots, counts: G.counts, canCount: G.canManage && editable(), editable: editable(), colorMode: colorMode(),
+        buckets: G.buckets, bots: G.bots.map((b) => ({ ...b, modelLabel: modelLabel(b) })), counts: G.counts, canCount: G.canManage && editable(), editable: editable(), colorMode: colorMode(),
         active: I.view === 'bucket' || I.view === 'bot' ? `${I.view}:${I.id}` : null, version: G.version,
         onSelect: (kind, id) => { if (!kind) { if (I.view === 'bucket' || I.view === 'bot') go('overview'); return; } go(kind, id); },
         onLink: link, onToggle: toggle, onUnlink: unlink,
@@ -453,9 +464,53 @@ export function mountBots(ctx) {
             h('span', { class: 'flow-item-top' }, h('span', { class: 'inst-name' }, b.name), b.builtin ? h('span', { class: 'flag flag-inst' }, 'built-in') : null),
             h('span', { class: 'inst-card-meta mono' }, h('span', null, b.id),
               h('span', { class: on ? null : 'warn' }, on ? `${plural(on, 'bucket')} on` : 'no enabled buckets'),
-              b.buckets.length > on ? h('span', null, `${b.buckets.length - on} off`) : null)));
-        })));
+              b.buckets.length > on ? h('span', null, `${b.buckets.length - on} off`) : null, h('span', null, modelLabel(b)))));
+        })),
+        G.providers.some((p) => p.needsKey) ? platformsSection() : null);
     });
+  }
+
+  /* ---------------------------------------------------------------- answering platforms */
+  const providerOf = (id) => G.providers.find((p) => p.id === id);
+  function modelLabel(b) {
+    if (b.provider === 'local') return (G.models.find((m) => m.id === (b.model || (G.models[0] || {}).id)) || { label: 'local model' }).label.replace(/ \(.*\)$/, '');
+    return `${(providerOf(b.provider) || { label: b.provider }).label.replace(/ \(.*\)$/, '')} · ${b.model || '?'}`;
+  }
+  async function loadKeys() {
+    if (!editable()) { G.keys = null; return; }
+    try { const j = await api('/api/providers'); G.keys = new Map((j.providers || []).map((p) => [p.id, p])); }
+    catch { G.keys = null; }
+    if (I.open && I.view === 'overview') render();
+  }
+  function platformsSection() {
+    const ed = editable();
+    if (ed && G.keys === null) queueMicrotask(loadKeys);
+    return h('section', { class: 'flow-sec kp', 'aria-labelledby': 'kp-h' },
+      h('h3', { id: 'kp-h', class: 'inst-sub' }, 'Answering platforms'),
+      h('p', { class: 'inst-help' }, 'Bots answer with the local model by default. Add an API key to let a bot answer with a hosted model instead. Keys are checked with the platform, stored encrypted on the server, and never shown again.'),
+      G.providers.filter((p) => p.needsKey).map((p) => {
+        const k = G.keys && G.keys.get(p.id);
+        const set = k ? k.configured : p.configured;
+        const inp = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', class: 'mono', placeholder: p.keyHint || 'API key', 'aria-label': `${p.label} API key`, disabled: !ed });
+        const err = errBox();
+        const save = h('button', { type: 'submit', class: 'btn btn-sm btn-primary', disabled: !ed }, set ? 'Replace key' : 'Save key');
+        return h('form', { class: 'kp-row', onsubmit: async (ev) => {
+          ev.preventDefault(); err.hidden = true;
+          const v = inp.value.trim(); if (!v) return fail(err, 'Paste an API key first.', inp);
+          save.disabled = true; rc(save, 'Checking…');
+          try { const r = await api(`/api/providers/${p.id}`, { method: 'PUT', json: { apiKey: v } }); inp.value = ''; toast(`${p.label} key saved${r.models ? ` · ${plural(r.models, 'model')} available` : ''}`); await load(); await loadKeys(); }
+          catch (e) { save.disabled = false; rc(save, set ? 'Replace key' : 'Save key'); fail(err, e.message, inp); }
+        } },
+          h('div', { class: 'kp-top' }, h('b', null, p.label),
+            h('span', { class: `badge ${set ? 'badge-good' : ''}` }, set ? (k && k.last4 ? `key ••••${k.last4}` : 'key set') : 'no key'),
+            p.docs ? h('a', { href: p.docs, target: '_blank', rel: 'noopener', class: 'inst-help' }, 'get a key ↗') : null),
+          h('div', { class: 'kp-in' }, inp, save,
+            set && ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: async () => {
+              if (!confirm(`Remove the ${p.label} API key? Bots that answer with ${p.label} must be switched first.`)) return;
+              try { await api(`/api/providers/${p.id}`, { method: 'DELETE' }); toast(`${p.label} key removed`); await load(); await loadKeys(); } catch (e) { fail(err, e.message); }
+            } }, 'Remove') : null),
+          err);
+      }));
   }
 
   // Link rows: shared by both details views (bot → its buckets, bucket → its bots). Repainted alone so forms keep edits.
@@ -533,18 +588,25 @@ export function mountBots(ctx) {
   }
 
   function bucketView(k) {
-    const ed = editable();
+    const ed = editable() && !k.builtin;
     const n = feeds(k.id).length;
     const kids = [back(),
       kicker('Bucket', k.builtin ? h('span', { class: 'flag flag-inst' }, 'built-in') : null),
       h('h3', { class: 'display inst-h', tabindex: -1, 'data-autofocus': true }, k.name),
-      h('div', { class: 'inst-card-meta mono' }, h('span', null, `id ${k.id}`), h('span', null, `feeds ${plural(n, 'bot')}`), k.updatedAt ? h('span', null, `updated ${ago(k.updatedAt)}`) : null),
-      h('p', { class: 'inst-scope' }, h('span', null, 'Files in ', h('b', { class: 'mono' }, k.folder), '. Bots cite them only while their link to this bucket is on.')),
-      h('section', { id: 'flow-links', class: 'flow-sec' })];
-    if (k.builtin) {
-      kids.push(h('div', { class: 'inst-alert' }, 'The built-in bucket is read-only: its files are managed by the corpus sync script. You can still link it to bots, or turn it off for them.'));
+      h('div', { class: 'inst-card-meta mono' }, h('span', null, k.folder), h('span', null, `feeds ${plural(n, 'bot')}`), k.updatedAt ? h('span', null, `updated ${ago(k.updatedAt)}`) : null)];
+    if (!G.canManage || !editable()) {
+      kids.push(h('div', { class: 'inst-alert' }, hint()), h('section', { id: 'flow-links', class: 'flow-sec' }));
       return h('div', { class: 'flow-view' }, kids);
     }
+    // A small knowDrive inspector: what's in the folder, and where each file is in the pipeline.
+    kids.push(h('section', { class: 'kdi', 'aria-labelledby': 'kdi-h' },
+      h('div', { class: 'inst-files-head' }, h('h4', { id: 'kdi-h', class: 'inst-sub', tabindex: -1 }, 'Corpus'), h('span', { class: 'panel-count mono', id: 'inst-files-count' }),
+        h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': 'refresh', onclick: () => loadFiles() }, 'Refresh')),
+      h('div', { id: 'kdi-summary' })));
+    if (ed) kids.push(dropZone(k), h('div', { id: 'inst-queue' }));
+    else if (k.builtin) kids.push(h('p', { class: 'note' }, 'Read-only: the built-in corpus is managed by the sync script. You can still link it to bots or turn it off for them.'));
+    kids.push(h('section', { class: 'inst-files', 'aria-label': 'Files' }, h('div', { id: 'inst-files' })),
+      h('section', { id: 'flow-links', class: 'flow-sec' }));
     if (ed) {
       const nm = h('input', { id: 'bk-name', maxlength: 80, autocomplete: 'off', 'data-fk': 'rename' }); nm.value = k.name;
       const err = errBox();
@@ -554,15 +616,9 @@ export function mountBots(ctx) {
         if (v === k.name) return;
         try { await api(`/api/buckets/${encodeURIComponent(k.id)}`, { method: 'PATCH', json: { name: v } }); toast(`Renamed to ${v}`); await load(); render(); }
         catch (e) { fail(err, e.message); }
-      } }, field('Bucket name', nm, null, 'bk-name'), h('button', { type: 'submit', class: 'btn btn-sm' }, 'Rename'), err));
+      } }, field('Bucket name', nm, null, 'bk-name'), h('button', { type: 'submit', class: 'btn btn-sm' }, 'Rename'), err),
+      h('div', { class: 'flow-danger' }, h('button', { type: 'button', class: 'btn btn-sm btn-danger', onclick: () => deleteBucket(k) }, 'Delete bucket')));
     }
-    if (!G.canManage) { kids.push(h('div', { class: 'inst-alert' }, hint())); return h('div', { class: 'flow-view' }, kids); }
-    if (ed) kids.push(dropZone(k), h('div', { id: 'inst-queue' }));
-    kids.push(h('section', { class: 'inst-files', 'aria-labelledby': 'inst-files-h' },
-      h('div', { class: 'inst-files-head' }, h('h4', { id: 'inst-files-h', class: 'inst-sub', tabindex: -1 }, 'Files'), h('span', { class: 'panel-count mono', id: 'inst-files-count' }),
-        h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-fk': 'refresh', onclick: () => loadFiles() }, 'Refresh')),
-      h('div', { id: 'inst-files' })));
-    if (ed) kids.push(h('div', { class: 'flow-danger' }, h('button', { type: 'button', class: 'btn btn-sm btn-danger', onclick: () => deleteBucket(k) }, 'Delete bucket')));
     const view = h('div', { class: 'flow-view' }, kids);
     queueMicrotask(() => { paintLinks(); paintFiles(); paintQueue(); });
     return view;
@@ -601,13 +657,56 @@ export function mountBots(ctx) {
       h('ul', { class: 'inst-q' }, rows.map((q) => h('li', { class: `inst-q-row q-${q.state}` },
         h('span', { class: 'inst-q-path mono' }, q.rel),
         h('span', { class: 'inst-q-meta' },
-          h('span', { class: `badge ${Q_BADGE[q.state]}` }, q.state === 'uploading' ? `uploading ${Math.round(q.pct * 100)}%` : q.state),
+          h('span', { class: `badge ${Q_BADGE[q.state]}` }, q.state === 'uploading' ? `uploading ${Math.round(q.pct * 100)}%` : q.state === 'processing' && q.stage ? stageLabel(q.stage) : q.state),
           h('span', { class: 'mono' }, fmtBytes(q.file.size))),
         q.state === 'uploading' ? h('span', { class: 'meter', 'aria-hidden': 'true' }, h('span', { style: { width: `${Math.round(q.pct * 100)}%` } })) : null,
         q.msg ? h('span', { class: 'err inst-q-msg' }, q.msg) : null))))));
   }
 
-  const F_BADGE = { ready: 'badge-good', processing: 'badge-warn', failed: 'badge-bad' };
+  const stageIndex = (st) => (st === 'ready' ? STAGES.length - 1 : STAGES.findIndex(([k]) => k === st));
+  function stageLabel(st) { return st === 'failed' ? 'Failed' : (STAGES.find(([k]) => k === st) || [st, st])[1].replace('Vectorized', 'Vectorizing'); }
+  function stageDetail(f) {
+    if (f.stage === 'vectorizing' && f.atoms) return `${f.vectorized ?? 0}/${f.atoms} atoms vectorized`;
+    if (f.stage === 'chunked' && f.atoms) return `${plural(f.atoms, 'atom')}`;
+    if (f.stage === 'ready' && f.atoms != null) return plural(f.atoms, 'atom');
+    return '';
+  }
+  function track(f) {
+    const at = f.stage === 'failed' ? -1 : stageIndex(f.stage || (f.state === 'ready' ? 'ready' : 'uploaded'));
+    const label = f.stage === 'failed' ? 'Failed' : `${stageLabel(f.stage || 'uploaded')} (step ${at + 1} of ${STAGES.length})`;
+    return h('ol', { class: `kdi-track${f.stage === 'failed' ? ' failed' : ''}`, 'aria-label': `Pipeline: ${label}` },
+      STAGES.map(([k, name], i) => h('li', { class: i < at || (i === at && f.stage === 'ready') ? 'done' : i === at ? 'now' : '', title: name },
+        h('span', { class: 'kdi-dot', 'aria-hidden': 'true' }), h('span', { class: 'kdi-step' }, name))));
+  }
+  function paintSummary() {
+    const el = I.open && $('#kdi-summary');
+    if (!el || !I.files) return;
+    const by = Object.fromEntries([...STAGES.map(([k]) => [k, 0]), ['failed', 0]]);
+    let atoms = 0, vec = 0;
+    for (const f of I.files) { by[f.stage || (f.state === 'ready' ? 'ready' : f.state === 'failed' ? 'failed' : 'uploaded')]++; atoms += f.atoms || 0; vec += f.vectorized ?? (f.state === 'ready' ? f.atoms || 0 : 0); }
+    rc(el, h('div', { class: 'kdi-sum', role: 'status' },
+      [...STAGES.map(([k, name]) => [k, name]), ['failed', 'Failed']].map(([k, name]) => h('div', { class: `kdi-chip s-${k}${by[k] ? '' : ' zero'}` },
+        h('b', null, String(by[k])), h('span', null, name === 'Vectorized' ? 'Vectorizing' : name))),
+      h('div', { class: 'kdi-chip s-atoms' }, h('b', null, atoms ? `${vec}/${atoms}` : '0'), h('span', null, 'atoms vectorized'))));
+  }
+  async function toggleAtoms(f) {
+    if (I.atoms.has(f.id)) { I.atoms.delete(f.id); paintFiles(); return; }
+    I.atoms.set(f.id, { loading: true }); paintFiles();
+    try { const j = await api(`/api/buckets/${encodeURIComponent(I.id)}/files/${encodeURIComponent(f.id)}/atoms?limit=3`); if (I.atoms.has(f.id)) I.atoms.set(f.id, { items: j.items || [], total: j.atoms }); }
+    catch (e) { if (I.atoms.has(f.id)) I.atoms.set(f.id, { error: e.message }); }
+    paintFiles();
+  }
+  function atomBox(f) {
+    const a = I.atoms.get(f.id);
+    if (!a) return null;
+    if (a.loading) return h('div', { class: 'kdi-atoms' }, h('p', { class: 'pending' }, h('span', { class: 'spinner' }), 'Reading atoms…'));
+    if (a.error) return h('div', { class: 'kdi-atoms' }, h('span', { class: 'err' }, a.error));
+    if (!a.items.length) return h('div', { class: 'kdi-atoms' }, h('p', { class: 'note' }, 'No atoms yet — knowDrive is still chunking this file.'));
+    return h('div', { class: 'kdi-atoms' },
+      h('div', { class: 'kdi-atoms-head mono' }, `first ${a.items.length} of ${plural(a.total ?? a.items.length, 'atom')} — what bots can quote and cite`),
+      a.items.map((x) => h('blockquote', { class: 'kdi-atom' }, h('span', { class: 'mono kdi-atom-n' }, `#${x.seq ?? '?'}`), x.text)));
+  }
+
   function paintFiles() {
     const el = I.open && $('#inst-files');
     if (!el) return;
@@ -616,22 +715,28 @@ export function mountBots(ctx) {
     if (!I.files) { rc(count); rc(el, h('p', { class: 'pending' }, h('span', { class: 'spinner' }), 'Loading files…')); return; }
     const proc = I.files.filter((f) => f.state === 'processing').length;
     rc(count, `${plural(I.files.length, 'file')}${proc ? ` · ${proc} processing` : ''}`);
+    paintSummary();
     if (!I.files.length) { rc(el, h('p', { class: 'note' }, 'No files yet — bots linked to this bucket find nothing in it.')); return; }
-    const ed = editable();
-    keepFocus(el, () => rc(el, h('ul', { class: 'inst-ftable', 'aria-label': 'Files' }, I.files.map((f) => h('li', { class: 'inst-frow' },
-      h('span', { class: 'inst-f-path mono', title: f.path }, f.path),
-      h('span', { class: 'inst-f-meta' },
-        h('span', { class: `badge ${F_BADGE[f.state]}`, title: [f.status, f.phase].filter(Boolean).join(' · ') }, f.state === 'processing' ? (f.phase || f.status || 'processing') : f.state),
-        h('span', { class: 'mono' }, fmtBytes(f.bytes)),
-        f.mime ? h('span', { class: 'mono inst-f-mime' }, f.mime) : null,
-        f.atoms != null && f.state === 'ready' ? h('span', { class: 'mono' }, plural(f.atoms, 'atom')) : null),
-      ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm inst-f-del', 'data-fk': `del:${f.id}`, 'aria-label': `Delete ${f.path}`, onclick: () => deleteFile(f) }, 'Delete') : null,
-      f.error ? h('span', { class: 'err inst-q-msg' }, f.error) : null)))));
+    const ed = editable() && !(bucket(I.id) || {}).builtin;
+    keepFocus(el, () => rc(el, h('ul', { class: 'kdi-files', 'aria-label': 'Files and their pipeline status' }, I.files.map((f) => {
+      const open = I.atoms.has(f.id);
+      return h('li', { class: `kdi-file st-${f.stage || f.state}` },
+        h('div', { class: 'kdi-file-top' },
+          h('button', { type: 'button', class: 'kdi-file-name mono', 'data-fk': `f:${f.id}`, 'aria-expanded': String(open), title: `${f.path} — show what knowDrive extracted`, onclick: () => toggleAtoms(f) },
+            h('span', { class: 'kdi-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'), f.path),
+          h('span', { class: 'kdi-file-meta mono' }, [fmtBytes(f.bytes), f.mime ? f.mime.split(';')[0] : null].filter(Boolean).join(' · ')),
+          ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm inst-f-del', 'data-fk': `del:${f.id}`, 'aria-label': `Delete ${f.path}`, onclick: () => deleteFile(f) }, 'Delete') : null),
+        h('div', { class: 'kdi-file-status' }, track(f),
+          h('span', { class: `badge ${f.state === 'ready' ? 'badge-good' : f.state === 'failed' ? 'badge-bad' : 'badge-warn'}` }, stageLabel(f.stage || f.state)),
+          stageDetail(f) ? h('span', { class: 'mono kdi-detail' }, stageDetail(f)) : null),
+        f.error ? h('span', { class: 'err inst-q-msg' }, f.error) : null,
+        open ? atomBox(f) : null);
+    }))));
   }
 
   function botForm(b) {
-    const edit = !!b, ro = !!(b && b.builtin) || !editable();
-    const v = b || { name: '', org: '', botName: '', greeting: '', starters: [], guards: 'general', minSimilarity: null };
+    const edit = !!b, ro = !editable();
+    const v = b || { name: '', org: '', botName: '', greeting: '', starters: [], guards: 'general', minSimilarity: null, provider: 'local', model: '', answerMode: 'select', instructions: '' };
     const err = errBox();
     const idNote = h('span', { class: 'inst-help mono', id: 'if-name-help' });
     const name = h('input', { id: 'if-name', required: true, maxlength: 80, autocomplete: 'off', 'aria-describedby': 'if-name-help', 'data-autofocus': !edit || null });
@@ -651,10 +756,37 @@ export function mountBots(ctx) {
     if (v.minSimilarity != null) floor.value = String(v.minSimilarity);
     const guards = h('select', { id: 'if-guards', 'aria-describedby': 'if-guards-help' }, h('option', { value: 'general' }, 'General'), h('option', { value: 'store' }, 'Retail store'));
     guards.value = v.guards;
+    // The answering model: the local model, or a hosted platform the operator has added a key for.
+    const prov = h('select', { id: 'if-prov', 'aria-describedby': 'if-prov-help' }, G.providers.map((p) => h('option', { value: p.id, disabled: p.needsKey && !p.configured && p.id !== v.provider || null },
+      p.needsKey && !p.configured ? `${p.label} — add a key first` : p.label)));
+    prov.value = v.provider || 'local';
+    const modelSel = h('select', { id: 'if-model', 'aria-describedby': 'if-model-help' });
+    const modelNote = h('span', { class: 'inst-help', id: 'if-model-help' });
+    async function fillModels() {
+      const p = prov.value, cur = p === (v.provider || 'local') ? v.model : '';
+      let list = p === 'local' ? G.models : null;
+      if (!list) {
+        rc(modelSel, h('option', { value: cur || '' }, cur || 'Loading models…')); rc(modelNote, 'Loading the models your key can use…');
+        try { list = (await api(`/api/providers/${p}/models`)).models || []; } catch (e) { list = []; rc(modelNote, e.message); }
+        if (prov.value !== p) return;
+      }
+      const want = cur || (providerOf(p) || {}).defaultModel || (list[0] || {}).id || '';
+      const ids = list.map((m) => m.id);
+      rc(modelSel, [...(want && !ids.includes(want) ? [{ id: want, label: want }] : []), ...list].map((m) => h('option', { value: m.id }, m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id)));
+      modelSel.value = want;
+      if (list.length || p === 'local') rc(modelNote, p === 'local' ? 'Runs on the KnowBot server: private, no per-answer cost.' : `${plural(list.length, 'model')} available to your ${(providerOf(p) || {}).label} key. Usage is billed to that account.`);
+    }
+    prov.addEventListener('change', fillModels);
+    queueMicrotask(fillModels);
+    const mode = h('select', { id: 'if-mode', 'aria-describedby': 'if-mode-help' },
+      h('option', { value: 'select' }, 'Quote only — exact lines from the files (recommended)'), h('option', { value: 'generate' }, 'Write answers — the model words them from the files'));
+    mode.value = v.answerMode || 'select';
+    const instr = h('textarea', { id: 'if-instr', rows: 4, maxlength: 800, 'aria-describedby': 'if-instr-help', placeholder: 'e.g. You support customers of Sunrise Bakery. Prefer opening-hours and pickup lines. Keep answers short and friendly.' });
+    instr.value = v.instructions || '';
     // A new bot can be wired to buckets right away (each link starts on).
     const picks = edit ? [] : G.buckets.map((k) => ({ k, cb: h('input', { type: 'checkbox', value: k.id }) }));
     const save = h('button', { type: 'submit', class: 'btn btn-primary', hidden: ro }, edit ? 'Save settings' : 'Create bot');
-    const all = [name, org, bn, greet, ...starters, floor, guards];
+    const all = [name, org, bn, greet, ...starters, floor, guards, prov, modelSel, mode, instr];
     if (ro) all.forEach((x) => { x.disabled = true; });
     const onSubmit = async (ev) => {
       ev.preventDefault(); err.hidden = true;
@@ -663,9 +795,11 @@ export function mountBots(ctx) {
       if (!nm) return fail(err, 'Name is required.', name);
       const fl = floor.value.trim();
       if (fl && !(Number(fl) >= 0 && Number(fl) < 1)) return fail(err, 'Relevance floor must be a number from 0 to 0.99.', floor);
-      const body = { name: nm, org: org.value.trim(), botName: bn.value.trim(), greeting: greet.value.trim(), starters: starters.map((x) => x.value.trim()).filter(Boolean), guards: guards.value };
+      if (prov.value !== 'local' && !modelSel.value) return fail(err, 'Choose a model for this platform.', modelSel);
+      const body = { name: nm, org: org.value.trim(), botName: bn.value.trim(), greeting: greet.value.trim(), starters: starters.map((x) => x.value.trim()).filter(Boolean), guards: guards.value,
+        provider: prov.value, model: modelSel.value || '', answerMode: mode.value, instructions: instr.value.trim() };
       if (fl) body.minSimilarity = Number(fl);
-      if (!edit) { for (const k of ['org', 'botName', 'greeting']) if (!body[k]) delete body[k]; if (idIn.value.trim()) body.id = slugify(idIn.value); body.buckets = picks.filter((p) => p.cb.checked).map((p) => ({ id: p.k.id, enabled: true })); }
+      if (!edit) { for (const k of ['org', 'botName', 'greeting', 'instructions', 'model']) if (!body[k]) delete body[k]; if (idIn.value.trim()) body.id = slugify(idIn.value); body.buckets = picks.filter((p) => p.cb.checked).map((p) => ({ id: p.k.id, enabled: true })); }
       save.disabled = true; rc(save, edit ? 'Saving…' : 'Creating…');
       try {
         const r = normBot(await api(edit ? `/api/instances/${encodeURIComponent(b.id)}` : '/api/instances', { method: edit ? 'PATCH' : 'POST', json: body }));
@@ -676,10 +810,13 @@ export function mountBots(ctx) {
       } catch (e) { save.disabled = false; rc(save, edit ? 'Save settings' : 'Create bot'); fail(err, e.message); }
     };
     return h('form', { class: 'inst-form', novalidate: true, onsubmit: onSubmit, 'aria-label': 'Bot settings' },
-      b && b.builtin ? h('p', { class: 'note' }, 'The built-in bot’s settings come from the server; only its bucket links can change here.') : null,
       field('Name', name, null, 'if-name'), idNote,
       idIn ? field('Id', idIn, 'Optional. Used in the chat link and embed code; fixed once created.', 'if-id') : null,
       h('div', { class: 'inst-row2' }, field('Organisation / brand name', org, null, 'if-org'), field('Bot name', bn, null, 'if-bot')),
+      h('fieldset', { class: 'inst-field kp-model' }, h('legend', null, 'Model'),
+        h('div', { class: 'inst-row2' }, field('Platform', prov, null, 'if-prov'), field('Model', modelSel, null, 'if-model')), modelNote,
+        field('Answer style', mode, 'Quote only: the model just picks lines and KnowBot quotes them with citations — nothing is invented. Write answers: the model phrases the reply; claims a source does not support are removed.', 'if-mode'),
+        field('Instructions', instr, 'Focus and tone for this bot. They never override the rules: answer only from the linked buckets, cite every claim, refuse when the files don’t cover it.', 'if-instr')),
       field('Greeting', greet, null, 'if-greet'),
       h('fieldset', { class: 'inst-field inst-starters' }, h('legend', null, 'Starter questions ', h('span', { class: 'inst-help' }, 'up to 6')), h('div', { class: 'inst-starter-grid' }, starters)),
       h('div', { class: 'inst-row2' },
@@ -701,14 +838,14 @@ export function mountBots(ctx) {
     const view = h('div', { class: 'flow-view' }, back(),
       kicker('Bot', b.builtin ? h('span', { class: 'flag flag-inst' }, 'built-in') : null),
       h('h3', { class: 'display inst-h', tabindex: -1, 'data-autofocus': true }, b.name),
-      h('div', { class: 'inst-card-meta mono' }, h('span', null, `id ${b.id}`), h('span', null, b.guards === 'store' ? 'retail guards' : 'general guards'),
+      h('div', { class: 'inst-card-meta mono' }, h('span', null, `id ${b.id}`), h('span', null, modelLabel(b)), h('span', null, b.answerMode === 'generate' ? 'writes answers' : 'quotes lines'), h('span', null, b.guards === 'store' ? 'retail guards' : 'general guards'),
         h('span', null, `floor ${b.minSimilarity != null ? b.minSimilarity.toFixed(2) : 'default'}`), b.updatedAt ? h('span', null, `updated ${ago(b.updatedAt)}`) : null),
       h('div', { id: 'flow-scope' }),
       h('div', { class: 'inst-links' },
         h('a', { class: 'btn btn-sm btn-primary', href: chatUrl(b.id), target: '_blank', rel: 'noopener', 'data-fk': 'chat', 'aria-label': `Open chat with ${b.name} in a new tab` }, 'Open chat ↗'), copyBtn),
       h('details', { class: 'inst-embed' }, h('summary', null, 'Embed code'), h('code', { class: 'mono' }, embedCode(b.id))),
       h('section', { id: 'flow-links', class: 'flow-sec' }),
-      h('details', { class: 'flow-settings', open: !b.builtin }, h('summary', null, 'Settings'), botForm(b)),
+      h('details', { class: 'flow-settings', open: true }, h('summary', null, 'Settings'), botForm(b)),
       !b.builtin && editable() ? h('div', { class: 'flow-danger' }, h('button', { type: 'button', class: 'btn btn-sm btn-danger', onclick: () => deleteBot(b) }, 'Delete bot')) : null);
     queueMicrotask(paintLinks);
     return view;

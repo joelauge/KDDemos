@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createRetriever, DEFAULT_STORE, DEFAULT_PREFIX } from './retrievers.mjs';
 import { InstanceRegistry, InstanceError, MAX_UPLOAD_BYTES } from './instances.mjs';
+import { completeWith, ProviderError } from './providers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +52,15 @@ export function createKnowBotServer(opts = {}) {
   const libPath = path.resolve(opts.libPath || env.KNOWBOT_LIB || path.join(root, 'lib', 'knowbot.js'));
   const llmBase = String(env.LLM_BASE_URL || 'http://127.0.0.1:8080/v1').replace(/\/+$/, '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
+  // Models a bot can answer with. Today one local model; KNOWBOT_MODELS (JSON [{id,label,baseUrl?,apiKeyEnv?}]) adds more.
+  const models = (() => {
+    const base = [{ id: llmModel, label: env.LLM_MODEL_LABEL || 'Qwen2.5 1.5B Instruct (Q4_K_M, llama.cpp)', default: true }];
+    try {
+      const extra = JSON.parse(env.KNOWBOT_MODELS || '[]');
+      return [...base, ...extra.filter((m) => m && typeof m.id === 'string' && m.id !== llmModel).map((m) => ({ id: m.id, label: String(m.label || m.id), baseUrl: m.baseUrl, apiKeyEnv: m.apiKeyEnv }))];
+    } catch { return base; }
+  })();
+  const publicModels = models.map(({ id, label, default: d }) => ({ id, label, ...(d ? { default: true } : {}) }));
   const rateLimit = Number(opts.rateLimit ?? env.KNOWBOT_RATE_LIMIT ?? 30);
   const eventsRateLimit = Number(opts.eventsRateLimit ?? env.KNOWBOT_EVENTS_RATE_LIMIT ?? 240);
   const trustProxy = !!(opts.trustProxy ?? /^(1|true|yes)$/i.test(env.KNOWBOT_TRUST_PROXY || ''));
@@ -76,6 +86,9 @@ export function createKnowBotServer(opts = {}) {
     kd, dataDir, logger: log, builtinRetriever: retriever,
     // The built-in floor (0.745) is calibrated for its corpus; smaller uploaded folders score lower, so new instances start at 0.70.
     defaultMinSimilarity: Number(env.KNOWBOT_INSTANCE_MIN_SIMILARITY ?? 0.7),
+    models: models.map((x) => x.id),
+    // Seals the operator's OpenAI/Anthropic keys in the registry. Changing it means re-entering those keys.
+    secret: env.KNOWBOT_SECRET_KEY || adminToken || 'knowbot-local-dev',
     builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
   });
 
@@ -196,11 +209,14 @@ export function createKnowBotServer(opts = {}) {
     return libCache;
   }
 
-  async function llmComplete(messages, settings = CANONICAL) {
-    const res = await fetch(`${llmBase}/chat/completions`, {
+  async function llmComplete(messages, settings = CANONICAL, modelId = llmModel) {
+    const m = models.find((x) => x.id === modelId) || models[0];
+    const base = String(m.baseUrl || llmBase).replace(/\/+$/, '');
+    const key = m.apiKeyEnv ? env[m.apiKeyEnv] : env.LLM_API_KEY;
+    const res = await fetch(`${base}/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(env.LLM_API_KEY ? { authorization: `Bearer ${env.LLM_API_KEY}` } : {}) },
-      body: JSON.stringify({ model: llmModel, messages, stream: false, ...settings }),
+      headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      body: JSON.stringify({ model: m.id, messages, stream: false, ...settings }),
       signal: AbortSignal.timeout(Number(env.LLM_TIMEOUT_MS || 300000)),
     }).catch((e) => {
       if (e.name === 'TimeoutError') throw new HttpError(504, `LLM timed out after ${Number(env.LLM_TIMEOUT_MS || 300000)}ms`);
@@ -216,7 +232,7 @@ export function createKnowBotServer(opts = {}) {
     await registry.ready;
     const inst = registry.get(instance);
     const retriever = registry.retriever(inst.id);
-    const persona = { ...DEFAULT_PERSONA, org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}) };
+    const persona = { ...DEFAULT_PERSONA, org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}), ...(inst.instructions ? { instructions: inst.instructions } : {}) };
     const k = 6;
     const minScore = Number(env.KNOWBOT_MIN_SCORE || 0);
     const settings = { ...CANONICAL, ...(lib.CANONICAL || {}) };
@@ -226,13 +242,18 @@ export function createKnowBotServer(opts = {}) {
     const tRet = performance.now();
     const results = ret.results;
     const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}`, instance: inst.id };
-    const engine = { type: 'openai', model: llmModel };
+    // type stays 'openai' (the wire protocol) for the local model; hosted platforms also name the provider.
+    const engine = { type: 'openai', model: inst.model || llmModel, ...(inst.provider ? { provider: inst.provider } : {}) };
 
     // Same path as KnowBot.ask() in lib/knowbot.js: guard -> retrieval -> answerFromSources (select mode by default).
     let fin = guard, tGen = tRet;
     if (!guard) {
-      const r = await lib.answerFromSources({ question, results, complete: (m, c) => llmComplete(m, c?.settings || settings), search: (x) => retriever.search(x, k), persona, minScore, k,
-        history: Array.isArray(history) ? history : [], mode: env.KNOWBOT_ANSWER_MODE || 'select', settings });
+      const provider = inst.provider || 'local';
+      const complete = provider === 'local'
+        ? (m, c) => llmComplete(m, c?.settings || settings, inst.model || llmModel)
+        : (m, c) => completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
+      const r = await lib.answerFromSources({ question, results, complete, search: (x) => retriever.search(x, k), persona, minScore, k,
+        history: Array.isArray(history) ? history : [], mode: inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select', settings });
       fin = r.fin; tGen = performance.now();
     }
     const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
@@ -312,9 +333,17 @@ export function createKnowBotServer(opts = {}) {
 
   async function instanceRoutes(req, res, url, p, m) {
     await registry.ready;
-    const [kind, id, sub, fileId] = p.split('/').filter(Boolean).slice(1).map(decodeURIComponent); // after /api
-    const graph = () => ({ bots: registry.list(), buckets: registry.bucketList(), canManage: registry.canWrite });
+    const [kind, id, sub, fileId, parts4] = p.split('/').filter(Boolean).slice(1).map(decodeURIComponent); // after /api
+    const graph = () => ({ bots: registry.list(), buckets: registry.bucketList(), models: publicModels,
+      providers: registry.providerList().map(({ last4, updatedAt, ...p }) => p), canManage: registry.canWrite });
     if (kind === 'graph' && !id && m === 'GET') return send(res, 200, graph());
+    if (kind === 'providers') {
+      requireAdmin(req);
+      if (!id && m === 'GET') return send(res, 200, { providers: registry.providerList() });
+      if (id && !sub && m === 'PUT') return send(res, 200, await registry.setProviderKey(id, (await readJson(req)).apiKey));
+      if (id && !sub && m === 'DELETE') return send(res, 200, await registry.setProviderKey(id, ''));
+      if (id && sub === 'models' && m === 'GET') return send(res, 200, { models: await registry.providerModels(id) });
+    }
     if (kind === 'instances') {
       if (!id) {
         if (m === 'GET') return send(res, 200, { instances: registry.list(), canManage: registry.canWrite });
@@ -343,6 +372,7 @@ export function createKnowBotServer(opts = {}) {
           return send(res, 201, await registry.upload(id, name, String(req.headers['content-type'] || '').split(';')[0].trim(), bytes));
         }
         if (fileId && m === 'DELETE') return send(res, 200, await registry.deleteFile(id, fileId));
+        if (fileId && m === 'GET' && parts4 === 'atoms') return send(res, 200, await registry.fileAtoms(id, fileId, url.searchParams.get('limit')));
       }
     }
     throw new HttpError(['GET', 'POST', 'PATCH', 'DELETE'].includes(m) ? 404 : 405, `no such endpoint ${m} ${p}`);
@@ -435,14 +465,14 @@ export function createKnowBotServer(opts = {}) {
       return send(res, 200, { ok: true, retrieval: mode, files: local.fileCount, chunks: local.chunkCount, llm: await llmReachable(), llmBase, sseClients: clients.size });
     }
 
-    if (/^\/api\/(?:instances|buckets|graph)(?:\/|$)/.test(p)) return instanceRoutes(req, res, url, p, m);
+    if (/^\/api\/(?:instances|buckets|graph|providers)(?:\/|$)/.test(p)) return instanceRoutes(req, res, url, p, m);
 
     if (p.startsWith('/api/')) {
       switch (`${m} ${p}`) {
         case 'GET /api/config': {
           await registry.ready;
           const inst = registry.list().find((x) => x.id === registry.get(url.searchParams.get('instance')).id);
-          return send(res, 200, { store, retrieval: mode, engine: { type: 'openai', model: llmModel }, canonical: { ...CANONICAL }, instance: inst });
+          return send(res, 200, { store, retrieval: mode, engine: { type: 'openai', model: inst?.model || llmModel }, canonical: { ...CANONICAL }, models: publicModels, instance: inst });
         }
 
         case 'POST /api/search': {
@@ -555,7 +585,7 @@ export function createKnowBotServer(opts = {}) {
   const server = http.createServer(async (req, res) => {
     const t0 = performance.now();
     res.setHeader('access-control-allow-origin', '*');
-    res.setHeader('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+    res.setHeader('access-control-allow-methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     res.setHeader('access-control-allow-headers', req.headers['access-control-request-headers'] || 'content-type, authorization');
     res.setHeader('access-control-expose-headers', 'content-type');
     const isStream = req.url.startsWith('/api/stream');
@@ -567,7 +597,7 @@ export function createKnowBotServer(opts = {}) {
     try {
       await handle(req, res);
     } catch (e) {
-      const status = e instanceof HttpError || e instanceof InstanceError ? e.status : 500;
+      const status = e instanceof HttpError || e instanceof InstanceError || e instanceof ProviderError ? e.status : 500;
       if (status === 500) log(`[error] ${req.method} ${logUrl}: ${e.stack || e}`);
       if (!res.headersSent) send(res, status, { error: { status, message: e.message || 'internal error', ...(e.extra || {}) } });
       else { try { res.end(); } catch {} }

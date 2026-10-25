@@ -8,6 +8,7 @@ import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
 import { normalizeFolder, safeRelPath, slugify } from '../instances.mjs';
+import { sealKey, openKey } from '../providers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -150,7 +151,9 @@ describe('chat instances', () => {
   });
 
   test('the built-in bot can only change its links; deleting a bucket unlinks it everywhere', async () => {
-    assert.equal((await patch('/api/instances/ugm', { name: 'x' })).status, 403);
+    const renamed = await (await patch('/api/instances/ugm', { greeting: 'Welcome to UGM!' })).json();
+    assert.equal(renamed.greeting, 'Welcome to UGM!', 'the built-in bot accepts settings');
+    assert.equal(renamed.name, 'The Ultimate Game Master');
     const u = await (await patch('/api/instances/ugm', { buckets: [{ id: 'ugm' }, { id: 'acme' }] })).json();
     assert.deepEqual(u.buckets.map((l) => l.id), ['ugm', 'acme']);
     assert.equal((await api('/api/buckets/ugm', { method: 'DELETE', headers: admin })).status, 403);
@@ -160,5 +163,23 @@ describe('chat instances', () => {
     await patch('/api/instances/ugm', { buckets: [{ id: 'ugm' }] });
     assert.equal((await api('/api/instances/front-desk', { method: 'DELETE', headers: admin })).status, 200);
     assert.equal((await api('/api/config?instance=front-desk')).status, 404);
+  });
+
+  test('provider keys are sealed, never listed, and bots on a hosted platform need a model', async () => {
+    const sealed = sealKey('sk-test-1234', 'secret-a');
+    assert.ok(!sealed.includes('sk-test'), 'the key is not stored in the clear');
+    assert.equal(openKey(sealed, 'secret-a'), 'sk-test-1234');
+    assert.throws(() => openKey(sealed, 'secret-b'), /different server secret/);
+    const g = await (await api('/api/graph')).json();
+    assert.deepEqual(g.providers.map((p) => [p.id, p.configured]), [['local', true], ['openai', false], ['anthropic', false]]);
+    assert.ok(g.providers.every((p) => !('last4' in p)), 'the public graph shows no key hints');
+    assert.equal((await api('/api/providers')).status, 401, 'key status is admin-only');
+    assert.equal((await post('/api/instances', { name: 'Claude bot', provider: 'anthropic' })).status, 400, 'a hosted platform needs a model');
+    assert.equal((await post('/api/instances', { name: 'Bad model', provider: 'local', model: 'gpt-4o' })).status, 400, 'local models come from the server list');
+    const bot = await (await post('/api/instances', { name: 'Claude bot', provider: 'anthropic', model: 'claude-opus-5-5', instructions: 'Answer warmly.', answerMode: 'generate' })).json();
+    assert.deepEqual([bot.provider, bot.model, bot.answerMode, bot.instructions], ['anthropic', 'claude-opus-5-5', 'generate', 'Answer warmly.']);
+    const local = await (await patch('/api/instances/claude-bot', { provider: 'local' })).json();
+    assert.equal(local.model, undefined, 'switching platform clears the old model id');
+    assert.equal((await api('/api/instances/claude-bot', { method: 'DELETE', headers: admin })).status, 200);
   });
 });

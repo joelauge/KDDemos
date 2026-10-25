@@ -1,0 +1,8 @@
+{
+  "name": "knowbot",
+  "private": true,
+  "type": "module",
+  "description": "KnowBot server: the only runtime dependency is the Anthropic SDK, loaded lazily for bots that answer with Claude.",
+  "scripts": { "start": "node server/server.mjs", "test": "node --test lib/test/core.test.mjs server/test/server.test.mjs server/test/instances.test.mjs server/test/providers.test.mjs" },
+  "dependencies": { "@anthropic-ai/sdk": "1.3.0" }
+}

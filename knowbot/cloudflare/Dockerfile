@@ -20,6 +20,9 @@ RUN --mount=type=secret,id=ca,required=false \
  && curl -fsSL -o /opt/models/model.gguf "${MODEL_URL}"
 
 WORKDIR /app
+# The Anthropic SDK (for bots that answer with Claude) is the server's only npm dependency.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 COPY lib ./lib
 COPY server ./server
 COPY corpus ./corpus

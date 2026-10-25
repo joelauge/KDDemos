@@ -141,8 +141,14 @@ A **bucket** is one knowDrive folder of files. A **bot** (chat instance) is link
 - **Admin:** creating, editing, linking, uploading and deleting require `KNOWBOT_ADMIN_TOKEN`, sent as `Authorization: Bearer …`; the dashboard keeps it in this browser only. Without a token set, only loopback requests can manage bots and buckets (local development).
 - **Using a bot:** `demo/chat.html?instance=<bot id>`, or `<script type="module" src=".../lib/embed.js" data-instance="<bot id>" data-api="<api>"></script>`. Its name, greeting and starter questions come from the bot settings.
 
+- **Corpus inspector:** clicking a bucket shows its files and where each one is in knowDrive's pipeline (Uploaded → Extracted → Chunked → Vectorized → Ready, or Failed with the reason), stage totals, atoms vectorized, and a preview of each file's first atoms (what bots can quote). A fresh file usually reaches Ready in 1–3 minutes.
+- **Answering model:** each bot answers with the local model (default) or a hosted platform: OpenAI or Anthropic (Claude), using the operator's own API key. Add keys under **Answering platforms**. They are checked against the platform by listing its models, sealed with AES-256-GCM using `KNOWBOT_SECRET_KEY` (or, if that's unset, the admin token), and only the last 4 characters are ever shown. Claude calls use the official `@anthropic-ai/sdk` (the server's only npm dependency) with no sampling parameters, `low` effort for line picking, and the server-side refusal fallback on models that support it. A declined request returns the fixed "not in my data" reply.
+- **Answer style:** `select` (quote only; the model picks lines and KnowBot quotes them) or `generate` (the model writes; claims a source doesn't support are removed). **Instructions** add focus and tone, and never override the grounding rules.
+
 API:
 - `GET /api/graph` returns bots, buckets and `canManage`.
 - Buckets: `GET/POST /api/buckets`, `GET/PATCH/DELETE /api/buckets/:id`, `GET/POST /api/buckets/:id/files` (raw body with an `x-filename` header), `DELETE /api/buckets/:id/files/:fileId`.
 - Bots: `GET/POST /api/instances`, `GET/PATCH/DELETE /api/instances/:id`; `buckets: [{id, enabled}]` replaces the bot's links.
+- Platforms (admin): `GET /api/providers`, `PUT/DELETE /api/providers/:id` (`{apiKey}`), `GET /api/providers/:id/models`.
+- Files: `GET /api/buckets/:id/files/:fileId/atoms?limit=3` previews a file's first atoms.
 - `/api/search`, `/api/canonical` and `/api/config` take `instance` (a bot id).

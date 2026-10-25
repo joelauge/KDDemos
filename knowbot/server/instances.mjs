@@ -6,6 +6,7 @@
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { KnowDriveRetriever } from './retrievers.mjs';
+import { PROVIDERS, sealKey, openKey, listModels } from './providers.mjs';
 
 export const REGISTRY_PATH = 'knowbot/_config/instances.json';
 export const MAX_UPLOAD_BYTES = 95 * 1024 * 1024; // Cloudflare Workers accept request bodies up to 100 MB
@@ -39,7 +40,7 @@ export function safeRelPath(name) {
 }
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
-const BOT_KEYS = ['id', 'name', 'org', 'botName', 'greeting', 'starters', 'guards', 'minSimilarity', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
+const BOT_KEYS = ['id', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
 const BUCKET_KEYS = ['id', 'name', 'folder', 'builtin', 'createdAt', 'updatedAt'];
 const now = () => new Date().toISOString();
 
@@ -49,6 +50,14 @@ function cleanName(v) {
   return name;
 }
 
+/** A bot's provider/model pair must make sense together: local models from the server list, hosted ones by id. */
+function checkModel(bot, localModels) {
+  const provider = bot.provider || 'local';
+  if (provider === 'local') {
+    if (bot.model && localModels.length && !localModels.includes(bot.model)) throw new InstanceError(400, `unknown local model "${bot.model}"`);
+  } else if (!bot.model) throw new InstanceError(400, `choose a ${PROVIDERS[provider].label} model for this bot`);
+}
+
 function newId(body, name, taken) {
   const id = slugify(body.id || name);
   if (!ID_RE.test(id) || RESERVED.has(id)) throw new InstanceError(400, 'id must be 1-40 lowercase letters, digits or dashes');
@@ -56,8 +65,27 @@ function newId(body, name, taken) {
   return id;
 }
 
-function cleanBot(body, { partial = false } = {}) {
+function cleanBot(body, { partial = false, models = [] } = {}) {
   const out = {};
+  if (body.instructions !== undefined) {
+    const v = String(body.instructions ?? '').trim();
+    if (v.length > 800) throw new InstanceError(400, 'instructions too long (max 800 characters)');
+    out.instructions = v || undefined;
+  }
+  if (body.provider !== undefined) {
+    const v = String(body.provider || 'local');
+    if (!PROVIDERS[v]) throw new InstanceError(400, `provider must be one of ${Object.keys(PROVIDERS).join(', ')}`);
+    out.provider = v === 'local' ? undefined : v;
+  }
+  if (body.model !== undefined) {
+    const v = String(body.model ?? '').trim();
+    if (v.length > 100 || /[^\w.:@/-]/.test(v)) throw new InstanceError(400, 'model must be a model id such as claude-opus-5-5 or gpt-4.1-mini');
+    out.model = v || undefined;
+  }
+  if (body.answerMode !== undefined) {
+    if (body.answerMode && !['select', 'generate'].includes(body.answerMode)) throw new InstanceError(400, 'answerMode must be "select" or "generate"');
+    out.answerMode = body.answerMode || undefined;
+  }
   if (body.name !== undefined || !partial) out.name = cleanName(body.name);
   for (const k of ['org', 'botName', 'greeting']) {
     if (body[k] === undefined) continue;
@@ -82,6 +110,19 @@ function cleanBot(body, { partial = false } = {}) {
     }
   }
   return out;
+}
+
+/**
+ * One pipeline stage per file, from knowDrive's coarse status plus its raw phase:
+ * uploaded → extracted → chunked → vectorizing → ready, or failed.
+ */
+export function fileStage(f) {
+  const phase = String(f.phase || ''), status = String(f.status || '');
+  if (status === 'error' || ['error', 'quarantined', 'retained'].includes(phase)) return 'failed';
+  if (phase === 'completed' || status === 'processed') return 'ready';
+  if (phase === 'chunked') return f.atom_count > 0 && (f.atoms_vectorized ?? 0) > 0 ? 'vectorizing' : 'chunked';
+  if (phase === 'text_extracted') return 'extracted';
+  return 'uploaded'; // pending / fetching / just stored
 }
 
 /** Bot results from several buckets: each bucket searched on its own (its folder is its world), then merged. */
@@ -113,12 +154,14 @@ export class InstanceRegistry {
    * @param {{ kd?: { baseUrl: string, apiKey: string|Function, store: string } | null, dataDir: string,
    *           builtin: object, builtinRetriever: object, defaultMinSimilarity: number, logger?: Function }} o
    */
-  constructor({ kd = null, dataDir, builtin, builtinRetriever, defaultMinSimilarity = 0.7, logger = () => {} }) {
-    this.kd = kd; this.dataDir = dataDir; this.log = logger;
+  constructor({ kd = null, dataDir, builtin, builtinRetriever, defaultMinSimilarity = 0.7, models = [], secret = 'knowbot-local-dev', logger = () => {} }) {
+    this.kd = kd; this.dataDir = dataDir; this.log = logger; this.models = models; this.secret = secret;
+    this.providerKeys = {}; // provider id → { sealed, last4, updatedAt }
     // The built-in bot and bucket come from the server config. Only the bot's bucket links can be changed.
     this.builtinBucket = { id: builtin.id, name: builtin.name, folder: builtin.folder, builtin: true };
     this.builtinBotBase = { id: builtin.id, name: builtin.name, org: builtin.org, guards: builtin.guards || 'store', builtin: true };
     this.builtinLinks = [{ id: builtin.id, enabled: true }];
+    this.builtinSettings = {}; // operator overrides for the built-in bot (model, instructions, greeting, …)
     this.builtinRetriever = builtinRetriever;
     this.defaultMinSimilarity = defaultMinSimilarity;
     this.bots = new Map();
@@ -157,11 +200,13 @@ export class InstanceRegistry {
     this.buckets = new Map(buckets.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map((x) => [x.id, x]));
     this.bots = new Map(bots.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map((x) => [x.id, { ...x, buckets: this.cleanLinks(x.buckets, { strict: false }) }]));
     if (Array.isArray(doc.builtinBot?.buckets)) this.builtinLinks = this.cleanLinks(doc.builtinBot.buckets, { strict: false });
+    if (doc.builtinBot?.settings && typeof doc.builtinBot.settings === 'object') this.builtinSettings = doc.builtinBot.settings;
+    this.providerKeys = Object.fromEntries(Object.entries(doc.providers || {}).filter(([k, v]) => PROVIDERS[k] && v && v.sealed));
     this.log(`[instances] ${this.bots.size} bot(s), ${this.buckets.size} bucket(s) loaded`);
   }
 
   async save() {
-    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: { buckets: this.builtinLinks } }, null, 2);
+    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: { buckets: this.builtinLinks, settings: this.builtinSettings }, providers: this.providerKeys }, null, 2);
     this.writeChain = this.writeChain.catch(() => {}).then(async () => {
       if (!this.kd) {
         await fsp.mkdir(this.dataDir, { recursive: true });
@@ -180,7 +225,7 @@ export class InstanceRegistry {
 
   /** Apply a change and persist it; on a failed save the previous state comes back. */
   async commit(change) {
-    const snap = { bots: new Map(this.bots), buckets: new Map(this.buckets), builtinLinks: this.builtinLinks };
+    const snap = { bots: new Map(this.bots), buckets: new Map(this.buckets), builtinLinks: this.builtinLinks, builtinSettings: this.builtinSettings, providerKeys: { ...this.providerKeys } };
     const out = change();
     try { await this.save(); } catch (e) { Object.assign(this, snap); throw e; }
     this.retrievers.clear();
@@ -208,7 +253,7 @@ export class InstanceRegistry {
 
   // ---------------------------------------------------------------- reads
   bucketList() { return [this.builtinBucket, ...[...this.buckets.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BUCKET_KEYS)); }
-  builtinBot() { return { ...this.builtinBotBase, buckets: this.builtinLinks }; }
+  builtinBot() { return { ...this.builtinBotBase, ...this.builtinSettings, builtin: true, id: this.builtinBotBase.id, buckets: this.builtinLinks }; }
   list() { return [this.builtinBot(), ...[...this.bots.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BOT_KEYS)); }
 
   get(id) {
@@ -253,10 +298,11 @@ export class InstanceRegistry {
   // ---------------------------------------------------------------- bots
   async create(body) {
     this.needWrite();
-    const fields = cleanBot(body);
+    const fields = cleanBot(body, { models: this.models });
     const id = newId(body, fields.name, (x) => x === this.builtinBotBase.id || this.bots.has(x));
     const t = now();
     const bot = { id, guards: 'general', ...fields, buckets: this.cleanLinks(body.buckets), createdAt: t, updatedAt: t };
+    checkModel(bot, this.models);
     return this.commit(() => { this.bots.set(id, bot); return pick(bot, BOT_KEYS); });
   }
 
@@ -264,12 +310,16 @@ export class InstanceRegistry {
     this.needWrite();
     const bot = this.get(id);
     if (bot.builtin) {
-      if (Object.keys(body).some((k) => k !== 'buckets')) throw new InstanceError(403, 'the built-in bot only lets you change its bucket links');
-      const links = this.cleanLinks(body.buckets);
-      return this.commit(() => { this.builtinLinks = links; return pick(this.builtinBot(), BOT_KEYS); });
+      const settings = { ...this.builtinSettings, ...cleanBot(body, { partial: true, models: this.models }) };
+      if (body.provider !== undefined && body.model === undefined && settings.provider !== bot.provider) settings.model = undefined;
+      checkModel(settings, this.models);
+      const links = body.buckets !== undefined ? this.cleanLinks(body.buckets) : this.builtinLinks;
+      return this.commit(() => { this.builtinSettings = settings; this.builtinLinks = links; return pick(this.builtinBot(), BOT_KEYS); });
     }
-    const next = { ...bot, ...cleanBot(body, { partial: true }), updatedAt: now() };
+    const next = { ...bot, ...cleanBot(body, { partial: true, models: this.models }), updatedAt: now() };
     if (body.buckets !== undefined) next.buckets = this.cleanLinks(body.buckets);
+    if (body.provider !== undefined && body.model === undefined && next.provider !== bot.provider) next.model = undefined;
+    checkModel(next, this.models);
     return this.commit(() => { this.bots.set(bot.id, next); return pick(next, BOT_KEYS); });
   }
 
@@ -313,6 +363,45 @@ export class InstanceRegistry {
     });
   }
 
+  // ---------------------------------------------------------------- answering platforms (API keys)
+  providerList() {
+    return Object.entries(PROVIDERS).map(([id, p]) => {
+      const k = this.providerKeys[id];
+      return { id, label: p.label, needsKey: p.needsKey, keyHint: p.keyHint, docs: p.docs, defaultModel: p.defaultModel,
+        configured: !p.needsKey || !!k, ...(k ? { last4: k.last4, updatedAt: k.updatedAt } : {}) };
+    });
+  }
+
+  providerKey(id) {
+    if (!PROVIDERS[id]?.needsKey) return null;
+    const k = this.providerKeys[id];
+    if (!k) throw new InstanceError(409, `no ${PROVIDERS[id].label} API key is set; add one under Answering platforms`);
+    return openKey(k.sealed, this.secret);
+  }
+
+  /** Checks the key against the platform (by listing its models) before it is stored. */
+  async setProviderKey(id, apiKey) {
+    this.needWrite();
+    if (!PROVIDERS[id]?.needsKey) throw new InstanceError(400, `"${id}" does not take an API key`);
+    const key = String(apiKey || '').trim();
+    if (!key) {
+      if ([...this.bots.values(), this.builtinBot()].some((b) => b.provider === id)) throw new InstanceError(409, `bots still answer with ${PROVIDERS[id].label}; switch them first`);
+      return this.commit(() => { delete this.providerKeys[id]; return this.providerList().find((p) => p.id === id); });
+    }
+    if (key.length > 400 || /\s/.test(key)) throw new InstanceError(400, 'that does not look like an API key');
+    const models = await listModels(id, key);
+    return this.commit(() => {
+      this.providerKeys[id] = { sealed: sealKey(key, this.secret), last4: key.slice(-4), updatedAt: now() };
+      return { ...this.providerList().find((p) => p.id === id), models: models.length };
+    });
+  }
+
+  async providerModels(id) {
+    if (!PROVIDERS[id]) throw new InstanceError(404, `no such provider "${id}"`);
+    if (id === 'local') return this.models.map((m) => ({ id: m, label: m }));
+    return listModels(id, this.providerKey(id));
+  }
+
   // ---------------------------------------------------------------- files (knowDrive only)
   needKd() { if (!this.kd) throw new InstanceError(503, 'file management needs a knowDrive key (KNOWDRIVE_API_KEY)'); }
 
@@ -332,10 +421,29 @@ export class InstanceRegistry {
       if (!j.has_more || !after) break;
     }
     return rows.filter((r) => String(r.filename || '').startsWith(b.folder) && !(r.tags || []).includes('kind:config')).map((r) => ({
-      id: r.id, path: r.filename.slice(b.folder.length), bytes: r.bytes ?? r.size ?? null, status: r.status || null, phase: r.phase || null,
-      mime: r.mime_type || null, atoms: r.atom_count ?? null, error: r.last_error?.message || r.error || null,
-      updatedAt: r.updated_at || r.last_modified_at || r.created_at || null,
+      id: r.id, path: r.filename.slice(b.folder.length), bytes: r.bytes ?? r.size ?? null, mime: r.mime_type || null,
+      status: r.status || null, phase: r.phase || null, stage: fileStage(r),
+      chunks: r.chunk_count ?? null, atoms: r.atom_count ?? null, vectorized: r.atoms_vectorized ?? null,
+      error: r.status_details || r.last_error?.message || null,
+      createdAt: r.created_at || null, updatedAt: r.updated_at || r.last_modified_at || r.created_at || null,
     })).sort((a, c) => a.path.localeCompare(c.path));
+  }
+
+  /** The first atoms of a file in this bucket: what knowDrive actually extracted and will cite. */
+  async fileAtoms(bucketId, fileId, limit = 5) {
+    this.needKd();
+    const b = this.bucket(bucketId);
+    const res = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}`);
+    if (res.status === 404) throw new InstanceError(404, 'no such file');
+    if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status}`);
+    const f = await res.json();
+    if (!String(f.filename || '').startsWith(b.folder)) throw new InstanceError(403, "that file is outside this bucket's folder");
+    const n = Math.max(1, Math.min(20, Number(limit) || 5));
+    const ar = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}/atoms?limit=${n}`);
+    if (!ar.ok) throw new InstanceError(502, `knowDrive HTTP ${ar.status} reading atoms`);
+    const j = await ar.json();
+    const atoms = (j.data || j.atoms || []).map((a) => ({ seq: a.sequence_index ?? null, tokens: a.metadata?.text_tokens ?? null, kind: a.metadata?.node_kind || a.metadata?.type || null, text: String(a.text || '').slice(0, 800) }));
+    return { id: fileId, path: f.filename.slice(b.folder.length), stage: fileStage(f), atoms: f.atom_count ?? atoms.length, shown: atoms.length, items: atoms };
   }
 
   async upload(bucketId, name, contentType, bytes) {

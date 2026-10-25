@@ -62,7 +62,7 @@ export async function createCanvas(el) {
     e(BotIcon), e('div', { className: 'fnode-body' },
     e('div', { className: 'fnode-kicker' }, e('span', null, 'bot'), d.item.builtin ? e('span', { className: 'flag flag-inst' }, 'built-in') : null),
     e('div', { className: 'fnode-name' }, d.item.name),
-    e('div', { className: 'fnode-folder' }, d.item.id),
+    e('div', { className: 'fnode-folder' }, d.item.id, d.item.modelLabel ? e('div', { className: 'fnode-model' }, d.item.modelLabel) : null),
     e('div', { className: `fnode-meta${d.enabled ? '' : ' warn'}` }, d.enabled ? `${plural(d.enabled, 'bucket')} on${d.linked > d.enabled ? ` · ${d.linked - d.enabled} off` : ''}` : d.linked ? 'all buckets off — answers nothing' : 'no buckets — answers nothing'))));
 
   function LinkEdge(p) {
