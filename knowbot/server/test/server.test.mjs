@@ -441,8 +441,8 @@ describe('server (HTTP)', () => {
       assert.equal(c.store, 'vs_97c857474b1f4e8892b134c283cf9849');
       const j = await (await fetch(`http://127.0.0.1:${p3}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'returns' }) })).json();
       assert.equal(j.source, 'knowdrive');
-      assert.deepEqual(kd.calls[0].body, { query: 'returns', max_num_results: 6, mode: 'hybrid', text: 'raw', filter: { all_of: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] } });
-      assert.equal(kd.calls[0].url, '/api/v1/vector_stores/vs_97c857474b1f4e8892b134c283cf9849/search');
+      assert.deepEqual(kd.calls.find((c) => c.url.endsWith('/search')).body, { query: 'returns', max_num_results: 6, mode: 'hybrid', text: 'raw', filter: { all_of: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] } });
+      assert.equal(kd.calls.find((c) => c.url.endsWith('/search')).url, '/api/v1/vector_stores/vs_97c857474b1f4e8892b134c283cf9849/search');
       assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
       assert.equal(j.results[0].url, 'https://example.test/policies/refund-policy');
     } finally { await close(kb3.server); await close(kd.srv); }
@@ -457,8 +457,8 @@ describe('server (HTTP)', () => {
     const p4 = await listen(kb4.server);
     try {
       const j = await (await fetch(`http://127.0.0.1:${p4}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'returns', k: 3 }) })).json();
-      assert.equal(kd.calls[0].url, '/api/v1/vector_stores/vs_shared/search');
-      assert.deepEqual(kd.calls[0].body.filter, { all_of: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] }, 'prefix enforced in the search via folder tags');
+      assert.equal(kd.calls.find((c) => c.url.endsWith('/search')).url, '/api/v1/vector_stores/vs_shared/search');
+      assert.deepEqual(kd.calls.find((c) => c.url.endsWith('/search')).body.filter, { all_of: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] }, 'prefix enforced in the search via folder tags');
       assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
     } finally { await close(kb4.server); await close(kd.srv); }
   });

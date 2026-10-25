@@ -1,6 +1,7 @@
 // One-line loader:
 // <script type="module" src=".../lib/embed.js" data-api="http://localhost:8787" data-mode="widget|inline|fullpage"
-//         data-target="#id" data-engine="server|webllm" data-org="..." data-name="KnowBot" data-starters="Q1|Q2"></script>
+//         data-target="#id" data-engine="server|webllm" data-org="..." data-name="KnowBot" data-starters="Q1|Q2"
+//         data-instance="acme"></script>   (data-instance: answer only from that chat instance's knowDrive folder)
 import { mount, ensureCss } from './widget.js';
 
 const me = new URL(import.meta.url);
@@ -26,13 +27,23 @@ const engine = d.engine === 'webllm' ? { type: 'webllm', ...(d.model ? { model: 
   ? { type: 'openai', baseUrl: d.llm, model: d.model } : { type: 'server' };
 
 ensureCss(d.css || new URL('./knowbot.css', me).href);
-const start = () => {
+const instance = /^[a-z0-9-]{1,40}$/.test(d.instance || '') ? d.instance : null;
+// An instance's name, greeting and starter questions come from the server unless the page sets them.
+const instanceConfig = async () => {
+  if (!instance) return null;
+  try { return (await (await fetch(`${apiBase}/api/config?instance=${encodeURIComponent(instance)}`)).json()).instance || null; } catch { return null; }
+};
+const start = async () => {
+  const inst = await instanceConfig();
   window.knowbot = mount(d.mode || 'widget', d.target || null, {
     apiBase,
     engine,
-    persona: { name: d.name || 'KnowBot', org: d.org || document.title || 'this organization' },
+    instance,
+    guards: inst?.guards,
+    persona: { name: d.name || inst?.botName || 'KnowBot', org: d.org || inst?.org || inst?.name || document.title || 'this organization' },
     title: d.title,
-    starters: d.starters ? d.starters.split('|').map((s) => s.trim()).filter(Boolean) : [],
+    greeting: d.greeting || inst?.greeting || undefined,
+    starters: d.starters ? d.starters.split('|').map((s) => s.trim()).filter(Boolean) : inst?.starters || [],
     open: d.open === 'true',
     position: d.position,
     telemetry: d.telemetry === 'false' ? false : true,

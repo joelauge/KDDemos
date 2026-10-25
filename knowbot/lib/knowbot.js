@@ -58,10 +58,11 @@ async function post(url, body, headers = {}, signal) {
   return res;
 }
 
-export const serverRetriever = ({ apiBase }) => ({
+export const serverRetriever = ({ apiBase, instance }) => ({
   type: 'server',
   async search(query, k, signal) {
-    const j = await (await post(`${trimSlash(apiBase)}/api/search`, { query, k }, {}, signal)).json();
+    // The server scopes retrieval to the instance's folder; the browser cannot widen it.
+    const j = await (await post(`${trimSlash(apiBase)}/api/search`, { query, k, ...(instance ? { instance } : {}) }, {}, signal)).json();
     return { source: j.source || 'server', results: (j.results || []).map(normalizeResult) };
   },
 });
@@ -274,9 +275,11 @@ const GUARDS = [
 ];
 
 /** Returns a refusal Answer fragment for out-of-bounds requests, or null. Pure and deterministic. */
-export function guardRequest(question, persona = {}) {
+// Guards that only make sense for a retail store's assistant; a 'general' instance skips them.
+const STORE_GUARDS = new Set(['platform', 'analytics']);
+export function guardRequest(question, persona = {}, { profile = 'store' } = {}) {
   const q = String(question ?? ''), org = { ...DEF_PERSONA, ...persona }.org;
-  const g = GUARDS.find((x) => x.re.test(q));
+  const g = GUARDS.find((x) => (profile === 'store' || !STORE_GUARDS.has(x.kind)) && x.re.test(q));
   return g ? { text: g.text(org), citations: [], grounded: false, refused: true, fallback: false, guard: g.kind } : null;
 }
 
@@ -725,9 +728,10 @@ export class KnowBot {
     this.persona = { ...DEF_PERSONA, ...o.persona };
     this.k = o.k ?? 6;
     this.minScore = o.minScore ?? 0;
-    this.retriever = createRetriever(o.retriever, this.apiBase);
+    this.instance = o.instance ? String(o.instance) : null;
+    this.retriever = createRetriever(o.retriever ?? (this.instance ? { type: 'server', instance: this.instance } : undefined), this.apiBase);
     this.engine = createEngine(o.engine, this.apiBase);
-    this.surface = detectSurface(o.surface && o.surface !== 'auto' ? o.surface : {});
+    this.surface = detectSurface({ ...(o.surface && o.surface !== 'auto' ? o.surface : {}), ...(this.instance ? { instance: this.instance } : {}) });
     this.sessionId = o.sessionId || sessionIdFor(this.surface.kind);
     this.telemetry = new Telemetry(o.telemetry ?? true, this.apiBase);
     this.history = [];
@@ -753,7 +757,7 @@ export class KnowBot {
     this.start();
     const turnId = `${this.sessionId}.${++this.turns}`, t0 = now();
     this.emit({ type: 'message.user', turnId, text: q });
-    const guard = guardRequest(q, this.persona);
+    const guard = guardRequest(q, this.persona, { profile: this.opts.guards || (this.instance ? 'general' : 'store') });
     o.onStatus?.({ phase: guard ? 'guarded' : 'retrieving' });
     const { source, results } = guard ? { source: 'guard', results: [] } : await this.retriever.search(q, this.k, o.signal);
     const t1 = now();

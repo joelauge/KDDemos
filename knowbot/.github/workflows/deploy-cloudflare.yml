@@ -1,5 +1,6 @@
 # Deploys the KnowBot API (cloudflare/: Worker + Container with llama-server and the Node server).
-# Secrets (on the github-pages environment, or as repository secrets): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, optional KNOWDRIVE_API_KEY.
+# Secrets (on the github-pages environment, or as repository secrets): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
+# KNOWDRIVE_API_KEY (the store the bot answers from) and KNOWBOT_ADMIN_TOKEN (dashboard instance management).
 name: Deploy KnowBot API to Cloudflare
 on:
   workflow_dispatch:
@@ -33,8 +34,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           KNOWDRIVE_API_KEY: ${{ secrets.KNOWDRIVE_API_KEY }}
+          KNOWBOT_ADMIN_TOKEN: ${{ secrets.KNOWBOT_ADMIN_TOKEN }}
         run: |
           if [ -n "$KNOWDRIVE_API_KEY" ]; then printf '%s' "$KNOWDRIVE_API_KEY" | npx wrangler secret put KNOWDRIVE_API_KEY; else echo "::warning::KNOWDRIVE_API_KEY not set; the container will answer from the bundled corpus"; fi
+          if [ -n "$KNOWBOT_ADMIN_TOKEN" ]; then printf '%s' "$KNOWBOT_ADMIN_TOKEN" | npx wrangler secret put KNOWBOT_ADMIN_TOKEN; else echo "::warning::KNOWBOT_ADMIN_TOKEN not set; chat instances can't be created or edited from the dashboard"; fi
       - name: Deploy (builds the container image with Docker)
         if: steps.guard.outputs.ok == 'true'
         working-directory: cloudflare

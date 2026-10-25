@@ -7,7 +7,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promises as fsp, createReadStream, existsSync, mkdirSync, appendFile, readFileSync, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { createRetriever, DEFAULT_STORE } from './retrievers.mjs';
+import { createRetriever, DEFAULT_STORE, DEFAULT_PREFIX } from './retrievers.mjs';
+import { InstanceRegistry, InstanceError, MAX_UPLOAD_BYTES } from './instances.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,11 +58,26 @@ export function createKnowBotServer(opts = {}) {
   const maxSse = Number(opts.maxSse ?? env.KNOWBOT_MAX_SSE ?? 100);
   const eventsMaxBytes = Number(opts.eventsMaxBytes ?? env.KNOWBOT_EVENTS_MAX_BYTES ?? 50 * 1024 * 1024);
   const readToken = String(opts.dashboardToken ?? env.KNOWBOT_DASHBOARD_TOKEN ?? '');
+  const adminToken = String(opts.adminToken ?? env.KNOWBOT_ADMIN_TOKEN ?? '');
   const quiet = opts.quiet ?? false;
   const log = (...a) => { if (!quiet) console.log(...a); };
 
   const { mode, retriever, local } = createRetriever({ corpusDir, env, logger: log, watch: opts.watch ?? true });
   const store = mode === 'knowdrive' ? (env.KNOWDRIVE_STORE || DEFAULT_STORE) : 'local:corpus';
+
+  // ------------------------------------------------------------ chat instances (one knowDrive folder each)
+  const kdKeyFile = env.KNOWDRIVE_API_KEY_FILE;
+  const kd = mode === 'knowdrive' ? {
+    baseUrl: String(env.KNOWDRIVE_BASE_URL || 'https://knowdrive.ai').replace(/\/+$/, ''), store,
+    apiKey: kdKeyFile ? () => { try { return readFileSync(kdKeyFile, 'utf8').trim(); } catch { return ''; } } : env.KNOWDRIVE_API_KEY,
+  } : null;
+  const builtinOrg = env.KNOWBOT_ORG || DEFAULT_PERSONA.org;
+  const registry = opts.registry || new InstanceRegistry({
+    kd, dataDir, logger: log, builtinRetriever: retriever,
+    // The built-in floor (0.745) is calibrated for its corpus; smaller uploaded folders score lower, so new instances start at 0.70.
+    defaultMinSimilarity: Number(env.KNOWBOT_INSTANCE_MIN_SIMILARITY ?? 0.7),
+    builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
+  });
 
   // ------------------------------------------------------------ events / SSE
   mkdirSync(dataDir, { recursive: true });
@@ -195,18 +211,21 @@ export function createKnowBotServer(opts = {}) {
     return j?.choices?.[0]?.message?.content ?? '';
   }
 
-  async function canonical({ question, sessionId, turnId, history }) {
+  async function canonical({ question, sessionId, turnId, history, instance }) {
     const lib = await loadLib();
-    const persona = { ...DEFAULT_PERSONA, ...(env.KNOWBOT_ORG ? { org: env.KNOWBOT_ORG } : {}) };
+    await registry.ready;
+    const inst = registry.get(instance);
+    const retriever = registry.retriever(inst.id);
+    const persona = { ...DEFAULT_PERSONA, org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}) };
     const k = 6;
     const minScore = Number(env.KNOWBOT_MIN_SCORE || 0);
     const settings = { ...CANONICAL, ...(lib.CANONICAL || {}) };
     const t0 = performance.now();
-    const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(question, persona) : null;
+    const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(question, persona, { profile: inst.guards || 'general' }) : null;
     const ret = guard ? { source: 'guard', results: [] } : await retriever.search(question, k);
     const tRet = performance.now();
     const results = ret.results;
-    const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}` };
+    const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}`, instance: inst.id };
     const engine = { type: 'openai', model: llmModel };
 
     // Same path as KnowBot.ask() in lib/knowbot.js: guard -> retrieval -> answerFromSources (select mode by default).
@@ -259,6 +278,65 @@ export function createKnowBotServer(opts = {}) {
     const got = Buffer.from(url.searchParams.get('token') || (auth.startsWith('Bearer ') ? auth.slice(7) : ''));
     const want = Buffer.from(readToken);
     if (got.length !== want.length || !timingSafeEqual(got, want)) throw new HttpError(401, 'operator token required');
+  }
+
+  /** Instance management writes to the knowDrive store: KNOWBOT_ADMIN_TOKEN, or loopback only when none is set. */
+  function requireAdmin(req) {
+    if (!adminToken) {
+      const ip = req.socket.remoteAddress || '';
+      if (/^(?:127\.|::1$|::ffff:127\.)/.test(ip) && !req.headers['x-forwarded-for']) return;
+      throw new HttpError(403, 'instance management is disabled: set KNOWBOT_ADMIN_TOKEN on the server');
+    }
+    const auth = String(req.headers.authorization || '');
+    const got = Buffer.from(auth.startsWith('Bearer ') ? auth.slice(7) : '');
+    const want = Buffer.from(adminToken);
+    if (got.length !== want.length || !timingSafeEqual(got, want)) throw new HttpError(401, 'admin token required');
+  }
+
+  /** Raw upload body (one file per request), capped below the Cloudflare request limit. */
+  function readRaw(req, limit) {
+    return new Promise((resolve, reject) => {
+      const len = Number(req.headers['content-length'] || 0);
+      if (len > limit) { req.resume(); return reject(new HttpError(413, `file exceeds ${Math.round(limit / 1048576)} MB`)); }
+      const parts = []; let size = 0; let done = false;
+      req.on('data', (c) => {
+        if (done) return;
+        size += c.length;
+        if (size > limit) { done = true; req.resume(); reject(new HttpError(413, `file exceeds ${Math.round(limit / 1048576)} MB`)); return; }
+        parts.push(c);
+      });
+      req.on('end', () => { if (!done) { done = true; resolve(Buffer.concat(parts)); } });
+      req.on('error', (e) => { if (!done) { done = true; reject(e); } });
+    });
+  }
+
+  async function instanceRoutes(req, res, url, p, m) {
+    await registry.ready;
+    const parts = p.split('/').filter(Boolean).slice(2).map(decodeURIComponent); // after /api/instances
+    const [id, sub, fileId] = parts;
+    if (!id) {
+      if (m === 'GET') return send(res, 200, { instances: registry.list(), canManage: registry.canWrite });
+      if (m === 'POST') { requireAdmin(req); return send(res, 201, await registry.create(await readJson(req))); }
+    } else if (!sub) {
+      if (m === 'GET') return send(res, 200, registry.list().find((x) => x.id === registry.get(id).id));
+      if (m === 'PATCH') { requireAdmin(req); return send(res, 200, await registry.update(id, await readJson(req))); }
+      if (m === 'DELETE') { requireAdmin(req); const it = await registry.remove(id); return send(res, 200, { ok: true, id: it.id }); }
+    } else if (sub === 'files') {
+      requireAdmin(req);
+      if (!fileId && m === 'GET') return send(res, 200, { files: await registry.listFiles(id) });
+      if (!fileId && m === 'POST') {
+        const it = registry.get(id);
+        if (it.builtin) throw new HttpError(403, 'the built-in instance is managed by the corpus sync script');
+        const name = decodeURIComponent(String(req.headers['x-filename'] || url.searchParams.get('name') || ''));
+        const bytes = await readRaw(req, MAX_UPLOAD_BYTES);
+        return send(res, 201, await registry.upload(id, name, String(req.headers['content-type'] || '').split(';')[0].trim(), bytes));
+      }
+      if (fileId && m === 'DELETE') {
+        if (registry.get(id).builtin) throw new HttpError(403, 'the built-in instance is managed by the corpus sync script');
+        return send(res, 200, await registry.deleteFile(id, fileId));
+      }
+    }
+    throw new HttpError(m === 'GET' || m === 'POST' || m === 'PATCH' || m === 'DELETE' ? 404 : 405, `no such endpoint ${m} ${p}`);
   }
 
   // ------------------------------------------------------------ helpers
@@ -348,17 +426,23 @@ export function createKnowBotServer(opts = {}) {
       return send(res, 200, { ok: true, retrieval: mode, files: local.fileCount, chunks: local.chunkCount, llm: await llmReachable(), llmBase, sseClients: clients.size });
     }
 
+    if (p === '/api/instances' || p.startsWith('/api/instances/')) return instanceRoutes(req, res, url, p, m);
+
     if (p.startsWith('/api/')) {
       switch (`${m} ${p}`) {
-        case 'GET /api/config':
-          return send(res, 200, { store, retrieval: mode, engine: { type: 'openai', model: llmModel }, canonical: { ...CANONICAL } });
+        case 'GET /api/config': {
+          await registry.ready;
+          const inst = registry.list().find((x) => x.id === registry.get(url.searchParams.get('instance')).id);
+          return send(res, 200, { store, retrieval: mode, engine: { type: 'openai', model: llmModel }, canonical: { ...CANONICAL }, instance: inst });
+        }
 
         case 'POST /api/search': {
           const body = await readJson(req);
           const query = typeof body.query === 'string' ? body.query.trim() : '';
           if (!query) throw new HttpError(400, 'query is required');
           if (query.length > 4000) throw new HttpError(400, 'query too long');
-          const r = await retriever.search(query, body.k ?? 6);
+          await registry.ready;
+          const r = await registry.retriever(body.instance).search(query, body.k ?? 6);
           return send(res, 200, r);
         }
 
@@ -400,7 +484,7 @@ export function createKnowBotServer(opts = {}) {
           const question = typeof body.question === 'string' ? body.question.trim() : '';
           if (!question) throw new HttpError(400, 'question is required');
           if (question.length > 4000) throw new HttpError(400, 'question too long');
-          const answer = await canonical({ question, sessionId: body.sessionId, turnId: body.turnId, history: body.history });
+          const answer = await canonical({ question, sessionId: body.sessionId, turnId: body.turnId, history: body.history, instance: body.instance });
           return send(res, 200, answer);
         }
 
@@ -462,7 +546,7 @@ export function createKnowBotServer(opts = {}) {
   const server = http.createServer(async (req, res) => {
     const t0 = performance.now();
     res.setHeader('access-control-allow-origin', '*');
-    res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    res.setHeader('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     res.setHeader('access-control-allow-headers', req.headers['access-control-request-headers'] || 'content-type, authorization');
     res.setHeader('access-control-expose-headers', 'content-type');
     const isStream = req.url.startsWith('/api/stream');
@@ -474,7 +558,7 @@ export function createKnowBotServer(opts = {}) {
     try {
       await handle(req, res);
     } catch (e) {
-      const status = e instanceof HttpError ? e.status : 500;
+      const status = e instanceof HttpError || e instanceof InstanceError ? e.status : 500;
       if (status === 500) log(`[error] ${req.method} ${logUrl}: ${e.stack || e}`);
       if (!res.headersSent) send(res, status, { error: { status, message: e.message || 'internal error', ...(e.extra || {}) } });
       else { try { res.end(); } catch {} }
@@ -494,7 +578,7 @@ export function createKnowBotServer(opts = {}) {
     return origClose(cb);
   };
 
-  return { server, retriever, local, mode, ready: local.ready, flush: () => writeQueue, config: { root, corpusDir, dataDir, libPath, llmBase, llmModel } };
+  return { server, retriever, registry, local, mode, ready: local.ready, flush: () => writeQueue, config: { root, corpusDir, dataDir, libPath, llmBase, llmModel } };
 }
 
 // ------------------------------------------------------------ main

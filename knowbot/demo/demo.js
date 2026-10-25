@@ -11,6 +11,13 @@ const apiParam = (() => {
 })();
 export const API = (apiParam || hostedApi() || (location.port === '8787' ? location.origin : 'http://localhost:8787')).replace(/\/+$/, '');
 export const PERSONA = { name: 'KnowBot', org: 'The Ultimate Game Master' };
+// ?instance=<id>: chat with one chat instance, which answers only from its own knowDrive folder.
+export const INSTANCE = /^[a-z0-9-]{1,40}$/.test(q.get('instance') || '') ? q.get('instance') : null;
+/** The instance's public settings (name, greeting, starters), or null for the built-in demo corpus. */
+export async function instanceConfig() {
+  if (!INSTANCE) return null;
+  try { return (await (await fetch(`${API}/api/config?instance=${encodeURIComponent(INSTANCE)}`)).json()).instance || null; } catch { return null; }
+}
 // Topics the corpus really covers; shown when a question matches nothing (refusal hint).
 export const COVERAGE = ['Products and bundles', 'Shipping policy', 'Refund policy', 'Game master guides'];
 export const STARTERS = [

@@ -129,3 +129,16 @@ max_tokens 400, seed 7.
 - **API:** `cloudflare/` deploys a Worker (`knowbot-api`) in front of one Cloudflare Container (`standard-4`, 4 vCPU / 12 GiB) that runs llama.cpp `llama-server` with Qwen2.5-1.5B-Instruct Q4_K_M plus the unchanged Node server. It is the same model and code as every judged round. The container sleeps after 15 minutes idle; the first request after that wakes it in roughly 5–20 s.
 - **Deploy:** `.github/workflows/deploy-cloudflare.yml` runs on push to `main` (or manually) once the repo secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `KNOWDRIVE_API_KEY` exist. Locally: `cd cloudflare && npm install && npx wrangler deploy` (needs Docker).
 - **Wire the pages to it:** put the deployed Worker URL in `lib/site-config.js` (`HOSTED_APIS['knowbot.knowdrive.ai']`). The dashboard and demos then use it by default.
+
+## Chat instances (one knowDrive folder each)
+
+Each chat instance answers **only** from one knowDrive folder: search is filtered to the folder's `dir:` tags, and any hit whose path is outside the folder is dropped before it can be quoted or cited. Create and fill them from the dashboard's **Instances** panel.
+
+- **Registry:** `knowbot/_config/instances.json` in the same store, tagged `kind:config` and never searchable. The built-in instance (`ugm`, `knowbot/ugm/`) comes from the server config and is read-only.
+- **Uploads:** any file type knowDrive accepts. One file per request, up to 95 MB (the Cloudflare request limit), stored at `<folder><relative path>` with tags `knowbot`, `knowbot:<id>` and `kind:upload`. Names can't climb out of the folder.
+- **Relevance floor:** new instances start at 0.70 (`KNOWBOT_INSTANCE_MIN_SIMILARITY`). Raise it if an instance answers off-topic questions; lower it if it refuses questions its files do answer.
+- **Guards:** `general` (prompt-injection, personal data, actions) or `store`, which adds the retail-only platform and analytics refusals.
+- **Admin:** creating, editing, uploading and deleting require `KNOWBOT_ADMIN_TOKEN`, sent as `Authorization: Bearer …`; the dashboard keeps it in this browser only. Without a token set, only loopback requests can manage instances (local development).
+- **Using an instance:** `demo/chat.html?instance=<id>`, or `<script type="module" src=".../lib/embed.js" data-instance="<id>" data-api="<api>"></script>`. Its name, greeting and starter questions come from the instance settings.
+
+API: `GET/POST /api/instances`, `GET/PATCH/DELETE /api/instances/:id`, `GET/POST /api/instances/:id/files` (raw body with an `x-filename` header), `DELETE /api/instances/:id/files/:fileId`. `/api/search`, `/api/canonical` and `/api/config` take `instance`.

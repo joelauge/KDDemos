@@ -13,11 +13,13 @@ export class KnowBotContainer extends Container {
       KNOWDRIVE_API_KEY: env.KNOWDRIVE_API_KEY || '',
       KNOWBOT_RATE_LIMIT: env.KNOWBOT_RATE_LIMIT || '30',
       ...(env.KNOWBOT_DASHBOARD_TOKEN ? { KNOWBOT_DASHBOARD_TOKEN: env.KNOWBOT_DASHBOARD_TOKEN } : {}),
+      // Required for creating chat instances and uploading files from the dashboard (writes to the knowDrive store).
+      ...(env.KNOWBOT_ADMIN_TOKEN ? { KNOWBOT_ADMIN_TOKEN: env.KNOWBOT_ADMIN_TOKEN } : {}),
     };
   }
 }
 
-const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, authorization', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
+const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, authorization, x-filename', 'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS' };
 
 export default {
   async fetch(request, env) {

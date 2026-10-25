@@ -326,10 +326,10 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [] }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
-    this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0; this.rescueMargin = Number(rescueMargin) || 0;
+    this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0; this.rescueMargin = Number(rescueMargin) || 0; this.cards = cards !== false;
     this.exclude = (Array.isArray(exclude) ? exclude : String(exclude || '').split(',')).map((t) => t.trim()).filter(Boolean);
     this.tag = tag;
     this.prefix = String(prefix || '').replace(/^\/+/, '');
@@ -360,7 +360,7 @@ export class KnowDriveRetriever {
       const floor = this.minSimilarity > 0;
       // A third, card-only query: there are few answer cards, so the right one ranks well there even when
       // general hybrid results would crowd it out.
-      const wantCards = floor && !this.exclude.includes('kind:canonical');
+      const wantCards = floor && this.cards && !this.exclude.includes('kind:canonical');
       const [hybrid, vector, cardHits] = await Promise.all([this.query(query, k, 'hybrid'), floor ? this.query(query, 5, 'vector') : [],
         wantCards ? this.query(query, 3, 'vector', ['kind:canonical']) : []]);
       await this.local?.ready; // title/url lookups need the local frontmatter index
@@ -384,7 +384,9 @@ export class KnowDriveRetriever {
       const merged = [...cards, ...results.filter((r) => !cards.some((c) => c.filename === r.filename))].slice(0, k);
       return { source: 'knowdrive', results: merged, floor: { top, min: this.minSimilarity, canonical: cards.map((c) => c.filename) } };
     } catch (e) {
-      this.log(`[retriever] knowDrive search failed (${e.name === 'TimeoutError' ? 'timeout' : e.message}); falling back to local`);
+      this.log(`[retriever] knowDrive search failed (${e.name === 'TimeoutError' ? 'timeout' : e.message})${this.local ? '; falling back to local' : ''}`);
+      // A folder-scoped instance has no local mirror: no results beats answering from outside its folder.
+      if (!this.local) return { source: 'error', results: [], error: String(e.message || e) };
       const r = await this.local.search(query, k);
       return { ...r, source: 'local-fallback', error: String(e.message || e) };
     }
