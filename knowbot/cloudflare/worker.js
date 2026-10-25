@@ -12,6 +12,8 @@ export class KnowBotContainer extends Container {
     this.envVars = {
       KNOWDRIVE_API_KEY: env.KNOWDRIVE_API_KEY || '',
       KNOWBOT_RATE_LIMIT: env.KNOWBOT_RATE_LIMIT || '30',
+      // The commit being deployed: part of the env fingerprint, so a new deploy restarts a warm container on the new image.
+      ...(env.KNOWBOT_BUILD ? { KNOWBOT_BUILD: env.KNOWBOT_BUILD } : {}),
       ...(env.KNOWBOT_DASHBOARD_TOKEN ? { KNOWBOT_DASHBOARD_TOKEN: env.KNOWBOT_DASHBOARD_TOKEN } : {}),
       // Required for creating chat instances and uploading files from the dashboard (writes to the knowDrive store).
       ...(env.KNOWBOT_ADMIN_TOKEN ? { KNOWBOT_ADMIN_TOKEN: env.KNOWBOT_ADMIN_TOKEN } : {}),
@@ -20,9 +22,9 @@ export class KnowBotContainer extends Container {
     };
   }
 
-  // A running container keeps the env it started with. When a deploy or `wrangler secret put` changes the secrets
-  // (rotated admin token, new knowDrive key) the same image can stay up with the old values, so compare a
-  // fingerprint of the env on every request and restart the container once when it changed.
+  // A running container keeps the env and image it started with. When `wrangler secret put` changes a secret (rotated
+  // admin token, new knowDrive key) or a deploy ships new code (KNOWBOT_BUILD), compare a fingerprint of the env on
+  // every request and restart the container once when it changed.
   async fetch(request) {
     const fp = await fingerprint(this.envVars);
     let started = null;

@@ -434,11 +434,11 @@ export function mountBots(ctx) {
     if (canvas || canvasErr === 'loading') return;
     canvasErr = 'loading'; paintCanvasState();
     if (!document.querySelector('link[data-flow-css]')) {
-      const { FLOW_CSS } = await import('./flow-canvas.js?v=e98cc5f').catch(() => ({ FLOW_CSS: null }));
-      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=e98cc5f"]'));
+      const { FLOW_CSS } = await import('./flow-canvas.js?v=814a170').catch(() => ({ FLOW_CSS: null }));
+      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=814a170"]'));
     }
     try {
-      const { createCanvas } = await import('./flow-canvas.js?v=e98cc5f');
+      const { createCanvas } = await import('./flow-canvas.js?v=814a170');
       const el = $('#flow-canvas'); rc(el);
       canvas = await createCanvas(el);
       canvasErr = '';
@@ -595,6 +595,7 @@ export function mountBots(ctx) {
           onclick: () => { I.mask = I.mask === `${b.id}:${k.id}` ? '' : `${b.id}:${k.id}`; paintLinks(); } }, l.mask ? (ed ? 'Edit mask' : 'Mask') : 'Add mask') : null,
         I.mask === `${b.id}:${k.id}` ? maskEditor(b, k, l, ed) : null)))
         : h('p', { class: 'note' }, isBot ? 'No buckets linked — this bot answers “I don’t know” to everything.' : 'Not linked to any bot yet.'),
+      rows.length ? h('p', { class: 'inst-help' }, isBot ? `Every file in a linked bucket is tagged bot:${I.id}; unlinking removes the tag.` : 'Every file here is tagged bot:<id> for each bot it feeds; unlinking removes the tag.') : null,
       ed && others.length ? h('form', { class: 'flow-link-add', onsubmit: (ev) => { ev.preventDefault(); if (isBot) link(I.id, sel.value); else link(sel.value, I.id); } },
         sel, h('button', { type: 'submit', class: 'btn btn-sm', 'data-fk': 'link-add' }, isBot ? 'Link bucket' : 'Link to bot')) : null));
     if (isBot) paintScope();

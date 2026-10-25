@@ -155,9 +155,11 @@ describe('chat instances', () => {
     await post('/api/instances', { name: 'Kiosk', buckets: ['acme'] });
     for (const id of ['kiosk', 'front-desk']) assert.equal((await search(id)).results.length, 3);
     await patch('/api/instances/kiosk', { buckets: [] });
-    const before = kd.calls.length;
+    await kb.registry.botTagging; // unlinking retags in the background
+    const searches = () => kd.calls.filter((c) => c.url.endsWith('/search')).length;
+    const before = searches();
     assert.deepEqual((await search('kiosk')).results, []);
-    assert.equal(kd.calls.length, before, 'no knowDrive search at all');
+    assert.equal(searches(), before, 'no knowDrive search at all');
   });
 
   test('uploads: folders become tags; moving a file only retags it; other buckets are off limits', async () => {
@@ -180,6 +182,29 @@ describe('chat instances', () => {
     assert.ok(tags.includes('f1:archive') && !tags.includes('bucket:acme') && !tags.includes('knowbot'), 'mask picker gets folder tags, not bookkeeping');
     assert.equal((await api('/api/buckets/acme/files/file-out', { method: 'DELETE', headers: admin })).status, 403, 'a file without the bucket tag cannot be deleted through it');
     assert.equal((await api(`/api/buckets/acme/files/${files[0].id}`, { method: 'DELETE', headers: admin })).status, 200);
+  });
+
+  test('linking a bucket to a bot tags its files bot:<id>; unlinking or deleting the bot removes the tag', async () => {
+    const tagsOf = (id) => kd.files.get(id).tags;
+    const up = await (await api('/api/buckets/menus/files', { method: 'POST', headers: { authorization: admin.authorization, 'content-type': 'text/markdown', 'x-filename': 'soup.md' }, body: '# soup' })).json();
+    await kb.registry.botTagging;
+    assert.ok(!tagsOf(up.id).some((t) => t.startsWith('bot:')), 'menus feeds no bot yet');
+    const bot = await (await post('/api/instances', { name: 'Waiter', buckets: [{ id: 'menus' }] })).json();
+    await kb.registry.botTagging;
+    assert.ok(tagsOf(up.id).includes('bot:waiter'), 'existing files get the bot tag when linked');
+    const up2 = await (await api('/api/buckets/menus/files', { method: 'POST', headers: { authorization: admin.authorization, 'content-type': 'text/markdown', 'x-filename': 'salad.md' }, body: '# salad' })).json();
+    assert.ok(tagsOf(up2.id).includes('bot:waiter'), 'new uploads to a linked bucket carry it too');
+    const tags = (await (await api('/api/buckets/menus/tags')).json()).tags.map((t) => t.tag);
+    assert.ok(!tags.includes('bot:waiter'), 'not offered as a mask tag');
+    await patch(`/api/instances/${bot.id}`, { buckets: [] });
+    await kb.registry.botTagging;
+    assert.ok(!tagsOf(up.id).includes('bot:waiter') && !tagsOf(up2.id).includes('bot:waiter'), 'unlinking removes it');
+    await patch(`/api/instances/${bot.id}`, { buckets: [{ id: 'menus', enabled: false }] });
+    await kb.registry.botTagging;
+    assert.ok(tagsOf(up.id).includes('bot:waiter'), 'a link that is switched off still counts as connected');
+    await api(`/api/instances/${bot.id}`, { method: 'DELETE', headers: admin });
+    await kb.registry.botTagging;
+    assert.ok(!tagsOf(up.id).includes('bot:waiter'), 'deleting the bot removes it');
   });
 
   test('the built-in bot can only change its links; deleting a bucket unlinks it everywhere', async () => {
