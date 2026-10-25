@@ -132,7 +132,9 @@ export async function createCanvas(el) {
     const [edges, setEdges] = useState(() => buildEdges(p, [], ref));
     const nCount = p.buckets.length + p.bots.length;
     const lastN = useRef(nCount);
-    useEffect(() => { setNodes((prev) => buildNodes(p, prev)); setEdges((prev) => buildEdges(p, prev, ref)); }, [p.version, p.editable, p.active]);
+    useEffect(() => { setNodes((prev) => buildNodes(p, prev)); setEdges((prev) => buildEdges(p, prev, ref)); }, [p.version, p.editable, p.active, p.flowKey]);
+    // Switching flows shows a different set of nodes: frame them.
+    useEffect(() => { if (inst.current) setTimeout(() => inst.current.fitView({ padding: 0.2, duration: 250, maxZoom: 1 }), 60); }, [p.flowKey]);
     useEffect(() => {
       if (nCount > lastN.current && inst.current) setTimeout(() => inst.current.fitView({ padding: 0.2, duration: 300, maxZoom: 1 }), 60);
       lastN.current = nCount;

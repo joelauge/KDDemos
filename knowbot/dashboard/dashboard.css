@@ -184,7 +184,10 @@ main { flex: 1; width: 100%; max-width: 1680px; margin: 0 auto; padding: 14px 24
 .panel-count { font-size: 11px; color: var(--dim); white-space: nowrap; }
 .panel-tools { display: flex; gap: 6px; align-items: center; }
 .side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.p-sessions, .p-convo { position: sticky; top: 12px; height: calc(100vh - 24px); max-height: 920px; min-height: 520px; }
+.p-convo { position: sticky; top: 12px; height: calc(100vh - 24px); max-height: 920px; min-height: 520px; }
+.left-col { position: sticky; top: 12px; height: calc(100vh - 24px); max-height: 920px; min-height: 520px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.p-sessions { flex: 1 1 auto; min-height: 240px; }
+.p-flows { flex: 0 1 auto; max-height: 46%; min-height: 0; }
 .sessions-list { overflow-y: auto; flex: 1; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
 .convo { overflow-y: auto; flex: 1; padding: 16px 18px 24px; outline: none; }
 
@@ -385,7 +388,8 @@ button.cite:hover { background: var(--btn); border-color: var(--btn); color: #ff
   .top, main, .foot { padding-left: 16px; padding-right: 16px; }
   .grid { grid-template-columns: minmax(0, 1fr); }
   .side { grid-template-columns: minmax(0, 1fr); }
-  .p-sessions, .p-convo { position: static; height: auto; min-height: 0; max-height: none; }
+  .left-col, .p-convo { position: static; height: auto; min-height: 0; max-height: none; }
+  .p-flows { max-height: none; }
   .sessions-list { max-height: 420px; }
   .convo { max-height: none; overflow: visible; }
   .empty-hero { grid-template-columns: 1fr; padding: 24px 20px; }
@@ -414,3 +418,13 @@ button.cite:hover { background: var(--btn); border-color: var(--btn); color: #ff
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* Bots & buckets flows (left column) */
+.flows-list { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.flow-row { width: 100%; text-align: left; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 2px 10px; align-items: center; padding: 8px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer; }
+.flow-row:hover, .flow-row:focus-visible { background: var(--raise); border-color: var(--line); }
+.flow-row-icon { grid-row: span 2; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.flow-row-icon svg { width: 17px; height: 17px; }
+.flow-row-name { font-weight: 600; font-size: 13px; color: var(--strong); display: flex; gap: 6px; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-row-meta { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flows-empty { padding: 8px; font-size: 12px; color: var(--muted); }

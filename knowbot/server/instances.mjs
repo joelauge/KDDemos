@@ -65,8 +65,8 @@ function cleanMask(m) {
 }
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
-const BOT_KEYS = ['id', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
-const BUCKET_KEYS = ['id', 'name', 'tag', 'builtin', 'createdAt', 'updatedAt'];
+const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
+const BUCKET_KEYS = ['id', 'flow', 'name', 'tag', 'builtin', 'createdAt', 'updatedAt'];
 const now = () => new Date().toISOString();
 
 function cleanName(v) {
@@ -186,6 +186,9 @@ export class InstanceRegistry {
     // root: where knowDrive stores a bucket's uploads. Never shown; membership is the tag.
     this.builtinBucket = { id: builtin.id, name: builtin.name, tag: builtin.tag || `knowbot:${builtin.id}`, root: builtin.folder, builtin: true };
     this.migrated = {}; // bucket id → ISO time its files were given bucket + folder tags
+    // Flows group bots and buckets into separate canvases. The built-in bot and bucket live in the demo flow.
+    this.flows = new Map();
+    this.demoFlow = { id: 'demo', name: `${builtin.name} (demo)`, demo: true };
     this.botTagged = {}; // "bot>bucket" → bucket tag, for every link whose files carry bot:<bot id>
     this.tagChain = Promise.resolve();
     this.builtinBotBase = { id: builtin.id, name: builtin.name, org: builtin.org, guards: builtin.guards || 'store', builtin: true };
@@ -231,10 +234,12 @@ export class InstanceRegistry {
       { ...x, tag: x.tag || `bucket:${x.id}`, root: x.root || folder || `knowbot/${x.id}/` }]));
     this.migrated = doc.migrated && typeof doc.migrated === 'object' ? doc.migrated : {};
     this.botTagged = doc.botTagged && typeof doc.botTagged === 'object' ? doc.botTagged : {};
+    this.flows = new Map((Array.isArray(doc.flows) ? doc.flows : []).filter((f) => f && ID_RE.test(f.id) && f.id !== this.demoFlow.id).map((f) => [f.id, { id: f.id, name: String(f.name || f.id).slice(0, 80), createdAt: f.createdAt }]));
     this.bots = new Map(bots.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map((x) => [x.id, { ...x, buckets: this.cleanLinks(x.buckets, { strict: false }) }]));
     if (Array.isArray(doc.builtinBot?.buckets)) this.builtinLinks = this.cleanLinks(doc.builtinBot.buckets, { strict: false });
     if (doc.builtinBot?.settings && typeof doc.builtinBot.settings === 'object') this.builtinSettings = doc.builtinBot.settings;
     this.providerKeys = Object.fromEntries(Object.entries(doc.providers || {}).filter(([k, v]) => PROVIDERS[k] && v && v.sealed));
+    if (this.assignFlows() && this.kd) this.save().catch((e) => this.log(`[instances] saving flows failed: ${e.message}`));
     this.log(`[instances] ${this.bots.size} bot(s), ${this.buckets.size} bucket(s) loaded`);
     if (this.kd) {
       this.migration = this.migrateTags().catch((e) => this.log(`[instances] tag migration failed: ${e.message}`));
@@ -272,6 +277,92 @@ export class InstanceRegistry {
       this.log(`[instances] tagged ${[...groups.values()].reduce((a, x) => a + x.length, 0)} file(s) in bucket ${b.id}`);
     }
     if (changed) await this.save();
+  }
+
+  /**
+   * Every bot and bucket belongs to one flow. Anything without one (a registry from before flows) is grouped by what it
+   * is linked to: the built-in bot's group is the demo flow; each other group becomes a flow named after its first bucket (or its bot).
+   */
+  assignFlows() {
+    const known = (f) => f === this.demoFlow.id || this.flows.has(f);
+    const loose = [...this.bots.values(), ...this.buckets.values()].filter((x) => !known(x.flow));
+    if (!loose.length) return false;
+    const parent = new Map();
+    const find = (k) => { while (parent.get(k) !== k) { parent.set(k, parent.get(parent.get(k))); k = parent.get(k); } return k; };
+    const add = (k) => { if (!parent.has(k)) parent.set(k, k); };
+    const union = (a, b) => { add(a); add(b); parent.set(find(a), find(b)); };
+    const builtinKey = `bot:${this.builtinBotBase.id}`;
+    add(builtinKey); union(builtinKey, `bucket:${this.builtinBucket.id}`);
+    for (const l of this.builtinLinks) union(builtinKey, `bucket:${l.id}`);
+    for (const b of this.bots.values()) { add(`bot:${b.id}`); for (const l of b.buckets || []) union(`bot:${b.id}`, `bucket:${l.id}`); }
+    for (const k of this.buckets.values()) add(`bucket:${k.id}`);
+    // A group that already has a flow (some member has one) keeps it.
+    const flowOf = new Map([[find(builtinKey), this.demoFlow.id]]);
+    for (const x of [...this.bots.values(), ...this.buckets.values()]) {
+      if (!known(x.flow)) continue;
+      const r = find(`${this.bots.get(x.id) === x ? 'bot' : 'bucket'}:${x.id}`);
+      if (!flowOf.has(r)) flowOf.set(r, x.flow);
+    }
+    const t = now();
+    // Buckets first, so a group's flow is named after what it answers from ("Access to Justice"), then lone bots.
+    for (const x of [...[...this.buckets.values()].sort((a, b) => a.name.localeCompare(b.name)), ...[...this.bots.values()].sort((a, b) => a.name.localeCompare(b.name))]) {
+      if (known(x.flow)) continue;
+      const r = find(`${this.bots.get(x.id) === x ? 'bot' : 'bucket'}:${x.id}`);
+      if (!flowOf.has(r)) {
+        const id = this.freeFlowId(x.name);
+        this.flows.set(id, { id, name: x.name, createdAt: t });
+        flowOf.set(r, id);
+      }
+      x.flow = flowOf.get(r);
+    }
+    this.log(`[instances] grouped ${loose.length} bot(s)/bucket(s) into flows`);
+    return true;
+  }
+
+  flowList() {
+    const count = (f) => ({ bots: this.list().filter((b) => b.flow === f).length, buckets: this.bucketList().filter((b) => b.flow === f).length });
+    return [{ ...this.demoFlow, ...count(this.demoFlow.id) }, ...[...this.flows.values()].sort((a, b) => a.name.localeCompare(b.name)).map((f) => ({ ...f, ...count(f.id) }))];
+  }
+
+  freeFlowId(name) {
+    const base = slugify(name).slice(0, 34) || 'flow';
+    for (let i = 1; ; i++) { const id = i === 1 ? base : `${base}-${i}`; if (id !== this.demoFlow.id && !this.flows.has(id)) return id; }
+  }
+  checkFlow(flow) {
+    const f = String(flow || '').toLowerCase();
+    if (f !== this.demoFlow.id && !this.flows.has(f)) throw new InstanceError(400, `no such flow "${flow}"`);
+    return f;
+  }
+  /** The flow a new bot or bucket goes into: the one named, or a new flow named after it. Returns [flowId, newFlow?]. */
+  flowFor(body, name) {
+    if (body.flow) return [this.checkFlow(body.flow), null];
+    const id = this.freeFlowId(name);
+    return [id, { id, name, createdAt: now() }];
+  }
+
+  async createFlow(body) {
+    this.needWrite();
+    const name = cleanName(body.name);
+    const id = newId(body, name, (v) => v === this.demoFlow.id || this.flows.has(v));
+    const f = { id, name, createdAt: now() };
+    return this.commit(() => { this.flows.set(id, f); return { ...f, bots: 0, buckets: 0 }; });
+  }
+
+  async updateFlow(id, body) {
+    this.needWrite();
+    const f = this.flows.get(String(id).toLowerCase());
+    if (!f) throw new InstanceError(String(id) === this.demoFlow.id ? 403 : 404, String(id) === this.demoFlow.id ? 'the demo flow cannot be renamed' : `no such flow "${id}"`);
+    const next = { ...f, name: cleanName(body.name) };
+    return this.commit(() => { this.flows.set(f.id, next); return next; });
+  }
+
+  /** Only an empty flow can be deleted: delete or move its bots and buckets first. */
+  async removeFlow(id) {
+    this.needWrite();
+    const f = this.flows.get(String(id).toLowerCase());
+    if (!f) throw new InstanceError(String(id) === this.demoFlow.id ? 403 : 404, String(id) === this.demoFlow.id ? 'the demo flow cannot be deleted' : `no such flow "${id}"`);
+    if ([...this.bots.values(), ...this.buckets.values()].some((x) => x.flow === f.id)) throw new InstanceError(409, 'this flow still has bots or buckets');
+    return this.commit(() => { this.flows.delete(f.id); return { ok: true, id: f.id }; });
   }
 
   /** Every link's files carry bot:<bot id>; links that are gone have it removed. Serialised; failures retry next time. */
@@ -332,7 +423,7 @@ export class InstanceRegistry {
   }
 
   async save() {
-    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: { buckets: this.builtinLinks, settings: this.builtinSettings }, providers: this.providerKeys, migrated: this.migrated, botTagged: this.botTagged }, null, 2);
+    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: { buckets: this.builtinLinks, settings: this.builtinSettings }, providers: this.providerKeys, migrated: this.migrated, botTagged: this.botTagged, flows: [...this.flows.values()] }, null, 2);
     this.writeChain = this.writeChain.catch(() => {}).then(async () => {
       if (!this.kd) {
         await fsp.mkdir(this.dataDir, { recursive: true });
@@ -351,7 +442,7 @@ export class InstanceRegistry {
 
   /** Apply a change and persist it; on a failed save the previous state comes back. */
   async commit(change) {
-    const snap = { bots: new Map(this.bots), buckets: new Map(this.buckets), builtinLinks: this.builtinLinks, builtinSettings: this.builtinSettings, providerKeys: { ...this.providerKeys } };
+    const snap = { flows: new Map(this.flows), bots: new Map(this.bots), buckets: new Map(this.buckets), builtinLinks: this.builtinLinks, builtinSettings: this.builtinSettings, providerKeys: { ...this.providerKeys } };
     const out = change();
     try { await this.save(); } catch (e) { Object.assign(this, snap); throw e; }
     this.retrievers.clear();
@@ -380,8 +471,8 @@ export class InstanceRegistry {
   }
 
   // ---------------------------------------------------------------- reads
-  bucketList() { return [this.builtinBucket, ...[...this.buckets.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BUCKET_KEYS)); }
-  builtinBot() { return { ...this.builtinBotBase, ...this.builtinSettings, builtin: true, id: this.builtinBotBase.id, buckets: this.builtinLinks }; }
+  bucketList() { return [{ ...this.builtinBucket, flow: this.demoFlow.id }, ...[...this.buckets.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BUCKET_KEYS)); }
+  builtinBot() { return { ...this.builtinBotBase, ...this.builtinSettings, builtin: true, id: this.builtinBotBase.id, flow: this.demoFlow.id, buckets: this.builtinLinks }; }
   list() { return [this.builtinBot(), ...[...this.bots.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BOT_KEYS)); }
 
   get(id) {
@@ -430,9 +521,13 @@ export class InstanceRegistry {
     const fields = cleanBot(body, { models: this.models });
     const id = newId(body, fields.name, (x) => x === this.builtinBotBase.id || this.bots.has(x));
     const t = now();
-    const bot = { id, guards: 'general', ...fields, buckets: this.cleanLinks(body.buckets), createdAt: t, updatedAt: t };
+    const links = this.cleanLinks(body.buckets);
+    // No flow named: join the flow of the first bucket it links to, else start a flow of its own.
+    const first = links[0] && this.bucket(links[0].id);
+    const [flow, newFlow] = this.flowFor(body.flow || !first ? body : { flow: first.flow || this.demoFlow.id }, fields.name);
+    const bot = { id, flow, guards: 'general', ...fields, buckets: links, createdAt: t, updatedAt: t };
     checkModel(bot, this.models);
-    return this.commit(() => { this.bots.set(id, bot); return pick(bot, BOT_KEYS); });
+    return this.commit(() => { if (newFlow) this.flows.set(newFlow.id, newFlow); this.bots.set(id, bot); return pick(bot, BOT_KEYS); });
   }
 
   async update(id, body) {
@@ -446,6 +541,7 @@ export class InstanceRegistry {
       return this.commit(() => { this.builtinSettings = settings; this.builtinLinks = links; return pick(this.builtinBot(), BOT_KEYS); });
     }
     const next = { ...bot, ...cleanBot(body, { partial: true, models: this.models }), updatedAt: now() };
+    if (body.flow !== undefined) next.flow = this.checkFlow(body.flow);
     if (body.buckets !== undefined) next.buckets = this.cleanLinks(body.buckets);
     if (body.provider !== undefined && body.model === undefined && next.provider !== bot.provider) next.model = undefined;
     checkModel(next, this.models);
@@ -466,9 +562,10 @@ export class InstanceRegistry {
     // The bucket IS its tag: "Access to Justice" → bucket:access-to-justice. (body.tag may name it explicitly.)
     const id = newId({ id: body.tag ? String(body.tag).replace(/^bucket:/, '') : body.id }, name, (x) => x === this.builtinBucket.id || this.buckets.has(x));
     const t = now();
-    const b = { id, name, tag: `bucket:${id}`, root: `knowbot/${id}/`, createdAt: t, updatedAt: t };
+    const [flow, newFlow] = this.flowFor(body, name);
+    const b = { id, flow, name, tag: `bucket:${id}`, root: `knowbot/${id}/`, createdAt: t, updatedAt: t };
     this.migrated[id] = t; // new: every file gets its tags at upload
-    return this.commit(() => { this.buckets.set(id, b); return pick(b, BUCKET_KEYS); });
+    return this.commit(() => { if (newFlow) this.flows.set(newFlow.id, newFlow); this.buckets.set(id, b); return pick(b, BUCKET_KEYS); });
   }
 
   async updateBucket(id, body) {
@@ -477,6 +574,7 @@ export class InstanceRegistry {
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
     if (body.tag !== undefined && `bucket:${String(body.tag).replace(/^bucket:/, '')}` !== b.tag) throw new InstanceError(400, "a bucket's tag can't change; create a new bucket instead");
     const next = { ...b, ...(body.name !== undefined ? { name: cleanName(body.name) } : {}), updatedAt: now() };
+    if (body.flow !== undefined) next.flow = this.checkFlow(body.flow);
     return this.commit(() => { this.buckets.set(b.id, next); return pick(next, BUCKET_KEYS); });
   }
 

@@ -207,6 +207,34 @@ describe('chat instances', () => {
     assert.ok(!tagsOf(up.id).includes('bot:waiter'), 'deleting the bot removes it');
   });
 
+  test('flows: every bot and bucket belongs to one; new ones start their own flow or join the one named', async () => {
+    let g = await (await api('/api/graph')).json();
+    assert.equal(g.flows[0].id, 'demo');
+    assert.ok(g.flows[0].demo);
+    assert.equal(g.bots.find((b) => b.builtin).flow, 'demo');
+    assert.equal(g.buckets.find((b) => b.builtin).flow, 'demo');
+    const solo = await (await post('/api/instances', { name: 'Solo Helper' })).json();
+    assert.equal(solo.flow, 'solo-helper', 'a bot with no links starts its own flow, named after it');
+    const k = await (await post('/api/buckets', { name: 'Solo Docs', flow: 'solo-helper' })).json();
+    assert.equal(k.flow, 'solo-helper');
+    const joined = await (await post('/api/instances', { name: 'Solo Two', buckets: [{ id: 'solo-docs' }] })).json();
+    assert.equal(joined.flow, 'solo-helper', 'a bot linked to a bucket joins that bucket\'s flow');
+    assert.equal((await post('/api/buckets', { name: 'Nowhere', flow: 'nope' })).status, 400);
+    g = await (await api('/api/graph')).json();
+    const f = g.flows.find((x) => x.id === 'solo-helper');
+    assert.deepEqual([f.name, f.bots, f.buckets], ['Solo Helper', 2, 1]);
+    assert.equal((await patch('/api/flows/solo-helper', { name: 'Solo desk' })).status, 200);
+    assert.equal((await api('/api/flows/solo-helper', { method: 'DELETE', headers: admin })).status, 409, 'not while it has bots or buckets');
+    assert.equal((await api('/api/flows/demo', { method: 'DELETE', headers: admin })).status, 403);
+    for (const id of ['solo-helper', 'solo-two']) await api(`/api/instances/${id}`, { method: 'DELETE', headers: admin });
+    await api('/api/buckets/solo-docs', { method: 'DELETE', headers: admin });
+    assert.equal((await api('/api/flows/solo-helper', { method: 'DELETE', headers: admin })).status, 200);
+    const nf = await (await post('/api/flows', { name: 'Empty flow' })).json();
+    assert.equal(nf.id, 'empty-flow');
+    await api('/api/flows/empty-flow', { method: 'DELETE', headers: admin });
+    await kb.registry.botTagging;
+  });
+
   test('the built-in bot can only change its links; deleting a bucket unlinks it everywhere', async () => {
     const renamed = await (await patch('/api/instances/ugm', { greeting: 'Welcome to UGM!' })).json();
     assert.equal(renamed.greeting, 'Welcome to UGM!', 'the built-in bot accepts settings');

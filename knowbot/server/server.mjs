@@ -334,7 +334,7 @@ export function createKnowBotServer(opts = {}) {
   async function instanceRoutes(req, res, url, p, m) {
     await registry.ready;
     const [kind, id, sub, fileId, parts4] = p.split('/').filter(Boolean).slice(1).map(decodeURIComponent); // after /api
-    const graph = () => ({ bots: registry.list(), buckets: registry.bucketList(), models: publicModels,
+    const graph = () => ({ flows: registry.flowList(), bots: registry.list(), buckets: registry.bucketList(), models: publicModels,
       providers: registry.providerList().map(({ last4, updatedAt, ...p }) => p), canManage: registry.canWrite });
     if (kind === 'graph' && !id && m === 'GET') return send(res, 200, graph());
     if (kind === 'providers') {
@@ -343,6 +343,12 @@ export function createKnowBotServer(opts = {}) {
       if (id && !sub && m === 'PUT') return send(res, 200, await registry.setProviderKey(id, (await readJson(req)).apiKey));
       if (id && !sub && m === 'DELETE') return send(res, 200, await registry.setProviderKey(id, ''));
       if (id && sub === 'models' && m === 'GET') return send(res, 200, { models: await registry.providerModels(id) });
+    }
+    if (kind === 'flows') {
+      if (!id && m === 'GET') return send(res, 200, { flows: registry.flowList() });
+      if (!id && m === 'POST') { requireAdmin(req); return send(res, 201, await registry.createFlow(await readJson(req))); }
+      if (id && !sub && m === 'PATCH') { requireAdmin(req); return send(res, 200, await registry.updateFlow(id, await readJson(req))); }
+      if (id && !sub && m === 'DELETE') { requireAdmin(req); return send(res, 200, await registry.removeFlow(id)); }
     }
     if (kind === 'instances') {
       if (!id) {
@@ -468,7 +474,7 @@ export function createKnowBotServer(opts = {}) {
       return send(res, 200, { ok: true, retrieval: mode, files: local.fileCount, chunks: local.chunkCount, llm: await llmReachable(), llmBase, sseClients: clients.size });
     }
 
-    if (/^\/api\/(?:instances|buckets|graph|providers)(?:\/|$)/.test(p)) return instanceRoutes(req, res, url, p, m);
+    if (/^\/api\/(?:instances|buckets|graph|providers|flows)(?:\/|$)/.test(p)) return instanceRoutes(req, res, url, p, m);
 
     if (p.startsWith('/api/')) {
       switch (`${m} ${p}`) {
