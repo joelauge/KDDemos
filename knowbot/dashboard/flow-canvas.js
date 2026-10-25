@@ -103,7 +103,7 @@ export async function createCanvas(el) {
       if (!names.has(l.id)) continue;
       const id = `${l.id}->${bot.id}`;
       out.push({ id, type: 'link', source: nodeId('bucket', l.id), target: nodeId('bot', bot.id), selected: sel.has(id), deletable: p.editable,
-        zIndex: l.enabled ? 1 : 0, ariaLabel: `${names.get(l.id)} feeds ${bot.name}, ${l.enabled ? 'on' : 'off'}`,
+        ariaLabel: `${names.get(l.id)} feeds ${bot.name}, ${l.enabled ? 'on' : 'off'}`,
         data: { enabled: l.enabled, editable: p.editable, bucketName: names.get(l.id), botName: bot.name,
           onToggle: () => ref.current.onToggle(bot.id, l.id), onUnlink: () => ref.current.onUnlink(bot.id, l.id) } });
     }

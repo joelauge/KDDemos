@@ -617,7 +617,7 @@ export function mountBots(ctx) {
         f.mime ? h('span', { class: 'mono inst-f-mime' }, f.mime) : null,
         f.atoms != null && f.state === 'ready' ? h('span', { class: 'mono' }, plural(f.atoms, 'atom')) : null),
       ed ? h('button', { type: 'button', class: 'btn btn-ghost btn-sm inst-f-del', 'data-fk': `del:${f.id}`, 'aria-label': `Delete ${f.path}`, onclick: () => deleteFile(f) }, 'Delete') : null,
-      f.error ? h('span', { class: 'err inst-q-msg' }, f.error) : null))))));
+      f.error ? h('span', { class: 'err inst-q-msg' }, f.error) : null)))));
   }
 
   function botForm(b) {
