@@ -1,7 +1,7 @@
 // node --test knowbot/lib/test/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { KnowBot, guardRequest, routeAnswer, NOT_IN_DATA, candidateLines, buildSelectMessages, finalizeSelection, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever } from '../knowbot.js';
+import { KnowBot, guardRequest, requireCitations, answerFromSources, routeAnswer, NOT_IN_DATA, candidateLines, buildSelectMessages, finalizeSelection, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever } from '../knowbot.js';
 
 const S = (i, over = {}) => ({
   file_id: `f${i}`, filename: `policies/doc${i}.md`, title: `Doc ${i}`, url: `https://example.com/${i}`, score: 10 - i,
@@ -359,4 +359,19 @@ test('ship-to-country route quotes the named country; mid-card chunks have no he
   const head = S(1, { filename: 'canonical/shipping-by-country.md', title: 'Shipping by country', text: '# x\nThe store ships to 29 countries, listed below.\n- **Shipping to Canada:** yes, the store ships to Canada.' });
   assert.match(routeAnswer('Do you ship to Brazil?', [head]).text, /^The store ships to 29 countries/);
   assert.equal(routeAnswer('How long does shipping take?', [head]), null);
+});
+
+test('citation gate: only cited sentences survive; nothing cited means the fixed refusal (any model, any mode)', async () => {
+  const c = [{ n: 1, filename: 'a.md' }, { n: 2, filename: 'b.md' }];
+  const g = requireCitations({ text: 'Open 9 to 5 [2]. We love bread! Closed Mondays [1].\n- Pickup at noon [2]\n- Free coffee', citations: c, grounded: true, refused: false });
+  assert.equal(g.text, 'Open 9 to 5 [1]. Closed Mondays [2].\n- Pickup at noon [1]');
+  assert.deepEqual(g.citations.map((x) => [x.n, x.filename]), [[1, 'b.md'], [2, 'a.md']]);
+  for (const bad of [{ text: 'We are great.', citations: c }, { text: 'See [7].', citations: c }, { text: 'Fine [1].', citations: [] }, null])
+    assert.equal(requireCitations(bad).text, NOT_IN_DATA);
+  assert.equal(NOT_IN_DATA, "I can't seem to find an answer to that in any of my current data sources.");
+  // end to end: a model that writes an uncited answer gets the refusal
+  const src = [S(1, { filename: 'hours.md', title: 'Hours', text: 'Open Tuesday to Sunday, 7am to 3pm.' })];
+  const r = await answerFromSources({ question: 'When are you open?', results: src, mode: 'generate', complete: async () => 'We are open every day from 9am!' });
+  assert.equal(r.fin.text, NOT_IN_DATA);
+  assert.equal(r.fin.refused, true);
 });
