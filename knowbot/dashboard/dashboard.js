@@ -4,6 +4,7 @@
 
 import { simulator, simCanonical } from './sim.js';
 import { hostedApi } from '../lib/site-config.js';
+import { mountBots } from './bots.js';
 
 /* ------------------------------------------------------------------ utils */
 const $ = (s, r = document) => r.querySelector(s);
@@ -85,6 +86,7 @@ function normSurface(s) {
     device: DEVICES.includes(s.device) ? s.device : 'unknown',
     host: str(s.host, 120), path: str(s.path, 300), referrer: str(s.referrer, 400),
     embedded: s.embedded === true, channel: str(s.channel, 24), lang: str(s.lang, 24), ua: str(s.ua, 400),
+    instance: /^[a-z0-9-]{1,40}$/.test(s.instance || '') ? s.instance : '', // chat instance (bot) id; '' = built-in
   };
 }
 function normCitations(arr) {
@@ -155,6 +157,7 @@ const S = {
   seen: new Set(), sessions: new Map(), canonical: new Map(), feed: [], newFeed: [],
   filter: null, selected: null, autoCanon: false, autoCanonSince: 0,
   ask: null, simRunning: false, flashKpi: false,
+  bots: [], builtinBot: 'ugm', botFilter: '', // bots from GET /api/graph; botFilter narrows everything to one bot
 };
 const ckey = (sid, tid) => `${sid}\u0001${tid}`;
 
@@ -224,7 +227,11 @@ function announce(msg) {
 }
 
 /* ------------------------------------------------------------------ filter */
+const botOf = (s) => s.surface.instance || S.builtinBot;
+function botName(id) { const b = S.bots.find((x) => x.id === id); return b ? b.name : id; }
+// The bot filter (meta-row select) stacks with the single click-to-filter dimension below.
 function sessionMatches(s, f = S.filter) {
+  if (S.botFilter && botOf(s) !== S.botFilter) return false;
   if (!f) return true;
   if (f.dim === 'kind') return s.surface.kind === f.value;
   if (f.dim === 'device') return s.surface.device === f.value;
@@ -248,7 +255,8 @@ async function requestCanonical(sessionId, turnId, question, opts = {}) {
   schedule();
   const session = S.sessions.get(sessionId);
   try {
-    const answer = await postCanonical({ question, sessionId, turnId });
+    // Canonical answers must come from the same bot (same enabled buckets) the visitor talked to.
+    const answer = await postCanonical({ question, sessionId, turnId, instance: session && session.surface.instance ? session.surface.instance : undefined });
     S.canonical.set(k, { status: 'done', answer, via: 'api', at: Date.now() });
   } catch (err) {
     if (session && session.sim) {
@@ -445,6 +453,12 @@ function surfaceBadge(surface, { full = false, sim = false } = {}) {
     surface.embedded ? h('span', { class: 'flag flag-iframe', title: 'Rendered inside an iframe' }, 'iframe') : null,
   );
 }
+// Bot badge: shown once custom bots exist (or the session names one), so single-bot setups stay uncluttered.
+function botBadge(s) {
+  if (!s.surface.instance && S.bots.length < 2) return null;
+  const id = botOf(s);
+  return h('span', { class: 'flag flag-inst', title: `Bot: ${botName(id)} (${id})` }, botName(id));
+}
 const simFlag = () => h('span', { class: 'flag flag-sim', title: 'Simulated traffic (surface.channel = sim)' }, 'sim');
 
 /* KPIs */
@@ -506,8 +520,8 @@ function renderKpis() {
     tile('p95 latency', fmtMs(k.p95), 'total, retrieval + generation', null, 'p95'),
     tile('Citations / answer', k.avgCites == null ? '—' : k.avgCites.toFixed(1), 'avg across bot answers', null, 'cites'),
   );
-  if (S.filter) el.setAttribute('aria-label', `Live metrics, filtered to ${DIM_LABEL[S.filter.dim]} ${S.filter.value}`);
-  else el.setAttribute('aria-label', 'Live metrics');
+  const parts = [S.botFilter ? `bot ${botName(S.botFilter)}` : null, S.filter ? `${DIM_LABEL[S.filter.dim]} ${S.filter.value}` : null].filter(Boolean);
+  el.setAttribute('aria-label', parts.length ? `Live metrics, filtered to ${parts.join(' and ')}` : 'Live metrics');
 }
 
 function renderFilterChip() {
@@ -550,7 +564,7 @@ function sessionRow(s) {
     type: 'button', class: 'srow', 'data-fk': `s:${s.sessionId}`, 'aria-current': S.selected === s.sessionId ? 'true' : 'false',
     onclick: () => selectSession(s.sessionId, true),
   },
-    h('span', { class: 'srow-meta' }, surfaceBadge(s.surface, { sim: s.sim })),
+    h('span', { class: 'srow-meta' }, surfaceBadge(s.surface, { sim: s.sim }), botBadge(s)),
     h('span', { class: `srow-q${lastQ ? '' : ' none'}` }, lastQ ? lastQ.user.text : 'No questions yet'),
     h('span', { class: 'srow-meta' },
       active ? h('span', { class: 'live-dot', title: 'active in last 5 min' }) : null,
@@ -559,13 +573,13 @@ function sessionRow(s) {
       h('span', null, ago(s.lastAt)),
       turnDots(s)),
   );
-  btn.setAttribute('aria-label', `${s.sim ? 'Simulated ' : ''}${s.surface.kind} session on ${s.surface.host || 'unknown host'}, ${s.surface.device}, ${nTurns} turns, last activity ${ago(s.lastAt)}${lastQ ? '. Last question: ' + lastQ.user.text.slice(0, 120) : ''}`);
+  btn.setAttribute('aria-label', `${s.sim ? 'Simulated ' : ''}${S.bots.length > 1 || s.surface.instance ? `bot ${botName(botOf(s))}, ` : ''}${s.surface.kind} session on ${s.surface.host || 'unknown host'}, ${s.surface.device}, ${nTurns} turns, last activity ${ago(s.lastAt)}${lastQ ? '. Last question: ' + lastQ.user.text.slice(0, 120) : ''}`);
   return btn;
 }
 function renderSessions() {
   const list = $('#sessions');
   const rows = [...S.sessions.values()].filter((s) => sessionMatches(s)).sort((a, b) => b.lastAt - a.lastAt);
-  $('#sessions-count').textContent = `${rows.length}${S.filter ? ' filtered' : ''} · ${S.sessions.size} total`;
+  $('#sessions-count').textContent = `${rows.length}${S.filter || S.botFilter ? ' filtered' : ''} · ${S.sessions.size} total`;
   withFocus(list, () => {
     const now = Date.now();
     const kids = rows.slice(0, 300).map((s) => {
@@ -695,9 +709,9 @@ function renderConvo() {
     }
     const sf = s.surface;
     const head = h('div', { class: 'convo-head' },
-      h('div', { class: 'convo-head-top' }, surfaceBadge(sf, { full: true, sim: s.sim })),
+      h('div', { class: 'convo-head-top' }, surfaceBadge(sf, { full: true, sim: s.sim }), botBadge(s)),
       h('dl', { class: 'facts' },
-        fact('Surface', sf.kind), fact('Device', sf.device), fact('Channel', sf.channel || '—'), fact('Embedded', sf.embedded ? 'yes (iframe)' : 'no'),
+        fact('Bot', `${botName(botOf(s))}${sf.instance ? '' : ' (built-in)'}`), fact('Surface', sf.kind), fact('Device', sf.device), fact('Channel', sf.channel || '—'), fact('Embedded', sf.embedded ? 'yes (iframe)' : 'no'),
         fact('Started', `${clock(s.startedAt)}`), fact('Last activity', ago(s.lastAt)), fact('Lang', sf.lang || '—'),
         fact('Turns', String(Math.max(turns.length, s.serverTurns || 0))),
         sf.referrer ? fact('Referrer', sf.referrer, true) : null,
@@ -800,6 +814,7 @@ function renderSurfaces() {
   const el = $('#surfaces');
   const groups = { kind: new Map(), device: new Map(), host: new Map() };
   for (const s of S.sessions.values()) {
+    if (!sessionMatches(s, null)) continue; // bot filter only
     const msgs = turnsOf(s).length;
     for (const [dim, v] of [['kind', s.surface.kind], ['device', s.surface.device], ['host', s.surface.host || '(none)']]) {
       const g = groups[dim].get(v) || { n: 0, msgs: 0 };
@@ -892,7 +907,7 @@ function feedItem(item, isNew) {
 }
 function feedVisible(item) {
   const s = S.sessions.get(item.e.sessionId);
-  return !S.filter || (s ? sessionMatches(s) : false);
+  return (!S.filter && !S.botFilter) || (s ? sessionMatches(s) : false);
 }
 function renderFeed() {
   const el = $('#feed');
@@ -917,11 +932,11 @@ function renderAsk() {
   const out = $('#ask-out');
   const a = S.ask;
   if (!a) { rc(out); return; }
-  if (a.status === 'pending') { rc(out, h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)), h('span', { class: 'pending' }, h('span', { class: 'spinner' }), 'KnowBot is answering with canonical settings…')); return; }
+  if (a.status === 'pending') { rc(out, h('div', { class: 'ask-q' }, a.bot ? `${botName(a.bot)} · ` : '', 'Q: ', h('b', null, a.question)), h('span', { class: 'pending' }, h('span', { class: 'spinner' }), 'KnowBot is answering with canonical settings…')); return; }
   if (a.status === 'error') { rc(out, h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)), h('div', { class: 'err' }, a.error), h('div', { class: 'note' }, 'Needs the KnowBot server: node knowbot/server/server.mjs')); return; }
   const ans = a.answer;
   rc(out, 
-    h('div', { class: 'ask-q' }, 'Q: ', h('b', null, a.question)),
+    h('div', { class: 'ask-q' }, a.bot ? `${botName(a.bot)} · ` : '', 'Q: ', h('b', null, a.question)),
     h('div', { class: 'msg-meta' }, answerBadges(ans), latencyView(ans.latencyMs)),
     ...answerBody(ans).flat(),
     engineLabel(ans.engine) ? h('div', { class: 'note mono' }, engineLabel(ans.engine)) : '');
@@ -931,13 +946,14 @@ async function onAsk(ev) {
   const input = $('#ask-input');
   const q = input.value.trim();
   if (!q || (S.ask && S.ask.status === 'pending')) return;
-  S.ask = { status: 'pending', question: q }; renderAsk();
+  const bot = S.botFilter && S.botFilter !== S.builtinBot ? S.botFilter : '';
+  S.ask = { status: 'pending', question: q, bot }; renderAsk();
   $('#ask-btn').disabled = true;
   try {
-    const answer = await postCanonical({ question: q, sessionId: `dashboard-${rid()}`, turnId: `t-${rid()}` });
-    S.ask = { status: 'done', question: q, answer };
+    const answer = await postCanonical({ question: q, sessionId: `dashboard-${rid()}`, turnId: `t-${rid()}`, instance: S.botFilter && S.botFilter !== S.builtinBot ? S.botFilter : undefined });
+    S.ask = { status: 'done', question: q, answer, bot };
   } catch (err) {
-    S.ask = { status: 'error', question: q, error: String(err && err.message || err) };
+    S.ask = { status: 'error', question: q, bot, error: String(err && err.message || err) };
   }
   $('#ask-btn').disabled = false;
   renderAsk();
@@ -976,6 +992,20 @@ function toggleTheme() {
   syncThemeBtn();
 }
 
+/* ------------------------------------------------------------------ bots & buckets */
+let bots = null;
+function setBots(list, builtinId) {
+  S.bots = list; S.builtinBot = builtinId;
+  if (S.botFilter && !list.some((b) => b.id === S.botFilter)) S.botFilter = '';
+  const sel = $('#inst-filter');
+  rc(sel, h('option', { value: '' }, 'All bots'), list.map((b) => h('option', { value: b.id }, b.builtin ? `${b.name} (built-in)` : b.name)));
+  sel.value = S.botFilter;
+  $('#inst-filter-wrap').hidden = list.length < 2;
+  $('#ask-input').placeholder = S.botFilter && S.botFilter !== S.builtinBot ? `Ask ${botName(S.botFilter)} (its enabled buckets only)…` : 'Ask anything the knowDrive covers…';
+  S.feedReset = true;
+  schedule();
+}
+
 /* ------------------------------------------------------------------ keyboard */
 function onSessionsKey(ev) {
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) return;
@@ -1002,6 +1032,12 @@ async function boot() {
     S.autoCanon = auto.checked; S.autoCanonSince = Date.now();
     announce(auto.checked ? 'Auto-canonicalize on: every new visitor question gets a canonical answer.' : 'Auto-canonicalize off.');
   });
+  bots = mountBots({ S, h, rc, str, num, parseTs, ago, announce, onList: setBots });
+  $('#inst-filter').addEventListener('change', (e) => {
+    S.botFilter = e.target.value; S.feedReset = true;
+    setBots(S.bots, S.builtinBot);
+    announce(S.botFilter ? `Showing sessions for ${botName(S.botFilter)}` : 'Showing all bots');
+  });
   listenBroadcast();
   renderAll();
   renderMeta();
@@ -1009,6 +1045,7 @@ async function boot() {
   await resolveApi();
   renderMeta();
   connect();
+  bots.load();
   setInterval(() => { if (S.sessions.size) { renderKpis(); renderSessions(); } }, 5000);
   if (new URLSearchParams(location.search).get('sim') === '1') toggleSim();
 }
