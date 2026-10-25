@@ -39,11 +39,12 @@ export async function createCanvas(el) {
     if (c.processing) return `${plural(c.n, 'file')} · ${c.processing} processing`;
     return c.n ? `${plural(c.n, 'file')} · ready` : 'empty';
   }
-  // Node icons: a folder of documents for a bucket, a bot head with a speech tail for a bot.
+  // Node icons: a pail with a handle for a bucket, a bot head with a speech tail for a bot.
   const svg = (...kids) => e('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' }, ...kids);
   const BucketIcon = () => e('span', { className: 'fnode-icon fnode-icon-bucket' }, svg(
-    e('path', { d: 'M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z' }),
-    e('path', { d: 'M8 12h8M8 15.5h5' })));
+    e('path', { d: 'M6.5 8.5a5.5 5.5 0 0 1 11 0' }),
+    e('path', { d: 'M3.5 8.5h17l-1.8 10.7a2 2 0 0 1-2 1.8H7.3a2 2 0 0 1-2-1.8z' }),
+    e('path', { d: 'M8 13h8M9 16.5h6' })));
   const BotIcon = () => e('span', { className: 'fnode-icon fnode-icon-bot' }, svg(
     e('path', { d: 'M12 3.5v3' }), e('circle', { cx: 12, cy: 2.8, r: 0.9, fill: 'currentColor', stroke: 'none' }),
     e('path', { d: 'M7 6.5h10a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-6l-3.5 2.5v-2.5H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3z' }),
