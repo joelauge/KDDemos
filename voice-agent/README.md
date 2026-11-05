@@ -44,6 +44,10 @@ Then call your Twilio number. To have the agent call you instead (handy on stage
 
 `GET /health` shows the store, model, voice, and which prompts were synthesized.
 
+### Test store
+
+The default test setup answers from the store on **public.knowdrive.ai** (`KNOWDRIVE_BASE_URL=https://public.knowdrive.ai`). It's a separate KnowDrive deployment with the same API, so the token and store id must come from that host: a token from knowdrive.ai won't work there. Point `KNOWDRIVE_BASE_URL` back at `https://knowdrive.ai` to answer from a store on the main deployment instead.
+
 ### Getting a KnowDrive token
 
 - **API token:** mint a PASETO token (`POST /-/apitokens/mint`) and put it in `KNOWDRIVE_API_TOKEN`. It's sent as `X-API-TOKEN`.
