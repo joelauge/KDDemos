@@ -46,22 +46,20 @@ Then call your Twilio number. To have the agent call you instead (handy on stage
 
 ### Test store
 
-The default test setup answers from the **Canada** store on **public.knowdrive.ai** (`vs_6164dda13277488abf2b8c7414f43c23`): about 405,000 files of Canadian legislation and case law (federal and provincial, English and French). It's a separate KnowDrive deployment with the same API, so the token must come from that host: a token from knowdrive.ai won't work there.
+The default setup answers from the **knowbot-ugm** store on **dev.knowdrive.ai** (`vs_f66318f0dd0e4540b27663b03ea40f40`): 137 files covering The Ultimate Game Master's Shopify store. These include products, collections, policies, shipping, and 31 `kind:canonical` answer cards. Use a developer key from dev.knowdrive.ai in `KNOWDRIVE_API_TOKEN`; keys from other KnowDrive deployments won't work there.
 
-`KNOWDRIVE_TAG_QUERY=lang:en` keeps French passages out of the answers (the voice speaks English). Sample questions that retrieve well:
+`KNOWDRIVE_TAG_QUERY=!kind:article` leaves out the 25 blog and news posts, which can be promotional or out of date. Sample questions that retrieve the right canonical card:
 
-- "How many weeks of maternity benefits can I get from employment insurance?" (up to 15 weeks, from Social Security Tribunal decisions)
-- "Who is entitled to vote in a federal election?" (citizenship, age and residence, from the Supreme Court of Canada)
+- "What is your return policy?" (30 days from receipt; start by emailing the store)
+- "Do you ship to Canada?" (yes, UPS rate calculated at checkout)
+- "How much is the Ultimate Bundle?" ($319.99, saving $41.91 on the items bought separately)
+- "Is the magnetic dice tray in stock?" (yes, $29.99)
 
-Narrower filters didn't help in testing. `legislation,lang:en` answered the maternity question from provincial job-protected-leave law (17 weeks), not the federal benefit (15 weeks). `legislation,lang:en,jurisdiction:ca-fed` returned only procedural regulations for both questions.
-
-The greeting says the agent can't give legal advice. Keep it that way for this corpus.
-
-Point `KNOWDRIVE_BASE_URL` back at `https://knowdrive.ai` to answer from a store on the main deployment instead.
+To answer from another store, change `KNOWDRIVE_BASE_URL`, `KNOWDRIVE_VECTOR_STORE_ID` and the persona settings.
 
 ### Getting a KnowDrive token
 
-- **API token:** mint a PASETO token (`POST /-/apitokens/mint`) and put it in `KNOWDRIVE_API_TOKEN`. It's sent as `X-API-TOKEN`.
+- **Developer key:** create one on the deployment that holds the store (for the default, dev.knowdrive.ai) and put it in `KNOWDRIVE_API_TOKEN`. It's sent as `X-API-TOKEN`.
 - **Short-lived token (quick tests):** from Claude, call the KnowDrive MCP `mint_token` tool with the two entitlements above. A JWT is detected automatically and sent as `Authorization: Bearer`. It expires within minutes.
 
 ### Keeping answers canonical

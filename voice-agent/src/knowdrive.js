@@ -45,8 +45,11 @@ export async function searchKnowDrive(query, { limit = config.knowdrive.topK } =
   const seen = new Set();
   const passages = [];
   for (const atom of data.atoms || []) {
-    const text = (atom.text || "").trim();
-    if (!text) continue;
+    // Drop YAML front matter (title/tags/ids): it carries no answer and would
+    // otherwise use up a passage slot when an atom is only the file header.
+    const text = (atom.text || "").replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
+    // Skip empty atoms and bare provenance footers ("Where this comes from: …").
+    if (!text || /^where this comes from:/i.test(text)) continue;
     const key = text.slice(0, 160);
     if (seen.has(key)) continue;
     seen.add(key);
