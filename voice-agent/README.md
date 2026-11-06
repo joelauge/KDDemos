@@ -46,7 +46,18 @@ Then call your Twilio number. To have the agent call you instead (handy on stage
 
 ### Test store
 
-The default test setup answers from the store on **public.knowdrive.ai** (`KNOWDRIVE_BASE_URL=https://public.knowdrive.ai`). It's a separate KnowDrive deployment with the same API, so the token and store id must come from that host: a token from knowdrive.ai won't work there. Point `KNOWDRIVE_BASE_URL` back at `https://knowdrive.ai` to answer from a store on the main deployment instead.
+The default test setup answers from the **Canada** store on **public.knowdrive.ai** (`vs_6164dda13277488abf2b8c7414f43c23`): about 405,000 files of Canadian legislation and case law (federal and provincial, English and French). It's a separate KnowDrive deployment with the same API, so the token must come from that host: a token from knowdrive.ai won't work there.
+
+`KNOWDRIVE_TAG_QUERY=lang:en` keeps French passages out of the answers (the voice speaks English). Sample questions that retrieve well:
+
+- "How many weeks of maternity benefits can I get from employment insurance?" (up to 15 weeks, from Social Security Tribunal decisions)
+- "Who is entitled to vote in a federal election?" (citizenship, age and residence, from the Supreme Court of Canada)
+
+Narrower filters didn't help in testing. `legislation,lang:en` answered the maternity question from provincial job-protected-leave law (17 weeks), not the federal benefit (15 weeks). `legislation,lang:en,jurisdiction:ca-fed` returned only procedural regulations for both questions.
+
+The greeting says the agent can't give legal advice. Keep it that way for this corpus.
+
+Point `KNOWDRIVE_BASE_URL` back at `https://knowdrive.ai` to answer from a store on the main deployment instead.
 
 ### Getting a KnowDrive token
 
