@@ -19,6 +19,10 @@ export class KnowBotContainer extends Container {
       ...(env.KNOWBOT_ADMIN_TOKEN ? { KNOWBOT_ADMIN_TOKEN: env.KNOWBOT_ADMIN_TOKEN } : {}),
       // Optional: seals stored OpenAI/Anthropic keys (defaults to the admin token).
       ...(env.KNOWBOT_SECRET_KEY ? { KNOWBOT_SECRET_KEY: env.KNOWBOT_SECRET_KEY } : {}),
+      // KnowBot Studio Builder (Claude): the key is a Worker secret (GitHub secret ANTHROPIC_API_KEY); provider and model are plain vars.
+      ...(env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY } : {}),
+      ...(env.KNOWBOT_STUDIO_PROVIDER ? { KNOWBOT_STUDIO_PROVIDER: env.KNOWBOT_STUDIO_PROVIDER } : {}),
+      ...(env.KNOWBOT_STUDIO_MODEL ? { KNOWBOT_STUDIO_MODEL: env.KNOWBOT_STUDIO_MODEL } : {}),
     };
   }
 

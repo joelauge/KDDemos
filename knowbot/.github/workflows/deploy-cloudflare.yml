@@ -35,8 +35,10 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           KNOWDRIVE_API_KEY: ${{ secrets.KNOWDRIVE_API_KEY }}
           KNOWBOT_ADMIN_TOKEN: ${{ secrets.KNOWBOT_ADMIN_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           if [ -n "$KNOWDRIVE_API_KEY" ]; then printf '%s' "$KNOWDRIVE_API_KEY" | npx wrangler secret put KNOWDRIVE_API_KEY; else echo "::warning::KNOWDRIVE_API_KEY not set; the container will answer from the bundled corpus"; fi
+          if [ -n "$ANTHROPIC_API_KEY" ]; then printf '%s' "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY; else echo "::notice::ANTHROPIC_API_KEY not set; the Studio Builder uses its scripted engine"; fi
           if [ -n "$KNOWBOT_ADMIN_TOKEN" ]; then printf '%s' "$KNOWBOT_ADMIN_TOKEN" | npx wrangler secret put KNOWBOT_ADMIN_TOKEN; else echo "::warning::KNOWBOT_ADMIN_TOKEN not set; chat instances can't be created or edited from the dashboard"; fi
       - name: Deploy (builds the container image with Docker)
         if: steps.guard.outputs.ok == 'true'
