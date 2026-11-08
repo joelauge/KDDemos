@@ -664,7 +664,9 @@ function clausesOf(question) {
     const terms = new Map([...own].map((w) => [w, 1]));
     // "how long is it covered": a pronoun leans on the earlier part's topic
     if (prev && /\b(?:it|its|they|them|their|this|that|these|those|one)\b/i.test(p)) for (const [w] of prev.terms) if (!terms.has(w)) terms.set(w, 0.3);
-    out.push({ text: p, intents, terms, ...(cmp ? { cmp } : {}), ...(alts.length > 1 ? { groups: alts } : {}) });
+    // a number right after a name ("Commuter 3", "Kids 20") names a model; other numbers are the visitor's own ("after 5 weeks")
+    const models = new Set([...bare.matchAll(/\b[A-Z][\w-]*\s+(\d{1,4})\b/g)].map((m) => m[1]));
+    out.push({ text: p, intents, terms, models, ...(cmp ? { cmp } : {}), ...(alts.length > 1 ? { groups: alts } : {}) });
   }
   // "contact"/"time"-only hints that ride along another intent add nothing: keep the strongest reading
   for (const c of out) if (c.intents.includes('duration') && c.intents.includes('time') && !/\b(?:what time|opening hours|open|close)\b/i.test(c.text)) c.intents = c.intents.filter((k) => k !== 'time');
@@ -723,7 +725,7 @@ export function rankLines(question, lines = []) {
       if (x.text.length > 260) s *= 0.95;
       per[li][ci] = Math.round(s * 1e6) / 1e6; answers[li][ci] = met > 0; matched[li][ci] = m; cover[li][ci] = Math.round(cov * 1e6) / 1e6;
       // a model number the question names ("Commuter 3") must be the line's own, not its neighbour's ("Commuter 1")
-      named[li][ci] = [...c.terms].every(([w, wt]) => wt < 1 || !/^\d+$/.test(w) || x.own.has(w));
+      named[li][ci] = [...(c.models || [])].every((w) => !c.terms.has(w) || x.own.has(w));
     });
     return Math.max(...per[li]);
   });
@@ -735,16 +737,17 @@ export function rankLines(question, lines = []) {
  * holds at least half of the clause's topic words, weighted by rarity (for "X or Y", half of one alternative).
  * Returns { covered (some clause covered, or nothing to check), clauses: [{ text, covered, terms (surface words) }] }.
  */
+const COVER_MIN = 0.25;
 export function answerCoverage(question, lines = [], picks = []) {
   if (!String(question || '').trim() || !lines.length) return { covered: true, clauses: [] };
   const r = rankLines(question, lines);
   const words = String(question).toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9]+(?:['-][a-z0-9]+)*/g) || [];
   const clauses = r.clauses.map((c, ci) => {
-    const own = [...c.terms].filter(([, w]) => w === 1).map(([t]) => t);
+    const own = [...c.terms].filter(([t, w]) => w === 1 && (!/^\d+$/.test(t) || c.models?.has(t))).map(([t]) => t);
     const valid = picks.filter((n) => n >= 1 && n <= lines.length);
     // "bikes under $1,000" is answered by rows whose own value satisfies it, never by prose that mentions a price
     const ok = c.cmp ? valid.some((n) => r.tbl[n - 1] && r.answers[n - 1][ci] && r.cover[n - 1][ci] >= 0.5)
-      : !own.length || valid.some((n) => r.cover[n - 1][ci] >= 0.5);
+      : !own.length || valid.some((n) => r.cover[n - 1][ci] >= COVER_MIN);
     const terms = words.filter((w) => rterms(w).size && [...rterms(w)].some((t) => own.includes(t)));
     return { text: c.text, covered: ok, terms: c.cmp && c.intents.includes('price') ? [...terms, 'prices'] : terms };
   });
@@ -863,14 +866,14 @@ export function answerFirst(question, lines = [], picks = [], { onTopic = () => 
   const strong = (i, ci) => r.named[i][ci] && r.matched[i][ci] >= (r.clauses[ci].cmp ? 0.5 : Math.max(0.5, Math.min(2, own(ci)))) && r.per[i][ci] >= (r.clauses[ci].cmp ? 0.3 : 0.4) && onTopic(lines[i]);
   const hard = (c) => c.intents.some((k) => !SOFT.has(k)) || !!c.cmp;
   const answersPart = (i, ci) => { const c = r.clauses[ci]; return !hard(c) || r.answers[i][ci]; };
-  const anyIntent = r.clauses.some((c) => c.intents.length || c.cmp);
-  const strongAny = (i) => r.clauses.some((_, ci) => strong(i, ci));
   // a caveat ("not transferable", "If … has been ridden") ranks a little below the rule it qualifies
   const fit = (i, ci) => r.per[i][ci] * (r.caveat[i] ? 0.85 : 1);
-  if (picks.length && !anyIntent) {
-    // nothing to check the answer type against: the model's picks stand, unless none of them is about what was asked
-    // while another line clearly is ("financing or payment plans" → the financing line, not the Care Plan line)
-    if (picks.some((n) => strongAny(n - 1))) return [...picks.filter((n) => strongAny(n - 1)), ...picks.filter((n) => !strongAny(n - 1))];
+  if (picks.length && !r.clauses.some(hard)) {
+    // no hard answer type to check against: the model's picks stand when one of them clearly answers ("Can I return
+    // after 5 weeks?" → "After 30 days a return is not accepted"); when none does, the line that does leads
+    // ("financing or payment plans" → the financing line, not the Care Plan line; "Can I return a bike?" → the rule)
+    const good = (n) => r.clauses.some((c, ci) => strong(n - 1, ci) && (!c.intents.length || r.answers[n - 1][ci]));
+    if (picks.some(good)) return [...picks.filter(good), ...picks.filter((n) => !good(n))];
   }
   const chosen = [], leadOf = [];
   // In a two-part question each part gets a line about that part: a line that also answers another part
@@ -900,6 +903,8 @@ export function answerFirst(question, lines = [], picks = [], { onTopic = () => 
 function sameFact(a, b, sources = []) {
   const file = (l) => { const s = sources[l.source] || {}; return s.filename || s.file_id || `#${l.source}`; };
   if (file(a) !== file(b)) return false;
+  const neg = (l) => /\b(?:not|no|never|cannot|without)\b|n't\b/i.test(l.cells ?? l.text);
+  if (neg(a) !== neg(b)) return false; // "accepted within 30 days" and "after 30 days … not accepted" are two facts
   const nu = (l) => new Set((String(l.cells ?? l.text).match(/\d+(?:[.,]\d+)*/g) || []).map((x) => x.replace(/,/g, '')));
   const [na, nb] = [nu(a), nu(b)];
   if (!na.size || !nb.size) return false;
@@ -990,7 +995,7 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
 
 // Every opener and closer here is pure courtesy (isCourtesy), so requireCitations keeps it; the facts are the quotes.
 // Confident and neutral: a grounded, verified answer never opens with a hedge ("I think …").
-const OPENERS = ["Good news, I found what you're looking for!", "Here's what I found!", "Here's what I found."];
+const OPENERS = ["Good news, I found what you're looking for!", "Here's what I found!", 'Good news, I found it!'];
 // (never "Here's what I found!": a one-file list goes on "Here's what “Title” says [1]:")
 const LIST_OPENERS = ['I found a few things that will help!', 'Good news, I found a few things that will help!'];
 const CLOSERS = ['Hope this helps!', 'Feel free to ask if you have any other questions.'];

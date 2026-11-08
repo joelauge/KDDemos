@@ -16,7 +16,9 @@ A trial bot is opened with a signed link that only works for that trial and stop
 
 Source: /studio/
 
-You can remove any file from your trial bot in KnowBot Studio, and you can remove the sample files at any time. A removed file is deleted from the store and no longer used for answers. TODO(owner): confirm whether a "Start over" button deletes all of a trial's files at once; today starting a new bot leaves the old trial's files to expire.
+You can remove any file from your trial bot in KnowBot Studio, and you can remove the sample files at any time. A removed file is deleted from the store and no longer used for answers.
+
+To delete everything at once, use **Start over** in the Studio header. After you confirm, it permanently deletes your trial bot's uploaded and imported files, its settings, the conversation and the questions it logged, and the old bot's link stops working. The shared sample files are not yours, so they are never deleted. A bot that has already launched is managed from your KnowDrive account instead.
 
 ## Seven-day expiry
 

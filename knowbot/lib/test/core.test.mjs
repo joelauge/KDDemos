@@ -309,7 +309,7 @@ test('select mode: the model only names lines; KnowBot quotes them with citation
   const r = await bot.ask('Can I return a gift card?');
   // KnowBot.ask speaks in the guide voice: opener, where it was found, the quoted lines (headline first), a closer
   assert.equal(r.text.split('\n').slice(1).join('\n'), '- “Returns are accepted within 30 days of receipt” [1]\n- “Sale items and gift cards cannot be returned” [1]\nFeel free to open the link for the full details.', 'the card headline leads');
-  assert.match(r.text.split('\n')[0], /^(?:I found a few things that should help!|Here's what I found!|Good news, I found a few things that might help!) Here's what \[“Returns”\]\(https:\/\/example\.com\/1\) says \[1\]:$/);
+  assert.match(r.text.split('\n')[0], /^(?:I found a few things that will help!|Good news, I found a few things that will help!) Here's what \[“Returns”\]\(https:\/\/example\.com\/1\) says \[1\]:$/);
   assert.equal(r.grounded, true);
   const plain = new KnowBot({ telemetry: false, voice: false, retriever: { type: 'custom', search: async () => src }, engine: { type: 'stub', complete: async () => 'L3' } });
   assert.equal((await plain.ask('Can I return a gift card?')).text, '- Returns are accepted within 30 days of receipt. [1]\n- Sale items and gift cards cannot be returned. [1]', 'voice:false keeps the bare quoted lines');
@@ -388,8 +388,9 @@ test('citation gate: only cited sentences survive; nothing cited means the fixed
 
 /* ---------- guide voice (friendly librarian): courtesy allowance, location, select-mode shapes ---------- */
 
-const OPEN1 = /^(?:I think I found what you're looking for!|Good news, I found what you're looking for!|Here's what I found!) /;
-const OPENN = /^(?:I found a few things that should help!|Here's what I found!|Good news, I found a few things that might help!)/;
+// confident openers only: a grounded answer never opens with a hedge ("I think …")
+const OPEN1 = /^(?:Good news, I found what you're looking for!|Here's what I found!|Good news, I found it!) /;
+const OPENN = /^(?:I found a few things that will help!|Good news, I found a few things that will help!)/;
 
 test('courtesy: one uncited opener and one uncited closer survive the citation gate, nothing else does', () => {
   const c = [{ n: 1, filename: 'a.md' }, { n: 2, filename: 'b.md' }];
