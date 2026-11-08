@@ -5,14 +5,17 @@ import { config, requireEnv } from "./config.js";
 import { searchKnowDrive } from "./knowdrive.js";
 import { composeAnswer } from "./answer.js";
 import { streamSpeech, synthesize } from "./tts.js";
+import { WebSocketServer } from "ws";
+import { handleMediaStream, issueStreamToken } from "./gemini-live.js";
 import { createTurn, endCall, getHistory, getLastQuestion, recordExchange, takeTurn } from "./sessions.js";
+
+const voiceToVoice = config.voiceEngine === "gemini";
 
 requireEnv([
   "PUBLIC_BASE_URL",
-    "KNOWDRIVE_VECTOR_STORE_ID",
-  "ELEVENLABS_API_KEY",
-  "ELEVENLABS_VOICE_ID",
+  "KNOWDRIVE_VECTOR_STORE_ID",
   "TWILIO_AUTH_TOKEN",
+  ...(voiceToVoice ? ["GEMINI_API_KEY"] : ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]),
 ]);
 
 const { VoiceResponse } = twilio.twiml;
@@ -84,6 +87,14 @@ function verifyTwilio(req, res, next) {
 app.post("/voice/incoming", verifyTwilio, (req, res) => {
   console.log(`[call] ${req.body.CallSid} from ${req.body.From}`);
   const twiml = new VoiceResponse();
+
+  if (voiceToVoice) {
+    // Hand the call's audio to the Gemini Live bridge over a WebSocket.
+    const stream = twiml.connect().stream({ url: `${base.replace(/^http/, "ws")}/media` });
+    stream.parameter({ name: "token", value: issueStreamToken(req.body.CallSid) });
+    return sendTwiml(res, twiml);
+  }
+
   const gather = twiml.gather(gatherOptions());
   speakPrompt(gather, "greeting");
   twiml.redirect({ method: "POST" }, `${base}/voice/reprompt`);
@@ -194,15 +205,20 @@ app.get("/audio/turn/:id", async (req, res) => {
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
+    engine: voiceToVoice ? "gemini" : "classic",
     store: config.knowdrive.vectorStoreId,
-    model: config.claude.model,
-    voice: config.elevenlabs.voiceId,
-    prompts: [...promptAudio.keys()],
+    ...(voiceToVoice
+      ? { model: config.gemini.model, voice: config.gemini.voice }
+      : { model: config.claude.model, voice: config.elevenlabs.voiceId, prompts: [...promptAudio.keys()] }),
   });
 });
 
-app.listen(config.port, async () => {
-  console.log(`KnowDrive voice agent listening on :${config.port}`);
+const server = app.listen(config.port, async () => {
+  console.log(`KnowDrive voice agent listening on :${config.port} (engine: ${voiceToVoice ? "gemini voice-to-voice" : "classic"})`);
   console.log(`Point your Twilio number's voice webhook at ${base}/voice/incoming (POST)`);
-  await warmPrompts();
+  if (!voiceToVoice) await warmPrompts();
 });
+
+// Twilio Media Streams connect here when VOICE_ENGINE=gemini.
+const wss = new WebSocketServer({ server, path: "/media" });
+wss.on("connection", handleMediaStream);

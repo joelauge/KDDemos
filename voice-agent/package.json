@@ -14,12 +14,15 @@
     "ask": "node scripts/ask.js",
     "twilio:configure": "node scripts/configure-twilio.js",
     "call": "node scripts/call.js",
-    "check": "node --check src/server.js && node --check src/config.js && node --check src/knowdrive.js && node --check src/answer.js && node --check src/tts.js && node --check src/sessions.js && node --check scripts/ask.js && node --check scripts/call.js && node --check scripts/configure-twilio.js"
+    "check": "node --check src/server.js && node --check src/config.js && node --check src/knowdrive.js && node --check src/answer.js && node --check src/tts.js && node --check src/sessions.js && node --check src/audio.js && node --check src/gemini-live.js && node --check scripts/ask.js && node --check scripts/call.js && node --check scripts/configure-twilio.js && node --check scripts/live-test.js",
+    "live-test": "node scripts/live-test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
+    "@google/genai": "^3.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "twilio": "^5.4.0"
+    "twilio": "^5.4.0",
+    "ws": "^8.22.2"
   }
 }

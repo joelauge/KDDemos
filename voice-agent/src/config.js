@@ -25,6 +25,16 @@ export const config = {
     effort: env.CLAUDE_EFFORT || "low",
   },
 
+  // "gemini": voice-to-voice through Gemini Live over Twilio Media Streams.
+  // "classic": Twilio speech recognition -> KnowDrive -> Claude -> ElevenLabs.
+  voiceEngine: (env.VOICE_ENGINE || "classic").toLowerCase(),
+
+  gemini: {
+    apiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY || "",
+    model: env.GEMINI_LIVE_MODEL || "gemini-3.8-live",
+    voice: env.GEMINI_VOICE || "Kore",
+  },
+
   elevenlabs: {
     apiKey: env.ELEVENLABS_API_KEY || "",
     voiceId: env.ELEVENLABS_VOICE_ID || "",
