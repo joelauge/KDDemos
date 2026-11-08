@@ -80,13 +80,18 @@ function utmParams(handle) {
   });
 }
 
-/** Cart permalink: adds the variant and goes straight to checkout. */
-function cartLink(variantId, quantity, handle, callSid) {
+const MAX_ITEMS = 5;
+
+/**
+ * Cart permalink: starts a NEW checkout containing exactly these items (it
+ * does not merge with anything already in the shopper's cart).
+ */
+function cartLink(lines, callSid) {
   const { ref } = config.shop;
-  const params = utmParams(handle);
+  const params = utmParams(lines.map((l) => l.handle).join(","));
   params.set("ref", ref); // Shown as the referral code in the order's conversion summary
   if (callSid) params.set("attributes[call]", callSid); // Ties the order to the call log
-  return `${config.shop.domain}/cart/${variantId}:${quantity}?${params}`;
+  return `${config.shop.domain}/cart/${lines.map((l) => `${l.variantId}:${l.quantity}`).join(",")}?${params}`;
 }
 
 /** Product page with the same UTM tags, used when no variant can be resolved. */
@@ -97,14 +102,13 @@ function productPageLink(handle) {
 const shortTitle = (title) => String(title).split(/\s+[-–|]\s+/)[0].trim();
 
 /**
- * Resolve what the caller wants into a link.
- * Returns { status: "ok", url, kind: "checkout"|"product_page", title, variant }
- * or a status the model can act on ("need_variant", "unavailable", "not_found").
+ * Resolve one requested item to a purchasable variant.
+ * Returns { status: "ok", handle, variantId, title, variant, quantity }, or a
+ * status the model can act on ("need_variant", "unavailable", "not_found",
+ * "store_unreachable").
  */
-export async function buildProductLink({ product, variant = "", quantity = 1, callSid }) {
-  if (!config.shop.domain) return { status: "error", reason: "Product links are not configured (SHOP_DOMAIN)." };
+async function resolveItem({ product, variant = "", quantity = 1 }) {
   const qty = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), 10);
-
   let handle = handleFrom(product);
   let data = null;
   try {
@@ -114,14 +118,13 @@ export async function buildProductLink({ product, variant = "", quantity = 1, ca
       if (handle) data = await fetchProduct(handle);
     }
   } catch (err) {
-    // Storefront unreachable or rate-limited: fall back to the product page.
     console.warn("[shop]", err.message);
-    if (handle) return { status: "ok", kind: "product_page", url: productPageLink(handle), title: product, variant };
-    return { status: "error", retryable: true, reason: "The store couldn't be reached." };
+    return { status: "store_unreachable", product, handle };
   }
   if (!data) {
     return {
       status: "not_found",
+      product,
       reason: `No product matches "${product}". Search the knowledge base for the product, then pass its handle.`,
     };
   }
@@ -130,6 +133,7 @@ export async function buildProductLink({ product, variant = "", quantity = 1, ca
   if (!chosen) {
     return {
       status: "need_variant",
+      product: shortTitle(data.title),
       reason: "Ask the caller which version they want, then call again with it.",
       valid_options: options,
     };
@@ -137,18 +141,62 @@ export async function buildProductLink({ product, variant = "", quantity = 1, ca
   if (!chosen.available) {
     return {
       status: "unavailable",
+      product: shortTitle(data.title),
       reason: `${chosen.title} is sold out.`,
       in_stock_options: (data.variants || []).filter((v) => v.available).map((v) => v.title),
     };
   }
-
   return {
     status: "ok",
-    kind: "checkout",
-    url: cartLink(chosen.id, qty, data.handle, callSid),
+    handle: data.handle,
+    variantId: chosen.id,
     title: shortTitle(data.title),
     variant: chosen.title === "Default Title" ? "" : chosen.title,
     quantity: qty,
+  };
+}
+
+/**
+ * Turn the requested items into one link.
+ * Returns { status: "ok", kind: "checkout"|"product_page", url, lines: [{title, variant, quantity}] },
+ * or the first item's problem status (plus which item) so the model can ask the caller.
+ */
+export async function buildProductLink({ items, callSid }) {
+  if (!config.shop.domain) return { status: "error", reason: "Product links are not configured (SHOP_DOMAIN)." };
+  const wanted = (Array.isArray(items) ? items : []).filter((i) => i?.product).slice(0, MAX_ITEMS);
+  if (!wanted.length) return { status: "error", reason: "No products were given." };
+
+  const resolved = await Promise.all(wanted.map(resolveItem));
+
+  // The store couldn't be reached: a single product still gets its (tagged) page.
+  const unreachable = resolved.filter((r) => r.status === "store_unreachable");
+  if (unreachable.length) {
+    if (wanted.length === 1 && unreachable[0].handle) {
+      return {
+        status: "ok",
+        kind: "product_page",
+        url: productPageLink(unreachable[0].handle),
+        lines: [{ title: unreachable[0].product, variant: wanted[0].variant || "", quantity: 1 }],
+      };
+    }
+    return { status: "error", retryable: true, reason: "The store couldn't be reached." };
+  }
+
+  const problemIndex = resolved.findIndex((r) => r.status !== "ok");
+  if (problemIndex !== -1) return { ...resolved[problemIndex], item_number: problemIndex + 1 };
+
+  // Merge repeats of the same variant.
+  const lines = [];
+  for (const r of resolved) {
+    const same = lines.find((l) => l.variantId === r.variantId);
+    if (same) same.quantity = Math.min(same.quantity + r.quantity, 10);
+    else lines.push({ ...r });
+  }
+  return {
+    status: "ok",
+    kind: "checkout",
+    url: cartLink(lines, callSid),
+    lines: lines.map(({ title, variant, quantity }) => ({ title, variant, quantity })),
   };
 }
 
@@ -162,10 +210,19 @@ export function toE164(raw) {
   return null;
 }
 
-export function smsBody({ title, variant, quantity = 1, kind, url }) {
-  const what = `${quantity > 1 ? `${quantity} x ` : ""}${title}${variant ? `, ${variant}` : ""}`;
+const describeLine = ({ title, variant, quantity = 1 }) =>
+  `${quantity > 1 ? `${quantity} x ` : ""}${title}${variant ? `, ${variant}` : ""}`;
+
+export function describeLines(lines) {
+  const parts = lines.map(describeLine);
+  return parts.length > 1 ? `${parts.slice(0, -1).join("; ")} and ${parts.at(-1)}` : parts[0];
+}
+
+export function smsBody({ lines, kind, url }) {
+  const what = describeLines(lines);
   const org = config.persona.orgName;
+  const verb = lines.length > 1 || lines[0].quantity > 1 ? "are" : "is";
   return kind === "checkout"
-    ? `${what} is in your cart at ${org}. Tap to check out: ${url}`
+    ? `${what} ${verb} in your cart at ${org}. Tap to check out: ${url}`
     : `Here's the ${what} from ${org}: ${url}`;
 }

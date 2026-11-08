@@ -11,7 +11,7 @@ import twilio from "twilio";
 import { config } from "./config.js";
 import { searchKnowDrive } from "./knowdrive.js";
 import { twilioToGemini, createGeminiToTwilio } from "./audio.js";
-import { buildProductLink, smsBody, toE164 } from "./shop.js";
+import { buildProductLink, describeLines, smsBody, toE164 } from "./shop.js";
 
 const { agentName, orgName, greeting } = config.persona;
 
@@ -30,12 +30,15 @@ Speaking style:
 - While a search is running, don't fill the silence with long filler; at most a few words such as "One moment."
 
 Texting product links:
-- After you've answered a question about a specific product the caller seems interested in, offer to text them a link that puts it in their cart and opens checkout. Vary how you ask; don't repeat the same wording on one call. For example: "Want me to text you a link so you can check out in a tap?", "I can send that straight to your phone, already in your cart. Would that help?", "Shall I text you a checkout link for that?"
+- After you've answered a question about a specific product the caller seems interested in, offer to text them a link that puts it in their cart and opens checkout.
+- Phrase the offer in your own words each time, fitted to the moment: sometimes lead with convenience (checking out from their phone), sometimes with the item being ready in the cart, sometimes as a quick question. Keep it to one short sentence. Never reuse wording you've already used on this call.
 - Offer at most once per product, and not at all if they've already declined. Don't push.
-- Before sending, know which version they want (color, orientation, size) and how many. If you don't know, ask.
+- If they're interested in more than one product, offer to put them all in one link rather than sending several texts.
+- Before sending, know which version of each product they want (color, orientation, size) and how many. If you don't know, ask.
 - Texts go to the number they're calling from unless they give another. Confirm before sending, using the last four digits you were given (for example "to the number ending in 0378?"). If they give a different number, read it back and get a yes first.
-- Then call send_product_link with the product's handle from the knowledge base passages (the "Handle" field, or the last part of its store page address), the version, the quantity, and phone_number only if they gave a different one.
-- If the tool asks for a version, ask the caller. If the version is sold out, say so and offer an in-stock one. When it succeeds, tell them it's on its way and that the link opens checkout with the item already in the cart.
+- Then call send_product_link with one entry per product: its handle from the knowledge base passages (the "Handle" field, or the last part of its store page address), the version, and the quantity. Pass phone_number only if they gave a different number.
+- If the tool asks for a version, ask the caller. If a version is sold out, say so and offer an in-stock one. When it succeeds, tell them it's on its way and that the link opens checkout with those items in the cart.
+- How the link works, if they ask: it opens a fresh checkout with only the items in that link. It doesn't add to, or include, anything already in a cart on the website. If they want other items too, offer to send a new link with everything together.
 - Never read out the link itself.
 
 Call flow:
@@ -59,25 +62,35 @@ export const TOOLS = [
       {
         name: "send_product_link",
         description:
-          "Text the caller a link that adds a product to their cart and opens checkout. Only call after the caller agreed and confirmed the number.",
+          "Text the caller one link that puts the listed products in a new cart and opens checkout. Only call after the caller agreed and confirmed the number.",
         parameters: {
           type: "OBJECT",
           properties: {
-            product: {
-              type: "STRING",
-              description: "The product's handle from the knowledge base (e.g. ultimate-bundle), or its store page URL. A product name works as a last resort.",
+            items: {
+              type: "ARRAY",
+              description: "One entry per product to include (up to 5).",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  product: {
+                    type: "STRING",
+                    description: "The product's handle from the knowledge base (e.g. ultimate-bundle), or its store page URL. A product name works as a last resort.",
+                  },
+                  variant: {
+                    type: "STRING",
+                    description: "The version the caller wants, in plain words (e.g. \"brown landscape\"). Empty if the product has only one version.",
+                  },
+                  quantity: { type: "INTEGER", description: "How many. Default 1." },
+                },
+                required: ["product"],
+              },
             },
-            variant: {
-              type: "STRING",
-              description: "The version the caller wants, in plain words (e.g. \"brown landscape\"). Empty if the product has only one version.",
-            },
-            quantity: { type: "INTEGER", description: "How many. Default 1." },
             phone_number: {
               type: "STRING",
               description: "Only if the caller asked for a number other than the one they're calling from, as they said it.",
             },
           },
-          required: ["product"],
+          required: ["items"],
         },
       },
       {
@@ -127,23 +140,19 @@ export function createToolRunner({ callSid, callerNumber, sendSms }) {
           reason: "There's no usable number for this caller. Ask for their mobile number and read it back.",
         };
       }
-      const link = await buildProductLink({
-        product: args.product,
-        variant: args.variant,
-        quantity: args.quantity,
-        callSid,
-      });
+      // Accept the older single-product shape too.
+      const items = Array.isArray(args.items) && args.items.length ? args.items : args.product ? [args] : [];
+      const link = await buildProductLink({ items, callSid });
       if (link.status !== "ok") return link;
       try {
         await sendSms(to, smsBody(link));
         textsSent += 1;
-        console.log(`[sms] ${callSid} sent ${link.kind} link for ${link.title}${link.variant ? ` (${link.variant})` : ""} to ***${to.slice(-4)}`);
+        console.log(`[sms] ${callSid} sent ${link.kind} link for ${describeLines(link.lines)} to ***${to.slice(-4)}`);
         return {
           status: "ok",
           sent_to_last_four: to.slice(-4),
-          opens: link.kind === "checkout" ? "checkout with the item in the cart" : "the product page",
-          product: link.title,
-          variant: link.variant,
+          opens: link.kind === "checkout" ? "a new checkout with exactly these items in the cart" : "the product page",
+          items: link.lines,
         };
       } catch (err) {
         console.error(`[sms] ${callSid} failed:`, err.message);
