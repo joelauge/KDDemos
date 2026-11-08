@@ -1336,6 +1336,8 @@ export function createStudio(o = {}) {
               T.spec = { ...defaultSpec(floorDefault), ...doc.spec };
               T.email = doc.email ?? null; T.converted = !!doc.converted; T.convertedFiles = doc.convertedFiles ?? null; T.convertedBucket = doc.convertedBucket ?? null;
               T.checkoutStartedAt = doc.checkoutStartedAt ?? null; T.flags = { ...(doc.flags || {}) };
+              // a trial loaded without a request (resuming a website import at start-up) takes its expiry from the doc
+              if (!T.expiresAt && doc.expiresAt) T.expiresAt = Date.parse(doc.expiresAt) || null;
               if (doc.answers) { T.grounded = doc.answers.grounded || 0; T.refusals = doc.answers.refusals || 0; }
               if (doc.proofDone) T.proofDone = doc.proofDone;
             }
@@ -1351,11 +1353,27 @@ export function createStudio(o = {}) {
       checkoutStartedAt: T.checkoutStartedAt, flags: T.flags, answers: { grounded: T.grounded, refusals: T.refusals }, proofDone: T.proofDone, savedAt: new Date(now()).toISOString() }, null, 2);
   }
   async function flushSpec(T) {
-    if (T.deleted) return;
+    if (T.deleted || closed) return;
     clearTimeout(T.specTimer); T.specTimer = null; T.specDirty = false;
-    const tags = T.converted ? ['knowbot', 'kind:trial-spec'] : [...trialTags(T), 'kind:trial-spec'];
-    try { await ingest({ storePath: specPath(T.id), tags, mime: 'application/json', bytes: Buffer.from(specDoc(T)) }); }
-    catch (e) { log(`[studio] spec doc write failed for ${T.id}: ${e.message}`); }
+    clearTimeout(T.jobSaveTimer); T.jobSaveTimer = null;
+    // writes of one trial's doc are serialised (each one reads the state when it is sent), so an older snapshot can
+    // never land after a newer one (a cancelled import must stay cancelled)
+    const write = async () => {
+      if (T.deleted || closed) return;
+      // storejob:running marks the docs of trials with a website import to resume after a restart (resumeAllStoreJobs)
+      const running = T.flags.storeJob?.state === 'running' ? ['storejob:running'] : [];
+      const tags = T.converted ? ['knowbot', 'kind:trial-spec', ...running] : [...trialTags(T), 'kind:trial-spec', ...running];
+      try { await ingest({ storePath: specPath(T.id), tags, mime: 'application/json', bytes: Buffer.from(specDoc(T)) }); }
+      catch (e) { log(`[studio] spec doc write failed for ${T.id}: ${e.message}`); }
+    };
+    T.specWrite = (T.specWrite || Promise.resolve()).then(write, write);
+    return T.specWrite;
+  }
+  /** A running website import's progress: saved at most every storeSaveMs (never pushed back by later progress). */
+  function saveJobSoon(T) {
+    if (T.jobSaveTimer || closed) return;
+    T.jobSaveTimer = setTimeout(() => { T.jobSaveTimer = null; flushSpec(T); }, storeSaveMs);
+    T.jobSaveTimer.unref?.();
   }
   function saveSpecSoon(T) {
     T.specDirty = true;
@@ -1419,7 +1437,7 @@ export function createStudio(o = {}) {
       stage, kdStage: fileStage(r), chunks: r.chunk_count ?? r.chunks ?? null, atoms,
       vectorized: Number(r.atoms_vectorized ?? (stage === 'ready' ? atoms : 0)), pages: r.page_count ?? r.metadata?.pages ?? null,
       sample: tags.some((x) => x.startsWith('sample:')), ...(tags.includes('src:store') ? { origin: 'store' } : {}),
-      ...(storePage ? { page: storePage, path: rel, url: man?.url || T.flags.storePdfUrls?.[r.id] || null } : {}), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
+      ...(storePage ? { page: storePage, path: rel, url: man?.url || T.flags.storePdfUrls?.[r.id] || T.flags.storeJob?.written?.[rel] || null } : {}), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
       stageAt: { ...stamps }, createdAt: isoOf(r.created_at), updatedAt: isoOf(r.updated_at || r.created_at),
     };
     // knowDrive vectorizes a file's atoms as one queued batch and reports the count only when it finishes, so a flat
@@ -2312,15 +2330,27 @@ export function createStudio(o = {}) {
    * products. 6 imports per hour per trial, 20 per IP (plans: 30 / 60).
    * o.storeNet (tests only) is passed to the importer's fetcher (allowAddresses/allowPorts/resolve); production
    * leaves it unset, so loopback, private and metadata addresses stay refused.
+   *
+   * Restarts: the job is persisted in the trial's spec doc (flags.storeJob: id, url, kinds, startedAt, state, plan
+   * counts, done counts per kind, uploaded, and written {path: url}), saved at most every 3 s while it runs; the doc
+   * carries the tag storejob:running while it is unfinished. Every page file it writes carries sjob:<job id>. After a
+   * restart the job resumes on its own (resumeAllStoreJobs at start-up) or when the trial is touched (GET trial,
+   * GET /store, the events stream): the files already in the store (sjob tag, by path) and the written URLs are
+   * skipped, so only the remaining pages are read and uploaded, under a fresh time budget and the same quota. A resumed
+   * job keeps its id, emits `resumed` {done, total} first, and its event ids continue above the last saved ones.
+   * Cancel (DELETE) marks it cancelled in the doc at once, so it never resumes. At most 5 resumes, within 24 h.
    */
   const storeBudgetMs = Math.max(1000, Number(o.storeBudgetMs ?? env.KNOWBOT_STORE_BUDGET_MS) || STORE_LIMITS.budgetMs);
   const storeRetryMs = Math.max(0, Number(o.storeRetryMs ?? 1000));
+  const storeSaveMs = Math.max(10, Number(o.storeSaveMs ?? 3000));
+  const STORE_MAX_RESUMES = 5, STORE_RESUME_MAX_AGE_MS = DAY;
   const STORE_PROGRESS = new Set(['fetching', 'reading', 'discovering']);
-  const STORE_MILESTONES = new Set(['detect', 'plan', 'found', 'building', 'capped', 'built', 'error', 'done']);
+  const STORE_MILESTONES = new Set(['resumed', 'detect', 'plan', 'found', 'building', 'capped', 'built', 'error', 'done']);
   const hostTagOf = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'site';
   const lightRow = (f) => ({ id: f.id, name: f.name, origin: 'store', page: f.page || null, stage: f.stage, bytes: f.bytes });
   function jobEmit(T, job, event, data) {
     const ev = { id: ++job.seq, event, data };
+    if (T.flags.storeJob?.id === job.id) T.flags.storeJob.seq = job.seq;
     // replay: milestones are pinned; every other event type keeps only its latest (uploaded carries cumulative counts)
     if (!STORE_MILESTONES.has(event)) { const i = job.events.findIndex((x) => x.event === event); if (i >= 0) job.events.splice(i, 1); }
     job.events.push(ev);
@@ -2357,16 +2387,28 @@ export function createStudio(o = {}) {
   async function storeImport(req, res, T, url) {
     const m = req.method;
     if (m === 'GET') {
-      const job = T.storeJob;
+      await resumeStoreJob(T);
+      // after a restart, a finished import is known from the spec doc only: its outcome is replayed as one `done`
+      const job = T.storeJob || restoredJob(T);
       if (!job) fail(404, 'not_found', 'No website import has run for this bot yet.');
-      const since = Number(url.searchParams.get('since') ?? req.headers['last-event-id'] ?? 0) || 0;
+      let since = Number(url.searchParams.get('since') ?? req.headers['last-event-id'] ?? 0) || 0;
+      if (since > job.seq) since = 0; // an id from before a restart the client cannot have seen here: replay it all
       return streamJob(req, res, job, since);
     }
     if (m === 'DELETE') {
       const job = T.storeJob;
       // Stop during Find: a running plan (planOnly) is cancelled too; its stream ends with error aborted + done {cancelled}
       if ((!job || job.state !== 'running') && T.storePlanAc) { T.storePlanAc.abort(); return sendJson(res, 202, { cancelled: true, plan: true }); }
+      const pj = T.flags.storeJob;
+      if ((!job || job.state !== 'running') && pj?.state === 'running') {
+        // interrupted by a restart and not resumed yet: cancelled for good, it never resumes
+        Object.assign(pj, { state: 'cancelled', finishedAt: now() });
+        await flushSpec(T);
+        return sendJson(res, 202, { cancelled: true, job: pj.id });
+      }
       if (!job || job.state !== 'running') fail(409, 'bad_request', 'No website import is running for this bot.');
+      job.cancelled = true;
+      if (pj?.id === job.id) { pj.state = 'cancelled'; pj.finishedAt = now(); flushSpec(T); } // durable before the stream ends
       job.ac.abort();
       return sendJson(res, 202, { cancelled: true, job: job.id });
     }
@@ -2394,7 +2436,7 @@ export function createStudio(o = {}) {
     }
     // one job per trial: the slot is taken synchronously, before any await, so a second POST sees it (409)
     const prevJob = T.storeJob;
-    const job = { id: randB32(8), url: body.url, kinds, state: 'running', startedAt: now(), finishedAt: null, seq: 0, events: [], listeners: new Set(), ac: new AbortController(), lastPush: {}, hosts: [] };
+    const job = newStoreJob({ id: randB32(8), url: body.url, kinds });
     T.storeJob = job; T.storeBusy = true;
     let files, previous, sharedBytes;
     try {
@@ -2411,9 +2453,100 @@ export function createStudio(o = {}) {
     }
     T.lastActivityAt = now();
     streamJob(req, res, job, 0); // attached before the job starts, so the POST sees every event
+    if (wellFormed) {
+      // persisted before anything is read: a restart from here on resumes this job (a bad address never is one)
+      T.flags.storeJob = { id: job.id, url: body.url, kinds, state: 'running', startedAt: job.startedAt, plan: null, total: null, done: {}, uploaded: 0, written: {}, seq: 0, activeMs: 0, resumes: 0 };
+      flushSpec(T);
+    }
     runStoreJob(T, job, { url: body.url, previous, wellFormed, sharedBytes, kinds })
       .catch((e) => log(`[studio] store job ${T.id}: ${e?.message}`));
   }
+  function newStoreJob({ id, url, kinds, startedAt = now(), seq = 0, resumed = false }) {
+    return { id, url, kinds, state: 'running', startedAt, runAt: now(), finishedAt: null, seq, events: [], listeners: new Set(), ac: new AbortController(), lastPush: {}, hosts: [], resumed };
+  }
+  /** A finished import known only from the spec doc (the server restarted since): replayed as one `done`. */
+  function restoredJob(T) {
+    const pj = T.flags.storeJob;
+    if (!pj || pj.state === 'running') return null;
+    const id = (pj.seq || 0) + 1;
+    return { id: pj.id, url: pj.url, kinds: pj.kinds, state: pj.state, startedAt: pj.startedAt, finishedAt: pj.finishedAt || null, seq: id, listeners: new Set(), restored: true,
+      events: [{ id, event: 'done', data: { restored: true, fileCount: pj.uploaded || 0, done: { ...(pj.done || {}) }, plan: pj.plan || null, total: pj.total ?? null,
+        ...(pj.state === 'cancelled' ? { cancelled: true, error: true } : pj.state === 'error' ? { error: true, code: pj.error || 'upstream' } : {}) } }] };
+  }
+  /** pj.activeMs: the job's running time over every run (resumed runs get a fresh time budget each). */
+  const jobActiveMs = (T, job) => (T.flags.storeJob?.activeBase || 0) + (now() - job.runAt);
+  /** The trial has an import the server was restarted in the middle of: resume it (one job per trial). → the job */
+  async function resumeStoreJob(T) {
+    if (!enabled || closed) return null;
+    await loadSpecDoc(T);
+    const pj = T.flags.storeJob;
+    if (!pj || pj.state !== 'running' || T.deleted) return null;
+    if (T.storeJob?.state === 'running') return T.storeJob;
+    const tooOld = now() - Number(pj.startedAt || 0) > STORE_RESUME_MAX_AGE_MS;
+    if (T.converted || (T.expiresAt && T.expiresAt < now()) || tooOld || (pj.resumes || 0) >= STORE_MAX_RESUMES) {
+      Object.assign(pj, { state: 'error', error: 'interrupted', finishedAt: now() });
+      await flushSpec(T);
+      return null;
+    }
+    pj.resumes = (pj.resumes || 0) + 1; pj.resumedAt = now(); pj.activeBase = pj.activeMs || 0;
+    // event ids continue well above the last saved one, so a client's Last-Event-ID never skips the resumed events
+    const job = newStoreJob({ id: pj.id, url: pj.url, kinds: pj.kinds || null, startedAt: pj.startedAt, seq: (pj.seq || 0) + 1000, resumed: true });
+    T.storeJob = job; T.storeBusy = true; T.lastActivityAt = now();
+    log(`[studio] resuming website import ${pj.id} for ${T.id} (${pj.uploaded || 0} files written, resume ${pj.resumes})`);
+    flushSpec(T);
+    (async () => {
+      let files, rows;
+      try {
+        files = await filesOf(T, { maxAgeMs: 0 });
+        rows = T.rows || [];
+      } catch (e) {
+        // knowDrive is unreachable: this run gives up, the doc still says running, the next touch tries again
+        job.state = 'error'; job.finishedAt = now(); T.storeBusy = false;
+        pj.resumes = Math.max(0, pj.resumes - 1);
+        jobEmit(T, job, 'error', { code: 'upstream', message: STORE_ERROR_COPY.upstream });
+        jobEmit(T, job, 'done', { files: [], fileCount: 0, error: true });
+        T.storeJob = null;
+        return;
+      }
+      const tag = `sjob:${pj.id}`;
+      const mine = rows.filter((r) => (r.tags || []).includes(tag));
+      const previous = rows.filter((r) => (r.tags || []).includes('src:store') && (r.tags || []).includes(`trial:${T.id}`) && !(r.tags || []).includes(tag));
+      const relOf = (r) => String(r.filename || '').slice(rootOf(T.id).length);
+      // reconcile with the store: its files are the truth (written after the last save too); the doc adds their URLs
+      const written = { ...(pj.written || {}) };
+      T.storeManifest ||= new Map();
+      const done = {};
+      for (const r of mine) {
+        const kind = (r.tags || []).find((x) => x.startsWith('page:'))?.slice(5) || 'page';
+        done[kind] = (done[kind] || 0) + 1;
+        const u = written[relOf(r)];
+        if (u && !T.storeManifest.has(r.id)) T.storeManifest.set(r.id, { url: u, kind, path: relOf(r) });
+      }
+      Object.assign(pj, { done, uploaded: mine.length });
+      const skip = { urls: Object.values(written), paths: [...new Set([...Object.keys(written), ...mine.map(relOf)])] };
+      const sharedBytes = usageOf(T, files).bytes - rows.reduce((n, r) => n + (Number(r.bytes) || 0), 0) - T.inflight;
+      jobEmit(T, job, 'resumed', { done: mine.length, total: pj.total ?? null, plan: pj.plan || null, resumes: pj.resumes, startedAt: new Date(Number(pj.startedAt)).toISOString() });
+      saveJobSoon(T);
+      await runStoreJob(T, job, { url: pj.url, previous, wellFormed: false, sharedBytes, kinds: pj.kinds || null, resume: { skip, mine, done } });
+    })().catch((e) => log(`[studio] store job resume ${T.id}: ${e?.message}`));
+    return job;
+  }
+  /** Start-up: every trial whose spec doc says an import was running (storejob:running) resumes it. */
+  let resumingAll = null;
+  async function resumeAllStoreJobs() {
+    if (!enabled || closed) return { resumed: 0 };
+    let rows = [];
+    try { rows = await listRows({ tags_all: 'kind:trial-spec,storejob:running' }); } catch (e) { log(`[studio] store job resume list failed: ${e.message}`); return { resumed: 0, error: e.message }; }
+    let resumed = 0;
+    for (const r of rows) {
+      const id = /^knowbot\/trials\/([^/]+)\/_spec\.json$/.exec(String(r.filename || ''))?.[1];
+      if (!id || !TRIAL_ID_RE.test(id) || deletedTrials.has(id) || closed) continue;
+      try { if (await resumeStoreJob(trialFor(id))) resumed++; } catch (e) { log(`[studio] store job resume ${id}: ${e.message}`); }
+    }
+    return { resumed };
+  }
+  /** Website imports running (or about to resume) in this process: the Worker waits for them before a restart. */
+  const storeJobsRunning = () => [...trials.values()].filter((T) => T.storeJob?.state === 'running').length + (resumingAll ? 1 : 0);
   /**
    * The finder's plan, streamed on this request only (planOnly): detect · discovering · plan · found · done {plan}.
    * Nothing is read beyond robots, sitemaps and feed totals, nothing is uploaded or replaced, and the trial's last
@@ -2604,7 +2737,8 @@ export function createStudio(o = {}) {
   async function answerSources(T, kept, { titleOf, fileName }) {
     const sources = [], srcHit = [];
     const pageHeadOf = (h) => storePageHead(h.crumb, h.text);
-    const manifestOf = (h) => T.storeManifest?.get(h.fileId) || (T.flags.storePdfUrls?.[h.fileId] ? { url: T.flags.storePdfUrls[h.fileId] } : null);
+    const writtenOf = (id) => { const w = T.flags.storeJob?.written; if (!w) return null; const f = (T.rows || []).find((x) => x.id === id)?.filename; const u = f && String(f).startsWith(rootOf(T.id)) ? w[String(f).slice(rootOf(T.id).length)] : null; return u ? { url: u } : null; };
+    const manifestOf = (h) => T.storeManifest?.get(h.fileId) || (T.flags.storePdfUrls?.[h.fileId] ? { url: T.flags.storePdfUrls[h.fileId] } : null) || writtenOf(h.fileId);
     const needsLookup = (h) => { const r = (T.rows || []).find((x) => x.id === h.fileId); return !!r && (r.tags || []).includes('src:store'); };
     // A URL read from atom text (H1 / breadcrumb / Source line) is only a candidate: the import manifest is the authority
     // when it knows the file; without one (after a restart) the URL must be on the imported site or a help desk it read.
