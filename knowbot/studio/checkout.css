@@ -670,3 +670,7 @@
    the only Launch on screen; the header "Launch · $249/mo" pill steps out of view (it keeps its box: no shift). */
 :root[data-co-cta="receipt"] #st-pricewrap, :root[data-co-cta="receipt"] #st-price,
 :root[data-co-cta="sheet"] #st-pricewrap, :root[data-co-cta="sheet"] #st-price { visibility: hidden !important; pointer-events: none; }
+
+/* fixer M r1 (D7): a stat caption ("removed at launch") wraps inside its cell instead of running into the border */
+.co-stat { padding-right: 12px; }
+.co-stat .co-unit { white-space: normal; text-wrap: balance; overflow-wrap: anywhere; min-width: 0; font-size: 10px; line-height: 1.25; }

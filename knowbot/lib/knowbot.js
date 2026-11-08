@@ -591,7 +591,26 @@ const INTENTS = [
     hit: /@[a-z0-9-]+\.[a-z]|\b\d{3}[-\s]\d{4}\b|https?:\/\/|\bwww\.|\b\d+\s+[A-Z][a-z]+\s+(?:Street|St|Road|Rd|Avenue|Ave|Lane|Way)\b/ },
   { kind: 'howto', ask: /\bhow (?:do|can|should|would) (?:i|we|you)\b|\bhow to\b|\bwhat (?:do|should) i do\b|\bsteps?\b|\bprocess\b/i,
     hit: /@[a-z0-9-]+\.[a-z]|\b\d{3}[-\s]\d{4}\b|https?:\/\/|(?:^|[:;.]\s*)(?:email|e-mail|call|book|bring|visit|send|fill(?: in| out)?|go to|contact|open|log in|sign in|click|tap|choose|select|start|reply|use|take|register|ask)\b/i },
+  // "Can I return a bike?" is answered by the rule ("Unridden bikes can be returned within 30 days"), not by a side case.
+  // Soft: it ranks the rule line first but never drops the model's picks for lacking a modal verb.
+  { kind: 'permission', soft: true, ask: /^\s*(?:can|may|could) (?:i|we|you)\b|\b(?:am i|are we|is it) (?:allowed|able|possible)\b/i,
+    hit: /\b(?:can|cannot|can't|may|must|allowed|eligible|accept(?:s|ed)?)\b|^\s*(?:yes|no)\b/i },
 ];
+const SOFT = new Set(INTENTS.filter((x) => x.soft).map((x) => x.kind));
+// "Which bikes cost under $1,000?": a comparator on a number. The threshold is never a topic word, and a line only
+// answers when its own value satisfies it ("$1,000" in a financing line is not a bike under $1,000).
+const CMP = /\b(under|below|less than|cheaper than|lower than|up to|at most|no more than|over|above|more than|greater than|higher than|at least)\s+(?:[$€£¥₹]\s?)?(\d[\d,]*(?:\.\d+)?)(\s?k\b)?/i;
+const CMP_OP = { under: '<', below: '<', 'less than': '<', 'cheaper than': '<', 'lower than': '<', 'up to': '<=', 'at most': '<=', 'no more than': '<=',
+  over: '>', above: '>', 'more than': '>', 'greater than': '>', 'higher than': '>', 'at least': '>=' };
+const MONEY = /[$€£¥₹]\s?(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s?(?:usd|eur|gbp|dollars?|euros?|pounds?)\b/gi;
+function cmpHolds(cmp, text, money) {
+  const v = money ? [...String(text).matchAll(MONEY)].map((m) => m[1] || m[2]) : String(text).match(/\d[\d,]*(?:\.\d+)?/g) || [];
+  if (!v.length) return false;
+  const x = parseFloat(String(v[0]).replace(/,/g, ''));
+  return cmp.op === '<' ? x < cmp.v : cmp.op === '<=' ? x <= cmp.v : cmp.op === '>' ? x > cmp.v : x >= cmp.v;
+}
+// A caveat ("…is not transferable", "If a returned bike has been ridden…") is a side fact: it never leads an answer.
+const CAVEAT = /\b(?:not|isn't|aren't|doesn't|don't|cannot|can't|won't|void|voids|except|excluding)\b|^\s*(?:if|unless|however|but|note|only if)\b/i;
 // Intent words carry the answer type, not the topic: they never count as topic words.
 INTENTS.find((x) => x.kind === 'when').hit = new RegExp(`${INTENTS.find((x) => x.kind === 'time').hit.source}|${INTENTS.find((x) => x.kind === 'duration').hit.source}`, 'i');
 const INTENT_WORDS = /\bhow (?:long|much|many|far|soon|often)\b|\bwhat time\b|\b(?:cost|costs|costing|price|prices|priced|pricing)\b/gi;
@@ -632,14 +651,20 @@ function clausesOf(question) {
   const out = [];
   for (const p of parts.length ? parts : [q]) {
     const intents = INTENTS.filter((x) => x.ask.test(p)).map((x) => x.kind);
-    const own = rterms(p.replace(INTENT_WORDS, ' '));
+    // only a listing or price question filters by the number ("Do you deliver orders over $75 free?" restates a rule)
+    const cm = intents.includes('price') || /^\s*(?:which|what|list|show|are there|any)\b/i.test(p) ? CMP.exec(p) : null;
+    const cmp = cm ? { op: CMP_OP[cm[1].toLowerCase()], v: parseFloat(cm[2].replace(/,/g, '')) * (cm[3] ? 1000 : 1) } : null;
+    const bare = (cm ? p.replace(cm[0], ' ') : p).replace(INTENT_WORDS, ' ');
+    const own = rterms(bare);
+    // "financing or payment plans": either alternative is the topic, so a line may cover just one of them
+    const alts = bare.split(/\s+or\s+/i).map((x) => rterms(x)).filter((s) => s.size);
     const prev = out[out.length - 1];
     // a part without its own intent or topic belongs to the previous one ("…, and what about Sundays")
-    if (prev && !intents.length && own.size < 2) { for (const w of own) prev.terms.set(w, 1); continue; }
+    if (prev && !intents.length && !cmp && own.size < 2) { for (const w of own) prev.terms.set(w, 1); continue; }
     const terms = new Map([...own].map((w) => [w, 1]));
     // "how long is it covered": a pronoun leans on the earlier part's topic
     if (prev && /\b(?:it|its|they|them|their|this|that|these|those|one)\b/i.test(p)) for (const [w] of prev.terms) if (!terms.has(w)) terms.set(w, 0.3);
-    out.push({ text: p, intents, terms });
+    out.push({ text: p, intents, terms, ...(cmp ? { cmp } : {}), ...(alts.length > 1 ? { groups: alts } : {}) });
   }
   // "contact"/"time"-only hints that ride along another intent add nothing: keep the strongest reading
   for (const c of out) if (c.intents.includes('duration') && c.intents.includes('time') && !/\b(?:what time|opening hours|open|close)\b/i.test(c.text)) c.intents = c.intents.filter((k) => k !== 'time');
@@ -659,34 +684,71 @@ export function rankLines(question, lines = []) {
   const N = lines.length || 1;
   const L = lines.map((l) => {
     const text = String(l.text || '');
-    const cut = text.search(TAIL);
-    return { all: rterms(text), head: rterms(cut > 20 ? text.slice(0, cut) : text), ctx: rterms(`${l.section || ''} ${l.ask || ''}`), text,
-      lead: rterms(text.split(/\s+/).slice(0, 6).join(' ')), // the line's subject: what it is about, not what it mentions
-      isQ: /\?\s*$/.test(text) && !/[.!]\s+\S/.test(text) };
+    // a table row is judged on its own cells: the document title it is prefixed with names the file, not the row
+    const own = l.cells != null ? String(l.cells) : text;
+    const cut = own.search(TAIL);
+    return { all: rterms(own), head: rterms(cut > 20 ? own.slice(0, cut) : own), ctx: rterms(`${l.section || ''} ${l.ask || ''}`), text, tbl: l.tbl || null,
+      lead: rterms(own.split(/\s+/).slice(0, 6).join(' ')), // the line's subject: what it is about, not what it mentions
+      isQ: /\?\s*$/.test(text) && !/[.!]\s+\S/.test(text), caveat: CAVEAT.test(text) };
   });
+  // the rows of one table share its topic ("Type: e-bike" in one row makes the whole model table about bikes)
+  const tblTerms = new Map();
+  for (const x of L) if (x.tbl) tblTerms.set(x.tbl, new Set([...(tblTerms.get(x.tbl) || []), ...x.all]));
+  for (const x of L) { x.own = new Set([...x.all, ...x.ctx]); if (x.tbl) x.ctx = new Set([...x.ctx, ...[...tblTerms.get(x.tbl)].filter((w) => !x.all.has(w))]); }
   const df = new Map();
   for (const x of L) for (const w of new Set([...x.all, ...x.ctx])) df.set(w, (df.get(w) || 0) + 1);
   const idf = (w) => Math.log(1 + N / (1 + (df.get(w) || 0))) + 0.15;
-  const per = [], answers = [], matched = [];
+  const per = [], answers = [], matched = [], cover = [], named = [];
   const score = L.map((x, li) => {
-    per[li] = []; answers[li] = []; matched[li] = [];
+    per[li] = []; answers[li] = []; matched[li] = []; cover[li] = []; named[li] = [];
     clauses.forEach((c, ci) => {
-      let got = 0, tot = 0, m = 0;
-      for (const [w, wt] of c.terms) {
-        const v = idf(w) * wt;
-        tot += v;
-        if (x.head.has(w)) { got += v; m += wt; } else if (x.all.has(w)) { got += 0.6 * v; m += wt; } else if (x.ctx.has(w)) { got += 0.55 * v; m += wt * 0.5; }
-      }
-      const cov = tot ? got / tot : 0;
-      const met = c.intents.length ? c.intents.filter((k) => INTENTS.find((i) => i.kind === k).hit.test(x.text)).length / c.intents.length : 0;
-      let s = cov + (c.intents.length ? 0.55 * met : 0) + ([...c.terms.keys()].some((w) => x.lead.has(w) && (c.terms.get(w) === 1)) ? 0.1 : 0);
+      const covOf = (keep) => {
+        let got = 0, tot = 0, m = 0;
+        for (const [w, wt] of c.terms) {
+          if (keep && !keep.has(w)) continue;
+          const v = idf(w) * wt;
+          tot += v;
+          if (x.head.has(w)) { got += v; m += wt; } else if (x.all.has(w)) { got += 0.6 * v; m += wt; } else if (x.ctx.has(w)) { got += 0.55 * v; m += wt * 0.5; }
+        }
+        return { cov: tot ? got / tot : 0, m };
+      };
+      // "X or Y": the best-covered alternative counts
+      const { cov, m } = c.groups ? c.groups.map((g) => covOf(g)).sort((a, b) => b.cov - a.cov || b.m - a.m)[0] : covOf(null);
+      const hit = (k) => INTENTS.find((i) => i.kind === k).hit.test(x.text) && (!c.cmp || cmpHolds(c.cmp, x.text, k === 'price' || c.intents.includes('price')));
+      let met = c.intents.length ? c.intents.filter(hit).length / c.intents.length : 0;
+      // a comparator with no answer-type word ("bikes under $1,000") still needs a value that satisfies it
+      if (c.cmp && !c.intents.length) met = cmpHolds(c.cmp, x.text, /[$€£¥₹]/.test(c.text)) ? 1 : 0;
+      let s = cov + (c.intents.length || c.cmp ? 0.55 * met : 0) + ([...c.terms.keys()].some((w) => x.lead.has(w) && (c.terms.get(w) === 1)) ? 0.1 : 0);
       if (x.isQ) s *= 0.25;
       if (x.text.length > 260) s *= 0.95;
-      per[li][ci] = Math.round(s * 1e6) / 1e6; answers[li][ci] = met > 0; matched[li][ci] = m;
+      per[li][ci] = Math.round(s * 1e6) / 1e6; answers[li][ci] = met > 0; matched[li][ci] = m; cover[li][ci] = Math.round(cov * 1e6) / 1e6;
+      // a model number the question names ("Commuter 3") must be the line's own, not its neighbour's ("Commuter 1")
+      named[li][ci] = [...c.terms].every(([w, wt]) => wt < 1 || !/^\d+$/.test(w) || x.own.has(w));
     });
     return Math.max(...per[li]);
   });
-  return { clauses, score, per, answers, matched };
+  return { clauses, score, per, answers, matched, cover, named, caveat: L.map((x) => x.caveat), tbl: L.map((x) => x.tbl) };
+}
+
+/**
+ * Pure: does a set of picked lines cover what was asked? A clause is covered when one picked line (with its heading)
+ * holds at least half of the clause's topic words, weighted by rarity (for "X or Y", half of one alternative).
+ * Returns { covered (some clause covered, or nothing to check), clauses: [{ text, covered, terms (surface words) }] }.
+ */
+export function answerCoverage(question, lines = [], picks = []) {
+  if (!String(question || '').trim() || !lines.length) return { covered: true, clauses: [] };
+  const r = rankLines(question, lines);
+  const words = String(question).toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9]+(?:['-][a-z0-9]+)*/g) || [];
+  const clauses = r.clauses.map((c, ci) => {
+    const own = [...c.terms].filter(([, w]) => w === 1).map(([t]) => t);
+    const valid = picks.filter((n) => n >= 1 && n <= lines.length);
+    // "bikes under $1,000" is answered by rows whose own value satisfies it, never by prose that mentions a price
+    const ok = c.cmp ? valid.some((n) => r.tbl[n - 1] && r.answers[n - 1][ci] && r.cover[n - 1][ci] >= 0.5)
+      : !own.length || valid.some((n) => r.cover[n - 1][ci] >= 0.5);
+    const terms = words.filter((w) => rterms(w).size && [...rterms(w)].some((t) => own.includes(t)));
+    return { text: c.text, covered: ok, terms: c.cmp && c.intents.includes('price') ? [...terms, 'prices'] : terms };
+  });
+  return { covered: !clauses.length || clauses.some((c) => c.covered), clauses };
 }
 
 /**
@@ -714,7 +776,10 @@ export function candidateLines(sources = [], { max = 45, perSource = 12, budget 
         while (i < raw.length && /^\s*\|.*\|\s*$/.test(raw[i])) tbl.push(raw[i++]);
         i--;
         if (leadable === null) leadable = false;
-        if (tbl.length > 2) tableLines(tbl).map((r) => (s.title ? `${String(s.title).split(' - ')[0].trim()}: ${r}` : r)).forEach(push);
+        if (tbl.length > 2) {
+          const tid = `${si}:${i}`; // one id per table: its rows share its topic (rankLines)
+          tableLines(tbl).forEach((r) => lines.push({ text: s.title ? `${String(s.title).split(' - ')[0].trim()}: ${r}` : r, section, ask, tbl: tid, cells: r }));
+        }
         continue;
       }
       const l = raw[i].replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').replace(/\*\*/g, '').trim();
@@ -736,7 +801,7 @@ export function candidateLines(sources = [], { max = 45, perSource = 12, budget 
   // which lines to keep: the first ones (no question), or the best answers when a question is given
   let keep;
   if (question && all.length) {
-    const r = rankLines(question, all.map((x) => ({ text: x.text, section: x.section, ask: x.ask })));
+    const r = rankLines(question, all.map((x) => ({ text: x.text, section: x.section, ask: x.ask, ...(x.tbl ? { tbl: x.tbl, cells: x.cells } : {}) })));
     const order = all.map((_, k) => k).sort((a, b) => (r.score[b] - r.score[a]) || (a - b));
     keep = new Set();
     const per = new Map();
@@ -764,7 +829,8 @@ export function candidateLines(sources = [], { max = 45, perSource = 12, budget 
     }
     const s = sources[x.si];
     out.push({ n: out.length + 1, source: x.si, text: clip(x.text, 320), title: String(s.title || ''), lead: x.leadable,
-      row: /^[^:]{1,60}: Variant: /.test(x.text), ...(x.section ? { section: x.section } : {}), ...(x.ask && x.ask !== x.text ? { ask: x.ask } : {}) });
+      row: /^[^:]{1,60}: Variant: /.test(x.text), ...(x.section ? { section: x.section } : {}), ...(x.ask && x.ask !== x.text ? { ask: x.ask } : {}),
+      ...(x.tbl ? { tbl: x.tbl, cells: x.cells } : {}) });
   });
   return out;
 }
@@ -791,29 +857,59 @@ export function buildSelectMessages(question, lines, persona = {}) {
 export function answerFirst(question, lines = [], picks = [], { onTopic = () => true, listy = false } = {}) {
   if (!String(question || '').trim() || !lines.length) return picks;
   const r = rankLines(question, lines);
-  const own = (ci) => [...r.clauses[ci].terms.values()].filter((w) => w === 1).length;
+  const own = (ci) => { const c = r.clauses[ci]; return c.groups ? Math.min(...c.groups.map((g) => g.size)) : [...c.terms.values()].filter((w) => w === 1).length; };
   // clearly about this part of the question: enough of its topic words, in the line or its heading
-  const strong = (i, ci) => r.matched[i][ci] >= Math.max(0.5, Math.min(2, own(ci))) && r.per[i][ci] >= 0.4 && onTopic(lines[i]);
-  const anyIntent = r.clauses.some((c) => c.intents.length);
-  if (picks.length && !anyIntent) return picks; // nothing to check the model's picks against: they stand
+  // (a comparator row may name its topic only through its table: "bikes under $1,000" → the model table's rows)
+  const strong = (i, ci) => r.named[i][ci] && r.matched[i][ci] >= (r.clauses[ci].cmp ? 0.5 : Math.max(0.5, Math.min(2, own(ci)))) && r.per[i][ci] >= (r.clauses[ci].cmp ? 0.3 : 0.4) && onTopic(lines[i]);
+  const hard = (c) => c.intents.some((k) => !SOFT.has(k)) || !!c.cmp;
+  const answersPart = (i, ci) => { const c = r.clauses[ci]; return !hard(c) || r.answers[i][ci]; };
+  const anyIntent = r.clauses.some((c) => c.intents.length || c.cmp);
+  const strongAny = (i) => r.clauses.some((_, ci) => strong(i, ci));
+  // a caveat ("not transferable", "If … has been ridden") ranks a little below the rule it qualifies
+  const fit = (i, ci) => r.per[i][ci] * (r.caveat[i] ? 0.85 : 1);
+  if (picks.length && !anyIntent) {
+    // nothing to check the answer type against: the model's picks stand, unless none of them is about what was asked
+    // while another line clearly is ("financing or payment plans" → the financing line, not the Care Plan line)
+    if (picks.some((n) => strongAny(n - 1))) return [...picks.filter((n) => strongAny(n - 1)), ...picks.filter((n) => !strongAny(n - 1))];
+  }
   const chosen = [], leadOf = [];
   // In a two-part question each part gets a line about that part: a line that also answers another part
   // ("Spare battery: $649, 2-year warranty") only leads when no focused line exists.
-  const other = (i, ci) => r.clauses.some((c, cj) => cj !== ci && c.intents.length && r.answers[i][cj] && strong(i, cj));
+  const other = (i, ci) => r.clauses.some((c, cj) => cj !== ci && hard(c) && r.answers[i][cj] && strong(i, cj));
+  const listed = [];
   r.clauses.forEach((c, ci) => {
-    const ok = (i) => strong(i, ci) && (!c.intents.length || r.answers[i][ci]);
-    const cands = lines.map((_, i) => i).filter(ok).sort((a, b) => (other(a, ci) - other(b, ci)) || (r.per[b][ci] - r.per[a][ci]) || (a - b));
+    let cands = lines.map((_, i) => i).filter((i) => strong(i, ci) && answersPart(i, ci));
+    // "under $1,000": the table rows whose value satisfies it are the answer, not prose that mentions a price
+    if (c.cmp) { cands = cands.filter((i) => r.tbl[i]).sort((a, b) => a - b); if (listy) listed.push(...cands.map((i) => i + 1)); }
+    else cands.sort((a, b) => (other(a, ci) - other(b, ci)) || (fit(b, ci) - fit(a, ci)) || (a - b));
     const best = cands.find((i) => !chosen.includes(i + 1));
     leadOf[ci] = best == null ? null : r.per[best][ci];
     if (best != null) chosen.push(best + 1);
   });
   if (!chosen.length) return picks; // no line clearly answers: leave the model's picks (or nothing) as they were
-  // other lines that answer a part nearly as well as its lead (the model's picks first)
-  const near = (n) => r.clauses.some((c, ci) => leadOf[ci] != null && strong(n - 1, ci) && (!c.intents.length || r.answers[n - 1][ci])
+  // other lines that answer a part nearly as well as its lead (the model's picks first); caveats after the rest
+  const near = (n) => r.clauses.some((c, ci) => leadOf[ci] != null && strong(n - 1, ci) && answersPart(n - 1, ci)
     && r.per[n - 1][ci] >= (picks.length ? 0.8 : c.intents.length ? 0.97 : 0.9) * leadOf[ci]);
   const pool = picks.length ? picks : lines.map((l, i) => i + 1).sort((a, b) => (r.score[b - 1] - r.score[a - 1]) || (a - b));
-  const extra = pool.filter((n) => !chosen.includes(n) && near(n));
-  return [...chosen, ...extra].slice(0, listy ? 10 : chosen.length + (picks.length ? 2 : 1));
+  const extra = [...listed.filter((n) => !chosen.includes(n)), ...pool.filter((n) => !chosen.includes(n) && !listed.includes(n) && near(n))];
+  const ordered = [...extra.filter((n) => !r.caveat[n - 1]), ...extra.filter((n) => r.caveat[n - 1])];
+  return [...new Set([...chosen, ...ordered])].slice(0, listy ? 10 : chosen.length + (picks.length ? 2 : 1));
+}
+
+/** Pure: two quoted lines of one source that state the same fact ("A spare E-City battery costs $649." and its price-list row). */
+function sameFact(a, b, sources = []) {
+  const file = (l) => { const s = sources[l.source] || {}; return s.filename || s.file_id || `#${l.source}`; };
+  if (file(a) !== file(b)) return false;
+  const nu = (l) => new Set((String(l.cells ?? l.text).match(/\d+(?:[.,]\d+)*/g) || []).map((x) => x.replace(/,/g, '')));
+  const [na, nb] = [nu(a), nu(b)];
+  if (!na.size || !nb.size) return false;
+  const [s, l] = na.size <= nb.size ? [a, b] : [b, a];
+  const [ns, nl] = na.size <= nb.size ? [na, nb] : [nb, na];
+  if (![...ns].every((x) => nl.has(x))) return false;
+  const tx = (t) => rterms(String(t).replace(INTENT_WORDS, ' ').replace(/\b(?:costs?|priced?|is|are)\b/gi, ' '));
+  const ts = tx(s.cells ?? s.text), tl = new Set([...tx(l.cells ?? l.text), ...rterms(l.section || '')]);
+  const content = [...ts].filter((w) => !/^\d+$/.test(w));
+  return content.length > 0 && content.filter((w) => tl.has(w)).length / content.length >= 0.75;
 }
 
 /** Pure: turn the model's line picks into a quoted, cited answer, or the fixed refusal. */
@@ -855,6 +951,19 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
     const lead = lines.find((l) => l.source === si && l.lead);
     if (lead && !picks.includes(lead.n) && onTopic(lead)) picks.unshift(lead.n);
   }
+  // one fact, one quote: a later line that repeats an earlier one's figures about the same thing is dropped
+  picks = picks.filter((n, k) => !picks.slice(0, k).some((m) => sameFact(lines[m - 1], lines[n - 1], sources)));
+  // Coverage gate: the quotes must be about what was asked (half of its topic words, weighted by rarity, in one line).
+  // Otherwise the lines that best answer the question themselves are tried; if none covers it, the answer is the refusal.
+  if (asked && opts.question !== undefined) {
+    let cov = answerCoverage(asked, lines, picks);
+    if (!cov.covered) {
+      const alt = answerFirst(asked, lines, [], { onTopic, listy }).filter((n) => onTopic(lines[n - 1]));
+      const altCov = answerCoverage(asked, lines, alt);
+      if (alt.length && altCov.covered) { picks = alt.filter((n, k) => !alt.slice(0, k).some((m) => sameFact(lines[m - 1], lines[n - 1], sources))); fallback = true; cov = altCov; }
+      else return { ...none, uncovered: cov.clauses.filter((c) => !c.covered).flatMap((c) => c.terms) };
+    }
+  }
   const cap = (listy ? 10 : 5) + picks.filter((n) => lines[n - 1].lead).length; // headlines don't use a list slot
   picks = picks.slice(0, cap);
   const citations = [], idx = new Map();
@@ -880,8 +989,10 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
 /* ---------- guide voice: friendly, points to where the answer is, quotes it ---------- */
 
 // Every opener and closer here is pure courtesy (isCourtesy), so requireCitations keeps it; the facts are the quotes.
-const OPENERS = ["I think I found what you're looking for!", "Good news, I found what you're looking for!", "Here's what I found!"];
-const LIST_OPENERS = ['I found a few things that should help!', "Here's what I found!", 'Good news, I found a few things that might help!'];
+// Confident and neutral: a grounded, verified answer never opens with a hedge ("I think …").
+const OPENERS = ["Good news, I found what you're looking for!", "Here's what I found!", "Here's what I found."];
+// (never "Here's what I found!": a one-file list goes on "Here's what “Title” says [1]:")
+const LIST_OPENERS = ['I found a few things that will help!', 'Good news, I found a few things that will help!'];
 const CLOSERS = ['Hope this helps!', 'Feel free to ask if you have any other questions.'];
 const DOWNLOADABLE = /\.(?:pdf|docx?|xlsx?|pptx?|csv|epub|zip|txt|rtf|odt)(?:[?#]|$)/i;
 /** FNV-1a of the normalised question: the same question always gets the same opener and closer. */
@@ -913,12 +1024,19 @@ export function guideText(items, sources, seed = '') {
     return `${OPENERS[h % OPENERS.length]} In ${whereOf(sources[x.si], x.section)}, it says: “${quoteText(x.text)}” [${x.n}]. ${closer}`;
   }
   const opener = LIST_OPENERS[h % LIST_OPENERS.length];
-  const one = items.every((x) => x.si === items[0].si);
+  const one = items.every((x) => x.si === items[0].si || x.n === items[0].n); // one file (atoms of one file share a citation)
   const sameAt = items.every((x) => x.section === items[0].section) ? items[0].section : null;
-  const body = one
-    ? [`${opener} Here's what ${whereOf(sources[items[0].si], sameAt)} says [${items[0].n}]:`, ...items.map((x) => `- “${quoteText(x.text)}” [${x.n}]`)]
-    : [opener, ...items.map((x) => `- From ${whereOf(sources[x.si], x.section)}: “${quoteText(x.text)}” [${x.n}]`)];
-  return [...body, closer].join('\n');
+  if (one) return [`${opener} Here's what ${whereOf(sources[items[0].si], sameAt)} says [${items[0].n}]:`, ...items.map((x) => `- “${quoteText(x.text)}” [${x.n}]`), closer].join('\n');
+  // Several places: items from the same place are said together under one lead-in, in the order the places first appear.
+  const groups = [];
+  for (const x of items) {
+    const g = groups.find((y) => y.n === x.n && (y.section || null) === (x.section || null));
+    if (g) g.items.push(x); else groups.push({ si: x.si, n: x.n, section: x.section, items: [x] });
+  }
+  const body = groups.flatMap((g) => (g.items.length === 1
+    ? [`- From ${whereOf(sources[g.si], g.section)}: “${quoteText(g.items[0].text)}” [${g.items[0].n}]`]
+    : [`- From ${whereOf(sources[g.si], g.section)}, it says [${g.items[0].n}]:`, ...g.items.map((x) => `  - “${quoteText(x.text)}” [${x.n}]`)]));
+  return [opener, ...body, closer].join('\n');
 }
 
 const NON_EN = /[¿¡ñçßäöüàâêîôûèé]|\b(?:el|los|las|una|cuál|cuánto|cuesta|envío|pedido|devoluciones|le|les|des|est|combien|coûte|der|die|das|und|ist|ich|kann|wie|viel|wann|nicht)\b/i;
@@ -1059,21 +1177,42 @@ async function answerUnchecked({ question, results = [], complete, search, perso
   const qs = specificTerms(`${question} ${questionEn}`);
   const affinity = (x) => [...specificTerms(String(x.title || '').split(' - ')[0])].filter((w) => qs.has(w)).length;
   const best = Math.max(0, ...pool0.map(affinity));
+  const full = pool0;
   if (best > 0) pool0 = pool0.filter((x) => affinity(x) > 0).sort((a, b) => affinity(b) - affinity(a));
   // Canonical answer cards first; the rest of the knowDrive only when no card line answers the question.
-  const cards = pool0.filter((s) => String(s.filename || '').startsWith('canonical/'));
-  const passes = cards.length && cards.length < pool0.length ? [cards, pool0.filter((s) => !cards.includes(s))] : [pool0];
-  let fin = finalizeSelection('', [], pool0);
-  for (const pool of passes) {
-    // coarse atoms (150-500 tokens) hold more lines than the model sees: keep the ones that best answer the question
-    let lines = candidateLines(pool, { question: questionEn || question });
-    if (questionEn) lines = [...lines.filter((l) => NON_EN.test(l.text)), ...lines.filter((l) => !NON_EN.test(l.text))].map((l, i) => ({ ...l, n: i + 1 }));
-    if (!lines.length) continue;
-    const ask = questionEn ? `${questionEn} (${cleanLine(question)})` : question;
-    const raw = await complete(buildSelectMessages(ask, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
-    fin = finalizeSelection(raw, lines, pool, { question, questionEn, voice });
-    if (!fin.refused) break;
+  const passesOf = (p) => {
+    const cards = p.filter((s) => String(s.filename || '').startsWith('canonical/'));
+    return cards.length && cards.length < p.length ? [cards, p.filter((s) => !cards.includes(s))] : [p];
+  };
+  let fin = finalizeSelection('', [], pool0), uncovered = [];
+  const run = async (passes) => {
+    for (const pool of passes) {
+      // coarse atoms (150-500 tokens) hold more lines than the model sees: keep the ones that best answer the question
+      let lines = candidateLines(pool, { question: questionEn || question });
+      if (questionEn) lines = [...lines.filter((l) => NON_EN.test(l.text)), ...lines.filter((l) => !NON_EN.test(l.text))].map((l, i) => ({ ...l, n: i + 1 }));
+      if (!lines.length) continue;
+      const ask = questionEn ? `${questionEn} (${cleanLine(question)})` : question;
+      const raw = await complete(buildSelectMessages(ask, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
+      fin = finalizeSelection(raw, lines, pool, { question, questionEn, voice });
+      if (fin.uncovered?.length) uncovered = fin.uncovered;
+      if (!fin.refused) return;
+    }
+  };
+  await run(passesOf(pool0));
+  // a title that shares a word with the question ("payment plans" ~ "Lumen Service Plans") is a preference, not a
+  // filter: when its sources don't cover the question, the whole result set is tried
+  if (fin.refused && pool0.length < full.length) await run(passesOf(full));
+  // still uncovered: one more hybrid query on the words no quote covered ("financing payment plans"), then refuse
+  if (fin.refused && uncovered.length && typeof search === 'function') {
+    try {
+      const more = selectSources((await search([...new Set(uncovered)].join(' ')))?.results || [], minScore, k);
+      const key = (x) => `${x.file_id || x.filename}|${String(x.text || '').slice(0, 80)}`;
+      const seen = new Set(full.map(key));
+      const extra = more.filter((m) => !seen.has(key(m)) && (SHIP_DEST.test(String(question || '')) || !COUNTRY_CARD.test(String(m.filename || ''))));
+      if (extra.length) await run([[...full, ...extra]]);
+    } catch { /* keep the refusal */ }
   }
+  if (fin.uncovered) { const { uncovered: _u, ...rest } = fin; fin = rest; }
   return { fin, generated: true };
 }
 

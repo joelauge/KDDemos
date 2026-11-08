@@ -10,6 +10,7 @@ const dev = await startDevServer({ speed: 4 });
 const b = await chromium.launch();
 const ctx = await b.newContext(mobile ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : { viewport: { width: 1440, height: 900 } });
 await ctx.addInitScript(() => { try { localStorage.setItem('kb-studio-motion', 'full'); } catch {} });
+if (process.env.NODRAW) await ctx.addInitScript(() => { window.__noMapDraw = true; });
 const page = await ctx.newPage();
 const cdp = await ctx.newCDPSession(page); await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
 await page.goto(dev.studioUrl); await page.waitForSelector('#st-log .st-chip-primary'); await page.waitForTimeout(2500);
