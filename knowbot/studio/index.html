@@ -10,12 +10,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- r5 (D1): the web fonts never block the first paint (the static Builder turn below paints with the system stack, then swaps) -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"></noscript>
-<link rel="stylesheet" href="./studio.css?v=a5e9244"><link rel="stylesheet" href="./ingest.css?v=a5e9244">
+<link rel="stylesheet" href="./studio.css?v=945e163"><link rel="stylesheet" href="./ingest.css?v=945e163">
 <!-- r7 (D1): the answer and checkout styles never block the first paint (their modules mount after app.js waits for them) -->
-<link rel="stylesheet" href="./proof.css?v=a5e9244" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><link rel="stylesheet" href="./checkout.css?v=a5e9244" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><noscript><link rel="stylesheet" href="./proof.css?v=a5e9244"><link rel="stylesheet" href="./checkout.css?v=a5e9244"></noscript>
-<link rel="stylesheet" href="./landing.css?v=a5e9244">
-<link rel="modulepreload" href="./store.js?v=a5e9244"><link rel="modulepreload" href="./motion.js?v=a5e9244"><link rel="modulepreload" href="./api.js?v=a5e9244">
-<link rel="modulepreload" href="./app.js?v=a5e9244">
+<link rel="stylesheet" href="./proof.css?v=945e163" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><link rel="stylesheet" href="./checkout.css?v=945e163" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><noscript><link rel="stylesheet" href="./proof.css?v=945e163"><link rel="stylesheet" href="./checkout.css?v=945e163"></noscript>
+<link rel="stylesheet" href="./landing.css?v=945e163">
+<link rel="modulepreload" href="./store.js?v=945e163"><link rel="modulepreload" href="./motion.js?v=945e163"><link rel="modulepreload" href="./api.js?v=945e163">
+<link rel="modulepreload" href="./app.js?v=945e163">
 </head><body>
 <!-- First view (landing.css / landing.js): shown only to first-time visitors (html[data-landing], set before paint). -->
 <div id="kl-landing" class="kl">
@@ -99,7 +99,7 @@
 <div id="st-live-ingest" class="st-sr" aria-live="polite"></div>
 <div id="st-live-assert" class="st-sr" aria-live="assertive"></div>
 <!-- async + last: the static Builder turn above paints and DOMContentLoaded fires without waiting for the module graph -->
-<script src="./landing.js?v=a5e9244" defer></script>
-<script type="module" async src="./app.js?v=a5e9244"></script>
+<script src="./landing.js?v=945e163" defer></script>
+<script type="module" async src="./app.js?v=945e163"></script>
 <noscript><p class="st-noscript">KnowBot Studio needs JavaScript to build and test your bot.</p></noscript>
 </body></html>
