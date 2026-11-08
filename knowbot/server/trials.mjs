@@ -29,7 +29,7 @@ import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypt
 import * as kbLib from '../lib/knowbot.js';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
-import { importStore, normalizeStoreUrl, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS } from './storeimport.mjs';
+import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS } from './storeimport.mjs';
 import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
@@ -1077,6 +1077,7 @@ export function createStudio(o = {}) {
     create: 60, createBurst: 20, createGlobal: 1000, upload: 120, uploadIp: 600, uploadBytesDay: 2048 * 1048576, inflight: 300 * 1048576,
     askMin: 40, askIpMin: 160, askDay: 300, setupMin: 40, setupIpMin: 160, setupEventsMin: 240, setupDay: 400, lookups: 120, lookupsIp: 600,
     storeHour: 6, storeIpHour: 20, // "Enter a Store URL" imports per hour (per trial, per IP)
+    storePlanHour: 30, storePlanIpHour: 60, // the finder's plan only (planOnly): cheaper, its own window
     ...(o.limits || {}),
   };
   let secret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || '';
@@ -1651,7 +1652,10 @@ export function createStudio(o = {}) {
   const convertedHitOk = (T, h, exclude) => !!(T.converted && T.convertedBucket && h?.tags && h.fileId && h.tags.includes(`bucket:${T.convertedBucket}`)
     && (!h.filename || h.filename.startsWith(rootOf(T.id))) && ![...ALWAYS_EXCLUDE, ...exclude].some((t) => h.tags.includes(t)) && !h.tags.some((t) => t.startsWith('sample:')));
   function scopeFilter(T, files) {
-    const disabled = files.filter((f) => !f.enabled && f.key).map((f) => `tfile:${f.key}`);
+    // a tfile key shared by an enabled file (store products uploaded in one /ingest batch share one) is never excluded
+    // by tag: that would silently drop its batch-mates; the disabled file itself is dropped by id (retrieve: disabledIds)
+    const live = new Set(files.filter((f) => f.enabled && f.key).map((f) => f.key));
+    const disabled = [...new Set(files.filter((f) => !f.enabled && f.key && !live.has(f.key)).map((f) => `tfile:${f.key}`))];
     return { all_of: [scopeTagOf(T)], none_of: [...ALWAYS_EXCLUDE, ...disabled] };
   }
   async function rawSearch(query, mode, k, filter, signal) {
@@ -2282,32 +2286,45 @@ export function createStudio(o = {}) {
   // ------------------------------------------------------------------------- "Enter a Store URL" (storeimport.mjs)
   /**
    * The website import runs as ONE background job per trial (T.storeJob). It survives the request closing.
-   *   POST   /trials/:id/store {url, owner}  starts the job and streams its events (SSE, ids = job sequence numbers).
-   *                                          409 busy while a job runs.
+   *   POST   /trials/:id/store {url, owner, kinds?}  starts the job and streams its events (SSE, ids = job sequence
+   *                                          numbers). 409 busy while a job runs (the slot is reserved before any await,
+   *                                          so two POSTs at once give one 200 and one 409). kinds: the page kinds to
+   *                                          read (storeimport KINDS); the rest is reported as report.leftOut.excluded.
+   *   POST   /trials/:id/store {url, owner, planOnly:true}  the finder only: detect · discovering · plan · found · done
+   *                                          {plan, planOnly}. Nothing is read or uploaded, earlier files stay, no import
+   *                                          slot is charged (its own looser window), and no busy state outlives the call.
    *   GET    /trials/:id/store?since=<seq>   re-attaches to the current (or last) job: replays its events after <seq>
    *                                          (or Last-Event-ID), then streams live until `done`. 404 when none ran.
    *   DELETE /trials/:id/store               cancels the running job; files already uploaded stay (reported).
    * Every job event also reaches the trial's events stream as `store` {job, type, seq, data} (progress ~2/s), so an
-   * open Studio follows (and resumes) the import without the POST connection.
+   * open Studio follows (and resumes) the import without the POST connection. The replay buffer pins the milestones
+   * (detect, plan, found, building, capped, built, error, done) and keeps only the latest of every other event type
+   * (progress, uploaded {k, uploaded} is cumulative), so a 10,000-product import still replays its plan after a refresh.
    * Job events: detect, plan, found, fetching, reading, building, uploaded {k, files, file, uploaded}, capped, built,
    *   error {code, message}, done {files, fileCount, usage, platform, name, base, counts, capped, report, spec, error?}.
    * Files go up in batches as soon as they are built (one /ingest call per batch of up to 40 product pages, one per
-   * other page so each keeps its own on/off switch), so atomizing starts long before the crawl ends. A re-import
-   * replaces the trial's earlier src:store files once the new import has its first batch. Budgets: time
-   * (o.storeBudgetMs / KNOWBOT_STORE_BUDGET_MS, default 20 min), the 100 MB trial quota (checked before every batch,
-   * never exceeded; what did not fit is reported), 10,000 products. 6 imports per hour per trial, 20 per IP.
+   * other page), so atomizing starts long before the crawl ends. Batch-mates share a tfile key; turning one off excludes
+   * it by file id (scopeFilter), never its batch-mates. A batch's bytes count as in flight (T.inflight) while it is
+   * sent, so a manual upload cannot overrun the quota beside it; a failed batch is retried (2 more tries, backoff) and
+   * then counted as report.leftOut.failed, never ending the import. A re-import replaces the trial's earlier src:store
+   * files once the new import has its first batch. Budgets: time (o.storeBudgetMs / KNOWBOT_STORE_BUDGET_MS, default
+   * 20 min), the 100 MB trial quota (checked before every batch, never exceeded; what did not fit is reported), 10,000
+   * products. 6 imports per hour per trial, 20 per IP (plans: 30 / 60).
    * o.storeNet (tests only) is passed to the importer's fetcher (allowAddresses/allowPorts/resolve); production
    * leaves it unset, so loopback, private and metadata addresses stay refused.
    */
   const storeBudgetMs = Math.max(1000, Number(o.storeBudgetMs ?? env.KNOWBOT_STORE_BUDGET_MS) || STORE_LIMITS.budgetMs);
+  const storeRetryMs = Math.max(0, Number(o.storeRetryMs ?? 1000));
   const STORE_PROGRESS = new Set(['fetching', 'reading', 'discovering']);
+  const STORE_MILESTONES = new Set(['detect', 'plan', 'found', 'building', 'capped', 'built', 'error', 'done']);
   const hostTagOf = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'site';
   const lightRow = (f) => ({ id: f.id, name: f.name, origin: 'store', page: f.page || null, stage: f.stage, bytes: f.bytes });
   function jobEmit(T, job, event, data) {
     const ev = { id: ++job.seq, event, data };
-    if (STORE_PROGRESS.has(event)) { const i = job.events.findIndex((x) => x.event === event); if (i >= 0) job.events.splice(i, 1); } // replay keeps the latest
+    // replay: milestones are pinned; every other event type keeps only its latest (uploaded carries cumulative counts)
+    if (!STORE_MILESTONES.has(event)) { const i = job.events.findIndex((x) => x.event === event); if (i >= 0) job.events.splice(i, 1); }
     job.events.push(ev);
-    if (job.events.length > 400) job.events.splice(0, job.events.length - 400);
+    while (job.events.length > 400) { const i = job.events.findIndex((x) => !STORE_MILESTONES.has(x.event)); if (i < 0) break; job.events.splice(i, 1); }
     for (const l of [...job.listeners]) { try { l(ev); } catch {} }
     const t = now();
     if (!STORE_PROGRESS.has(event) || t - (job.lastPush[event] || 0) >= 500) {
@@ -2328,6 +2345,14 @@ export function createStudio(o = {}) {
     const listener = (ev) => { write(ev); if (ev.event === 'done') end(); };
     job.listeners.add(listener);
     res.on('close', () => { if (!closed) { closed = true; clearInterval(ping); job.listeners.delete(listener); } });
+  }
+  const refundStoreSlot = (T) => { const arr = windows.get(`store ${T.id}`); if (arr && arr.length) arr.pop(); };
+  /** The hosts an import's citations may link: the store's own site and the help desks it read. */
+  function storeHostsOf(base, helpdesks) {
+    const out = new Set();
+    try { out.add(new URL(base).hostname.toLowerCase()); } catch {}
+    for (const d of helpdesks || []) { try { out.add(new URL(d.origin).hostname.toLowerCase()); } catch {} }
+    return [...out].slice(0, 20);
   }
   async function storeImport(req, res, T, url) {
     const m = req.method;
@@ -2350,33 +2375,102 @@ export function createStudio(o = {}) {
     let wellFormed = true;
     try { normalizeStoreUrl(body.url); } catch { wellFormed = false; }   // reported as an SSE bad_url error below, free
     if (body.owner === false) fail(400, 'bad_request', 'Please confirm you own or manage this store.');
+    const planOnly = body.planOnly === true;
+    let kinds = null;
+    if (body.kinds != null) {
+      if (!Array.isArray(body.kinds) || !body.kinds.length || body.kinds.length > STORE_KINDS.length * 2 || body.kinds.some((k) => typeof k !== 'string' || !STORE_KINDS.includes(k))) {
+        fail(400, 'bad_request', `kinds must be a list of: ${STORE_KINDS.join(', ')}.`);
+      }
+      kinds = [...new Set(body.kinds)];
+      if (kinds.length === STORE_KINDS.length) kinds = null;
+    }
     if (T.storeJob?.state === 'running') fail(409, 'busy', STORE_ERROR_COPY.busy, { job: T.storeJob.id });
+    if (planOnly) return storePlan(req, res, T, body.url, wellFormed);
     if (wellFormed) {
       limitOrThrow(`store ${T.id}`, limits.storeHour, 3600000, 'store imports for this bot');
       limitOrThrow(`storeip ${ip(req)}`, limits.storeIpHour, 3600000, 'store imports from this address');
     }
-    const files = await filesOf(T, { maxAgeMs: 0 });
-    const previous = (T.rows || []).filter((r) => (r.tags || []).includes('src:store') && (r.tags || []).includes(`trial:${T.id}`));
-    const prevBytes = previous.reduce((n, r) => n + (Number(r.bytes) || 0), 0);
-    const remaining = QUOTA_BYTES - (usageOf(T, files).bytes - prevBytes);
-    if (remaining <= 0) fail(413, 'quota', STORE_ERROR_COPY.quota);
-    const job = { id: randB32(8), url: body.url, state: 'running', startedAt: now(), finishedAt: null, seq: 0, events: [], listeners: new Set(), ac: new AbortController(), lastPush: {} };
+    // one job per trial: the slot is taken synchronously, before any await, so a second POST sees it (409)
+    const prevJob = T.storeJob;
+    const job = { id: randB32(8), url: body.url, kinds, state: 'running', startedAt: now(), finishedAt: null, seq: 0, events: [], listeners: new Set(), ac: new AbortController(), lastPush: {}, hosts: [] };
     T.storeJob = job; T.storeBusy = true;
+    let files, previous, sharedBytes;
+    try {
+      files = await filesOf(T, { maxAgeMs: 0 });
+      previous = (T.rows || []).filter((r) => (r.tags || []).includes('src:store') && (r.tags || []).includes(`trial:${T.id}`));
+      const prevBytes = previous.reduce((n, r) => n + (Number(r.bytes) || 0), 0);
+      const remaining = QUOTA_BYTES - (usageOf(T, files).bytes - prevBytes);
+      if (remaining <= 0) fail(413, 'quota', STORE_ERROR_COPY.quota);
+      sharedBytes = usageOf(T, files).bytes - (T.rows || []).reduce((n, r) => n + (Number(r.bytes) || 0), 0) - T.inflight;
+    } catch (e) {
+      if (T.storeJob === job) { T.storeJob = prevJob; T.storeBusy = false; }
+      if (wellFormed) refundStoreSlot(T);
+      throw e;
+    }
     T.lastActivityAt = now();
     streamJob(req, res, job, 0); // attached before the job starts, so the POST sees every event
-    runStoreJob(T, job, { url: body.url, previous, wellFormed, sharedBytes: usageOf(T, files).bytes - (T.rows || []).reduce((n, r) => n + (Number(r.bytes) || 0), 0) })
+    runStoreJob(T, job, { url: body.url, previous, wellFormed, sharedBytes, kinds })
       .catch((e) => log(`[studio] store job ${T.id}: ${e?.message}`));
   }
-  async function runStoreJob(T, job, { url, previous, wellFormed, sharedBytes }) {
+  /**
+   * The finder's plan, streamed on this request only (planOnly): detect · discovering · plan · found · done {plan}.
+   * Nothing is read beyond robots, sitemaps and feed totals, nothing is uploaded or replaced, and the trial's last
+   * import job (and its replay) stays as it was. One plan at a time per trial; closing the request cancels it.
+   */
+  async function storePlan(req, res, T, rawUrl, wellFormed) {
+    if (T.storePlanBusy) fail(409, 'busy', 'A website check is already running for this bot.');
+    if (wellFormed) {
+      limitOrThrow(`storeplan ${T.id}`, limits.storePlanHour, 3600000, 'website checks for this bot');
+      limitOrThrow(`storeplanip ${ip(req)}`, limits.storePlanIpHour, 3600000, 'website checks from this address');
+    }
+    T.storePlanBusy = true;
+    const ac = new AbortController();
+    let n = 0, closed = false;
+    res.on('close', () => { if (!res.writableFinished) { closed = true; ac.abort(); } });
+    res.writeHead(200, SSE_HEADERS);
+    const emit = (event, data) => { if (!closed) writeFrame(res, ++n, event, data); };
+    const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, pingMs); ping.unref?.();
+    try {
+      let files = [];
+      try { files = await filesOf(T); } catch {}
+      const prevBytes = (T.rows || []).filter((r) => (r.tags || []).includes('src:store')).reduce((k, r) => k + (Number(r.bytes) || 0), 0);
+      const remainingBytes = Math.max(1, QUOTA_BYTES - (usageOf(T, files).bytes - prevBytes));
+      const r = await importStore(rawUrl, { planOnly: true, remainingBytes, signal: ac.signal, net: o.storeNet, budgetMs: Math.min(storeBudgetMs, 120000),
+        onEvent: (ev, d) => { if (ev !== 'error' && ev !== 'fetching') emit(ev, d); } });
+      T.lastActivityAt = now();
+      emit('done', { planOnly: true, plan: r.plan, platform: r.platform, api: r.api, name: r.name, base: r.base, fileCount: 0 });
+    } catch (e) {
+      const code = e?.code && STORE_ERROR_COPY[e.code] ? e.code : 'upstream';
+      const message = e?.code && STORE_ERROR_COPY[e.code] ? (e.message && e.message !== 'aborted' ? e.message : STORE_ERROR_COPY[e.code]) : STORE_ERROR_COPY.upstream;
+      if (!e?.code) log(`[studio] store plan failed: ${e?.message}`);
+      emit('error', { code, message });
+      emit('done', { planOnly: true, error: true, cancelled: code === 'aborted', fileCount: 0 });
+    } finally {
+      T.storePlanBusy = false; clearInterval(ping);
+      try { res.end(); } catch {}
+    }
+  }
+  /** ingestMany with 2 retries (1 s, 2 s backoff) on 5xx, 429 and timeouts; 4xx refusals are not retried. */
+  async function ingestRetry(args, signal) {
+    for (let attempt = 0; ; attempt++) {
+      try { return await ingestMany(args); }
+      catch (e) {
+        if (signal?.aborted) throw Object.assign(new Error('aborted'), { code: 'aborted' });
+        const retryable = !(e instanceof StudioError) || e.status >= 500 || e.status === 429;
+        if (!retryable || attempt >= 2) throw e;
+        await sleep(storeRetryMs * (attempt + 1), signal);
+      }
+    }
+  }
+  async function runStoreJob(T, job, { url, previous, wellFormed, sharedBytes, kinds }) {
     const send = (ev, d) => jobEmit(T, job, ev, d);
     const signal = job.ac.signal;
-    let foundAny = false, replaced = false, k = 0, uploaded = 0, quotaOut = 0;
+    let foundAny = false, replaced = false, k = 0, uploaded = 0, quotaOut = 0, failedUp = 0;
     const rows = [];
-    const leftOutQuota = {};
+    const leftOutQuota = {}, leftOutFailed = {};
     const prevIds = new Set(previous.map((r) => r.id));
     const stamp = `${T.id}:store:${job.id}`;
     T.storeManifest ||= new Map();
-    const refundTrialSlot = () => { const arr = windows.get(`store ${T.id}`); if (arr && arr.length) arr.pop(); };
     const rowsBytes = () => (T.rows || []).reduce((n, r) => n + (Number(r.bytes) || 0), 0);
     async function replacePrevious() {
       if (replaced) return;
@@ -2400,6 +2494,7 @@ export function createStudio(o = {}) {
       if (signal.aborted) throw Object.assign(new Error('aborted'), { code: 'aborted' });
       await replacePrevious();
       const have = taken();
+      // in flight elsewhere (a manual upload) counts; our own batches are released before the next one is sized
       let used = rowsBytes() + sharedBytes + T.inflight;
       const items = [];
       for (const f of files) {
@@ -2419,8 +2514,19 @@ export function createStudio(o = {}) {
         const key = randB32(10);
         const tags = [...trialTags(T), `tfile:${key}`, 'src:store', `site:${hostTagOf(group[0].f.host)}`, `page:${kind}`];
         const mime = group[0].f.mime;
-        // a batch already on its way is let finish (an aborted upload could still land, untracked); cancel stops the next
-        const got = await ingestMany({ tags, mime, items: group.map((x) => ({ storePath: `${rootOf(T.id)}${x.rel}`, bytes: x.bytes })) });
+        const size = group.reduce((n, x) => n + x.bytes.length, 0);
+        // the batch is in flight: a manual upload beside it sees these bytes in its quota check
+        T.inflight += size; inflightBytes += size;
+        let got;
+        try {
+          // a batch already on its way is let finish (an aborted upload could still land, untracked); cancel stops the next
+          got = await ingestRetry({ tags, mime, items: group.map((x) => ({ storePath: `${rootOf(T.id)}${x.rel}`, bytes: x.bytes })) }, signal);
+        } catch (e) {
+          if (signal.aborted || e?.code === 'aborted') throw Object.assign(new Error('aborted'), { code: 'aborted' });
+          log(`[studio] store batch failed (${group.length} ${kind}): ${e?.message}`);
+          failedUp += group.length; leftOutFailed[kind] = (leftOutFailed[kind] || 0) + group.length;
+          continue;
+        } finally { T.inflight -= size; inflightBytes -= size; }
         for (const [i, x] of group.entries()) {
           const path = `${rootOf(T.id)}${x.rel}`;
           const g = got.find((r) => r && r.filename === path) || got[i] || {};
@@ -2437,6 +2543,7 @@ export function createStudio(o = {}) {
           newRows.push(file); rows.push(file); uploaded++;
         }
       }
+      if (!newRows.length) return;
       T.questionsCache = null; T.lastActivityAt = now();
       k++;
       send('uploaded', { k, uploaded, kind, files: newRows.length <= 40 ? newRows : newRows.map(lightRow), file: newRows[0] });
@@ -2445,16 +2552,23 @@ export function createStudio(o = {}) {
     const doneFiles = () => (rows.length <= 300 ? rows : rows.map(lightRow));
     try {
       const r = await importStore(url, { remainingBytes: QUOTA_BYTES - (rowsBytes() - previous.reduce((n, x) => n + (Number(x.bytes) || 0), 0)) - sharedBytes, signal, net: o.storeNet,
-        budgetMs: storeBudgetMs, enrich: o.storeEnrich, onFiles,
-        onEvent: (ev, d) => { if (ev === 'found' || ev === 'plan') foundAny = true; if (ev !== 'error') send(ev, d); } });
+        budgetMs: storeBudgetMs, enrich: o.storeEnrich, onFiles, ...(kinds ? { kinds } : {}),
+        onEvent: (ev, d) => {
+          if (ev === 'found' || ev === 'plan') foundAny = true;
+          if (ev === 'detect') job.hosts = storeHostsOf(d.base, []);
+          if (ev === 'plan') job.hosts = storeHostsOf(job.hosts[0] ? `http://${job.hosts[0]}` : '', d.helpdesks);
+          if (ev !== 'error') send(ev, d);
+        } });
+      if (!rows.length && failedUp) throw new StudioError(502, 'upstream', 'knowDrive did not accept the imported pages. Try again in a minute.');
       kickPoller(T);
       if (rows.length) applyStoreDraft(T, r.name);
-      const report = { ...r.report, uploaded, leftOut: { ...r.report.leftOut, quota: { ...r.report.leftOut.quota } } };
+      const report = { ...r.report, uploaded, leftOut: { ...r.report.leftOut, quota: { ...r.report.leftOut.quota }, failed: { ...leftOutFailed } } };
       for (const [kind, n] of Object.entries(leftOutQuota)) report.leftOut.quota[kind] = (report.leftOut.quota[kind] || 0) + n;
       let capped = r.capped;
       if (quotaOut) capped = { ...(capped || {}), bytes: { limit: QUOTA_BYTES, droppedProducts: (capped?.bytes?.droppedProducts || 0) + (leftOutQuota.product || 0), droppedSections: (capped?.bytes?.droppedSections || 0) + quotaOut, leftOut: report.leftOut.quota } };
-      T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, platform: r.platform, name: r.name || null, files: uploaded,
-        found: r.report.found, written: r.report.written, leftOut: report.leftOut, timeUp: !!r.report.timeUp };
+      if (failedUp) capped = { ...(capped || {}), failed: { files: failedUp, leftOut: leftOutFailed } };
+      T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, hosts: storeHostsOf(r.base, r.plan?.helpdesks), platform: r.platform, name: r.name || null, files: uploaded,
+        found: r.report.found, written: r.report.written, leftOut: report.leftOut, timeUp: !!r.report.timeUp, ...(kinds ? { kinds } : {}) };
       saveSpecSoon(T);
       const all = await filesOf(T);
       job.state = 'done'; job.finishedAt = now(); T.storeBusy = false;
@@ -2464,8 +2578,8 @@ export function createStudio(o = {}) {
       const code = e?.code && STORE_ERROR_COPY[e.code] ? e.code : e instanceof StudioError ? e.code : 'upstream';
       const message = e?.code && STORE_ERROR_COPY[e.code] ? (e.message && e.message !== 'aborted' ? e.message : STORE_ERROR_COPY[e.code]) : e instanceof StudioError ? e.message : STORE_ERROR_COPY.upstream;
       if (!(e instanceof StudioError) && !e?.code) log(`[studio] store import failed: ${e?.message}`);
-      if (!foundAny && wellFormed) refundTrialSlot();
-      if (rows.length) { kickPoller(T); T.flags.storeLast = { at: new Date(now()).toISOString(), url, files: uploaded, cancelled: code === 'aborted', error: code }; saveSpecSoon(T); }
+      if (!foundAny && wellFormed) refundStoreSlot(T);
+      if (rows.length) { kickPoller(T); T.flags.storeLast = { at: new Date(now()).toISOString(), url, hosts: job.hosts, files: uploaded, cancelled: code === 'aborted', error: code }; saveSpecSoon(T); }
       job.state = code === 'aborted' ? 'cancelled' : 'error'; job.finishedAt = now(); T.storeBusy = false;
       send('error', { code, message });
       let usage = null;
@@ -2488,6 +2602,16 @@ export function createStudio(o = {}) {
     const pageHeadOf = (h) => storePageHead(h.crumb, h.text);
     const manifestOf = (h) => T.storeManifest?.get(h.fileId) || (T.flags.storePdfUrls?.[h.fileId] ? { url: T.flags.storePdfUrls[h.fileId] } : null);
     const needsLookup = (h) => { const r = (T.rows || []).find((x) => x.id === h.fileId); return !!r && (r.tags || []).includes('src:store'); };
+    // A URL read from atom text (H1 / breadcrumb / Source line) is only a candidate: the import manifest is the authority
+    // when it knows the file; without one (after a restart) the URL must be on the imported site or a help desk it read.
+    const siteHosts = new Set((T.flags.storeLast?.hosts || []).map((x) => String(x).toLowerCase()));
+    try { if (T.flags.storeLast?.url) siteHosts.add(new URL(T.flags.storeLast.url).hostname.toLowerCase()); } catch {}
+    const siteDomains = new Set([...siteHosts].map((x) => registrableDomain(x)));
+    const onSite = (u) => {
+      let hn; try { const x = new URL(u); if (x.protocol !== 'http:' && x.protocol !== 'https:') return false; hn = x.hostname.toLowerCase(); } catch { return false; }
+      return siteHosts.has(hn) || siteDomains.has(registrableDomain(hn));
+    };
+    const trustUrl = (u, man) => (!u ? null : man?.url ? (u === man.url ? u : null) : onSite(u) ? u : null);
     const lookupUrl = async (h) => {
       if (h.seq == null || !needsLookup(h)) return null;
       let atoms = [];
@@ -2510,12 +2634,13 @@ export function createStudio(o = {}) {
       if (head || (man && man.url && !lastSourceUrl(h.text))) {
         // one page per file: every segment of this atom belongs to the page in its H1
         const crumbs = h.crumb ? h.crumb.split(' > ').map((x) => x.trim()).filter(Boolean) : [];
-        const pageUrl = head?.url || lastSourceUrl(h.text) || man?.url || h.url || null;
+        const pageUrl = man?.url || trustUrl(head?.url, null) || trustUrl(lastSourceUrl(h.text), null) || trustUrl(h.url, null) || null;
+        const headOk = !!head && head.url === pageUrl;
         for (const sg of sourceSegments(h.text)) {
           const text = stripPageHead(stripSourceLines(sg.text), pageUrl);
           if (!text.trim()) continue;
           const section = sg.heading && (sg.level || 2) >= 2 ? sg.heading : crumbs.length > 1 && crumbs[crumbs.length - 1] !== '…' ? crumbs[crumbs.length - 1] : null;
-          sources.push({ file_id: h.fileId, filename: fileName(h.fileId), title: head?.title || man?.title || titleOf(h), url: pageUrl, score: h.similarity ?? 0, text,
+          sources.push({ file_id: h.fileId, filename: fileName(h.fileId), title: (headOk && head.title) || man?.title || titleOf(h), url: pageUrl, score: h.similarity ?? 0, text,
             ...(h.page != null ? { page: h.page } : {}), ...(section ? { section } : {}) });
           srcHit.push(h);
         }
@@ -2527,8 +2652,10 @@ export function createStudio(o = {}) {
       // an imported store file is "# File title" > "## Page or product" (its Source line) > "### FAQ question": the
       // librarian names the store page ("In “Commuter Lite”…" linking the product page), and the question as its section
       const store = needsLookup(h);
+      const man2 = store ? manifestOf(h) : null;
       for (const [i, sg] of segs.entries()) {
-        const url = sg.url || (i === 0 ? h.url || await lookupUrl(h) : null);
+        let url = sg.url || (i === 0 ? h.url || await lookupUrl(h) : null);
+        if (store && url && url !== man2?.url && !onSite(url)) url = null; // an off-site URL in imported text never becomes a link
         const text = stripSourceLines(sg.text);
         if (!text.trim()) continue;
         let title = titleOf(h), section = sg.heading || crumbSection;

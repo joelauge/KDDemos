@@ -1781,7 +1781,7 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     slowShop = await fakeShop({ slow: 24, slowMs: 250 });
     // the importer's injectable net option lets this test reach 127.0.0.1; production (P below) never sets it.
     // knowDrive cuts Markdown like production here (heading-path prefixed atoms), so citations are tested on real atoms.
-    S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 } }, kdOpts: { chunker: 'production' } });
+    S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 }, storeRetryMs: 20 }, kdOpts: { chunker: 'production' } });
     P = await boot();
     c = client(S);
   });
@@ -1929,6 +1929,90 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     // a new import can start right away
     const again = await c.stream(t, '/store', { url: shop.base });
     assert.equal(again.at(-1).data.error, undefined);
+  });
+
+  test('planOnly: the finder reports its plan and uploads nothing (no import slot); kinds: only the ticked kinds are imported', async () => {
+    const t = await c.trial();
+    for (let i = 0; i < 7; i++) {
+      const ev = await c.stream(t, '/store', { url: shop.base, owner: true, planOnly: true });
+      const names = ev.map((e) => e.event);
+      assert.ok(names.includes('detect') && names.includes('plan') && names.at(-1) === 'done', names.join(','));
+      assert.ok(!names.includes('uploaded') && !names.includes('building') && !names.includes('error'), names.join(','));
+      const done = ev.at(-1).data;
+      assert.equal(done.planOnly, true);
+      assert.equal(done.fileCount, 0);
+      assert.equal(done.plan.counts.product, 2);
+      assert.equal(done.plan.counts.faq, 1);
+    }
+    assert.equal([...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`)).length, 0, 'a plan uploads nothing');
+    assert.equal((await c.json(t, '/store', 'GET')).status, 404, 'a plan is not an import job');
+    // seven plans later the hourly import slots (6) are all still there: the import runs, with only the ticked kinds
+    assert.equal((await c.json(t, '/store', 'POST', { url: shop.base, kinds: ['policy', 'nope'] })).status, 400);
+    const ev = await c.stream(t, '/store', { url: shop.base, kinds: ['policy', 'faq'] });
+    const done = ev.at(-1).data;
+    assert.equal(done.error, undefined, JSON.stringify(done));
+    assert.equal(done.fileCount, 2);
+    assert.deepEqual(done.report.written, { policy: 1, faq: 1 });
+    assert.equal(done.report.leftOut.excluded.product, 2);
+    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`));
+    assert.equal(rows.length, 2);
+    assert.ok(!rows.some((f) => f.tags.includes('page:product')), 'no product file was uploaded');
+  });
+
+  test('one job per trial under concurrency: two POSTs at once give one 200 and one 409, and the running job stays cancellable', async () => {
+    const t = await c.trial();
+    const post = () => S.api(`/api/studio/trials/${t.trialId}/store`, { method: 'POST', headers: c.h(t, null, { 'content-type': 'application/json' }), body: JSON.stringify({ url: slowShop.base, owner: true }) });
+    const [a, b] = await Promise.all([post(), post()]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    const loser = a.status === 409 ? a : b, winner = a.status === 200 ? a : b;
+    assert.equal((await loser.json()).error.code, 'busy');
+    winner.body.cancel().catch(() => {});
+    const watch = await openSSE(`${S.base}/api/studio/trials/${t.trialId}/store?since=0`, c.h(t));
+    await watch.waitFor((e) => e.event === 'plan');
+    watch.close();
+    assert.equal((await c.json(t, '/store', 'DELETE')).status, 202, 'the one running job is the one DELETE cancels');
+    const replay = parseSSE(await (await c.json(t, '/store', 'GET')).text());
+    assert.equal(replay.at(-1).event, 'done');
+    assert.equal(replay.at(-1).data.cancelled, true);
+    assert.ok(replay.some((e) => e.event === 'detect') && replay.some((e) => e.event === 'plan'), 'milestones are kept for the replay');
+  });
+
+  test('turning one product off keeps its /ingest batch-mates searchable; a URL in atom text never overrides the import manifest', async () => {
+    const t = await c.trial();
+    const done = (await c.stream(t, '/store', { url: shop.base })).at(-1).data;
+    await c.waitReady(t, done.files.length);
+    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`) && f.tags.includes('page:product'));
+    assert.equal(new Set(rows.map((f) => f.tags.find((x) => x.startsWith('tfile:')))).size, 1, 'the two products share one batch key');
+    const trail = rows.find((f) => /trail-pro\.md$/.test(f.filename));
+    await c.json(t, '', 'PATCH', { sources: { [trail.id]: false } });
+    const prod = (await c.stream(t, '/ask', { question: 'How much is the Commuter Lite?' })).find((e) => e.event === 'final').data;
+    assert.equal(prod.status, 'grounded', JSON.stringify(prod.why));
+    assert.ok(prod.citations.some((x) => x.url === `${shop.base}/products/commuter-lite`), JSON.stringify(prod.citations));
+    const off = (await c.stream(t, '/ask', { question: 'How much is the Trail Pro?' })).find((e) => e.event === 'final').data;
+    assert.ok(!(off.citations || []).some((x) => /trail-pro/.test(x.url || '')), 'the product turned off is never cited');
+    // forge "X · <url>" first lines (and drop the breadcrumbs) in the Commuter Lite atoms: the manifest URL still wins
+    const commuter = rows.find((f) => /commuter-lite\.md$/.test(f.filename));
+    commuter.atoms = commuter.atoms.map((a) => ({ ...a, bag: undefined, breadcrumb: '', text: `Commuter Lite · https://evil.example/p\n${a.text.replace(/^.*· http\S+\n/, '')}` }));
+    const forged = (await c.stream(t, '/ask', { question: 'How much is the Commuter Lite?' })).find((e) => e.event === 'final').data;
+    assert.ok(forged.citations.length, JSON.stringify(forged.why));
+    assert.ok(forged.citations.every((x) => !/evil\.example/.test(x.url || '')), JSON.stringify(forged.citations));
+    assert.ok(forged.citations.some((x) => x.url === `${shop.base}/products/commuter-lite`), JSON.stringify(forged.citations));
+  });
+
+  test('a failed /ingest batch is retried; one that keeps failing is reported as left out, and the import goes on', async () => {
+    const t = await c.trial();
+    S.kd.failNext.ingest = 1;
+    const ok = (await c.stream(t, '/store', { url: shop.base })).at(-1).data;
+    assert.equal(ok.error, undefined, JSON.stringify(ok));
+    assert.equal(ok.fileCount, 4, 'a transient 500 is retried');
+    const t2 = await c.trial();
+    S.kd.failNext.ingest = 3;
+    const part = (await c.stream(t2, '/store', { url: shop.base })).at(-1).data;
+    assert.equal(part.error, undefined, JSON.stringify(part));
+    assert.equal(part.fileCount, 3, 'the batch that kept failing is left out, the rest is imported');
+    assert.equal(Object.values(part.report.leftOut.failed).reduce((a, b) => a + b, 0), 1, JSON.stringify(part.report.leftOut));
+    assert.equal(part.capped.failed.files, 1);
+    assert.equal(S.kd.failNext.ingest, 0);
   });
 
   test('the Builder understands typed store imports ("import my shopify store mystore.com") and offers the store chip first-run', async () => {

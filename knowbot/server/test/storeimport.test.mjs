@@ -387,14 +387,21 @@ describe('Magento 2', () => {
         if (/cmsPage/.test(query)) return res.end(JSON.stringify({ data: { p0: { title: 'FAQ', url_key: 'faq', content: '<details><summary>Do you ship to Austria?</summary><p>Yes, in 3 days.</p></details>' } } }));
         return res.end('{}');
       },
-      '/sitemap.xml': { type: 'application/xml', body: (b) => urlset([`${b}/customer-service`, `${b}/velo-jersey.html`]) },
+      '/sitemap.xml': { type: 'application/xml', body: (b) => urlset([`${b}/customer-service`, `${b}/velo-jersey.html`, `${b}/apparel.html`]) },
+      '/apparel.html': { body: page('Apparel', '<h1>Apparel</h1><p>Jerseys, bibs and jackets for every season on the bike.</p>') },
       '/customer-service': { body: page('Customer service', '<h1>Customer service</h1><p>Call us Monday to Friday, 9 to 5, on 0800 123 456.</p>') },
       '/velo-jersey.html': { body: page('Velo Jersey', '<h1>Velo Jersey</h1><h2>Care</h2><p>Wash cold at 30 degrees and hang to dry.</p>') },
     } });
-    const { r, error } = await run(w.url(host), { pageSize: 1 });
+    const { r, error, events } = await run(w.url(host), { pageSize: 1 });
     assert.ifError(error);
     assert.equal(r.platform, 'magento');
     assert.equal(byKind(r, 'product').length, 2);
+    // the category .html is a candidate: counted apart in the plan, read once, kept as a collection (no Product JSON-LD)
+    const plan = events.find((x) => x.e === 'plan').d;
+    assert.equal(plan.counts.product, 2, 'the feed total, not every .html page');
+    assert.equal(plan.candidates, 2);
+    assert.ok(r.files.some((f) => f.path.endsWith('/collection/apparel.md')), r.files.map((f) => f.path).join(' '));
+    assert.ok(!byKind(r, 'product').some((f) => /apparel/.test(f.path)));
     const j = text(r.files.find((f) => f.path.endsWith('/product/velo-jersey.md')));
     assert.match(j, /- Velo Jersey price: 49\.00 EUR \(was 59\.00 EUR\)/);
     assert.match(j, /- Velo Jersey L: 49\.00 EUR, SKU VJ-L, out of stock/);
@@ -484,6 +491,7 @@ describe('generic site', () => {
     assert.ok(r.report.leftOut.time.product > 0, JSON.stringify(r.report.leftOut));
     assert.ok(r.capped.time);
     assert.ok(r.files.some((f) => f.kind === 'faq'), 'what was read is kept');
+    assert.ok(r.report.leftOut.time.product + byKind(r, 'product').length <= 30, `counted once: ${JSON.stringify(r.report.leftOut.time)} + ${byKind(r, 'product').length}`);
   });
 
   test('cancel: an abort stops the import with aborted', async () => {
@@ -667,5 +675,79 @@ describe('timeouts and size caps', () => {
     const f = createStoreFetcher(NET0);
     const d = await detectPlatform(s.base, f.fetch);
     assert.equal(d.platform, 'generic'); assert.equal(d.api, false);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ review fixes
+describe('review fixes: kinds, budgets, candidates, setext, shared platforms', () => {
+  const slowShop = (n, delay) => {
+    const shop = shopify({ n });
+    const routes = shop.hosts[shop.host];
+    const inner = routes['*'];
+    routes['*'] = (req, res, ctx) => setTimeout(() => inner(req, res, ctx), /^\/products\//.test(ctx.url.pathname) ? delay : 0);
+    return shop;
+  };
+
+  test('kinds: only the ticked kinds are read; the rest is reported as leftOut.excluded', async () => {
+    const shop = shopify({ n: 30 });
+    const w = await web(shop.hosts);
+    const { r, error, events } = await run(w.url(shop.host), { kinds: ['policy', 'faq'] });
+    assert.ifError(error);
+    assert.equal(byKind(r, 'product').length, 0);
+    assert.ok(byKind(r, 'policy').length >= 1 && byKind(r, 'faq').length === 1, r.files.map((f) => f.path).join(' '));
+    assert.ok(r.files.every((f) => ['policy', 'faq'].includes(f.kind)), r.files.map((f) => f.kind).join(' '));
+    assert.equal(w.hits(/^\/products\/trail-pro/), 0, 'no product page is read');
+    assert.equal(w.hits(/\.pdf$/), 0, 'no PDF is read');
+    assert.equal(r.report.leftOut.excluded.product, 30);
+    assert.deepEqual(events.find((x) => x.e === 'plan').d.kinds, ['policy', 'faq']);
+  });
+
+  test('time budget with a paged feed: products left out by time are counted once and never eat the cap', async () => {
+    const shop = slowShop(60, 400);
+    const w = await web(shop.hosts);
+    const { r, error } = await run(w.url(shop.host), { budgetMs: 2500, enrich: 'all', pageSize: 10 });
+    assert.ifError(error);
+    assert.ok(r.report.timeUp);
+    const written = byKind(r, 'product').length;
+    assert.ok(written < 60, `written ${written}`);
+    assert.equal(written + r.report.leftOut.time.product, 60, `${written} written + ${JSON.stringify(r.report.leftOut.time)} left out by time = the catalogue`);
+    assert.equal(r.capped.products, undefined, 'unread products never count as kept');
+  });
+
+  test('enrichment is a running budget: as many product pages as the time allows, then feed copy; reported as enrich {read, of}', async () => {
+    const shop = slowShop(60, 300);
+    const w = await web(shop.hosts);
+    const { r, error, events } = await run(w.url(shop.host), { budgetMs: 4500, pageSize: 20 });
+    assert.ifError(error);
+    assert.equal(byKind(r, 'product').length, 60, 'every product is written');
+    const read = w.hits(/^\/products\/trail-pro-\d+$/);
+    assert.ok(read > 5 && read < 60, `product pages read ${read}`);
+    assert.equal(r.capped.enrich.of, 60);
+    assert.equal(r.capped.enrich.read, r.report.enriched);
+    assert.ok(events.some((x) => x.e === 'capped' && x.d.enrich));
+    assert.ok(!r.report.timeUp, 'the reserve kept time for PDFs and pages');
+  });
+
+  test('setext underlines in page copy are escaped: a forged "X · url" H1 can never take over the atoms', () => {
+    const t = htmlToText('<p>Fake · https://evil.example/p<br>=====</p><p>Also<br>---</p>', { main: false });
+    assert.equal(t, 'Fake · https://evil.example/p\n\\=====\n\nAlso\n\\---');
+    const url = 'https://s.test/products/real';
+    const md = renderMarkdown(readProductHtml(page('Real', `<h1>Real</h1><h2>Specs</h2><p>Fake · https://evil.example/p<br>=====</p><p>${'Long spec line for the real product. '.repeat(80)}</p>`), url, { title: 'Real', url, descriptionHtml: '<p>Short.</p>' }));
+    const atoms = atomizeProduction(md);
+    assert.ok(atoms.length >= 3);
+    for (const a of atoms) { assert.ok(a.text.includes(url), a.text.slice(0, 200)); assert.ok(!a.breadcrumb.startsWith('Fake'), a.breadcrumb); }
+    // the fake chunker does recognise setext headings: unescaped, the forged H1 would win
+    assert.ok(atomizeProduction('# Real · u\n\nFake · https://evil.example/p\n=====\n\nmore').some((a) => /^Fake/.test(a.breadcrumb) || /^Fake · https:\/\/evil/.test(a.text)));
+  });
+
+  test('shared store platforms: every tenant is its own site', () => {
+    assert.equal(registrableDomain('lumen.wixsite.com'), 'lumen.wixsite.com');
+    assert.equal(registrableDomain('www.lumen.mybigcommerce.com'), 'lumen.mybigcommerce.com');
+    assert.equal(registrableDomain('acme.square.site'), 'acme.square.site');
+    assert.equal(registrableDomain('help.lumen.com'), 'lumen.com');
+    const f = createStoreFetcher(NET);
+    f.allowSite('lumen.wixsite.com');
+    assert.equal(f.hostOkFor('https://lumen.wixsite.com/shop/p/x'), true);
+    assert.equal(f.hostOkFor('https://other.wixsite.com/shop'), false, 'another tenant is not this store');
   });
 });

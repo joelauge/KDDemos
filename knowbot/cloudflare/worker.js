@@ -39,6 +39,8 @@ export class KnowBotContainer extends Container {
   // request until it closes (containerFetch → inflightRequests; isActivityExpired() is false while any is open, and every
   // forwarded message renews the activity timeout), so sleepAfter never puts a container to sleep mid-call. The restart
   // below would cut a call, though, so it waits until nothing is in flight; the next request after that restarts it.
+  // Checked with `wrangler dev --local-protocol https` and a stand-in container: wss upgrades on the media stream and web
+  // voice paths reach the container with Upgrade: websocket and x-forwarded-proto https; other upgrade paths get 404.
   async fetch(request) {
     const fp = await fingerprint(this.envVars);
     let started = null;

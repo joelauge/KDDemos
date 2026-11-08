@@ -770,6 +770,29 @@ async function storeJourney(browser, dev, cell) {
       const sum = await page.locator('.st-si-sum:not([hidden])').last().innerText().catch(() => '');
       check('18-store', 'summary lists what was imported by kind', /Products|Policies|Help pages/.test(sum), { detail: sum.replace(/\s+/g, ' ') });
     }
+    // Sources: the website's products fold into one group; its button controls a role=group, which searches every file
+    {
+      const gb = page.locator('#in-intake-slot li.st-sg[data-sgroup="product"] .st-sg-btn').first();
+      const has = await gb.waitFor({ state: 'attached', timeout: 15000 }).then(() => true).catch(() => false);
+      if (has) {
+        await gb.scrollIntoViewIfNeeded().catch(() => {});
+        if ((await gb.getAttribute('aria-expanded')) !== 'true') await gb.click();
+        const ctl = await gb.getAttribute('aria-controls');
+        const grp = await page.evaluate((id) => { const g = document.getElementById(id); return g ? { role: g.getAttribute('role'), label: g.getAttribute('aria-label'), hidden: g.hidden } : null; }, ctl);
+        check('18-store', 'Sources group: button aria-controls a role=group named "<Kind> files"', !!grp && grp.role === 'group' && /Products files/.test(grp.label || '') && !grp.hidden, { detail: JSON.stringify(grp) });
+        const listed = await page.waitForFunction(() => document.querySelectorAll('#in-intake-slot .st-sgp-l > li').length >= 4, null, { timeout: 8000 }).then(() => true).catch(() => false);
+        const q = page.locator('#in-intake-slot .st-sgp-q').first();
+        let one = false;
+        if (listed) {
+          await q.fill('trail');
+          one = await page.waitForFunction(() => { const l = [...document.querySelectorAll('#in-intake-slot .st-sgp-l > li')]; return l.length === 1 && /Trail Pro/.test(l[0].innerText) && !!l[0].querySelector('a[target="_blank"]') && !!l[0].querySelector('input[type="checkbox"]') && /Remove/.test(l[0].innerText); }, null, { timeout: 8000 }).then(() => true).catch(() => false);
+          await q.fill('');
+        }
+        check('18-store', 'Sources group past the row cap: search finds any product file (link, Use switch, Remove)', listed && one,
+          { detail: await page.locator('#in-intake-slot .st-sgp').first().innerText().catch(() => '') });
+        await gb.click().catch(() => {});
+      } else check('18-store', 'Sources group for the imported products', false);
+    }
     await press(page.locator('.st-si-actions button', { hasText: 'Import again' }).last(), 'Import again');
     await input.fill('localhost');
     await press(page.locator('.st-si button[type="submit"]').last(), 'Find sources');
@@ -795,7 +818,8 @@ try {
   for (const cell of RUN) {
     // One dev server per cell: the per-IP rate limits (6 trials/h, 20 Builder turns/min) are real, and every cell
     // comes from 127.0.0.1, so sharing a server would test the limiter instead of the journey.
-    const dev = await startDevServer({ speed });
+    // storeRowsShown 2: the fake store's 4 products exceed the server's row cap, so the Sources group's own search runs
+    const dev = await startDevServer({ speed, studio: { storeRowsShown: 2 } });
     log(`  ${dev.studioUrl}`);
     try { await journey(browser, dev, cell); await storeJourney(browser, dev, cell); }
     catch (e) { results.push({ cell: cell.name, step: 'crash', name: e.message, ok: false, soft: false, detail: '' }); log(`  [FAIL] crash ${e.stack}`); }
