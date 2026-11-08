@@ -26,6 +26,8 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY lib ./lib
 COPY server ./server
 COPY corpus ./corpus
+# KnowBot Studio: the Lumen Bikes sample files the 'Use sample files' demo ingests
+COPY studio/samples ./studio/samples
 COPY cloudflare/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
