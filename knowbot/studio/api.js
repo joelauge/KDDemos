@@ -331,6 +331,24 @@ export async function fileAtoms(fileId, { limit = 12, around, span = 1 } = {}) {
 /** POST /samples -> {files, usage}. */
 export async function attachSamples(set = 'lumen-bikes') { return request('POST', trialPath('/samples'), { body: { set } }); }
 
+/**
+ * POST /store (SSE): "Enter a Store URL". onEvent(type, data, id) for detect|fetching|found|building|capped|built|
+ * uploaded|error|done. Resolves with the 'done' data ({files, usage, platform, name, counts, capped}); rejects with an
+ * ApiError whose code is the importer's (bad_url, blocked_host, not_found, robots, no_content, quota, rate_limited…)
+ * and whose message is the server's plain-English copy. The new files also arrive through the events stream.
+ */
+export async function importStore(url, { owner = true, onEvent, signal } = {}) {
+  const path = trialPath('/store');
+  let errEvent = null;
+  const done = await postStream(path, { url: String(url || '').trim(), owner: !!owner }, { signal, until: 'done',
+    onEvent: (type, data, id) => { if (type === 'error') errEvent = data; onEvent && onEvent(type, data, id); } });
+  if (errEvent || done?.error) {
+    const e = errEvent || {};
+    throw new ApiError(e.message || 'Something went wrong reading that store.', { status: 200, code: e.code || 'upstream', detail: e });
+  }
+  return done;
+}
+
 /** DELETE /samples. */
 export async function removeSamples() { return request('DELETE', trialPath('/samples')); }
 

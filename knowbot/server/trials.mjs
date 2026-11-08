@@ -29,6 +29,7 @@ import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypt
 import * as kbLib from '../lib/knowbot.js';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
+import { importStore, ERROR_COPY as STORE_ERROR_COPY } from './storeimport.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -248,7 +249,7 @@ export function lastSourceUrl(text) {
 export function sourceSegments(text) {
   const out = [];
   let cur = { lines: [], url: null, heading: null };
-  const push = () => { if (cur.lines.some((l) => l.trim())) out.push({ text: cur.lines.join('\n').trim(), url: cur.url, heading: cur.heading }); };
+  const push = () => { if (cur.lines.some((l) => l.trim())) out.push({ text: cur.lines.join('\n').trim(), url: cur.url, heading: cur.heading, level: cur.level }); };
   for (const line of String(text ?? '').split('\n')) {
     const m = SOURCE_LINE_RE.exec(line);
     if (!m) { cur.lines.push(line); continue; }
@@ -256,10 +257,10 @@ export function sourceSegments(text) {
     while (prev.length && !prev[prev.length - 1].trim()) prev.pop();
     const head = prev.length && /^#{1,6}\s+\S/.test(prev[prev.length - 1]) ? prev.pop() : null;
     push();
-    cur = { lines: head ? [head] : [], url: m[1], heading: head ? head.replace(/^#+\s*/, '').replace(/[*_`]+/g, '').trim() : null };
+    cur = { lines: head ? [head] : [], url: m[1], heading: head ? head.replace(/^#+\s*/, '').replace(/[*_`]+/g, '').trim() : null, level: head ? /^#+/.exec(head)[0].length : null };
   }
   push();
-  return out.length ? out : [{ text: String(text ?? '').trim(), url: null, heading: null }];
+  return out.length ? out.map(({ level, ...x }) => (level ? { ...x, level } : x)) : [{ text: String(text ?? '').trim(), url: null, heading: null }];
 }
 
 /** Fail closed: a hit must carry trial:<id>, and none of the excluded tags (the fake ignores filters on purpose). */
@@ -496,9 +497,12 @@ export function parseIntent(message, ctx = {}) {
   const strict = /\b(?:more\s+)?strict(?:er)?\b/i.test(msg) && !/\bless\s+strict\b/i.test(msg);
   if (strict) { patch.floor = Math.min(0.85, Math.round(((Number(spec.floor) || 0.7) + 0.05) * 100) / 100); intents.push('strict'); }
   if (/\b(guess|internet|web search|make (?:it|stuff|things) up|less strict|loosen|looser|lower the floor)\b/i.test(msg)) intents.push('explain_canonical');
+  // "Enter a Store URL" typed: "import my shopify store mystore.com", "pull in our products from acme.com/shop"
+  const storeAsk = storeIntentOf(msg);
+  if (storeAsk) { actions.push({ type: 'import_store', ...(storeAsk.url ? { url: storeAsk.url } : {}) }); intents.push('import_store'); }
   if (/\bremove (?:the )?samples?\b|\bremove (?:the )?sample files\b/i.test(msg)) { actions.push({ type: 'remove_samples' }); intents.push('remove_samples'); }
-  else if (/\b(?:samples?|demo|example files?)\b/i.test(msg)) { actions.push({ type: 'attach_samples' }); intents.push('attach_samples'); }
-  if (/\b(?:just\s+)?(?:let me\s+)?upload\b|\bskip\b/i.test(msg) && !intents.includes('attach_samples')) { actions.push({ type: 'request_upload' }); intents.push('request_upload'); }
+  else if (!storeAsk && /\b(?:samples?|demo|example files?)\b/i.test(msg)) { actions.push({ type: 'attach_samples' }); intents.push('attach_samples'); }
+  if (/\b(?:just\s+)?(?:let me\s+)?upload\b|\bskip\b/i.test(msg) && !intents.includes('attach_samples') && !storeAsk) { actions.push({ type: 'request_upload' }); intents.push('request_upload'); }
   if (/\b(?:test it|test my|run (?:the |a )?test|prove|proof run|run (?:the )?proof)\b/i.test(msg)) { actions.push({ type: 'run_proof', mini: false }); intents.push('run_proof'); }
   const launchWords = /\b(launch|buy|go live|i'?m happy|sign me up|checkout)\b/i.test(msg);
   const priceWords = /\b(price|pricing|how much|cost)\b/i.test(msg);
@@ -540,6 +544,25 @@ export const INSIGHTS_INTENT_RE = /\b(?:what (?:did|have|do|are|were) (?:people|
 export const INVENTORY_INTENT_RE = /\b(?:what(?:'s| is| do i have) in (?:my|the|our|its|your) (?:files?|docs?|documents?|sources?|knowledge|data)|what do(?:es)? (?:my|the|our|its) (?:files?|docs?|documents?|sources?) (?:cover|say|contain|include|have)|what (?:does|did) (?:it|my bot|the bot|\w+ help) (?:learn|know)(?: so far)?|what (?:does|did) it learn|what (?:files|docs|documents) (?:do i|did i|does it|have i)|(?:list|show) (?:me )?(?:my|the|all) (?:files|docs|documents|sources)|which (?:files|docs|documents) (?:does it|do i|did i|are)|what (?:topics|subjects) (?:does it|do my files|can it))\b/i;
 export const REFUSAL_INTENT_RE = /\b(?:refusal(?: message| line| text)?|(?:change|edit|customi[sz]e|rewrite|reword|set) (?:the |its |my )?(?:refusal|fallback|"?i don'?t know"?|not found|no answer)(?: message| line| text| reply)?|when it (?:doesn'?t|does not|can'?t|cannot|won'?t) (?:know|answer|find)|(?:fallback|no[- ]answer|not[- ]found|i don'?t know) (?:message|answer|reply|line|text)|what (?:does|will) it say when)\b/i;
 export const LANGUAGE_INTENT_RE = /\b(?:answer|answers|reply|replies|respond|responds|speak|speaks|talk|chat|work|works|understand|understands|support|supports|handle|handles|in)\b[^.?!]{0,30}\b(?:french|spanish|german|italian|portuguese|dutch|chinese|mandarin|japanese|korean|arabic|hindi|polish|swedish|turkish|russian|other languages|another language|many languages|multiple languages)\b|\b(?:what|which|how many) languages?\b|\bmultilingual\b|\btranslat(?:e|es|ed|ion|ions|ing)\b|\blanguages? (?:does it|can it|it) (?:speak|support|answer)\b/i;
+const STORE_WORD_RE = /\b(?:store|shop|webshop|e-?shop|online shop|website|web site|site|shopify|woocommerce|woo|magento|squarespace|bigcommerce|catalog(?:ue)?|products?)\b/i;
+const STORE_VERB_RE = /\b(?:import|pull(?:\s+in)?|load|read|scrape|crawl|connect|sync|bring\s+in|grab|fetch|use)\b/i;
+const DOMAIN_RE = /(?:^|[\s(<"'“])((?:https?:\/\/)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|shop|store|co|io|ai|app|biz|info|uk|us|ca|au|de|fr|nl|es|it|eu|nz|ie|in|jp|br|mx|se|no|dk|fi|ch|at|be|pl|pt|cz|xyz|online|site|dev|me|tv|fm|gg|ly|so|to|cc)(?:\.[a-z]{2})?(?::\d{2,5})?(?:\/[^\s,;!?)"'”]*)?)(?=$|[\s,;!?)"'”]|\.(?:\s|$))/i;
+/**
+ * A typed "Enter a Store URL" request (pure): { url|null } or null. Needs an import verb with a store word ("import my
+ * shopify store", "pull in our products"), or a store web address with a store word or verb ("our shop is
+ * mystore.com"), or the phrase "store URL". Uploads, e-mail addresses and file names never count.
+ */
+export function storeIntentOf(msg) {
+  const s = String(msg || '');
+  if (/\bupload\b/i.test(s) && !/\bstore\s+url\b/i.test(s)) return null;
+  const m = DOMAIN_RE.exec(s.replace(/\S+@\S+/g, ' '));
+  const url = m && !/\.(?:pdf|docx?|pptx?|xlsx?|csv|txt|md|html?|png|jpe?g|gif|webp|mp3|wav|m4a)$/i.test(m[1]) ? m[1].replace(/[.]+$/, '') : null;
+  const word = STORE_WORD_RE.test(s), verb = STORE_VERB_RE.test(s);
+  if (/\b(?:enter|paste|add|use)\s+(?:a|my|our|the)?\s*(?:store|shop|site|website)\s+(?:url|address|link)\b|\bstore\s+url\b/i.test(s)) return { url };
+  if (verb && word && (/\b(?:import|pull|scrape|crawl|connect|sync|bring)\b/i.test(s) || url)) return { url };
+  if (url && word && /\b(?:my|our)\b/i.test(s)) return { url };
+  return null;
+}
 const BUSINESS_NOUN_RE = /\b(?:shop|store|business|company|startup|caf[eé]|coffee shop|restaurant|bar|pub|bakery|clinic|practice|surgery|studio|salon|spa|gym|agency|firm|hotel|hostel|b&b|school|academy|nursery|garage|workshop|brand|boutique|bookshop|pharmacy|dealership|brewery|winery|farm|charity|nonprofit|non-profit|club|team|venue|library|museum|co-?op|marketplace|platform|app|saas)$/i;
 function specificWords(msg) {
   return (String(msg).toLowerCase().replace(/['’]/g, '').match(/[a-z0-9]+/g) || []).filter((w) => !LAUNCH_GENERIC.has(w) && w.length > 1);
@@ -911,6 +934,7 @@ export function createStudio(o = {}) {
     // conference NAT never dead-ends, and only typed Builder turns count (system events have their own loose cap).
     create: 60, createBurst: 20, createGlobal: 1000, upload: 120, uploadIp: 600, uploadBytesDay: 2048 * 1048576, inflight: 300 * 1048576,
     askMin: 40, askIpMin: 160, askDay: 300, setupMin: 40, setupIpMin: 160, setupEventsMin: 240, setupDay: 400, lookups: 120, lookupsIp: 600,
+    storeHour: 6, storeIpHour: 20, // "Enter a Store URL" imports per hour (per trial, per IP)
     ...(o.limits || {}),
   };
   let secret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || '';
@@ -1193,7 +1217,7 @@ export function createStudio(o = {}) {
       id: r.id, key, name, bytes: Number(r.bytes ?? r.size ?? 0), mime: r.mime_type || MIME_OF[ext] || 'application/octet-stream', kind: KIND_OF.get(ext) || 'txt',
       stage, kdStage: fileStage(r), chunks: r.chunk_count ?? r.chunks ?? null, atoms,
       vectorized: Number(r.atoms_vectorized ?? (stage === 'ready' ? atoms : 0)), pages: r.page_count ?? r.metadata?.pages ?? null,
-      sample: tags.some((x) => x.startsWith('sample:')), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
+      sample: tags.some((x) => x.startsWith('sample:')), ...(tags.includes('src:store') ? { origin: 'store' } : {}), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
       stageAt: { ...stamps }, createdAt: isoOf(r.created_at), updatedAt: isoOf(r.updated_at || r.created_at),
     };
     if (!TERMINAL.has(stage) && t - since >= stallMs) file.stalledFor = t - since;
@@ -1992,6 +2016,73 @@ export function createStudio(o = {}) {
       try { res.end(); } catch {}
     }
   }
+  // ------------------------------------------------------------------------- "Enter a Store URL" (storeimport.mjs)
+  /**
+   * POST /trials/:id/store {url} → SSE: detect, fetching, found, building, capped, built, uploaded, done | error + done.
+   * A re-import replaces the trial's earlier src:store files (only once the new import built something). The import
+   * runs within the trial's remaining quota (the files it replaces count as free). 6 per hour per trial, 20 per IP.
+   * o.storeNet (tests only) is passed to the importer's fetcher (allowAddresses/allowPorts/resolve); production
+   * leaves it unset, so loopback, private and metadata addresses stay refused.
+   */
+  async function storeImport(req, res, T) {
+    limitOrThrow(`store ${T.id}`, limits.storeHour, 3600000, 'store imports for this bot');
+    limitOrThrow(`storeip ${ip(req)}`, limits.storeIpHour, 3600000, 'store imports from this address');
+    const body = await readBody(req);
+    if (!body || typeof body !== 'object' || typeof body.url !== 'string' || !body.url.trim() || body.url.length > 2048) fail(400, 'bad_request', STORE_ERROR_COPY.bad_url);
+    if (body.owner === false) fail(400, 'bad_request', 'Please confirm you own or manage this store.');
+    if (T.storeBusy) fail(409, 'bad_request', 'A store import is already running for this bot.');
+    const files = await filesOf(T, { maxAgeMs: 0 });
+    const previous = (T.rows || []).filter((r) => (r.tags || []).includes('src:store') && (r.tags || []).includes(`trial:${T.id}`));
+    const prevBytes = previous.reduce((n, r) => n + (Number(r.bytes) || 0), 0);
+    const remaining = QUOTA_BYTES - (usageOf(T, files).bytes - prevBytes);
+    if (remaining <= 0) fail(413, 'quota', STORE_ERROR_COPY.quota);
+    T.storeBusy = true;
+    const ac = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+    res.writeHead(200, SSE_HEADERS);
+    let n = 0;
+    const send = (event, data) => { if (!ac.signal.aborted) writeFrame(res, ++n, event, data); };
+    const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, pingMs); ping.unref?.();
+    T.lastActivityAt = now();
+    try {
+      const r = await importStore(body.url, { remainingBytes: remaining, signal: ac.signal, net: o.storeNet,
+        onEvent: (ev, d) => { if (ev !== 'error') send(ev === 'done' ? 'built' : ev, d); } });
+      // replace the earlier import only now that this one built files
+      for (const row of previous) {
+        try { await deleteRow(row.id); } catch {}
+        T.rows = (T.rows || []).filter((x) => x.id !== row.id);
+        const sources = { ...T.spec.sources }; delete sources[row.id];
+        T.spec = { ...T.spec, sources };
+        T.summaries.delete(row.id); T.atomCache.delete(row.id);
+      }
+      if (previous.length) { T.questionsCache = null; saveSpecSoon(T); }
+      const rows = [];
+      const stamp = `${T.id}:store:${now()}`;
+      for (const f of r.files) {
+        if (ac.signal.aborted) break;
+        if (!sniffOk('md', f.bytes)) continue;
+        // a byte-identical copy of a file already in the store is not searchable under new tags (production): every
+        // import gets an invisible, import-specific whitespace tail, like the sample copies
+        const file = await uploadInto(T, { name: f.name, bytes: uniqueCopy(f.bytes, `${stamp}:${f.name}`), mime: 'text/markdown', extraTags: ['src:store'], signal: ac.signal });
+        rows.push(file);
+        send('uploaded', { file });
+      }
+      kickPoller(T);
+      const all = await filesOf(T);
+      send('done', { files: rows, usage: usageOf(T, all), platform: r.platform, name: r.name, base: r.base, counts: r.counts, capped: r.capped });
+    } catch (e) {
+      const code = e?.code && STORE_ERROR_COPY[e.code] ? e.code : e instanceof StudioError ? e.code : 'upstream';
+      const message = e?.code && STORE_ERROR_COPY[e.code] ? e.message : e instanceof StudioError ? e.message : STORE_ERROR_COPY.upstream;
+      if (!(e instanceof StudioError) && !e?.code) log(`[studio] store import failed: ${e?.message}`);
+      send('error', { code, message });
+      send('done', { files: [], error: true });
+    } finally {
+      T.storeBusy = false;
+      clearInterval(ping);
+      try { res.end(); } catch {}
+    }
+  }
+
   /**
    * The sources the answer step quotes from, one per "Source:" section of each kept hit: { file_id, filename, title,
    * url, score, text, page?, section? } plus srcHit[i] (the hit source i came from). url: the section's own
@@ -2019,13 +2110,23 @@ export function createStudio(o = {}) {
     };
     for (const h of kept) {
       const segs = sourceSegments(h.text);
-      const crumbSection = h.crumb && h.crumb.includes(' > ') ? h.crumb.split(' > ').pop().trim() : null;
+      const crumbs = h.crumb ? h.crumb.split(' > ').map((x) => x.trim()).filter(Boolean) : [];
+      const crumbSection = crumbs.length > 1 ? crumbs[crumbs.length - 1] : null;
+      // an imported store file is "# File title" > "## Page or product" (its Source line) > "### FAQ question": the
+      // librarian names the store page ("In “Commuter Lite”…" linking the product page), and the question as its section
+      const store = needsLookup(h);
       for (const [i, sg] of segs.entries()) {
         const url = sg.url || (i === 0 ? h.url || await lookupUrl(h) : null);
         const text = stripSourceLines(sg.text);
         if (!text.trim()) continue;
-        sources.push({ file_id: h.fileId, filename: fileName(h.fileId), title: titleOf(h), url: url || null, score: h.similarity ?? 0, text,
-          ...(h.page != null ? { page: h.page } : {}), ...((sg.heading || crumbSection) ? { section: sg.heading || crumbSection } : {}) });
+        let title = titleOf(h), section = sg.heading || crumbSection;
+        if (store) {
+          const pageTitle = sg.heading && sg.level === 2 ? sg.heading : crumbs[1] || null;
+          const sub = sg.heading && sg.level > 2 ? sg.heading : sg.heading && sg.level === 2 ? null : crumbs[2] || null;
+          if (pageTitle) { title = pageTitle; section = sub; }
+        }
+        sources.push({ file_id: h.fileId, filename: fileName(h.fileId), title, url: url || null, score: h.similarity ?? 0, text,
+          ...(h.page != null ? { page: h.page } : {}), ...(section ? { section } : {}) });
         srcHit.push(h);
       }
     }
@@ -2192,8 +2293,8 @@ export function createStudio(o = {}) {
     const step = stepOf(T, files);
     const ready = files.filter((f) => f.stage === 'ready');
     // fixer r4: with no files nothing can be tested yet: files first, the spec second, never a Proof Run
-    if (!files.length) return [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })];
-    if (step === 'purpose' || step === 'sources') return [C('samples', 'Use sample files', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })];
+    if (!files.length) return [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('store', 'Enter a Store URL', { action: { type: 'import_store' } }), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })];
+    if (step === 'purpose' || step === 'sources') return [C('samples', 'Use sample files', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('store', 'Enter a Store URL', { action: { type: 'import_store' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })];
     if (step === 'learn' && !ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
     if (step === 'launch') return [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('what-get', 'What do I get?', { send: 'What do I get?' })];
     if (!ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
@@ -2217,7 +2318,7 @@ export function createStudio(o = {}) {
     return list.slice(0, 4);
   }
   const EMIT_TYPES = new Set(['golive:open']); // fixer r7: client store events a chip may emit (studio/app.js onChip)
-  const ACTION_TYPES = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples']);
+  const ACTION_TYPES = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples', 'import_store']);
   const botName = (T) => T.spec.name || 'Your bot';
   /** Enabled files still learning (not Ready, not Failed): a Proof Run waits for them. */
   const learningOf = (files) => files.filter((f) => f.enabled && !TERMINAL.has(f.stage));
@@ -2341,6 +2442,12 @@ export function createStudio(o = {}) {
     if (has('explain_plan')) return { reply: `KnowDrive is $${PRICE}/month: your KnowBot hosted with a share link, an embed widget for any site, 100 MB of storage, citations on every answer and canonical refusals, and question insights so you can see what people ask. Your files carry over. Cancel anytime.`,
       chips: [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
     if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
+    if (has('import_store')) {
+      const a = acts.find((x) => x.type === 'import_store') || { type: 'import_store' };
+      const where = a.url ? ` ${clip(String(a.url).replace(/^https?:\/\//i, '').replace(/\/$/, ''), 60)}` : ' your store';
+      return { reply: withNotes(`${diff.length ? `${confirmChanges(diff)} ` : ''}Let's import${where}. Check the address, tick that you own or manage it, and I'll read its products, help pages and policies, about a minute.`),
+        actions: [a], patch, chips: [C('upload', 'Upload files instead', { action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
+    }
     if (has('attach_samples')) {
       // fixer r7: this is the one "Loading…" line; the samples_attached turn that follows only adds the draft card
       T.flags.samplesAckTurn = T.setupTurns;
@@ -3454,6 +3561,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       allow('POST', 'DELETE');
     }
 
+    if (sub === 'store') { allow('POST'); return storeImport(req, res, T); }
     if (sub === 'events') { allow('GET'); return openEvents(req, res, T, url); }
     if (sub === 'channels' && fid && sub2 === 'test') {
       allow('POST');

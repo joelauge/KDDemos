@@ -620,7 +620,7 @@ export function createKnowBotServer(opts = {}) {
     res.setHeader('access-control-allow-headers', req.headers['access-control-request-headers'] || 'content-type, authorization');
     // /v1 (and its /api/v1 alias): a browser client can read retry-after, the rate-limit headers and x-request-id, preflight included
     res.setHeader('access-control-expose-headers', isDevApiPath(String(req.url || '').split('?')[0]) ? DEV_EXPOSE_HEADERS : 'content-type');
-    const isStream = req.url.startsWith('/api/stream') || /^\/api\/studio\/trials\/[^/]+\/(?:events|setup|ask)/.test(req.url);
+    const isStream = req.url.startsWith('/api/stream') || /^\/api\/studio\/trials\/[^/]+\/(?:events|setup|ask|store)/.test(req.url);
     const logUrl = req.url.replace(/([?&]token=)[^&]*/g, '$1***').slice(0, 200); // never log the operator token
     if (isStream) log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${logUrl} SSE open`);
     res.on('finish', () => {

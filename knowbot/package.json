@@ -5,7 +5,7 @@
   "description": "KnowBot server: the only runtime dependency is the Anthropic SDK, loaded lazily for bots that answer with Claude.",
   "scripts": {
     "start": "node server/server.mjs",
-    "test": "node --test lib/test/core.test.mjs server/test/server.test.mjs server/test/instances.test.mjs server/test/providers.test.mjs server/test/trials.test.mjs server/test/questions.test.mjs server/test/devapi.test.mjs server/test/channels.test.mjs",
+    "test": "node --test lib/test/core.test.mjs server/test/server.test.mjs server/test/instances.test.mjs server/test/providers.test.mjs server/test/trials.test.mjs server/test/storeimport.test.mjs server/test/questions.test.mjs server/test/devapi.test.mjs server/test/channels.test.mjs",
     "studio:dev": "node studio/test/dev-server.mjs",
     "studio:smoke": "node studio/test/smoke.mjs"
   },

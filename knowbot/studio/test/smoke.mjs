@@ -227,7 +227,7 @@ async function journey(browser, dev, cell) {
   const logText = await page.innerText('#st-log').catch(() => '');
   check('01-landing', 'B0 text visible', /Start with your files or ours\?/.test(logText), { detail: `${firstMsgMs} ms to first Builder message` });
   const chipTexts = await page.locator('#st-log .st-chips:not([hidden]) .st-chip').allInnerTexts();
-  check('01-landing', '3 chips, primary = Use sample files', chipTexts.length === 3 && /Use sample files/.test(chipTexts[0]) &&
+  check('01-landing', 'first-run choices: samples (primary), upload, store URL', chipTexts.length >= 3 && /Use sample files/.test(chipTexts[0]) && /Upload my files/.test(chipTexts[1]) && /Enter a Store URL/.test(chipTexts[2]) &&
     await page.locator('#st-log .st-chip-primary').first().innerText().then((t) => /Use sample files/.test(t)).catch(() => false), { detail: chipTexts.join(' | ') });
   await waitState(page, (s) => s.trial.status === 'ready', { timeout: 8000 });
   check('01-landing', 'trial created (201)', trialStatus === 201, { detail: `status ${trialStatus}` });
@@ -696,6 +696,54 @@ async function journey(browser, dev, cell) {
   }
 }
 
+// ------------------------------------------------------------------ Enter a Store URL (a fresh trial per cell)
+async function storeJourney(browser, dev, cell) {
+  const check = makeChecker(cell);
+  const context = await setupCell(browser, cell);
+  const page = await context.newPage();
+  const errors = [];
+  watchConsole(page, errors);
+  try {
+    await page.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
+    await waitState(page, (s) => s.trial.status === 'ready', { timeout: 10000 });
+    await page.waitForTimeout(500);
+    check('18-store', 'Builder offers "Enter a Store URL"', await clickBuilderChip(page, cell, /Enter a Store URL/));
+    const input = page.locator('.st-si input[placeholder="yourstore.com"]').last();
+    const opened = await input.waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false);
+    check('18-store', 'inline URL field (placeholder yourstore.com) + ownership checkbox', opened && await page.locator('.st-si .st-si-check input[type="checkbox"]').last().isVisible());
+    await input.fill(dev.shopUrl);
+    await press(page.locator('.st-si button[type="submit"]').last(), 'Import store');
+    const gated = await page.waitForFunction(() => /own or manage/i.test(document.querySelector('.st-si .st-field-msg')?.textContent || ''), null, { timeout: 3000 }).then(() => true).catch(() => false);
+    check('18-store', 'import waits for "I own or manage this store"', gated);
+    await page.locator('.st-si .st-si-check input[type="checkbox"]').last().check();
+    await press(page.locator('.st-si button[type="submit"]').last(), 'Import store');
+    const seen = await page.waitForFunction(() => /Shopify store found/.test(document.querySelector('.st-si-run')?.innerText || '') || /Found \d/.test(document.querySelector('.st-si-found')?.textContent || ''), null, { timeout: 15000 }).then(() => true).catch(() => false);
+    check('18-store', 'progress: platform found, then counts', seen, { detail: await page.locator('.st-si-run').last().innerText().catch(() => '') });
+    const done = await page.waitForFunction(() => /Imported \d+ files?/.test(document.querySelector('.st-si-status')?.textContent || ''), null, { timeout: 30000 }).then(() => true).catch(() => false);
+    check('18-store', 'import done: "Imported N files from …"', done, { detail: await page.locator('.st-si-status').last().innerText().catch(() => '') });
+    await shot(page, cell, '18-store');
+    const rows = await waitState(page, (s) => s.fileOrder.length >= 3 && s.fileOrder.some((id) => s.files[id]?.phase === 'ready'), { timeout: 45000 }).then(() => true).catch(() => false);
+    check('18-store', 'imported files appear and learn like uploads', rows);
+    const tid = await page.evaluate(() => window.__studio.store.getState().trial.id);
+    const token = await page.evaluate(() => window.__studio.store.getState().trial.token);
+    const r = await fetch(`${dev.url}/api/studio/trials/${tid}/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: 'Can I return a bike?' }) });
+    const fin = (await r.text()).split('\n\n').map((fr) => (/^event: final$/m.test(fr) ? JSON.parse(/^data: (.*)$/m.exec(fr)[1]) : null)).find(Boolean);
+    check('18-store', 'librarian answer links the store page it quotes', !!fin && fin.status === 'grounded' && fin.text.includes(`${dev.shopUrl}/policies/refund-policy`), { detail: fin?.text });
+    // a bad address: store error copy with both ways forward
+    await pane(page, cell, 'setup');
+    await press(page.locator('.st-si-actions button', { hasText: 'Import again' }).last(), 'Import again');
+    await input.fill('localhost');
+    await press(page.locator('.st-si button[type="submit"]').last(), 'Import store');
+    const errUi = await page.waitForFunction(() => {
+      const run = document.querySelector('.st-si.is-error .st-si-run');
+      return run && /Try another URL/.test(run.innerText) && /Upload files instead/.test(run.innerText) ? run.innerText : null;
+    }, null, { timeout: 10000 }).then((h) => h.jsonValue()).catch(() => null);
+    check('18-store', 'errors use the store copy with "Try another URL" and "Upload files instead"', !!errUi, { detail: String(errUi || '').replace(/\s+/g, ' ') });
+    check('18-store', 'no console errors', errors.length === 0, { soft: true, detail: errors.slice(0, 3).join(' || ') });
+    check('18-store', 'no horizontal scroll', await noHScroll(page));
+  } finally { await context.close(); }
+}
+
 // ------------------------------------------------------------------ main
 
 const speed = Number(process.env.FAKE_SPEED || 4) || 4;
@@ -710,7 +758,7 @@ try {
     // comes from 127.0.0.1, so sharing a server would test the limiter instead of the journey.
     const dev = await startDevServer({ speed });
     log(`  ${dev.studioUrl}`);
-    try { await journey(browser, dev, cell); }
+    try { await journey(browser, dev, cell); await storeJourney(browser, dev, cell); }
     catch (e) { results.push({ cell: cell.name, step: 'crash', name: e.message, ok: false, soft: false, detail: '' }); log(`  [FAIL] crash ${e.stack}`); }
     finally { await dev.close(); }
   }

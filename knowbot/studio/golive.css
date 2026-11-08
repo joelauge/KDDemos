@@ -245,9 +245,11 @@
 .gl-key-off div { display: grid; gap: 3px; }
 .gl-key-off b { font-size: 13.5px; color: var(--strong); } .gl-key-off small { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .gl-key-skel, .gl-out-skel { display: grid; gap: 8px; padding: 12px; border-radius: 12px; border: 1px solid var(--line); min-height: 64px; }
-.gl-key-skel i, .gl-out-skel i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--raise) 0%, var(--panel-2) 50%, var(--raise) 100%) 0 0 / 200% 100%; animation: gl-shimmer 1.2s linear infinite; }
+/* perf (M): shimmer = a translated highlight on ::after (compositor-only), not an animated background-position */
+.gl-key-skel i, .gl-out-skel i, .gl-ex-loading i { position: relative; display: block; height: 10px; border-radius: 5px; background: var(--raise); overflow: hidden; }
+.gl-key-skel i::after, .gl-out-skel i::after, .gl-ex-loading i::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--panel-2), transparent); transform: translateX(-100%); animation: gl-shimmer 1.2s linear infinite; }
 .gl-key-skel i:nth-child(2), .gl-out-skel i:nth-child(2) { width: 70%; } .gl-out-skel i:nth-child(3) { width: 45%; }
-@keyframes gl-shimmer { to { background-position: -200% 0; } }
+@keyframes gl-shimmer { to { transform: translateX(100%); } }
 
 .gl-runform { display: grid; gap: 8px; }
 .gl-label { font: 600 12.5px/1.3 var(--font); color: var(--strong); }
@@ -312,7 +314,7 @@
 
 /* reduced motion: everything stays, nothing moves */
 :root[data-motion="reduce"] .gl-mic-ring, :root[data-motion="reduce"] .gl-bub.is-typing i, :root[data-motion="reduce"] .gl-wm.is-typing i,
-:root[data-motion="reduce"] .gl-key-skel i, :root[data-motion="reduce"] .gl-out-skel i { animation: none !important; }
+:root[data-motion="reduce"] .gl-key-skel i::after, :root[data-motion="reduce"] .gl-out-skel i::after { animation: none !important; display: none; }
 :root[data-motion="reduce"] .gl-mic.is-live .gl-mic-ring { opacity: .8; transform: scale(1.12); }
 :root[data-motion="reduce"] .gl-w { transition: none; }
 [data-signature] .gl-bub.is-typing i { animation-play-state: paused; }
@@ -448,9 +450,8 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
 
 /* prefilled Try it: a short skeleton while the example exchange arrives */
 .gl-ex-loading { display: grid; gap: 6px; padding: 4px 6px; }
-.gl-ex-loading i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--raise) 0%, var(--panel-2) 50%, var(--raise) 100%) 0 0 / 200% 100%; animation: gl-shimmer 1.2s linear infinite; }
 .gl-ex-loading i:nth-of-type(1) { width: 62%; justify-self: end; } .gl-ex-loading i.is-short { width: 45%; }
-:root[data-motion="reduce"] .gl-ex-loading i { animation: none; }
+:root[data-motion="reduce"] .gl-ex-loading i::after { animation: none; display: none; }
 .gl-wex-hold { display: contents; }
 
 /* Developers: OpenAPI link, errors and rate limits */

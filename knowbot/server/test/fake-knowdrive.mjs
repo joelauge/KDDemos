@@ -225,7 +225,7 @@ const FIXTURE_UGM = Object.freeze({
  * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number }} [o]
  * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, settle: () => Promise<void> }>}
  */
-export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'trial' } = {}) {
+export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all' } = {}) {
   speed = Math.max(0.01, Number(speed) || 1);
   const files = new Map();
   const calls = [];
@@ -309,12 +309,10 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     const pool = [];
     // production: a pure vector search under a narrow tag filter can come back empty (approximate index), hybrid can't
     const allOf = (Array.isArray(filter?.all_of) ? filter.all_of : []).filter((t) => typeof t === 'string');
-    // narrowScope 'trial' (default): Studio trial scopes (trial:, sample-set:, bucket:), the filters known to be narrow in
-    // production; 'all': every all_of filter.
-    // CONTRACT-GAP: server/devapi.mjs liveSimilarities and the live-bot retrievers (server/retrievers.mjs) search in
-    // pure vector mode under a bot's tag filter and break under narrowScope:'all' (devapi/channels/questions tests);
-    // they need the same hybrid-with-distance fallback trials.mjs retrieve() has. Until then their scopes are exempt.
-    const narrowTag = (t) => narrowScope === 'all' || /^(?:trial|sample-set|bucket):/.test(t);
+    // narrowScope 'all' (default): every all_of filter; 'trial': Studio trial scopes only (trial:, sample-set:, bucket:);
+    // 'none': off. Every vector caller (trials retrieve, retrievers.mjs, devapi trialSearch/liveSimilarities, questions)
+    // retries an empty vector search as hybrid and scores it by each hit's `distance`, never by its RRF score.
+    const narrowTag = (t) => narrowScope === 'all' || (narrowScope === 'trial' && /^(?:trial|sample-set|bucket):/.test(t));
     if (mode === 'vector' && allOf.some(narrowTag) && narrowRows > 0) {
       const matching = [...files.values()].filter((f) => f.store === store && allOf.every((t) => f.tags.includes(t))).length;
       if (matching < narrowRows) return [];

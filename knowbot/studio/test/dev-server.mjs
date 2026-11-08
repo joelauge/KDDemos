@@ -53,6 +53,41 @@ export async function startFakeChannelSink({ host = '127.0.0.1' } = {}) {
   return { url, sent, close: () => new Promise((r) => srv.close(() => r())) };
 }
 
+/**
+ * A fake Shopify-shaped store on loopback for "Enter a Store URL" (fictional Lumen Bikes shop, written for the dev
+ * server): products.json, two policies, an FAQ page and a sitemap. { url, port, close() }. The dev Studio may import
+ * from THIS port only (storeNet below); production never reaches loopback.
+ */
+export async function startFakeStore({ host = '127.0.0.1' } = {}) {
+  const page = (title, body, head = '') => `<!doctype html><html><head><title>${title}</title>${head}</head><body><header><nav>Shop Help Cart</nav></header><main><h1>${title}</h1>${body}</main><footer>© Lumen Bikes</footer></body></html>`;
+  const products = [
+    ['Trail Pro', 'trail-pro', '1899.00', 'Full-suspension carbon trail bike. Frames carry a lifetime warranty for the original owner.', [['Small / Black', 'TP-S', true], ['Large / Black', 'TP-L', false]]],
+    ['Commuter Lite', 'commuter-lite', '799.00', 'Aluminium city bike with mudguards, a rack and dynamo lights.', []],
+    ['E-City 500', 'e-city-500', '2499.00', 'Electric city bike with a 500 Wh battery: about 90 km of range on the eco setting.', []],
+    ['Kids 20', 'kids-20', '349.00', 'A 20-inch bike for riders aged 6 to 9, with coaster brakes.', []],
+  ].map(([title, handle, price, desc, vs], i) => ({ id: i + 1, title, handle, vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: `<p>${desc}</p>`,
+    variants: vs.length ? vs.map(([t, sku, available]) => ({ title: t, price, sku, available })) : [{ title: 'Default Title', price, sku: handle.toUpperCase(), available: true }] }));
+  const routes = {
+    '/': () => [200, 'text/html', page('Lumen Bikes', '<p>Bikes for trails and towns.</p>', '<link href="https://cdn.shopify.com/s/theme.css"><script>Shopify.currency={"active":"USD"};</script><meta property="og:site_name" content="Lumen Bikes">')],
+    '/products.json': (u) => [200, 'application/json', JSON.stringify({ products: Number(u.searchParams.get('page') || 1) > 1 ? [] : products })],
+    '/policies/refund-policy': () => [200, 'text/html', page('Refund policy', '<p>Unridden bikes can be returned within 30 days of delivery for a full refund.</p><p>Ridden bikes can be exchanged within 14 days.</p>')],
+    '/policies/shipping-policy': () => [200, 'text/html', page('Shipping policy', '<p>Orders ship within 2 business days. Shipping is free in the US on orders over $100.</p>')],
+    '/pages/faq': () => [200, 'text/html', page('FAQ', '<details><summary>Do you ship to Canada?</summary><p>Yes, we ship to Canada for a flat $25 fee.</p></details><details><summary>Can I test ride a bike?</summary><p>Test rides last 30 minutes and need a photo ID.</p></details>')],
+    '/sitemap.xml': (u, base) => [200, 'application/xml', `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${base}/pages/faq</loc></url></urlset>`],
+  };
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const r = routes[u.pathname];
+    if (!r) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
+    const [status, type, body] = r(u, `http://${host}:${srv.address().port}`);
+    res.writeHead(status, { 'content-type': type }); res.end(body);
+  });
+  srv.on('clientError', (e, sock) => { try { sock.destroy(); } catch {} });
+  await new Promise((r) => srv.listen(0, host, r));
+  const port = srv.address().port;
+  return { url: `http://${host}:${port}`, port, close: () => { srv.closeAllConnections?.(); return new Promise((r) => srv.close(() => r())); } };
+}
+
 function assertLoopback(u, what = 'KNOWDRIVE_BASE_URL') {
   const host = new URL(u).hostname;
   if (host !== '127.0.0.1') throw new Error(`dev-server refuses to start: ${what} must resolve to 127.0.0.1 (got ${host})`);
@@ -64,9 +99,10 @@ function assertLoopback(u, what = 'KNOWDRIVE_BASE_URL') {
  */
 export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', engine = 'scripted', quiet = true, env: extra = {}, studio, channels = true } = {}) {
   if (extra.KNOWDRIVE_BASE_URL) assertLoopback(extra.KNOWDRIVE_BASE_URL); // refuse before starting anything
-  const kd = await startFakeKnowDrive({ speed, queueStaggerMs: 600, honorScope: true });
+  const kd = await startFakeKnowDrive({ speed, queueStaggerMs: 600, honorScope: true, narrowScope: 'all' }); // production: a narrow-filter vector search can come back empty
   const llm = await startFakeLLM();
   const sink = await startFakeChannelSink({ host: '127.0.0.1' });
+  const shop = await startFakeStore({ host: '127.0.0.1' });
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-studio-dev-'));
   const env = {
     KNOWDRIVE_BASE_URL: kd.url, KNOWDRIVE_API_KEY: 'fake-key', KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials',
@@ -83,15 +119,18 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
     if (env.KNOWBOT_STUDIO_PROVIDER && env.KNOWBOT_STUDIO_PROVIDER !== 'local') throw new Error('dev-server: only the local (fake) model is allowed');
     for (const k of ['META_GRAPH_BASE_URL', 'EMAIL_REPLY_WEBHOOK', 'TWILIO_API_BASE_URL']) if (env[k]) assertLoopback(env[k], k);
     for (const k of REAL_PROVIDER_KEYS) if (env[k]) throw new Error(`dev-server refuses to start: ${k} would reach a real provider`);
-  } catch (e) { await kd.close(); await llm.close(); await sink.close(); throw e; }
-  const kb = createKnowBotServer({ root: ROOT, env, quiet, watch: false, dataDir, studio: { sweep: false, ...(studio || {}) } });
+  } catch (e) { await kd.close(); await llm.close(); await sink.close(); await shop.close(); throw e; }
+  // "Enter a Store URL" may reach the fake shop's port on loopback only (the importer refuses loopback by default)
+  const storeNet = { allowAddresses: ['127.0.0.1'], allowPorts: [shop.port], paceMs: 20 };
+  const kb = createKnowBotServer({ root: ROOT, env, quiet, watch: false, dataDir, studio: { sweep: false, storeNet, ...(studio || {}) } });
   await new Promise((r, j) => { kb.server.once('error', j); kb.server.listen(port, host, r); });
   const actual = kb.server.address().port;
   const url = `http://${host}:${actual}`;
   return {
-    url, studioUrl: `${url}/studio/`, port: actual, kd, llm, kb, dataDir, sink, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null,
+    url, studioUrl: `${url}/studio/`, port: actual, kd, llm, kb, dataDir, sink, shop, shopUrl: shop.url, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null,
     async close() {
       await new Promise((r) => kb.server.close(() => r()));
+      await shop.close();
       await kd.close();
       await llm.close();
       await sink.close();
@@ -119,6 +158,7 @@ if (isMain) {
   const dev = await startDevServer({ speed, port, engine, quiet: process.env.QUIET !== '0' });
   console.log(`Studio: ${dev.studioUrl}`);
   console.log(`[dev] fake knowDrive ${dev.kd.url} · fake model ${dev.llm.url} · FAKE_SPEED=${speed} · Builder engine: ${engine}`);
+  console.log(`[dev] Enter a Store URL: try ${dev.shopUrl} (a fake Shopify store on loopback; nothing else is reachable)`);
   console.log(`[dev] channels: SMS, voice, WhatsApp and e-mail webhooks use fake secrets (TWILIO_AUTH_TOKEN=${DEV_CHANNEL_SECRETS.TWILIO_AUTH_TOKEN}, EMAIL_WEBHOOK_SECRET=${DEV_CHANNEL_SECRETS.EMAIL_WEBHOOK_SECRET}); outbound sends go to ${dev.sink.url}`);
   dev.kb.server.on('error', (e) => console.error(`[dev ${stamp()}] server error: ${e?.stack || e}`));
   dev.kb.server.on('close', () => console.error(`[dev ${stamp()}] server closed`));

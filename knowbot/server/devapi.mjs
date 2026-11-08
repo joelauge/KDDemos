@@ -342,14 +342,22 @@ export function createDevApi(o = {}) {
     const disabled = new Set(Object.entries(t.spec.sources || {}).filter(([, v]) => v === false).map(([k]) => k));
     const shared = t.T?.flags?.sharedSet && t.T?.flags?.sharedAt ? t.T.flags.sharedSet : null;
     const filters = [{ all_of: [`trial:${t.id}`], none_of: none }, ...(shared ? [{ all_of: [`sample-set:${shared}`, 'kind:trial-sample'], none_of: none }] : [])];
-    const pages = await Promise.all(filters.map(async (filter) => {
+    const page = async (filter, mode) => {
       const res = await kdFetch(`/api/v1/vector_stores/${encodeURIComponent(store)}/search`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 10000,
-        body: JSON.stringify({ query: question, max_num_results: 12, mode: 'vector', text: 'raw', filter, fields: 'tags,uri,score,text,file_id,metadata' }),
+        body: JSON.stringify({ query: question, max_num_results: 12, mode, text: 'raw', filter, fields: 'tags,uri,score,text,file_id,metadata' }),
       });
       if (!res.ok) throw new ApiError(502, 'upstream', `knowDrive search failed (HTTP ${res.status})`);
       const j = await res.json();
       return Array.isArray(j.data) ? j.data : [];
+    };
+    // production: a pure vector search under a narrow tag filter (one trial) can come back empty while hybrid, same
+    // filter, finds the atoms and still reports each hit's vector `distance`; keep only those (simOf scores by distance,
+    // never by the RRF score)
+    const pages = await Promise.all(filters.map(async (filter) => {
+      const v = await page(filter, 'vector');
+      if (v.length) return v;
+      return (await page(filter, 'hybrid')).filter((d) => d && d.distance != null && Number.isFinite(Number(d.distance)));
     }));
     const seen = new Set();
     const hits = [];

@@ -374,8 +374,15 @@ export class KnowDriveRetriever {
       // A third, card-only query: there are few answer cards, so the right one ranks well there even when
       // general hybrid results would crowd it out.
       const wantCards = floor && this.cards && !this.exclude.includes('kind:canonical');
-      const [hybrid, vector, cardHits] = await Promise.all([this.query(query, k, 'hybrid'), floor ? this.query(query, 5, 'vector') : [],
+      let [hybrid, vector, cardHits] = await Promise.all([this.query(query, k, 'hybrid'), floor ? this.query(query, 5, 'vector') : [],
         wantCards ? this.query(query, 3, 'vector', ['kind:canonical']) : []]);
+      // Production: a pure vector search under a narrow tag filter (a bot's bucket) can come back empty while hybrid,
+      // same filter, finds the atoms and still reports each hit's vector `distance`. Use those hits, scored by that
+      // distance (similarity = 1 - distance/2), never by the hybrid RRF score.
+      const byDistance = (docs) => docs.filter((d) => d && d.distance != null && Number.isFinite(Number(d.distance)))
+        .map((d) => ({ ...d, score: 1 - Number(d.distance) / 2 }));
+      if (floor && !vector.length && hybrid.length) vector = byDistance(hybrid).sort((a, b) => b.score - a.score).slice(0, 5);
+      if (wantCards && !cardHits.length) cardHits = byDistance(await this.query(query, 3, 'hybrid', ['kind:canonical']));
       await this.local?.ready; // title/url lookups need the local frontmatter index
       // defense in depth: when a prefix is configured, only hits under it (tag window is the primary guard)
       const results = hybrid.map((d) => this.mapResult(d)).filter((r) => r && r.text);

@@ -509,6 +509,8 @@ function originOf(g, fallback = 'customer') {
   const e = Object.entries(g.origins || {}).sort((a, b) => b[1] - a[1]);
   return e[0]?.[0] || fallback;
 }
+/** knowDrive created_at/updated_at are unix SECONDS (numbers); an ISO string is still accepted. Returns ms, or 0. */
+const atOf = (v) => { const n = Number(v); if (v != null && v !== '' && Number.isFinite(n)) return n < 1e11 ? n * 1000 : n; return Date.parse(v) || 0; };
 const fileTitle = (name, crumb) => {
   const c = String(crumb || '').split(' > ')[0].replace(/^#+\s*/, '').trim();
   if (c && /[A-Z]/.test(c)) return c;
@@ -518,15 +520,22 @@ const fileTitle = (name, crumb) => {
 /** The nearest file in the bot's own material (scope tag, never a question or config file), by vector similarity. */
 function defaultNearest(kd, store, scopeKey) {
   if (!/^(?:trial|bucket):/.test(scopeKey)) return null; // a live bot's corpus is not scope-tagged: the caller passes `nearest`
-  return async (q) => {
+  const search = async (q, mode) => {
     const res = await kdFetch(kd, `/api/v1/vector_stores/${encodeURIComponent(store)}/search`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 6000,
-      body: JSON.stringify({ query: q, max_num_results: 5, mode: 'vector', text: 'raw', filter: { all_of: [scopeKey], none_of: [...NEVER_CITE_TAGS, 'kind:trial-spec'] }, fields: 'tags,uri,score,text,file_id,metadata' }),
+      body: JSON.stringify({ query: q, max_num_results: 5, mode, text: 'raw', filter: { all_of: [scopeKey], none_of: [...NEVER_CITE_TAGS, 'kind:trial-spec'] }, fields: 'tags,uri,score,text,file_id,metadata' }),
     });
     if (!res.ok) return null;
     const j = await res.json();
+    return Array.isArray(j.data) ? j.data : [];
+  };
+  return async (q) => {
+    let data = await search(q, 'vector');
+    if (data === null) return null;
+    // production: a narrow-filter vector search can be empty; hybrid (same filter) still carries each hit's distance
+    if (!data.length) data = ((await search(q, 'hybrid')) || []).filter((d) => d && Number.isFinite(Number(d.distance)));
     let best = null; const context = [];
-    for (const d of Array.isArray(j.data) ? j.data : []) {
+    for (const d of data) {
       const tg = Array.isArray(d.tags) ? d.tags.map(String) : null;
       if (!tg || !tg.includes(scopeKey) || NEVER_CITE_TAGS.some((t) => tg.includes(t)) || tg.includes('kind:trial-spec') || parseQuestionPath(d.filename)) continue; // fail closed
       const sim = Number.isFinite(Number(d.distance)) ? 1 - Number(d.distance) / 2 : Number(d.score);
@@ -614,7 +623,7 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
       const studioProbe = tagVal(tg, 'channel') === 'studio' && probeHashes.has(p.hash);
       const test = !!prev?.test || !!tagOrigin || studioProbe;
       const origin = (prev?.origin && prev.origin !== 'customer' ? prev.origin : null) || tagOrigin || (studioProbe ? 'probe' : 'customer');
-      entries.set(r.filename, { hash: p.hash, at: prev?.at || p.at || Date.parse(r.created_at) || 0, outcome: tagVal(tg, 'outcome') === 'refused' ? 'refused' : 'answered', q: prev?.q, row: r, test, origin,
+      entries.set(r.filename, { hash: p.hash, at: prev?.at || p.at || atOf(r.created_at), outcome: tagVal(tg, 'outcome') === 'refused' ? 'refused' : 'answered', q: prev?.q, row: r, test, origin,
         channel: prev?.channel || tagVal(tg, 'channel') || 'web', files: prev?.files || null, atoms: prev?.atoms || null });
     }
   }
@@ -695,9 +704,18 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
           body: JSON.stringify({ query: g.q, max_num_results: 12, mode: 'vector', text: 'raw', filter: { all_of: [QUESTIONS_TAG, ...tags] }, fields: 'tags,uri,score,text,file_id,metadata' }),
         });
         if (!res.ok) return;
-        const j = await res.json();
+        let data = (await res.json())?.data;
+        data = Array.isArray(data) ? data : [];
+        if (!data.length) { // narrow filter: vector can be empty, hybrid still reports each hit's distance (never use its RRF score)
+          const h = await kdFetch(kd, `/api/v1/vector_stores/${encodeURIComponent(st)}/search`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 6000,
+            body: JSON.stringify({ query: g.q, max_num_results: 12, mode: 'hybrid', text: 'raw', filter: { all_of: [QUESTIONS_TAG, ...tags] }, fields: 'tags,uri,score,text,file_id,metadata' }),
+          });
+          const hd = h.ok ? (await h.json())?.data : null;
+          data = (Array.isArray(hd) ? hd : []).filter((d) => d && Number.isFinite(Number(d.distance)));
+        }
         g.similar = [];
-        for (const d of Array.isArray(j.data) ? j.data : []) {
+        for (const d of data) {
           const tg = Array.isArray(d.tags) ? d.tags.map(String) : null;
           if (!tg || !tg.includes(QUESTIONS_TAG) || !tags.every((t) => tg.includes(t))) continue; // fail closed
           const sim = Number.isFinite(Number(d.distance)) ? 1 - Number(d.distance) / 2 : Number(d.score);

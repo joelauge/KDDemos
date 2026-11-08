@@ -889,7 +889,9 @@ export function mount(ctx) {
     if (motion.reduced() || !wrap || !wrap.isConnected) return;
     const e = $('.co-embed', wrap);
     if (!e) return;
-    e.classList.remove('is-caret'); void e.offsetWidth; e.classList.add('is-caret');
+    // perf (M): restart the caret a frame later instead of forcing a reflow (void offsetWidth) to restart it
+    e.classList.remove('is-caret');
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (e.isConnected) e.classList.add('is-caret'); }));
   }
 
   // ---- make it yours (B9)

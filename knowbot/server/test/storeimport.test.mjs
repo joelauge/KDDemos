@@ -97,16 +97,16 @@ describe('Shopify', () => {
     assert.deepEqual(names, ['127-0-0-1-about-us.md', '127-0-0-1-faq.md', '127-0-0-1-products-1.md', '127-0-0-1-products-2.md', '127-0-0-1-refund-policy.md', '127-0-0-1-shipping-policy.md'].sort().map((n) => n.replace('about-us', 'pages')).sort());
     const prod = fileText(r, /products-1/);
     assert.match(prod, /^# Products: Lumen Bikes \(part 1 of 2\)/);
-    assert.match(prod, /\n## Trail Pro 1\nSource: http:\/\/127\.0\.0\.1:\d+\/products\/trail-pro-1\n\n- Price: 1,299\.00 USD \(was 1,499\.00 USD\)\n- Brand: Lumen\n- Type: Bikes\n- SKU: TP-1\n- Availability: in stock\n- Tags: mtb, carbon\n\nA light carbon trail bike, number 1\./);
-    assert.match(prod, /## Trail Pro 2\n[\s\S]*?- Price: 1,299\.00 USD to 1,349\.00 USD[\s\S]*?- Variants:\n {2}- Small \/ Black: 1,299\.00 USD, SKU TP-2-S, in stock\n {2}- Large \/ Black: 1,349\.00 USD, SKU TP-2-L, out of stock/);
+    assert.match(prod, /\n## Trail Pro 1\n\nSource: http:\/\/127\.0\.0\.1:\d+\/products\/trail-pro-1\n- Trail Pro 1 price: 1,299\.00 USD \(was 1,499\.00 USD\)\n- Trail Pro 1 brand: Lumen\n- Trail Pro 1 type: Bikes\n- Trail Pro 1 SKU: TP-1\n- Trail Pro 1 availability: in stock\n- Trail Pro 1 tags: mtb, carbon\n\nA light carbon trail bike, number 1\./);
+    assert.match(prod, /## Trail Pro 2\n[\s\S]*?- Trail Pro 2 price: 1,299\.00 USD to 1,349\.00 USD[\s\S]*?- Trail Pro 2 variants:\n {2}- Trail Pro 2 Small \/ Black: 1,299\.00 USD, SKU TP-2-S, in stock\n {2}- Trail Pro 2 Large \/ Black: 1,349\.00 USD, SKU TP-2-L, out of stock/);
     assert.ok(!/evilScript/.test(prod), 'scripts stripped');
     assert.equal(r.files.find((f) => /products-1/.test(f.name)).docs, 200);
     const faq = fileText(r, /faq/);
-    assert.match(faq, /## FAQ\nSource: http:\/\/127\.0\.0\.1:\d+\/pages\/faq\n\n### How long does shipping take\?\nTwo to five business days in the US\.\n\n### Do you ship to Canada\?\nYes, for a flat \$25\./);
+    assert.match(faq, /## FAQ\n\nSource: http:\/\/127\.0\.0\.1:\d+\/pages\/faq\n\n### How long does shipping take\?\nTwo to five business days in the US\.\n\n### Do you ship to Canada\?\nYes, for a flat \$25\./);
     const refund = fileText(r, /refund-policy/);
-    assert.match(refund, /## Refund policy\nSource: .*\/policies\/refund-policy\n\nWe refund unused items within 30 days of delivery\.\n\n\\# not a heading/);
+    assert.match(refund, /## Refund policy\n\nSource: .*\/policies\/refund-policy\nWe refund unused items within 30 days of delivery\.\n\n\\# not a heading/);
     assert.ok(!/Footer text|Home Shop Cart/.test(refund), 'nav and footer dropped');
-    assert.match(fileText(r, /pages/), /## About us\nSource: .*\/pages\/about-us\n\nLumen Bikes has built/);
+    assert.match(fileText(r, /pages/), /## About us\n\nSource: .*\/pages\/about-us\nLumen Bikes has built/);
     assert.equal(s.hits(/lookbook/), 1, 'small store: non-matching page is checked by title');
     assert.ok(!/Lookbook/.test(r.files.map((f) => f.bytes.toString()).join('')), 'non-help page not imported');
     // politeness and privacy
@@ -153,7 +153,7 @@ describe('Shopify', () => {
     assert.ifError(error);
     assert.equal(r.platform, 'shopify'); assert.equal(r.api, false);
     assert.equal(r.counts.products, 1);
-    assert.match(fileText(r, /products/), /## Trail Pro 1\nSource: .*\/products\/trail-pro-1\n\n- Price: 1,299\.00 USD\n- Brand: Lumen\n- SKU: TP-1\n- Availability: in stock\n\nCarbon trail bike\./);
+    assert.match(fileText(r, /products/), /## Trail Pro 1\n\nSource: .*\/products\/trail-pro-1\n- Trail Pro 1 price: 1,299\.00 USD\n- Trail Pro 1 brand: Lumen\n- Trail Pro 1 SKU: TP-1\n- Trail Pro 1 availability: in stock\n\nCarbon trail bike\./);
     assert.ok(r.warnings.some((w) => /products\.json/.test(w)));
   });
 });
@@ -209,12 +209,12 @@ describe('Magento 2', () => {
     assert.equal(r.counts.products, 3);
     assert.equal(s.log.filter((l) => l.method === 'POST' && /products\(/.test(l.body)).length, 2, 'two GraphQL pages');
     const prod = fileText(r, /products/);
-    assert.match(prod, /## Hydro Bottle\nSource: http:\/\/127\.0\.0\.1:\d+\/hydro-bottle\.html\n\n- Price: 19\.50 EUR \(was 25\.00 EUR\)\n- SKU: HB-1\n- Availability: in stock\n- Categories: Gear\n\nKeeps water cold/);
-    assert.match(prod, /## Rain Jacket[\s\S]*?- Type: Configurable[\s\S]*?- Variants:\n {2}- M \/ Blue: 120\.00 EUR, SKU RJ-M-B, out of stock/);
+    assert.match(prod, /## Hydro Bottle\n\nSource: http:\/\/127\.0\.0\.1:\d+\/hydro-bottle\.html\n- Hydro Bottle price: 19\.50 EUR \(was 25\.00 EUR\)\n- Hydro Bottle SKU: HB-1\n- Hydro Bottle availability: in stock\n- Hydro Bottle categories: Gear\n\nKeeps water cold/);
+    assert.match(prod, /## Rain Jacket[\s\S]*?- Rain Jacket type: Configurable[\s\S]*?- Rain Jacket variants:\n {2}- Rain Jacket M \/ Blue: 120\.00 EUR, SKU RJ-M-B, out of stock/);
     const faq = fileText(r, /faq/);
     assert.match(faq, /### Can I return a bike\?\nYes, within 14 days\./);
     assert.match(fileText(r, /shipping/), /We ship across the EU/);
-    assert.match(fileText(r, /pages/), /## Customer Service\nSource: .*\/customer-service\n\nCall us Monday/);
+    assert.match(fileText(r, /pages/), /## Customer Service\n\nSource: .*\/customer-service\nCall us Monday/);
     assert.equal(s.hits(/^\/faq$/), 0, 'CMS page already read through GraphQL is not fetched again');
     assert.equal(s.hits(/hydro-bottle\.html/), 0, 'API products: product pages not crawled');
   });
@@ -224,7 +224,7 @@ describe('Magento 2', () => {
     assert.ifError(error);
     assert.equal(r.platform, 'magento'); assert.equal(r.api, false);
     assert.equal(r.counts.products, 1);
-    assert.match(fileText(r, /products/), /## Hydro Bottle\n[\s\S]*- Price: 19\.50 EUR/);
+    assert.match(fileText(r, /products/), /## Hydro Bottle\n[\s\S]*- Hydro Bottle price: 19\.50 EUR/);
   });
 });
 
@@ -259,8 +259,8 @@ describe('Squarespace', () => {
     assert.equal(r.platform, 'squarespace'); assert.equal(r.api, true);
     assert.equal(r.counts.products, 2);
     const prod = fileText(r, /products/);
-    assert.match(prod, /## Mug\nSource: http:\/\/127\.0\.0\.1:\d+\/shop\/p\/mug\n\n- Price: 18\.00 GBP\n- SKU: mug-1\n- Availability: in stock\n- Tags: ceramic\n\nMug is handmade\./);
-    assert.match(prod, /## Bowl[\s\S]*?- Price: 30\.00 GBP to 42\.00 GBP[\s\S]*?- Variants:\n {2}- Size: Small: 30\.00 GBP, SKU b-s, out of stock\n {2}- Size: Large: 42\.00 GBP, SKU b-l, in stock/);
+    assert.match(prod, /## Mug\n\nSource: http:\/\/127\.0\.0\.1:\d+\/shop\/p\/mug\n- Mug price: 18\.00 GBP\n- Mug SKU: mug-1\n- Mug availability: in stock\n- Mug tags: ceramic\n\nMug is handmade\./);
+    assert.match(prod, /## Bowl[\s\S]*?- Bowl price: 30\.00 GBP to 42\.00 GBP[\s\S]*?- Bowl variants:\n {2}- Bowl Size: Small: 30\.00 GBP, SKU b-s, out of stock\n {2}- Bowl Size: Large: 42\.00 GBP, SKU b-l, in stock/);
     assert.match(fileText(r, /faq/), /### Are mugs dishwasher safe\?\nYes, top rack\./);
     assert.match(fileText(r, /returns/), /Return any piece within 30 days/);
     assert.equal(s.hits(/^\/shop\/p\//), 0, 'API path: product pages not fetched');
@@ -272,7 +272,7 @@ describe('Squarespace', () => {
     assert.equal(r.platform, 'squarespace'); assert.equal(r.api, false);
     assert.equal(s.hits(/format=json/), 0);
     assert.equal(r.counts.products, 2);
-    assert.match(fileText(r, /products/), /## Bowl\n[\s\S]*- Price: 30\.00 GBP to 42\.00 GBP/);
+    assert.match(fileText(r, /products/), /## Bowl\n[\s\S]*- Bowl price: 30\.00 GBP to 42\.00 GBP/);
   });
 });
 
@@ -308,9 +308,9 @@ describe('WooCommerce', () => {
     assert.equal(r.counts.products, 3);
     assert.equal(s.hits(/\/wc\/store\/v1\/products\?per_page=2&page=\d/), 2);
     const prod = fileText(r, /products/);
-    assert.match(prod, /## Espresso Grinder – Mk 1\nSource: http:\/\/127\.0\.0\.1:\d+\/product\/grinder-1\/\n\n- Price: 1,299\.00 AUD \(was 1,499\.00 AUD\)\n- SKU: EG-1\n- Availability: in stock\n- Options: Colour \(Black, Steel\)\n- Categories: Grinders\n\nFlat burrs\.\n\n64 mm flat burrs, stepless\./);
+    assert.match(prod, /## Espresso Grinder – Mk 1\n\nSource: http:\/\/127\.0\.0\.1:\d+\/product\/grinder-1\/\n- Espresso Grinder – Mk 1 price: 1,299\.00 AUD \(was 1,499\.00 AUD\)\n- Espresso Grinder – Mk 1 SKU: EG-1\n- Espresso Grinder – Mk 1 availability: in stock\n- Espresso Grinder – Mk 1 options: Colour \(Black, Steel\)\n- Espresso Grinder – Mk 1 categories: Grinders\n\nFlat burrs\.\n\n64 mm flat burrs, stepless\./);
     assert.match(fileText(r, /faq/), /### Is there a warranty\?\nTwo years\./);
-    assert.match(fileText(r, /shipping-returns/), /## Shipping & Returns\nSource: .*\/shipping-returns\/\n\nFree shipping in Australia/);
+    assert.match(fileText(r, /shipping-returns/), /## Shipping & Returns\n\nSource: .*\/shipping-returns\/\nFree shipping in Australia/);
     assert.ok(!r.files.some((f) => /gallery/i.test(f.bytes.toString())), 'non-help pages skipped');
   });
 });
@@ -345,12 +345,12 @@ describe('generic site', () => {
     assert.equal(s.hits(/sm-posts|blog|cart/), 0, 'posts sitemap, blog and robots-disallowed /cart skipped');
     assert.equal(s.hits(/^\/sitemap\.xml/), 0, 'robots Sitemap: line used instead of guessing');
     assert.equal(r.counts.products, 1);
-    assert.match(fileText(r, /products/), /## 2P Tent\nSource: .*\/tent-2p\n\n- Price: 349\.00 CAD\n- Brand: Acme\n- Availability: limited availability\n- Variants:\n {2}- 2P Tent Green: 349\.00 CAD, SKU T2-G, in stock\n\nTwo-person, 1\.4 kg\./);
-    assert.match(fileText(r, /faq/), /## Help centre\nSource: .*\/help\/faq\n\n### Do tents come with stakes\?\nYes, eight aluminium stakes\.\n\n### Can I pick up in store\?\nYes, in Calgary\./);
+    assert.match(fileText(r, /products/), /## 2P Tent\n\nSource: .*\/tent-2p\n- 2P Tent price: 349\.00 CAD\n- 2P Tent brand: Acme\n- 2P Tent availability: limited availability\n- 2P Tent variants:\n {2}- 2P Tent Green: 349\.00 CAD, SKU T2-G, in stock\n\nTwo-person, 1\.4 kg\./);
+    assert.match(fileText(r, /faq/), /## Help centre\n\nSource: .*\/help\/faq\n\n### Do tents come with stakes\?\nYes, eight aluminium stakes\.\n\n### Can I pick up in store\?\nYes, in Calgary\./);
     const pol = fileText(r, /shipping-policy/);
     assert.match(pol, /Ships in 1–2 days via Canada Post\.\n\n- Free over 99 CAD\n- Tracking included/);
     assert.ok(!/SECRET|color:red/.test(pol));
-    assert.match(fileText(r, /pages/), /## About Acme\nSource: .*\/about\n\nFamily-run outfitter/);
+    assert.match(fileText(r, /pages/), /## About Acme\n\nSource: .*\/about\nFamily-run outfitter/);
   });
   test('detectPlatform on a bare site with no API says generic', async () => {
     const s = await site({ '/': { body: html('Plain', '<h1>Plain</h1>') } });
@@ -525,9 +525,9 @@ describe('Markdown builder', () => {
     assert.deepEqual(files.map((f) => f.docs), [1, 1, 1, 1, 2, 2, 1]);
     const p1 = files[4].bytes.toString();
     assert.match(p1, /^# Products: S \(part 1 of 3\)\n\nImported from https:\/\/s\.example on 2026-11-08\./);
-    assert.match(p1, /## P0\nSource: https:\/\/s\.example\/p0\n\n\\# forged\n\n#### Real\n\nok\n/);
-    assert.match(p1, /## P1\nSource: https:\/\/s\.example\/p1\n\n- Price: 1\.00\n\n# forged heading/, 'builder trusts collector text (collectors escape via htmlToText)');
-    assert.match(files[3].bytes.toString(), /\n## About\nSource: https:\/\/s\.example\/about\n/);
+    assert.match(p1, /## P0\n\nSource: https:\/\/s\.example\/p0\n\\# forged\n\n#### Real\n\nok\n/);
+    assert.match(p1, /## P1\n\nSource: https:\/\/s\.example\/p1\n- Price: 1\.00\n\n# forged heading/, 'builder trusts collector text (collectors escape via htmlToText)');
+    assert.match(files[3].bytes.toString(), /\n## About\n\nSource: https:\/\/s\.example\/about\n/);
     for (const f of files) assert.equal(f.mime, 'text/markdown');
   });
   test('docsFromHtml extracts FAQ pairs from question headings and keeps text otherwise', () => {

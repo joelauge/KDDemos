@@ -654,6 +654,7 @@ function renderHero() {
     const chip = $(`.st-msg-a .st-chip[data-chip="${id}"]`, logEl);
     if (chip && !chip.closest('.st-chips')?.hidden && !chip.closest('.is-stale')) { chip.click(); return; }
     if (id === 'use_samples') { addUserMessage('Use sample files · 30s demo'); dispatchAction({ type: 'attach_samples', set: 'lumen-bikes' }, { fromClick: true }); }
+    else if (id === 'import_store') { addUserMessage('Enter a Store URL'); dispatchAction({ type: 'import_store' }, { fromClick: true }); }
     else { addUserMessage('Upload my files'); dispatchAction({ type: 'request_upload' }, { fromClick: true }); }
   };
   // r5 (D1): the Builder's 'Use sample files' chip is the one solid primary on screen. Over the map this is a quiet
@@ -672,6 +673,15 @@ function dedupeLandingLink() {
       b.hidden = true;
       const prev = b.previousElementSibling;   // 'Add a file or try the sample files.' -> 'Add a file.'
       if (prev && /^\s*or\s*$/i.test(prev.textContent || '')) prev.hidden = true;
+    }
+    // the third first-run choice in the bot pane's empty state too: '… Add a file. Or enter your store's URL.'
+    // CONTRACT-GAP: studio/samplebot.js (C) could render this link itself (builderAction({ type: 'import_store' }));
+    // B adds it to C's empty-state line until then (app.js also handles 'import_store' on builder:action).
+    if (!isLive()) for (const p of $$('.sb-empty', slots.bot)) {
+      if (p.querySelector('[data-store-link]')) continue;
+      const link = h('button', { type: 'button', class: 'sb-link', dataset: { storeLink: '1' },
+        onclick: () => { addUserMessage('Enter a Store URL'); dispatchAction({ type: 'import_store' }, { fromClick: true }); } }, "enter your store's URL");
+      p.append(h('span', { class: 'sb-store' }, ' Or ', link, '.'));
     }
   };
   run();
@@ -714,6 +724,7 @@ function helpIntent(text, label) {
   if (!hasFiles) chips.push({ id: 'use_samples', label: 'Use sample files', kind: 'primary', action: { type: 'attach_samples' }, local: true });
   else if (ready && !m.proofRun) chips.push({ id: 'run_proof', label: 'Run the Proof Run', kind: 'primary', action: { type: 'run_proof' }, local: true });
   else chips.push({ id: 'add_more', label: 'Add more files', action: { type: 'request_upload' }, local: true });
+  if (!hasFiles) chips.push({ id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true });
   if (!hasFiles) chips.push({ id: 'proof_info', label: 'What is the Proof Run?', send: 'What is the Proof Run?' });
   else if (ready && m.proofRun) chips.push({ id: 'launch', label: `Launch · ${priceText()}`, kind: 'primary', action: { type: 'show_launch' }, local: true });
   chips.push(channelsChip());
@@ -825,10 +836,15 @@ let logRO = null;
 /** perf (r5): the follow runs inside the ResizeObserver callback itself. That callback is delivered after layout and
  * before paint, so reading the log's geometry there is free (r4 read scrollHeight in a rAF, after other frame callbacks
  * had dirtied layout again: a forced reflow per frame under streaming). Many growing messages = one delivery. */
+// perf (r8): no geometry is read at all. One ResizeObserver delivery (all grown messages of a frame together) makes one
+// blind write; the browser clamps it to the bottom (an unchanged position fires no scroll event), so streaming never
+// reads scrollHeight/clientHeight/scrollTop per frame, in a rAF or anywhere else on this path.
+let followQueued = false;
 function followNow() {
-  if (!stick || !logEl) return;
-  const top = logEl.scrollHeight - logEl.clientHeight;
-  if (top - logEl.scrollTop > 1) logEl.scrollTop = top;
+  if (!stick || !logEl || followQueued) return;
+  followQueued = true;
+  logEl.scrollTop = 1e9;
+  queueMicrotask(() => { followQueued = false; });
 }
 function wireLogScroll() {
   // perf (r6): the reader's scroll position is read in the scroll event that their input causes (layout is clean
@@ -1319,7 +1335,7 @@ const SERVER_CHIP_IDS = new Set(['samples', 'upload', 'what-canonical', 'what-at
 
 // ---- persistence of the log (sessionStorage, reload case)
 
-const SKIP_RESTORE = new Set(['replay-demo', 'email-capture', 'launch', 'success', 'activating', 'expired', 'scorecard', 'insights']);
+const SKIP_RESTORE = new Set(['store-import', 'replay-demo', 'email-capture', 'launch', 'success', 'activating', 'expired', 'scorecard', 'insights']);
 function logKey() { return `kb-studio-log:${getState().trial.id || 'none'}`; }
 let saveTimer = 0;
 function saveLog() {
@@ -1545,7 +1561,11 @@ function onTurnEvent(rec, st, type, data, input) {
       if (diff.length && !st.diffShown) { addCard(rec, 'config-diff', { rows: [...diff], by: 'setup', fromVersion: prevV, version: v }); st.diffShown = true; st.cards++; }
       break;
     }
-    case 'action': dispatchAction(data || {}, { fromClick: false }); break;
+    case 'action':
+      // a typed "import my shopify store mystore.com": the URL card rides on the Builder's own reply
+      if (data?.type === 'import_store') { if (!focusOpenStoreCard(data.url)) { addCard(rec, 'store-import', { url: data.url || '' }); st.cards++; } break; }
+      dispatchAction(data || {}, { fromClick: false });
+      break;
     case 'card': {
       if (!data || !data.type) break;
       if (data.type === 'config-diff' && st.diffShown) break;
@@ -1590,6 +1610,7 @@ function defaultChips() {
   if (step === 'purpose' || step === 'sources') return [
     { id: 'use_samples', label: 'Use sample files', kind: 'primary', action: { type: 'attach_samples' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
+    { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
   ];
   if (step === 'learn') return [
     { id: 'what_atom', label: "What's an atom?", send: "What's an atom?" },
@@ -1699,6 +1720,7 @@ function dispatchAction(a, { fromClick = false } = {}) {
   // the landing's short map band opens up inside the click that starts the build (an input: never a layout shift)
   if (fromClick && (type === 'attach_samples' || type === 'request_upload')) document.documentElement.setAttribute('data-intent', '');
   switch (type) {
+    case 'import_store': openStoreImport({ url: a.url || '' }); break;
     case 'request_upload':
       emit('intake:open', {});
       if (fromClick) { if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); }
@@ -2670,6 +2692,7 @@ function paletteCommands() {
   return [
     { id: 'add', label: 'Add files', ico: 'upload', run: () => { emit('intake:open', {}); if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); } },
     { id: 'samples', label: 'Use sample files', ico: 'bolt', run: () => dispatchAction({ type: 'attach_samples' }, { fromClick: true }) },
+    { id: 'store', label: 'Enter a Store URL (import products, help pages, policies)', ico: 'link', run: () => dispatchAction({ type: 'import_store' }, { fromClick: true }) },
     { id: 'ask', label: `Ask ${botName()}…`, ico: 'chat', run: focusBotComposer },
     { id: 'proof', label: 'Run Proof Run', ico: 'flask', run: () => dispatchAction({ type: 'run_proof' }) },
     { id: 'view', label: getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Toggle Proof view', ico: 'shieldCheck', run: () => setView(getState().ui.view === 'proof' ? 'bot' : 'proof', 'toggle') },
@@ -2892,6 +2915,174 @@ store.registerCard('email-capture', (data, el) => {
       msg.className = 'st-field-msg is-bad';
     }
   });
+});
+
+// ------------------------------------------------------------------ "Enter a Store URL" (POST /store, storeimport.mjs)
+// One card in the Builder: address + "I own or manage this store" → a StageTrack-style run (Find · Read · Build · Add)
+// fed by the importer's own events. Files then arrive through the normal events stream and atomize like uploads.
+const STORE_PLATFORM = { shopify: 'Shopify store', woocommerce: 'WooCommerce store', magento: 'Magento store', squarespace: 'Squarespace store', generic: 'Store website' };
+const STORE_STEPS = [{ key: 'find', label: 'Find' }, { key: 'read', label: 'Read' }, { key: 'build', label: 'Build' }, { key: 'add', label: 'Add' }];
+let storeCardApi = null;   // the open card ({ focus(url), running() }) — one at a time
+const storeHost = (u) => String(u || '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^www\./i, '').replace(/[/?#].*$/, '').slice(0, 60);
+const nPlural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString('en-US')} ${Number(n) === 1 ? one : many}`;
+function storeFoundLine(c = {}) {
+  const parts = [];
+  if (c.products) parts.push(nPlural(c.products, 'product'));
+  if (c.pages || c.faqs) parts.push(nPlural((c.pages || 0) + (c.faqs ? 1 : 0), 'help page'));
+  if (c.faqs) parts.push(nPlural(c.faqs, 'FAQ answer'));
+  if (c.policies) parts.push(nPlural(c.policies, 'policy', 'policies'));
+  return parts.length ? `Found ${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]}` : 'Found nothing to import yet';
+}
+function storeCappedLine(cp = {}) {
+  const out = [];
+  if (cp.products) out.push(`the first ${Number(cp.products.limit).toLocaleString('en-US')} products`);
+  if (cp.pages) out.push(`the first ${Number(cp.pages.limit).toLocaleString('en-US')} help pages`);
+  let t = out.length ? `Imported ${out.join(' and ')}.` : '';
+  if (cp.bytes) t += ` ${cp.bytes.droppedProducts ? `${nPlural(cp.bytes.droppedProducts, 'product')} didn't fit` : 'Some sections didn\'t fit'} in your trial's space.`;
+  if (cp.time) t += ' The store was slow, so a few pages were skipped.';
+  return t.trim();
+}
+/** A store card already open and idle takes the new request (prefilled) instead of a second card. */
+function focusOpenStoreCard(url) {
+  if (!storeCardApi || !storeCardApi.el.isConnected) { storeCardApi = null; return false; }
+  storeCardApi.focus(url);
+  return true;
+}
+function openStoreImport({ url = '' } = {}) {
+  if (isMobile()) setTab('setup', { slide: true });
+  if (focusOpenStoreCard(url)) return;
+  localSay("Paste your store's web address. I'll read its products, help pages and policies (public pages only, as your visitors see them) and turn them into files your bot quotes, with a link back to each page.",
+    { reply: true, card: { type: 'store-import', data: { url } }, chips: [] });
+}
+store.registerCard('store-import', (data, el) => {
+  const id = uid('si');
+  const input = h('input', { type: 'text', inputmode: 'url', id, class: 'st-text', placeholder: 'yourstore.com', autocomplete: 'url', spellcheck: 'false', autocapitalize: 'off',
+    maxlength: '2048', value: data?.url || '', 'aria-describedby': `${id}-msg` });
+  const own = h('input', { type: 'checkbox', id: `${id}-own`, class: 'st-si-own' });
+  const msg = h('p', { id: `${id}-msg`, class: 'st-field-msg', role: 'status' });
+  const go = h('button', { type: 'submit', class: 'st-btn st-btn-primary' }, h('span', { html: icon('arrowRight', 15) }), h('span', { class: 'st-btn-label' }, 'Import store'));
+  const instead = h('button', { type: 'button', class: 'st-btn st-btn-ghost' }, 'Upload files instead');
+  const form = h('form', { class: 'st-si-form', novalidate: true },
+    h('label', { for: id, class: 'st-si-label' }, "Your store's web address"),
+    h('div', { class: 'st-si-row' }, input, go),
+    h('label', { class: 'st-si-check', for: `${id}-own` }, own, h('span', null, 'I own or manage this store')),
+    h('div', { class: 'st-si-foot' }, msg, instead));
+  // the run: StageTrack-like nodes, a status line, a progress bar, the found / capped lines
+  const nodes = STORE_STEPS.map((st) => h('li', { class: 'st-si-node', dataset: { step: st.key, state: 'todo' } },
+    h('span', { class: 'st-si-dot', 'aria-hidden': 'true' }), h('span', { class: 'st-si-node-l' }, st.label)));
+  const track = h('ol', { class: 'st-si-track', 'aria-label': 'Import steps' }, ...nodes);
+  const status = h('p', { class: 'st-si-status', role: 'status', 'aria-live': 'polite' });
+  const barFill = h('i');
+  const bar = h('div', { class: 'st-si-bar', role: 'progressbar', 'aria-label': 'Pages read', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', hidden: true }, barFill);
+  const found = h('p', { class: 'st-si-found', hidden: true });
+  const capped = h('p', { class: 'st-si-capped', hidden: true });
+  const cancel = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Cancel');
+  const actions = h('div', { class: 'st-si-actions', hidden: true });
+  const run = h('div', { class: 'st-si-run', hidden: true }, status, track, bar, found, capped, actions);
+  const card = h('div', { class: 'st-card st-si' },
+    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Enter a Store URL'), h('span', { class: 'st-card-meta', title: 'Shopify, WooCommerce, Magento, Squarespace or any public site' }, 'Any online store')),
+    form, run);
+  el.append(card);
+  let ac = null, busy = false, lastUrl = '';
+  const reveal = (node) => {
+    if (!node.hidden) return;
+    node.hidden = false;
+    if (!motion.reduced()) motion.animate(node, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out' });
+  };
+  const setStep = (key, state) => {
+    const i = STORE_STEPS.findIndex((x) => x.key === key);
+    nodes.forEach((n, j) => { n.dataset.state = j < i ? 'done' : j === i ? state : (state === 'failed' ? n.dataset.state === 'done' ? 'done' : 'todo' : 'todo'); });
+  };
+  const say = (t) => { status.textContent = t; };
+  const setBar = (done, total) => {
+    const p = total > 0 ? Math.max(0.04, Math.min(1, done / total)) : 0;
+    bar.style.setProperty('--p', String(p));
+    bar.setAttribute('aria-valuenow', String(Math.round(p * 100)));
+  };
+  const showActions = (...btns) => { actions.replaceChildren(...btns); actions.hidden = !btns.length; };
+  const tryAnother = () => {
+    run.hidden = true; form.hidden = false; card.classList.remove('is-error', 'is-done');
+    input.focus(); input.select();
+  };
+  const uploadInstead = () => { addUserMessage('Upload files instead'); dispatchAction({ type: 'request_upload' }, { fromClick: true }); };
+  instead.addEventListener('click', uploadInstead);
+  cancel.addEventListener('click', () => { if (ac) ac.abort(); });
+  function fail(message) {
+    busy = false; ac = null;
+    card.classList.add('is-error');
+    const cur = nodes.find((n) => n.dataset.state === 'active');
+    if (cur) cur.dataset.state = 'failed';
+    say(message);
+    bar.hidden = true;
+    const again = h('button', { type: 'button', class: 'st-btn st-btn-primary st-btn-sm' }, 'Try another URL');
+    const up = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Upload files instead');
+    again.addEventListener('click', tryAnother);
+    up.addEventListener('click', uploadInstead);
+    showActions(again, up);
+    announce(message, 'assertive');
+    queueMicrotask(() => again.focus({ preventScroll: true }));
+  }
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const v = input.value.trim();
+    msg.className = 'st-field-msg'; msg.textContent = '';
+    if (!v || v.length > 2048 || /\s/.test(v)) {
+      msg.textContent = "That doesn't look like a web address. Try something like yourstore.com."; msg.className = 'st-field-msg is-bad';
+      input.setAttribute('aria-invalid', 'true'); input.focus(); return;
+    }
+    input.removeAttribute('aria-invalid');
+    if (!own.checked) {
+      msg.textContent = 'Tick the box to confirm you own or manage this store.'; msg.className = 'st-field-msg is-bad';
+      own.focus(); return;
+    }
+    busy = true; lastUrl = v; ac = new AbortController();
+    document.documentElement.setAttribute('data-intent', '');
+    form.hidden = true; card.classList.remove('is-error', 'is-done');
+    found.hidden = true; capped.hidden = true; bar.hidden = true; setBar(0, 0);
+    showActions(cancel);
+    reveal(run);
+    setStep('find', 'active');
+    say(`Looking at ${storeHost(v)}…`);
+    let uploaded = 0;
+    try {
+      await trialP;
+      const done = await api.importStore(v, { owner: true, signal: ac.signal, onEvent: (type, d) => {
+        if (type === 'detect') { setStep('read', 'active'); say(`${STORE_PLATFORM[d?.platform] || 'Store website'} found${d?.name ? `: ${d.name}` : ''}. Reading products and help pages…`); }
+        else if (type === 'fetching') { reveal(bar); setBar(d?.done || 0, d?.total || 0); }
+        else if (type === 'found') { found.textContent = `${storeFoundLine(d)}.`; reveal(found); }
+        else if (type === 'building') { setStep('build', 'active'); bar.hidden = true; say(`Building ${nPlural((d?.files || []).length, 'file')}…`); }
+        else if (type === 'capped') { const t = storeCappedLine(d || {}); if (t) { capped.textContent = t; reveal(capped); } }
+        else if (type === 'built') { setStep('add', 'active'); say(`Adding ${nPlural((d?.files || []).length, 'file')} to your bot…`); }
+        else if (type === 'uploaded') uploaded++;
+      } });
+      busy = false; ac = null;
+      nodes.forEach((n) => { n.dataset.state = 'done'; });
+      card.classList.add('is-done');
+      const n = (done?.files || []).length || uploaded;
+      const where = done?.name || storeHost(lastUrl);
+      say(`Imported ${nPlural(n, 'file')} from ${where}. They're learning now; each answer will link the store page it quotes.`);
+      const again = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Import again');
+      again.addEventListener('click', tryAnother);
+      showActions(again);
+      announce(`Imported ${nPlural(n, 'file')} from ${where}.`);
+      emit('files:added', { source: 'store', count: n });
+    } catch (err) {
+      if (err?.code === 'aborted' || err?.name === 'AbortError' || ac?.signal?.aborted) { fail('The import was cancelled.'); return; }
+      fail(err?.message && err.status !== 0 ? err.message : "Couldn't reach the studio. Nothing was imported; try again.");
+    }
+  });
+  storeCardApi = {
+    el: card,
+    focus(url) {
+      if (busy) { card.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' }); return; }
+      if (url) input.value = url;
+      if (form.hidden) tryAnother(); else { input.focus(); if (url) input.select(); }
+      card.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' });
+    },
+  };
+  queueMicrotask(() => { if (!isMobile() || data?.url) input.focus({ preventScroll: true }); });
+  return { update(d) { if (d?.url) storeCardApi?.focus(d.url); } };
 });
 
 store.registerCard('expired', (data, el) => {
@@ -3455,7 +3646,7 @@ on('setup:post', (d) => {
 // Resolves C's CONTRACT-GAPs: modules ask B to run a Builder action (with the Builder's narration), or to show a tab.
 on('builder:action', (a) => {
   if (!a || !a.type) return;
-  const label = { attach_samples: 'Use sample files', request_upload: 'Upload my files', run_proof: 'Run the Proof Run', show_launch: `Launch · ${priceText()}` }[a.type];
+  const label = { attach_samples: 'Use sample files', request_upload: 'Upload my files', import_store: 'Enter a Store URL', run_proof: 'Run the Proof Run', show_launch: `Launch · ${priceText()}` }[a.type];
   if (label && a.narrate !== false) addUserMessage(label);
   dispatchAction(a, { fromClick: a.fromClick !== false });
 });
@@ -4002,6 +4193,7 @@ async function createTrialWithRetry() {
         localSay('Good news: your own bot can start now. Use the sample files for the 30-second demo, or add yours.', { chips: [
           { id: 'use_samples', label: 'Use sample files · 30s demo', kind: 'primary', action: { type: 'attach_samples' }, local: true },
           { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
+          { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
         ] });
       }
       return r;
@@ -4196,6 +4388,7 @@ function renderB0() {
   setChips(rec, [
     { id: 'use_samples', label: 'Use sample files · 30s demo', kind: 'primary', action: { type: 'attach_samples', set: 'lumen-bikes' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
+    { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
     { id: 'what_canonical', label: "How does it avoid making things up?", local: true, run: explainCanonical },
   ], { still: hydrating });
   // r6 (D1): a 3-step "what happens next" preview under the first turn (desktop; identical to index.html's static
@@ -4289,6 +4482,7 @@ function explainCanonical() {
   localSay(`It only answers from the files you give it. It quotes them word for word with [n] citations, and if the answer isn't there it says exactly: *"${NOT_IN_DATA}"* No guessing, ever.`, { reply: true, chips: [
     { id: 'use_samples', label: 'Show me with sample files', kind: 'primary', action: { type: 'attach_samples', set: 'lumen-bikes' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
+    { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
   ] });
 }
 

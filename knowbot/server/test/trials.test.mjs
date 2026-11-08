@@ -10,7 +10,7 @@ import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
-  splitSentences, citeQuotedLines, quotedLineParts, sourceSegments, stripSourceLines, lastSourceUrl, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords } from '../trials.mjs';
+  splitSentences, citeQuotedLines, quotedLineParts, storeIntentOf, sourceSegments, stripSourceLines, lastSourceUrl, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords } from '../trials.mjs';
 import { requireCitations, isCourtesy } from '../../lib/knowbot.js';
 import { atomize, extractText, startFakeKnowDrive as startKD } from './fake-knowdrive.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
@@ -74,7 +74,7 @@ async function openSSE(url, headers) {
 }
 
 async function boot({ env = {}, studio = {}, speed = 3, kdKey = true } = {}) {
-  const kd = await startFakeKnowDrive({ speed });
+  const kd = await startFakeKnowDrive({ speed, narrowScope: 'all' }); // production: narrow-filter vector search can be empty
   const llm = await startFakeLLM({ slowMs: 9000 });
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-trials-'));
   const clock = { skew: 0 };
@@ -946,7 +946,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const t0 = await c.trial();
     const none = await c.stream(t0, '/setup', { message: 'only answer about warranties and returns' });
     assert.match(none.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), /Add files first/);
-    assert.deepEqual(none.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Open bot spec']);
+    assert.deepEqual(none.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Enter a Store URL', 'Open bot spec']);
     // a scope over the sample files keeps only the warranty file on, with a ConfigDiff card
     const t = await c.trial();
     assert.equal((await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' })).status, 201);
@@ -1015,7 +1015,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     // no files: a spec edit never offers the Proof Run
     const t3 = await c.trial();
     const se = await c.stream(t3, '/setup', { event: { type: 'spec_edit', data: {} } });
-    assert.deepEqual(se.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Open bot spec']);
+    assert.deepEqual(se.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Enter a Store URL', 'Open bot spec']);
   });
 
   test('r4: fake knowDrive spreads weak candidates and runs two files at once', async () => {
@@ -1702,5 +1702,161 @@ describe('shared sample mode (KNOWBOT_STUDIO_SAMPLE_MODE=shared): one copy, repl
     assert.ok(S.kd.files.has(files[0].id), 'shared copies are never deleted per trial');
     await S.kb.studio.sweep();
     assert.ok(S.kd.files.has(files[0].id), 'the sweeper never touches kind:trial-sample');
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ Enter a Store URL
+/** A tiny Shopify-shaped store on 127.0.0.1 (products.json, a refund policy, an FAQ page). */
+async function fakeShop() {
+  const page = (title, body) => `<!doctype html><html><head><title>${title}</title></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
+  let price = '1299.00';
+  const routes = {
+    '/': () => [200, 'text/html', page('Lumen Test Shop', '<p>Bikes.</p>').replace('</head>', '<link href="https://cdn.shopify.com/s/theme.css"><script>Shopify.currency={"active":"USD"};</script><meta property="og:site_name" content="Lumen Test Shop"></head>')],
+    '/products.json': (u) => [200, 'application/json', JSON.stringify({ products: Number(u.searchParams.get('page') || 1) > 1 ? [] : [
+      { id: 1, title: 'Trail Pro', handle: 'trail-pro', vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: '<p>A carbon trail bike with a lifetime frame warranty.</p>', variants: [{ title: 'Default Title', price, sku: 'TP-1', available: true }] },
+      { id: 2, title: 'Commuter Lite', handle: 'commuter-lite', vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: '<p>An aluminium city bike with mudguards.</p>', variants: [{ title: 'Default Title', price: '799.00', sku: 'CL-1', available: true }] },
+    ] })],
+    '/policies/refund-policy': () => [200, 'text/html', page('Refund policy', '<p>Unridden bikes can be returned within 30 days of delivery for a full refund.</p>')],
+    '/pages/faq': () => [200, 'text/html', page('FAQ', '<details><summary>Do you ship to Canada?</summary><p>Yes, we ship to Canada for a flat $25 fee.</p></details>')],
+    '/sitemap.xml': (u, base) => [200, 'application/xml', `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${base}/pages/faq</loc></url></urlset>`],
+  };
+  const s = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const r = routes[u.pathname];
+    if (!r) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
+    const [status, type, body] = r(u, `http://127.0.0.1:${s.address().port}`);
+    res.writeHead(status, { 'content-type': type }); res.end(body);
+  });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  return { base: `http://127.0.0.1:${s.address().port}`, setPrice: (p) => { price = p; }, close: () => { s.closeAllConnections?.(); return new Promise((r) => s.close(r)); } };
+}
+
+describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
+  let S, P, c, shop;
+  before(async () => {
+    shop = await fakeShop();
+    // the importer's injectable net option lets this test reach 127.0.0.1; production (P below) never sets it
+    S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 } } });
+    P = await boot();
+    c = client(S);
+  });
+  after(async () => { await S.close(); await P.close(); await shop.close(); });
+
+  test('imports a store: progress events, src:store uploads that atomize, cited answers that link the source page', async () => {
+    const t = await c.trial();
+    const ev = await c.stream(t, '/store', { url: shop.base, owner: true });
+    const names = ev.map((e) => e.event);
+    for (const n of ['detect', 'fetching', 'found', 'building', 'built', 'uploaded', 'done']) assert.ok(names.includes(n), `${n} in ${names.join(',')}`);
+    assert.ok(names.indexOf('detect') < names.indexOf('found') && names.indexOf('found') < names.indexOf('building') && names.indexOf('built') < names.indexOf('uploaded'));
+    assert.equal(ev.find((e) => e.event === 'detect').data.platform, 'shopify');
+    assert.deepEqual(ev.find((e) => e.event === 'found').data, { products: 2, pages: 0, policies: 1, faqs: 1 });
+    const done = ev.at(-1);
+    assert.equal(done.event, 'done');
+    assert.ok(done.data.files.length >= 3, JSON.stringify(done.data));
+    assert.ok(done.data.files.every((f) => f.origin === 'store'));
+    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`));
+    assert.ok(rows.length >= 3 && rows.every((f) => f.tags.includes('src:store') && f.filename.startsWith(`knowbot/trials/${t.trialId}/`) && f.filename.endsWith('.md')));
+    assert.ok(!S.kd.calls.some((x) => x.stray?.length), 'no stray text parts were sent to /ingest');
+    await c.waitReady(t, done.data.files.length);
+    // the librarian answer points to the page it came from, with its link
+    const fin = (await c.stream(t, '/ask', { question: 'Can I return a bike?' })).find((e) => e.event === 'final').data;
+    assert.equal(fin.status, 'grounded', JSON.stringify(fin.why));
+    assert.match(fin.text, /30 days/);
+    const cit = fin.citations.find((x) => /refund/i.test(x.file));
+    assert.ok(cit, JSON.stringify(fin.citations));
+    assert.equal(cit.url, `${shop.base}/policies/refund-policy`);
+    assert.ok(fin.text.includes(`(${shop.base}/policies/refund-policy)`), `the answer links the policy page: ${fin.text}`);
+    assert.doesNotMatch(fin.text, /Source:/, 'Source lines are provenance, never quoted');
+    const prod = (await c.stream(t, '/ask', { question: 'How much is the Commuter Lite?' })).find((e) => e.event === 'final').data;
+    assert.equal(prod.status, 'grounded', JSON.stringify(prod.why));
+    assert.match(prod.text, /799/);
+    assert.ok(prod.citations.some((x) => x.url === `${shop.base}/products/commuter-lite`), JSON.stringify(prod.citations));
+    assert.equal(prod.proof.unsupported, 0);
+    assert.ok(prod.proof.claims.length >= 1 && prod.proof.claims.every((x) => x.verified), JSON.stringify(prod.proof.claims));
+  });
+
+  test('a re-import replaces the earlier src:store files; bad input and unconfirmed ownership are 400', async () => {
+    const t = await c.trial();
+    const first = (await c.stream(t, '/store', { url: shop.base })).at(-1).data.files.map((f) => f.id);
+    shop.setPrice('1199.00');
+    const second = (await c.stream(t, '/store', { url: shop.base })).at(-1).data.files.map((f) => f.id);
+    assert.equal(second.length, first.length);
+    const now = (await (await c.json(t, '/files')).json()).files.map((f) => f.id).sort();
+    assert.deepEqual(now, [...second].sort(), 'only the new import is left');
+    assert.ok(first.every((id) => !S.kd.files.has(id)), 'the earlier import was deleted from knowDrive');
+    assert.equal((await c.json(t, '/store', 'POST', { url: '' })).status, 400);
+    assert.equal((await c.json(t, '/store', 'POST', { url: shop.base, owner: false })).status, 400);
+    const bad = await c.stream(t, '/store', { url: 'javascript:alert(1)' });
+    assert.deepEqual(bad.map((e) => e.event), ['error', 'done']);
+    assert.equal(bad[0].data.code, 'bad_url');
+    assert.match(bad[0].data.message, /web address/);
+    assert.equal((await c.json(t, '/store', 'GET')).status, 405);
+  });
+
+  test('the Builder understands typed store imports ("import my shopify store mystore.com") and offers the store chip first-run', async () => {
+    for (const [q, url] of [['import my shopify store mystore.com', 'mystore.com'], ['Pull in our products from https://acme.com/shop', 'https://acme.com/shop'], ['Enter a Store URL', null]]) assert.deepEqual(storeIntentOf(q), { url }, q);
+    for (const q of ['use sample files', 'upload my files', 'a bot for my bike store', 'my email is bob@acme.com', 'read warranty.pdf']) assert.equal(storeIntentOf(q), null, q);
+    assert.deepEqual(parseIntent('import my shopify store mystore.com', { spec: defaultSpec() }).actions, [{ type: 'import_store', url: 'mystore.com' }]);
+    const t = await c.trial();
+    const ev = await c.stream(t, '/setup', { message: 'import my shopify store mystore.com' });
+    assert.deepEqual(ev.filter((e) => e.event === 'action').map((e) => e.data), [{ type: 'import_store', url: 'mystore.com' }]);
+    assert.match(ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), /mystore\.com[\s\S]*own or manage/);
+    const chips = ev.find((e) => e.event === 'chips').data.chips;
+    assert.ok(chips.some((x) => x.action?.type === 'request_upload'), JSON.stringify(chips));
+  });
+
+  test('6 imports per hour per trial, then 429 with retry-after', async () => {
+    const t = await c.trial();
+    for (let i = 0; i < 6; i++) assert.equal((await c.stream(t, '/store', { url: 'not a url' }))[0].data.code, 'bad_url');
+    const r = await c.json(t, '/store', 'POST', { url: 'not a url' });
+    assert.equal(r.status, 429);
+    assert.ok(Number(r.headers.get('retry-after')) > 60);
+    assert.equal((await r.json()).error.code, 'rate_limited');
+  });
+
+  test('production default: loopback and private addresses are refused (blocked_host), nothing is uploaded', async () => {
+    const pc = client(P);
+    const t = await pc.trial();
+    const ev = (await pc.stream(t, '/store', { url: shop.base })).filter((e) => e.event !== 'fetching');
+    assert.deepEqual(ev.map((e) => e.event), ['error', 'done']);
+    assert.equal(ev[0].data.code, 'blocked_host');
+    assert.equal((await (await pc.json(t, '/files')).json()).files.length, 0);
+    assert.equal((await pc.stream(t, '/store', { url: 'http://169.254.169.254/latest/meta-data/' })).find((e) => e.event === 'error').data.code, 'blocked_host');
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ fake knowDrive = production
+describe('fake knowDrive enforces the production facts', () => {
+  let kd;
+  before(async () => { kd = await startKD({ speed: 50, narrowScope: 'all' }); });
+  after(async () => { await kd.close(); });
+  const ingest = async (parts) => {
+    const fd = new FormData();
+    for (const [k, v, name] of parts) if (name) fd.append(k, new Blob([v], { type: 'text/markdown' }), name); else fd.append(k, v);
+    const r = await fetch(`${kd.url}/api/v1/ingest`, { method: 'POST', headers: { authorization: 'Bearer x', 'x-vector-store-id': 'vs_p' }, body: fd });
+    return { status: r.status, body: await r.json() };
+  };
+  const search = async (mode, filter, query = 'refund window days') => (await (await fetch(`${kd.url}/api/v1/vector_stores/vs_p/search`, { method: 'POST',
+    headers: { authorization: 'Bearer x', 'content-type': 'application/json' }, body: JSON.stringify({ query, mode, max_num_results: 10, filter }) })).json()).data;
+
+  test('ingest part order, stray text parts, unix-second timestamps, dedup, narrow vector search vs hybrid', async () => {
+    const text = '# Refunds\n\nThe refund window is 30 days from delivery for every order.\n';
+    assert.equal((await ingest([['tags', 'trial:a'], ['file', text, 'a/r.md'], ['mime_type', 'text/markdown']])).status, 400, 'mime_type after a file part');
+    const stray = await ingest([['tags', 'trial:a'], ['mime_type', 'text/markdown'], ['path', 'a/r.md'], ['file', text, 'a/r.md']]);
+    assert.equal(stray.status, 200);
+    assert.deepEqual(stray.body.files.map((f) => f.filename), ['path', 'a/r.md'], 'a stray text part is stored as its own file');
+    const row = stray.body.files[1];
+    assert.equal(typeof row.created_at, 'number');
+    assert.ok(row.created_at < 1e11, 'created_at is unix seconds');
+    await kd.settle();
+    // narrow filter (1 file): vector finds nothing, hybrid finds it and carries distance next to its RRF score
+    assert.deepEqual(await search('vector', { all_of: ['trial:a'] }), []);
+    const hyb = (await search('hybrid', { all_of: ['trial:a'] })).filter((h) => h.tags.includes('trial:a'));
+    assert.ok(hyb.length >= 1 && hyb.every((h) => typeof h.distance === 'number' && h.score < 0.05));
+    // a byte-identical copy under new tags is never returned
+    const dup = (await ingest([['tags', 'trial:b'], ['mime_type', 'text/markdown'], ['file', text, 'b/r.md']])).body.files[0];
+    await kd.settle();
+    const hits = await search('hybrid', { all_of: ['trial:b'] });
+    assert.ok(!hits.some((h) => h.file_id === dup.id), 'the duplicate is not searchable');
   });
 });

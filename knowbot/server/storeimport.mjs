@@ -554,29 +554,34 @@ const AVAIL = (a) => (a == null ? null : a === true ? 'in stock' : a === false ?
 const cleanTitle = (s) => clip(oneLine(s), 200).replace(/^#+\s*/, '');
 /** A product as Markdown body lines (the section heading and Source line are added by the file builder). */
 export function productDoc(p) {
+  // Every fact line names its product ("- Trail Pro price: …"): a line is quoted on its own, so it must say what it
+  // is about without its heading (a line picker sees only the line; a librarian quote should read whole).
+  const name = cleanTitle(p.title) || 'Untitled product';
   const L = [];
+  const fact = (key, value) => L.push(`- ${name} ${key}: ${value}`);
   const price = fmtMoney(p.price, p.currency);
   const was = fmtMoney(p.compareAt, p.currency);
-  if (price) L.push(`- Price: ${price}${was && Number(p.compareAt) > Number(p.price) ? ` (was ${was})` : ''}${p.priceMax && Number(p.priceMax) > Number(p.price) ? ` to ${fmtMoney(p.priceMax, p.currency)}` : ''}`);
-  if (p.brand) L.push(`- Brand: ${oneLine(p.brand)}`);
-  if (p.type) L.push(`- Type: ${oneLine(p.type)}`);
-  if (p.sku) L.push(`- SKU: ${oneLine(p.sku)}`);
-  if (p.availability) L.push(`- Availability: ${p.availability}`);
+  if (price) fact('price', `${price}${was && Number(p.compareAt) > Number(p.price) ? ` (was ${was})` : ''}${p.priceMax && Number(p.priceMax) > Number(p.price) ? ` to ${fmtMoney(p.priceMax, p.currency)}` : ''}`);
+  if (p.brand) fact('brand', oneLine(p.brand));
+  if (p.type) fact('type', oneLine(p.type));
+  if (p.sku) fact('SKU', oneLine(p.sku));
+  if (p.availability) fact('availability', p.availability);
   const vs = (p.variants || []).filter((v) => v && v.title && !/^default( title)?$/i.test(v.title));
   if (vs.length) {
-    L.push('- Variants:');
+    L.push(`- ${name} variants:`);
     for (const v of vs.slice(0, 60)) {
       const bits = [fmtMoney(v.price, p.currency), v.sku ? `SKU ${oneLine(v.sku)}` : null, v.available == null ? null : AVAIL(v.available)].filter(Boolean);
-      L.push(`  - ${oneLine(v.title)}${bits.length ? `: ${bits.join(', ')}` : ''}`);
+      const vt = oneLine(v.title);
+      L.push(`  - ${vt.toLowerCase().startsWith(name.toLowerCase()) ? vt : `${name} ${vt}`}${bits.length ? `: ${bits.join(', ')}` : ''}`);
     }
     if (vs.length > 60) L.push(`  - …and ${vs.length - 60} more variants`);
   }
-  if (p.options?.length) L.push(`- Options: ${p.options.map((o) => `${oneLine(o.name)} (${o.values.map(oneLine).join(', ')})`).join('; ')}`);
-  if (p.categories?.length) L.push(`- Categories: ${p.categories.map(oneLine).filter(Boolean).join(', ')}`);
-  if (p.tags?.length) L.push(`- Tags: ${p.tags.map(oneLine).filter(Boolean).join(', ')}`);
+  if (p.options?.length) fact('options', p.options.map((o) => `${oneLine(o.name)} (${o.values.map(oneLine).join(', ')})`).join('; '));
+  if (p.categories?.length) fact('categories', p.categories.map(oneLine).filter(Boolean).join(', '));
+  if (p.tags?.length) fact('tags', p.tags.map(oneLine).filter(Boolean).join(', '));
   const desc = p.descriptionHtml != null ? htmlToText(p.descriptionHtml, { main: false, minLevel: 4 }) : String(p.description || '').trim();
   const text = `${L.join('\n')}${desc ? `\n\n${clip(desc, 6000)}` : ''}`.trim();
-  return { kind: 'product', title: cleanTitle(p.title) || 'Untitled product', url: p.url, text };
+  return { kind: 'product', title: name, url: p.url, text };
 }
 function productFromLd(o, pageUrl) {
   const offers = [].concat(o.offers || []).flatMap((x) => (typeIs(x, 'AggregateOffer') && x.offers ? [].concat(x.offers) : [x]));
@@ -972,7 +977,7 @@ const mdLine = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/^#+\s*/,
 /**
  * Turn documents into a few Markdown files: `<slug>-products-N.md` (one `## title` per product), `<slug>-faq.md`
  * (`## page` / `### question`), one `<slug>-<policy>.md` per policy and `<slug>-pages.md`. Every section carries a
- * `Source: <url>` line so citations can show where the answer came from. Byte budget priority: policies, FAQ, pages,
+ * `Source: <url>` line (right under its heading, after a blank line) so citations can link where the answer came from. Byte budget priority: policies, FAQ, pages,
  * then products. → { files:[{name, bytes:Buffer, mime, docs, size}], capped:{...}|null }
  */
 export function buildMarkdownFiles(docs, o = {}) {
@@ -1000,7 +1005,9 @@ export function buildMarkdownFiles(docs, o = {}) {
   const files = [];
   const taken = new Set();
   const nameOf = (base) => { let n = `${slug}-${base}.md`, i = 2; while (taken.has(n)) n = `${slug}-${base}-${i++}.md`; taken.add(n); return n; };
-  const section = (d, level = 2) => `${'#'.repeat(level)} ${mdLine(d.title)}\nSource: ${d.url}\n\n${String(d.text).trim()}\n`;
+  // The heading stands alone (so every chunker keeps it as the section breadcrumb) and the Source line opens the section's
+  // first paragraph (so the URL travels in the same atom as the first facts; trials.mjs looks it up for later atoms).
+  const section = (d, level = 2) => `${'#'.repeat(level)} ${mdLine(d.title)}\n\nSource: ${d.url}\n${String(d.text).trim()}\n`;
   /** Add sections to new file(s) under the byte budget; returns how many sections were kept. */
   function emit(baseName, header, sections, { split = Infinity } = {}) {
     let cur = null, part = 0;
@@ -1030,7 +1037,7 @@ export function buildMarkdownFiles(docs, o = {}) {
   // FAQ: grouped by source page
   const groups = new Map();
   for (const d of faqs.filter(keep)) { const k = d.url; if (!groups.has(k)) groups.set(k, { title: d.group || 'FAQ', url: d.url, items: [] }); groups.get(k).items.push(d); }
-  const faqSecs = [...groups.values()].map((g) => ({ n: g.items.length, md: `## ${mdLine(g.title)}\nSource: ${g.url}\n\n${g.items.map((d) => `### ${mdLine(d.title)}\n${String(d.text).trim()}\n`).join('\n')}` }));
+  const faqSecs = [...groups.values()].map((g) => ({ n: g.items.length, md: `## ${mdLine(g.title)}\n\nSource: ${g.url}\n\n${g.items.map((d) => `### ${mdLine(d.title)}\n${String(d.text).trim()}\n`).join('\n')}` }));
   if (faqSecs.length) emit('faq', () => `# Frequently asked questions: ${store}{{N}}\n\n${stamp}\n`, faqSecs);
   const pgs = pages.filter(keep);
   if (pgs.length) emit('pages', () => `# Help and about pages: ${store}{{N}}\n\n${stamp}\n`, pgs.map((d) => ({ md: section(d) })));

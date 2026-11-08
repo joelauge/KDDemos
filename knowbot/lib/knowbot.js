@@ -570,36 +570,201 @@ function tableLines(rows) {
   return rows.slice(2).map((r) => cells(r).map((c, i) => (c ? `${head[i] || ''}: ${c}`.replace(/^: /, '') : '')).filter(Boolean).join('; '));
 }
 
-/** Candidate lines for selection: answer cards first (sources arrive in retrieval order), at most `max` lines. */
-export function candidateLines(sources = [], { max = 45, perSource = 12, budget = 4500 } = {}) {
+/* ---------- answer ranking: which line directly answers the question ---------- */
+
+// What kind of answer a question asks for, and what such an answer looks like in a line.
+const NUMW = '(?:\\d+(?:[.,]\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|ninety|a|an)';
+const INTENTS = [
+  { kind: 'duration', ask: /\bhow long\b|\bfor how many (?:years|months|weeks|days|hours)\b|\bhow many (?:years|months|weeks|days|hours|minutes|cycles)\b|\bhow soon\b|\bwhen does (?:it|the \w+) expire\b|\bexpir(?:e|y|ation)\b/i,
+    hit: new RegExp(`\\b${NUMW}(?:\\s*(?:-|–|to|or)\\s*${NUMW})?[\\s-]*(?:years?|yrs?|months?|weeks?|days?|business days|working days|hours?|hrs?|minutes?|mins?|seconds?|cycles?)\\b|\\blifetime\\b|\\bnever expires?\\b|\\b(?:annual|yearly|monthly|weekly|daily|overnight|same[- ]day|next[- ]day)\\b`, 'i') },
+  { kind: 'price', ask: /\bhow much\b(?!\s+(?:time|longer|weight|range|load|does it weigh))|\bcost(?:s|ing)?\b|\bprice[sd]?\b|\bpricing\b|\bfees?\b|\bcharges?\b(?!\s+(?:it|the battery|a battery|my|your))|\bpay\b|\bexpensive\b|\bcheap\b|\brates?\b/i,
+    hit: /[$€£¥₹]\s?\d|\d\s?(?:usd|eur|gbp|dollars?|euros?|pounds?)\b|\d+(?:[.,]\d+)?\s?%|\bfree(?: of charge)?\b|\bno (?:extra )?(?:charge|cost|fee)\b|\bat no cost\b/i },
+  { kind: 'time', ask: /\bwhat time\b|\bopening hours\b|\bhours\b|\bwhen (?:are|is|do|does|can) (?:you|we|i|the store|the shop|it) (?:open|close|closed)\b|\bopen(?:ing)?\b.*\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekends?|holidays?)\b/i,
+    hit: /\b\d{1,2}(?:[:.]\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b|\bnoon\b|\bmidnight\b|\b(?:mon|tues|wednes|thurs|fri|satur|sun)days?\b|\bweekends?\b|\bweekdays?\b|\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b|\bclosed\b/i },
+  // a bare "when" is answered by a day, a time or a delay ("within 2 business days")
+  { kind: 'when', ask: /\bwhen\b(?!\s+(?:are|is|do|does|can) (?:you|we|i|the store|the shop|it) (?:open|close|closed)\b)/i, hit: null },
+  { kind: 'distance', ask: /\bhow far\b|\brange\b|\bhow many (?:km|kilometres|kilometers|miles)\b/i,
+    hit: /\b\d+(?:[.,]\d+)?\s?(?:km|kilomet(?:er|re)s?|miles?|mi)\b/i },
+  { kind: 'count', ask: /\bhow many\b(?!\s+(?:years|months|weeks|days|hours|minutes|cycles|km|kilometres|kilometers|miles))/i,
+    hit: new RegExp(`\\b${NUMW}\\b|\\bup to\\b`, 'i') },
+  { kind: 'contact', ask: /\b(?:email|e-mail|phone|call|contact|reach|address|where is|where are|located)\b/i,
+    hit: /@[a-z0-9-]+\.[a-z]|\b\d{3}[-\s]\d{4}\b|https?:\/\/|\bwww\.|\b\d+\s+[A-Z][a-z]+\s+(?:Street|St|Road|Rd|Avenue|Ave|Lane|Way)\b/ },
+  { kind: 'howto', ask: /\bhow (?:do|can|should|would) (?:i|we|you)\b|\bhow to\b|\bwhat (?:do|should) i do\b|\bsteps?\b|\bprocess\b/i,
+    hit: /@[a-z0-9-]+\.[a-z]|\b\d{3}[-\s]\d{4}\b|https?:\/\/|(?:^|[:;.]\s*)(?:email|e-mail|call|book|bring|visit|send|fill(?: in| out)?|go to|contact|open|log in|sign in|click|tap|choose|select|start|reply|use|take|register|ask)\b/i },
+];
+// Intent words carry the answer type, not the topic: they never count as topic words.
+INTENTS.find((x) => x.kind === 'when').hit = new RegExp(`${INTENTS.find((x) => x.kind === 'time').hit.source}|${INTENTS.find((x) => x.kind === 'duration').hit.source}`, 'i');
+const INTENT_WORDS = /\bhow (?:long|much|many|far|soon|often)\b|\bwhat time\b|\b(?:cost|costs|costing|price|prices|priced|pricing)\b/gi;
+const RSTOP = new Set([...STOPW, ...'how why where who whom whose does did doe is am be do i me my we us it a an of to in on at or if as by off out then than that would should could might must let make made like please ok okay tell much many long far soon often time last take takes took there here these those such also very really ever still yet else other another lot lots kind sort way thing things'.split(' ')]);
+// Words that mean the same thing for answer matching (after stemming).
+const RSYN = new Map(Object.entries({ cover: 'warranty', coverag: 'warranty', guarante: 'warranty', guarant: 'warranty', warrant: 'warranty',
+  opening: 'open', hour: 'open', clos: 'open', financ: 'financ', loan: 'financ', instal: 'financ', installment: 'financ',
+  rent: 'rent', rental: 'rent', hire: 'rent', deliv: 'deliver', delivery: 'deliver', ship: 'deliver', shipping: 'deliver', arriv: 'deliver',
+  refund: 'return', return: 'return', exchang: 'return' }));
+function rstem(w) {
+  w = w.replace(/'s$/, '').replace(/'/g, '');
+  if (w.length > 4 && /ies$/.test(w)) w = w.slice(0, -3) + 'y';
+  else if (w.length > 4 && /(?:ss|x|z|ch|sh)es$/.test(w)) w = w.slice(0, -2);
+  else if (w.length > 3 && /[^su]s$/.test(w)) w = w.slice(0, -1);
+  if (w.length > 5 && /ing$/.test(w)) w = w.slice(0, -3);
+  else if (w.length > 4 && /ed$/.test(w)) w = w.slice(0, -2);
+  if (w.length > 4 && /e$/.test(w)) w = w.slice(0, -1);
+  return RSYN.get(w) || w;
+}
+/** Topic words of a text for answer ranking: stemmed, synonyms folded, hyphen compounds kept whole too ("e-bike" → ebike, bike). */
+function rterms(t) {
+  const out = new Set();
+  for (const tok of String(t).toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9]+(?:['-][a-z0-9]+)*/g) || []) {
+    const parts = tok.split('-');
+    if (parts.length > 1) { const j = parts.join('').replace(/'/g, ''); if (j.length > 2 && !/^\d+$/.test(j)) out.add(rstem(j)); }
+    for (const p of parts) {
+      if (/^\d+$/.test(p)) { if (p.length <= 4) out.add(p); continue; } // model numbers ("Kids 20") name the topic
+      if (p.length < 3) continue;
+      if (!RSTOP.has(p) && !GENERIC.has(p)) out.add(rstem(p));
+    }
+  }
+  return out;
+}
+// "How much is X and how long is it covered?" asks two things: split it so each part gets its own best line.
+function clausesOf(question) {
+  const q = String(question || '').replace(/\s+/g, ' ').trim();
+  const parts = q.split(/\s*(?:\?\s*|;\s*|,?\s+and\s+(?=(?:how|what|when|where|which|who|is|are|do|does|can)\b)|,\s+(?=(?:how|what|when|where|which)\b))/i).filter((p) => p && /[a-z]/i.test(p));
   const out = [];
-  let used = 0;
+  for (const p of parts.length ? parts : [q]) {
+    const intents = INTENTS.filter((x) => x.ask.test(p)).map((x) => x.kind);
+    const own = rterms(p.replace(INTENT_WORDS, ' '));
+    const prev = out[out.length - 1];
+    // a part without its own intent or topic belongs to the previous one ("…, and what about Sundays")
+    if (prev && !intents.length && own.size < 2) { for (const w of own) prev.terms.set(w, 1); continue; }
+    const terms = new Map([...own].map((w) => [w, 1]));
+    // "how long is it covered": a pronoun leans on the earlier part's topic
+    if (prev && /\b(?:it|its|they|them|their|this|that|these|those|one)\b/i.test(p)) for (const [w] of prev.terms) if (!terms.has(w)) terms.set(w, 0.3);
+    out.push({ text: p, intents, terms });
+  }
+  // "contact"/"time"-only hints that ride along another intent add nothing: keep the strongest reading
+  for (const c of out) if (c.intents.includes('duration') && c.intents.includes('time') && !/\b(?:what time|opening hours|open|close)\b/i.test(c.text)) c.intents = c.intents.filter((k) => k !== 'time');
+  return out.length ? out : [{ text: q, intents: [], terms: new Map() }];
+}
+const TAIL = /,?\s+\b(?:because|since|so that|unless|otherwise|which|although|though|except|but)\b/i;
+/**
+ * Pure, deterministic: how well each line directly answers the question.
+ * lines: [{ text, section?, ask?, title? }]. Returns { clauses, score: [best score per line], per: [[score per clause]], answers: [[intent met per clause]], matched: [[topic words matched per clause]] }.
+ * A line scores for the question's topic words it states itself (weighted by rarity across the lines; words only
+ * in a trailing "because …" clause count less), for those in its heading or FAQ question, and for having the kind
+ * of answer asked for ("how long" → a duration, "how much" → a price, "when/what time" → hours or days).
+ * A line whose subject (its first words) is what was asked gets a little more; a line that is itself a question never answers.
+ */
+export function rankLines(question, lines = []) {
+  const clauses = clausesOf(question);
+  const N = lines.length || 1;
+  const L = lines.map((l) => {
+    const text = String(l.text || '');
+    const cut = text.search(TAIL);
+    return { all: rterms(text), head: rterms(cut > 20 ? text.slice(0, cut) : text), ctx: rterms(`${l.section || ''} ${l.ask || ''}`), text,
+      lead: rterms(text.split(/\s+/).slice(0, 6).join(' ')), // the line's subject: what it is about, not what it mentions
+      isQ: /\?\s*$/.test(text) && !/[.!]\s+\S/.test(text) };
+  });
+  const df = new Map();
+  for (const x of L) for (const w of new Set([...x.all, ...x.ctx])) df.set(w, (df.get(w) || 0) + 1);
+  const idf = (w) => Math.log(1 + N / (1 + (df.get(w) || 0))) + 0.15;
+  const per = [], answers = [], matched = [];
+  const score = L.map((x, li) => {
+    per[li] = []; answers[li] = []; matched[li] = [];
+    clauses.forEach((c, ci) => {
+      let got = 0, tot = 0, m = 0;
+      for (const [w, wt] of c.terms) {
+        const v = idf(w) * wt;
+        tot += v;
+        if (x.head.has(w)) { got += v; m += wt; } else if (x.all.has(w)) { got += 0.6 * v; m += wt; } else if (x.ctx.has(w)) { got += 0.55 * v; m += wt * 0.5; }
+      }
+      const cov = tot ? got / tot : 0;
+      const met = c.intents.length ? c.intents.filter((k) => INTENTS.find((i) => i.kind === k).hit.test(x.text)).length / c.intents.length : 0;
+      let s = cov + (c.intents.length ? 0.55 * met : 0) + ([...c.terms.keys()].some((w) => x.lead.has(w) && (c.terms.get(w) === 1)) ? 0.1 : 0);
+      if (x.isQ) s *= 0.25;
+      if (x.text.length > 260) s *= 0.95;
+      per[li][ci] = Math.round(s * 1e6) / 1e6; answers[li][ci] = met > 0; matched[li][ci] = m;
+    });
+    return Math.max(...per[li]);
+  });
+  return { clauses, score, per, answers, matched };
+}
+
+/**
+ * Candidate lines for selection: answer cards first (sources arrive in retrieval order), at most `max` lines.
+ * Each line remembers where it sits in its atom: `section` (the nearest heading above it, or the source's own
+ * section) and `ask` (the FAQ question line it answers), both taken from the knowDrive text, never invented.
+ * With `question`, coarse atoms that hold more lines than the caps keep the lines that best answer it (rankLines),
+ * in their original order; without it the first lines are kept, as before.
+ */
+// CONTRACT-GAP: server/trials.mjs (Studio preview, not owner Q) calls candidateLines(sources) without { question };
+// finalizeSelection still puts the answering line first among those lines, but passing { question } there would also
+// keep answer lines that sit past the 12th line of a coarse atom.
+export function candidateLines(sources = [], { max = 45, perSource = 12, budget = 4500, question = '' } = {}) {
+  const all = [];
   sources.forEach((s, si) => {
     const raw = cleanSource(s.text).split('\n');
+    const title = String(s.title || '').trim().toLowerCase();
     const lines = [];
     let leadable = null; // a card's headline is its opening sentence, never a bullet (a mid-card chunk starts with one)
+    let section = sectionOf(s) || '', ask = '';
+    const push = (text) => lines.push({ text, section, ask });
     for (let i = 0; i < raw.length; i++) {
       if (/^\s*\|.*\|\s*$/.test(raw[i])) {
         const tbl = [];
         while (i < raw.length && /^\s*\|.*\|\s*$/.test(raw[i])) tbl.push(raw[i++]);
         i--;
         if (leadable === null) leadable = false;
-        if (tbl.length > 2) lines.push(...tableLines(tbl).map((r) => (s.title ? `${String(s.title).split(' - ')[0].trim()}: ${r}` : r)));
+        if (tbl.length > 2) tableLines(tbl).map((r) => (s.title ? `${String(s.title).split(' - ')[0].trim()}: ${r}` : r)).forEach(push);
         continue;
       }
       const l = raw[i].replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').replace(/\*\*/g, '').trim();
-      if (!l || /^#/.test(l) || /^where this comes from/i.test(l) || l.split(/\s+/).length < 2) continue;
+      if (/^#/.test(l)) {
+        // "## Heading" and deeper name a section; a "# Heading" is the document's own title, not a section
+        const h = /^##/.test(l) ? cleanLine(l.replace(/^#+\s*/, '')).replace(/[[\]“”"]/g, '').slice(0, 80).trim() : '';
+        section = h && h.toLowerCase() !== title ? h : '';
+        ask = '';
+        continue;
+      }
+      if (!l || /^where this comes from/i.test(l) || l.split(/\s+/).length < 2 || (title && l.toLowerCase() === title)) continue; // a bare title line is no answer
       if (leadable === null) leadable = !/^\s*(?:[-*•]|\d+[.)])\s+/.test(raw[i]);
-      lines.push(...(l.length > 320 ? l.split(/(?<=[.!?])\s+(?=[A-Z])/) : [l]));
+      (l.length > 320 ? l.split(/(?<=[.!?])\s+(?=[A-Z])/) : [l]).forEach(push);
+      // an FAQ question line ("Can I take a test ride?") frames the answer lines under it
+      if (/\?\s*$/.test(l) && l.length <= 160) ask = l; else if (/^(?:Q|Question)\s*[:.]/i.test(l)) ask = l;
     }
-    let first = true;
-    for (const text of lines.slice(0, perSource)) {
-      if (out.length >= max || used + text.length > budget) return;
-      out.push({ n: out.length + 1, source: si, text: clip(text, 320), title: String(s.title || ''),
-        lead: first && !!leadable && String(s.filename || '').startsWith('canonical/'), row: /^[^:]{1,60}: Variant: /.test(text) });
-      first = false;
-      used += text.length;
+    lines.forEach((x, i) => all.push({ si, i, ...x, leadable: i === 0 && !!leadable && String(s.filename || '').startsWith('canonical/') }));
+  });
+  // which lines to keep: the first ones (no question), or the best answers when a question is given
+  let keep;
+  if (question && all.length) {
+    const r = rankLines(question, all.map((x) => ({ text: x.text, section: x.section, ask: x.ask })));
+    const order = all.map((_, k) => k).sort((a, b) => (r.score[b] - r.score[a]) || (a - b));
+    keep = new Set();
+    const per = new Map();
+    let used = 0;
+    for (const k of order) {
+      const x = all[k], c = per.get(x.si) || 0;
+      if (keep.size >= max) break;
+      if (c >= perSource || used + x.text.length > budget) continue;
+      keep.add(k); per.set(x.si, c + 1); used += x.text.length;
     }
+    // a canonical card's headline stays (it is the card's direct answer)
+    all.forEach((x, k) => { if (x.leadable && !keep.has(k) && keep.size < max) keep.add(k); });
+  }
+  const out = [];
+  let used = 0, stop = false;
+  const seen = new Map();
+  all.forEach((x, k) => {
+    if (keep) { if (!keep.has(k)) return; }
+    else {
+      const c = seen.get(x.si) || 0;
+      if (stop || c >= perSource) return;
+      if (out.length >= max || used + x.text.length > budget) { seen.set(x.si, perSource); if (out.length >= max) stop = true; return; }
+      seen.set(x.si, c + 1);
+      used += x.text.length;
+    }
+    const s = sources[x.si];
+    out.push({ n: out.length + 1, source: x.si, text: clip(x.text, 320), title: String(s.title || ''), lead: x.leadable,
+      row: /^[^:]{1,60}: Variant: /.test(x.text), ...(x.section ? { section: x.section } : {}), ...(x.ask && x.ask !== x.text ? { ask: x.ask } : {}) });
   });
   return out;
 }
@@ -616,6 +781,41 @@ export function buildSelectMessages(question, lines, persona = {}) {
   ];
 }
 
+/**
+ * Answer-first ordering of line picks (pure, deterministic). For each part of the question that asks for a kind of
+ * answer ("how long", "how much", "when"…), the line that best answers it (rankLines) leads, whether or not the model
+ * picked it; model picks that only mention the topic in passing, without that kind of answer, are dropped, and those
+ * that answer nearly as well are kept after it. With no model picks (`picks` empty) this is the keyword fallback.
+ * Returns line numbers (1-based); [] when nothing in `lines` clearly answers.
+ */
+export function answerFirst(question, lines = [], picks = [], { onTopic = () => true, listy = false } = {}) {
+  if (!String(question || '').trim() || !lines.length) return picks;
+  const r = rankLines(question, lines);
+  const own = (ci) => [...r.clauses[ci].terms.values()].filter((w) => w === 1).length;
+  // clearly about this part of the question: enough of its topic words, in the line or its heading
+  const strong = (i, ci) => r.matched[i][ci] >= Math.max(0.5, Math.min(2, own(ci))) && r.per[i][ci] >= 0.4 && onTopic(lines[i]);
+  const anyIntent = r.clauses.some((c) => c.intents.length);
+  if (picks.length && !anyIntent) return picks; // nothing to check the model's picks against: they stand
+  const chosen = [], leadOf = [];
+  // In a two-part question each part gets a line about that part: a line that also answers another part
+  // ("Spare battery: $649, 2-year warranty") only leads when no focused line exists.
+  const other = (i, ci) => r.clauses.some((c, cj) => cj !== ci && c.intents.length && r.answers[i][cj] && strong(i, cj));
+  r.clauses.forEach((c, ci) => {
+    const ok = (i) => strong(i, ci) && (!c.intents.length || r.answers[i][ci]);
+    const cands = lines.map((_, i) => i).filter(ok).sort((a, b) => (other(a, ci) - other(b, ci)) || (r.per[b][ci] - r.per[a][ci]) || (a - b));
+    const best = cands.find((i) => !chosen.includes(i + 1));
+    leadOf[ci] = best == null ? null : r.per[best][ci];
+    if (best != null) chosen.push(best + 1);
+  });
+  if (!chosen.length) return picks; // no line clearly answers: leave the model's picks (or nothing) as they were
+  // other lines that answer a part nearly as well as its lead (the model's picks first)
+  const near = (n) => r.clauses.some((c, ci) => leadOf[ci] != null && strong(n - 1, ci) && (!c.intents.length || r.answers[n - 1][ci])
+    && r.per[n - 1][ci] >= (picks.length ? 0.8 : c.intents.length ? 0.97 : 0.9) * leadOf[ci]);
+  const pool = picks.length ? picks : lines.map((l, i) => i + 1).sort((a, b) => (r.score[b - 1] - r.score[a - 1]) || (a - b));
+  const extra = pool.filter((n) => !chosen.includes(n) && near(n));
+  return [...chosen, ...extra].slice(0, listy ? 10 : chosen.length + (picks.length ? 2 : 1));
+}
+
 /** Pure: turn the model's line picks into a quoted, cited answer, or the fixed refusal. */
 export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
   const none = { text: NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false };
@@ -624,13 +824,6 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
   let picks = [...new Set([...out.matchAll(/\bL?(\d{1,3})\b/gi)].map((m) => +m[1]))].filter((n) => n >= 1 && n <= lines.length);
   let fallback = false;
   if (/^\s*none\b/i.test(out)) return none;
-  if (!picks.length) {
-    // unusable model output: fall back to lines that share real terms with the question
-    const q = terms(opts.question || '');
-    picks = lines.map((l) => ({ n: l.n, hit: [...terms(l.text)].filter((w) => q.has(w)).length })).filter((x) => x.hit >= 2).sort((a, b) => b.hit - a.hit).map((x) => x.n);
-    fallback = true;
-    if (!picks.length) return none;
-  }
   // A pick must be about what was asked: share a specific word (product, policy, country…) with the question.
   // Product table rows carry their product name, so they're judged on the row alone; a card's prose may lean on
   // its title. Words like "store" or "item" don't count.
@@ -642,30 +835,44 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
     if (l.row) return [...specificTerms(prefixOf(l))].some((w) => q.has(w));
     return [...specificTerms(`${l.lead ? '' : l.title} ${l.text}`)].some((w) => q.has(w));
   };
+  const listy = /\b(?:what(?:'s| is| are| comes)? in(?:cluded)?|which|all|every|list|contents?|includes?|in the box)\b/i.test(`${opts.question || ''} ${opts.questionEn || ''}`);
+  const asked = opts.questionEn || opts.question || '';
+  if (!picks.length) {
+    // unusable model output: fall back to the lines that best answer the question themselves (rankLines)
+    picks = answerFirst(asked, lines, [], { onTopic, listy });
+    fallback = true;
+    if (!picks.length) return none;
+  }
+  // an FAQ question line never answers: a pick of one means the answer line under it
+  const isAsk = (l) => /\?\s*$/.test(l.text) && !/[.!]\s+\S/.test(l.text);
+  picks = [...new Set(picks.map((n) => (isAsk(lines[n - 1]) ? lines.find((l) => l.source === lines[n - 1].source && l.n > n && l.ask === lines[n - 1].text && !isAsk(l))?.n : n)).filter(Boolean))];
   picks = picks.filter((n) => onTopic(lines[n - 1]));
   if (!picks.length) return none;
+  // the line that directly answers ("2 years or 800 cycles" for "how long…") leads; passing mentions drop out
+  if (!fallback) picks = answerFirst(asked, lines, picks, { onTopic, listy });
   // A card's headline line is its direct answer: lead with it when the card is used and the headline itself is on topic.
   for (const si of [...new Set(picks.map((n) => lines[n - 1].source))].reverse()) {
     const lead = lines.find((l) => l.source === si && l.lead);
     if (lead && !picks.includes(lead.n) && onTopic(lead)) picks.unshift(lead.n);
   }
-  const listy = /\b(?:what(?:'s| is| are| comes)? in(?:cluded)?|which|all|every|list|contents?|includes?|in the box)\b/i.test(`${opts.question || ''} ${opts.questionEn || ''}`);
   const cap = (listy ? 10 : 5) + picks.filter((n) => lines[n - 1].lead).length; // headlines don't use a list slot
   picks = picks.slice(0, cap);
   const citations = [], idx = new Map();
-  const cite = (si) => {
+  // the citation points where the quoted line sits: its own heading inside the atom when it has one (never invented)
+  const cite = (si, line) => {
     const s = sources[si], key = s.file_id || s.filename || `#${si}`;
     if (!idx.has(key)) {
       idx.set(key, citations.length + 1);
-      citations.push(citationOf(s, citations.length + 1));
+      const sec = line && sectionOf({ section: line.section, title: s.title });
+      citations.push(citationOf(sec ? { ...s, section: sec } : s, citations.length + 1));
     }
     return idx.get(key);
   };
   if (opts.voice) {
-    const items = picks.map((n) => { const l = lines[n - 1]; return { text: l.text, si: l.source, n: cite(l.source) }; });
+    const items = picks.map((n) => { const l = lines[n - 1]; return { text: l.text, si: l.source, n: cite(l.source, l), ...(l.section ? { section: l.section } : {}) }; });
     return { text: guideText(items, sources, opts.voiceSeed ?? `${opts.question || ''}`), citations, grounded: true, refused: false, fallback, selected: picks };
   }
-  const quoted = picks.map((n) => { const l = lines[n - 1]; return `${l.text.replace(/\s*[.;:]?\s*$/, '')}. [${cite(l.source)}]`.replace(/([.!?])\. \[/, '$1 ['); });
+  const quoted = picks.map((n) => { const l = lines[n - 1]; return `${l.text.replace(/\s*[.;:]?\s*$/, '')}. [${cite(l.source, l)}]`.replace(/([.!?])\. \[/, '$1 ['); });
   const text = quoted.length === 1 ? quoted[0] : quoted.map((q) => `- ${q}`).join('\n');
   return { text, citations, grounded: true, refused: false, fallback, selected: picks };
 }
@@ -685,13 +892,14 @@ function voiceHash(seed) {
 }
 const quoteText = (t) => String(t).replace(/\s*[.;:,]?\s*$/, '').replace(/“/g, '‘').replace(/”/g, '’');
 /** “Title” (a markdown link when the source has a URL), then its page and section when it really has them. */
-function whereOf(s) {
+function whereOf(s, at) {
   const title = cleanLine(String(s.title || s.filename || 'Untitled')).replace(/[[\]“”"]/g, '').slice(0, 120).trim() || 'Untitled';
-  const link = linkOf(s), page = pageOf(s), section = sectionOf(s);
+  // `at`: the quoted line's own heading (from the knowDrive text); null when items under different headings share one place
+  const link = linkOf(s), page = pageOf(s), section = at === undefined ? sectionOf(s) : at && sectionOf({ section: at, title: s.title });
   return [link ? `[“${title}”](${link})` : `“${title}”`, page && `page ${page}`, section && `under “${section}”`].filter(Boolean).join(', ');
 }
 /**
- * Deterministic answer text in the guide voice. items: [{ text, si (source index), n (citation number) }].
+ * Deterministic answer text in the guide voice. items: [{ text, si (source index), n (citation number), section? (the line's own heading) }].
  * One item: "<opener> In “Title”, page N, it says: “line” [1]. <closer>"
  * Several: an opener, then one cited bullet per item (one location line when they all come from one place), then a closer.
  */
@@ -702,13 +910,14 @@ export function guideText(items, sources, seed = '') {
     : links.length ? `Feel free to open the link${links.length > 1 ? 's' : ''} for the full details.` : CLOSERS[(h >>> 4) % CLOSERS.length];
   if (items.length === 1) {
     const [x] = items;
-    return `${OPENERS[h % OPENERS.length]} In ${whereOf(sources[x.si])}, it says: “${quoteText(x.text)}” [${x.n}]. ${closer}`;
+    return `${OPENERS[h % OPENERS.length]} In ${whereOf(sources[x.si], x.section)}, it says: “${quoteText(x.text)}” [${x.n}]. ${closer}`;
   }
   const opener = LIST_OPENERS[h % LIST_OPENERS.length];
   const one = items.every((x) => x.si === items[0].si);
+  const sameAt = items.every((x) => x.section === items[0].section) ? items[0].section : null;
   const body = one
-    ? [`${opener} Here's what ${whereOf(sources[items[0].si])} says [${items[0].n}]:`, ...items.map((x) => `- “${quoteText(x.text)}” [${x.n}]`)]
-    : [opener, ...items.map((x) => `- From ${whereOf(sources[x.si])}: “${quoteText(x.text)}” [${x.n}]`)];
+    ? [`${opener} Here's what ${whereOf(sources[items[0].si], sameAt)} says [${items[0].n}]:`, ...items.map((x) => `- “${quoteText(x.text)}” [${x.n}]`)]
+    : [opener, ...items.map((x) => `- From ${whereOf(sources[x.si], x.section)}: “${quoteText(x.text)}” [${x.n}]`)];
   return [...body, closer].join('\n');
 }
 
@@ -856,7 +1065,8 @@ async function answerUnchecked({ question, results = [], complete, search, perso
   const passes = cards.length && cards.length < pool0.length ? [cards, pool0.filter((s) => !cards.includes(s))] : [pool0];
   let fin = finalizeSelection('', [], pool0);
   for (const pool of passes) {
-    let lines = candidateLines(pool);
+    // coarse atoms (150-500 tokens) hold more lines than the model sees: keep the ones that best answer the question
+    let lines = candidateLines(pool, { question: questionEn || question });
     if (questionEn) lines = [...lines.filter((l) => NON_EN.test(l.text)), ...lines.filter((l) => !NON_EN.test(l.text))].map((l, i) => ({ ...l, n: i + 1 }));
     if (!lines.length) continue;
     const ask = questionEn ? `${questionEn} (${cleanLine(question)})` : question;

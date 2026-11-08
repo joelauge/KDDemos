@@ -1152,3 +1152,50 @@ textarea.st-text { resize: vertical; }
   .st-ins-row > .st-ins-bar { align-self: center; }
   .st-ins-gaps .st-ins-row > .st-ins-tag { justify-self: start; }
 }
+
+/* ---- "Enter a Store URL" card (app.js store-import): the address form, then a StageTrack-style run (Find · Read ·
+   Build · Add) with the importer's own progress. Motion matches the ingest StageTrack: done nodes fill, the active node
+   pulses on a compositor-only pseudo-element, the read bar scales with transform. */
+.st-si-form { display: grid; gap: 10px; }
+.st-si-label { font-size: 13px; font-weight: 600; color: var(--strong); }
+.st-si-row { display: flex; gap: 8px; min-width: 0; }
+.st-si-row .st-text { flex: 1 1 auto; min-width: 0; }
+.st-si-row .st-btn { flex: none; }
+.st-si-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; min-height: 32px; }
+.st-si-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); flex: none; }
+.st-si-check input:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
+.st-si-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.st-si-foot .st-field-msg { margin: 0; flex: 1 1 200px; }
+.st-si-run { display: grid; gap: 10px; }
+.st-si-run[hidden], .st-si-form[hidden], .st-si-bar[hidden], .st-si-found[hidden], .st-si-capped[hidden], .st-si-actions[hidden] { display: none; }
+.st-si-status { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--strong); overflow-wrap: anywhere; }
+.st-si.is-error .st-si-status { color: var(--text); }
+.st-si-track { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 2px 0 0; padding: 0; }
+.st-si-node { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; color: var(--dim, var(--muted)); font-size: 11.5px; }
+.st-si-node + .st-si-node::before { content: ''; position: absolute; top: 5px; right: calc(50% + 9px); left: calc(-50% + 9px); height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent) 0 0) no-repeat left / var(--pf, 0%) 100%, var(--line); transition: background-size var(--dur-3) var(--ease-out); }
+.st-si-node[data-state="done"] + .st-si-node::before, .st-si-node[data-state="done"]::before { --pf: 100%; }
+.st-si-dot { position: relative; z-index: 1; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--line-2, var(--line)); background: var(--panel);
+  transition: background-color var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out); }
+.st-si-node[data-state="done"] .st-si-dot { background: var(--accent); border-color: var(--accent); }
+.st-si-node[data-state="active"] .st-si-dot { border-color: var(--accent); }
+.st-si-node[data-state="active"] .st-si-dot::before { content: ''; position: absolute; inset: -6px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 22%, transparent);
+  opacity: 0; transform: scale(.5); animation: st-si-pulse 1.2s var(--ease-in-out) infinite; pointer-events: none; }
+.st-si-node[data-state="failed"] .st-si-dot { background: var(--warn); border-color: var(--warn); }
+.st-si-node[data-state="done"] .st-si-node-l { color: var(--text); }
+.st-si-node[data-state="active"] .st-si-node-l { color: var(--strong); font-weight: 600; }
+.st-si-node[data-state="failed"] .st-si-node-l { color: var(--warn); font-weight: 600; }
+@keyframes st-si-pulse { 0%, 100% { opacity: 0; transform: scale(.5); } 45% { opacity: 1; transform: scale(1); } }
+.st-si-bar { position: relative; height: 4px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.st-si-bar > i { position: absolute; inset: 0; background: var(--accent); transform-origin: left center; transform: scaleX(var(--p, 0)); transition: transform 400ms var(--ease-out); }
+.st-si-found { margin: 0; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.st-si-capped { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--warn); }
+.st-si-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.st-si.is-done .st-si-status { color: var(--text); }
+:root[data-motion="reduce"] .st-si-node[data-state="active"] .st-si-dot::before { display: none; }
+:root[data-motion="reduce"] .st-si-bar > i, :root[data-motion="reduce"] .st-si-node + .st-si-node::before { transition: none; }
+@media (prefers-reduced-motion: reduce) { :root:not([data-motion="full"]) .st-si-node[data-state="active"] .st-si-dot::before { display: none; } }
+@media (max-width: 420px) {
+  .st-si-row { flex-direction: column; }
+  .st-si-row .st-btn { width: 100%; justify-content: center; }
+}

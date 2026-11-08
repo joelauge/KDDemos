@@ -656,7 +656,7 @@ function sourcesList(cites) {
       h('span', { class: 'cite', 'aria-hidden': 'true' }, String(c.n)),
       h('span', { class: 'src-title' }, c.url ? h('a', { href: c.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, title) : title,
         c.page || c.section ? h('span', { class: 'src-loc', style: { color: 'var(--muted, #666)', fontWeight: '400' } }, ` · ${[c.page && `p. ${c.page}`, c.section].filter(Boolean).join(' · ')}`) : null),
-      h('span', { class: 'src-file' }, c.filename, c.score != null ? h('span', { class: 'score' }, `score ${c.score.toFixed(3)}`) : null),
+      h('span', { class: 'src-file' }, c.filename), // no score: in knowDrive mode it is a hybrid RRF rank, never a similarity
       c.snippet ? h('span', { class: 'src-snip' }, c.snippet) : null,
     );
     els.set(c.n, li); ol.append(li);

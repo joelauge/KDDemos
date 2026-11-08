@@ -354,12 +354,14 @@
 .co-act-meter { height: 4px; border-radius: 4px; background: var(--raise); overflow: hidden; }
 .co-act-meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transform-origin: left; transform: scaleX(0); transition: transform 1.9s linear; }
 .co-act-skel { display: grid; gap: 7px; }
-.co-act-skel i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--raise) 0%, var(--panel-2) 50%, var(--raise) 100%) 0 0 / 200% 100%; animation: co-shimmer 1.2s linear infinite; }
+/* perf (M): the shimmer is a translated highlight (compositor-only), never an animated background-position (a repaint a frame) */
+.co-act-skel i { position: relative; display: block; height: 10px; border-radius: 5px; background: var(--raise); overflow: hidden; }
+.co-act-skel i::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--panel-2), transparent); transform: translateX(-100%); animation: co-shimmer 1.2s linear infinite; }
 .co-act-skel i.is-short { width: 55%; }
-@keyframes co-shimmer { to { background-position: -200% 0; } }
-:root[data-motion="reduce"] .co-act-skel i { animation: none; }
+@keyframes co-shimmer { to { transform: translateX(100%); } }
+:root[data-motion="reduce"] .co-act-skel i::after { animation: none; display: none; }
 :root[data-motion="reduce"] .co-act-meter i { transition: none; }
-[data-signature] .co-act-skel i { animation-play-state: paused; }
+[data-signature] .co-act-skel i::after { animation-play-state: paused; }
 
 .co-success { display: grid; gap: 12px; padding: 14px; border-radius: 16px; border: 1px solid color-mix(in srgb, var(--good) 30%, var(--line)); background: var(--panel); box-shadow: var(--st-shadow-2); min-width: 0; }
 .co-success-head { display: flex; align-items: center; gap: 12px; }

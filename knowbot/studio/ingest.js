@@ -3757,6 +3757,11 @@ export function mount(ctx) {
       const vbox = { x: regX - 6, y: (mob ? cy : top) - 10, w: regW + 12, h: occH + 12 };
       host.append(card);
       mapFx.append(host);
+      // perf (M): the card text's box is read inside a ResizeObserver callback (layout is clean there), never right
+      // after a text write in phase B (that read forced a 17 ms reflow under 4x CPU throttle)
+      const tGeo = { top: 0, h: 0 };
+      let tRO = null;
+      try { const tE = card.querySelector('.in-doc-t'); if (tE) { tRO = new ResizeObserver(() => { tGeo.top = tE.offsetTop; tGeo.h = tE.offsetHeight; }); tRO.observe(tE); } } catch { tRO = null; }
       rel();
       veilTo(1, 260);
       map.setOverlay(occId, (g, dpr, now) => {
@@ -3792,7 +3797,9 @@ export function mount(ctx) {
       let w = await waitPhase(lid, RANK.chunked, signal); if (w !== 'ok') return finishEarly(w);
       scan.remove();
       // the real chunk text, when it arrived while the card waited
-      { const pv = previews.get(key); if (pv && pv.length && pv !== pv0) { const tEl = card.querySelector('.in-doc-t'); if (tEl) { const nm = tEl.querySelector('.in-doc-mn'); tEl.textContent = prepChips(key, pv).cardText; if (nm) tEl.prepend(nm, ' '); } } }
+      let swapped = '';
+      { const pv = previews.get(key); if (pv && pv.length && pv !== pv0) { const tEl = card.querySelector('.in-doc-t'); if (tEl) { const nm = tEl.querySelector('.in-doc-mn'); swapped = prepChips(key, pv).cardText; tEl.textContent = swapped; if (nm) tEl.prepend(nm, ' '); } } }
+      if (tRO) { tRO.disconnect(); tRO = null; }
       const fB = getState().files[lid];
       let N = clamp(Number(fB.chunks) || Math.ceil((fB.atoms || 6) / 3), 1, mob ? 2 : 6);
       // strip edges fall BETWEEN text lines (never through one): desktop 10 lines of 15 px under a ~31 px header,
@@ -3801,8 +3808,11 @@ export function mount(ctx) {
       // one layout read (the card has been on screen for a phase already), before any strip is written
       const tEl0 = card.querySelector('.in-doc-t');
       const LH = mob ? 16 : 15, CH0 = mob ? MOB_CARD_H : 200;
-      const LH0 = tEl0 && tEl0.offsetTop > 0 ? tEl0.offsetTop : (mob ? 7 : 34);
-      const LN = clamp(tEl0 ? Math.round(tEl0.offsetHeight / LH) : (mob ? 2 : 10), 1, mob ? 2 : 10);
+      // cached box (ResizeObserver); a text swapped in just now is estimated from its length (~27 chars a line on
+      // desktop, ~44 on phones) instead of measured, so no reflow is forced here
+      const LH0 = tGeo.top > 0 ? tGeo.top : (mob ? 7 : 34);
+      const LN = clamp(swapped ? Math.ceil(swapped.length / (mob ? 44 : 27))
+        : tEl0 && tGeo.h > 0 ? Math.round(tGeo.h / LH) : (mob ? 2 : 10), 1, mob ? 2 : 10);
       N = Math.min(N, LN);
       const edge = (i) => (i <= 0 ? 0 : i >= N ? CH0 : LH0 + Math.round((i * LN) / N) * LH);
       rel = await domTurn(); if (aborted()) { rel(); return; }

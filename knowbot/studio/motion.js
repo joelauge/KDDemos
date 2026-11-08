@@ -260,12 +260,11 @@ export function fmtNum(n) {
   if (nf === null) { try { nf = new Intl.NumberFormat(); } catch { nf = false; } }
   return nf ? nf.format(n) : String(n);
 }
-// r5 (perf): the first NumberFormat loads its locale data (~50 ms on a throttled CPU). That cost used to land inside the
-// first "files ready" update, mid-ingest; it is paid in an idle period right after boot instead.
-try {
-  const warm = () => { fmtNum(1234); try { new Date().toLocaleDateString(); } catch { /* ignore */ } };
-  if (typeof requestIdleCallback === 'function') requestIdleCallback(warm, { timeout: 2500 }); else setTimeout(warm, 1200);
-} catch { /* not a browser */ }
+// perf (M): measured under 4x CPU, that first NumberFormat costs 47-78 ms however it is scheduled: run from an idle
+// callback it was a long animation frame of its own, and left lazy it lands mid-answer (samplebot's toLocaleString).
+// It is paid once, synchronously, while the module graph evaluates: that boot task is already the page's one
+// unavoidable long task, nothing is animating yet, and every later count-up and "N atoms" label is warm.
+try { fmtNum(1234); (1234.5).toLocaleString(); new Date().toLocaleDateString(); } catch { /* not a browser */ }
 
 const tickers = new WeakMap();
 // r5: elements whose interpolation ticks are skipped because they are outside the viewport (IntersectionObserver: no

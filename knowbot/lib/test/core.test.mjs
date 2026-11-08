@@ -1,8 +1,13 @@
 // node --test knowbot/lib/test/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { KnowBot, guardRequest, requireCitations, answerFromSources, routeAnswer, NOT_IN_DATA, candidateLines, buildSelectMessages, finalizeSelection, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever, isCourtesy, guideText, hitPage, hitSection } from '../knowbot.js';
-import { KnowDriveRetriever } from '../../server/retrievers.mjs';
+import { KnowBot, guardRequest, requireCitations, answerFromSources, routeAnswer, NOT_IN_DATA, candidateLines, buildSelectMessages, finalizeSelection, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever, isCourtesy, guideText, hitPage, hitSection, rankLines, answerFirst } from '../knowbot.js';
+import { KnowDriveRetriever, LocalRetriever } from '../../server/retrievers.mjs';
+import { htmlToText } from '../../server/storeimport.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const S = (i, over = {}) => ({
   file_id: `f${i}`, filename: `policies/doc${i}.md`, title: `Doc ${i}`, url: `https://example.com/${i}`, score: 10 - i,
@@ -526,4 +531,140 @@ test('retrieval: knowDrive hits map page (only when reported) and section; norma
   assert.deepEqual([n.page, n.section], [9, 'Setup']);
   const passthrough = normalizeResult({ file_id: 'b', filename: 'b.md', text: 'y', page: 2, section: 'Intro' });
   assert.deepEqual([passthrough.page, passthrough.section], [2, 'Intro'], 'server /api/search rows keep their location in the browser');
+});
+
+/* ---------- answer selection: the line that directly answers wins (coarse 150-500 token atoms) ---------- */
+
+const LUMEN = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../studio/samples/lumen-bikes');
+// One coarse atom from the warranty policy, as production returns it: the end of "Components" plus the whole battery section.
+const BATTERY_ATOM = () => {
+  const md = fs.readFileSync(path.join(LUMEN, 'lumen-warranty-returns.md'), 'utf8');
+  return { file_id: 'kd_warranty', filename: 'knowbot/trials/_samples/lumen/lumen-warranty-returns.md', title: 'Lumen Bikes Warranty and Returns Policy', url: null, score: 0.031,
+    section: 'Components', text: md.slice(md.indexOf('Saddles are covered'), md.indexOf('## Returns')).trim() };
+};
+// A small selector model that goes for word overlap: it picks the lines sharing the most words with the question.
+const overlapPicker = (msgs) => {
+  const user = msgs.at(-1).content, q = new Set(user.split('\nQUESTION: ')[1].toLowerCase().match(/[a-z0-9]+/g));
+  return user.split('\n').filter((l) => /^L\d+ /.test(l))
+    .map((l) => ({ n: l.match(/^L(\d+)/)[1], s: (l.toLowerCase().match(/[a-z0-9]+/g) || []).filter((w) => w.length > 3 && q.has(w)).length }))
+    .sort((a, b) => b.s - a.s).slice(0, 2).map((x) => `L${x.n}`).join(', ');
+};
+const quotesOf = (text) => [...String(text).matchAll(/“([^”]+)” \[\d+\]/g)].map((m) => m[1]); // the quoted lines, not the places
+const flat = (t) => String(t).replace(/\*\*/g, '').replace(/\s+/g, ' ');
+
+test('answer selection: "how long is the warranty on an e-bike battery?" quotes the 2 years / 800 cycles line, never the charger line', async () => {
+  const atom = BATTERY_ATOM();
+  const q = 'How long is the warranty on an e-bike battery?';
+  assert.ok(candidateLines([atom], { question: q }).some((l) => /800 full charge cycles/.test(l.text)), 'with the question, the answer line is among the lines the model sees');
+  const lines = candidateLines([atom], { perSource: 40 });
+  const charger = lines.find((l) => /third-party charger/.test(l.text)), answer = lines.find((l) => /800 full charge cycles/.test(l.text));
+  assert.ok(charger && answer, 'both lines are candidates');
+  assert.equal(answer.section, 'How long e-bike batteries are covered', 'a line knows the heading it sits under inside a coarse atom');
+  // the live-preview failure: the model picked the charger line (it shares "battery" and "warranty" with the question)
+  for (const raw of [`L${charger.n}`, `L${charger.n}, L${answer.n}`, overlapPicker(buildSelectMessages(q, lines)), '', 'I think L', 'Sure! The answer is above.']) {
+    const fin = requireCitations(finalizeSelection(raw, lines, [atom], { question: q, voice: true }));
+    assert.equal(fin.refused, false, raw);
+    assert.match(fin.text, /under “How long e-bike batteries are covered”, it says: “E-bike batteries are covered for 2 years or 800 full charge cycles, whichever comes first” \[1\]\./, raw);
+    assert.doesNotMatch(fin.text, /third-party charger/, raw);
+    assert.equal(fin.citations[0].section, 'How long e-bike batteries are covered', 'the citation points at the section the quote sits in');
+    assert.equal(fin.citations.length, 1);
+  }
+  // end to end (select mode, voice): the same through answerFromSources, and deterministic
+  const run = () => answerFromSources({ question: q, results: [atom], voice: true, complete: async () => `L${charger.n}` });
+  const [a, b] = [await run(), await run()];
+  assert.match(a.fin.text, /“E-bike batteries are covered for 2 years or 800 full charge cycles, whichever comes first” \[1\]/);
+  assert.deepEqual(a, b, 'canonical determinism: same question, same sources, same answer');
+});
+
+test('answer selection: rankLines weighs the kind of answer asked for, the heading, and passing mentions', () => {
+  const L = [{ text: 'Use only the charger supplied with your e-bike, because a third-party charger voids the battery warranty.', section: 'How long e-bike batteries are covered' },
+    { text: 'E-bike batteries are covered for 2 years or 800 full charge cycles, whichever comes first.', section: 'How long e-bike batteries are covered' },
+    { text: 'What are your opening hours?' }, { text: 'The store is open Monday to Saturday 9am–6pm and Sunday 11am–4pm.', ask: 'What are your opening hours?' },
+    { text: 'The Lumen E-City costs $3,199.', section: 'Lumen E-City' }, { text: 'A spare E-City battery costs $649.', section: 'Accessories' }];
+  const best = (q) => { const r = rankLines(q, L); return L[r.score.indexOf(Math.max(...r.score))].text; };
+  assert.match(best('How long is the warranty on an e-bike battery?'), /2 years or 800/);
+  assert.match(best('What are your opening hours on Sunday?'), /Sunday 11am–4pm/, 'an FAQ answer beats the FAQ question line');
+  assert.match(best('How much does the Lumen E-City cost?'), /\$3,199/, 'the line about the E-City beats the one about its battery');
+  assert.deepEqual(rankLines('How much is a spare E-City battery and how long is it covered?', L).clauses.map((c) => c.intents), [['price'], ['duration']], 'two-part questions are ranked part by part');
+  assert.deepEqual(rankLines('Do you offer financing?', L).clauses.map((c) => c.intents), [[]], 'yes/no questions ask for no answer type');
+  assert.deepEqual(rankLines('How long is the warranty?', L), rankLines('How long is the warranty?', L), 'pure');
+  // no intent: the model's picks stand untouched; an intent with no line that has that kind of answer: they stand too
+  assert.deepEqual(answerFirst('Do you offer financing?', L, [3, 1]), [3, 1]);
+  assert.deepEqual(answerFirst('How long does a test ride last?', L, [4]), [4]);
+});
+
+test('answer selection: a picked FAQ question line is replaced by the answer under it; coarse atoms keep their answer lines', () => {
+  const faq = { file_id: 'faq', filename: 'lumen-store-faq.txt', title: 'Lumen Bikes Store FAQ', url: null, score: 0.03,
+    text: 'What are your opening hours?\nThe store is open Monday to Saturday 9am–6pm and Sunday 11am–4pm.\nDo you offer financing?\nWe offer financing: 0% financing for 12 months is available on bikes over $1,000.' };
+  const lines = candidateLines([faq]);
+  assert.equal(lines[1].ask, 'What are your opening hours?');
+  const fin = finalizeSelection('L3', lines, [faq], { question: 'Do you offer financing?' });
+  assert.equal(fin.text, 'We offer financing: 0% financing for 12 months is available on bikes over $1,000. [1]');
+  // a coarse atom with more lines than the model sees: with the question, the answer line is kept
+  const filler = Array.from({ length: 20 }, (_, i) => `Accessory number ${i + 1} is sold in the shop next to the helmets.`);
+  const big = { ...faq, text: [...filler, 'Test rides last 30 minutes and require photo ID.'].join('\n') };
+  assert.equal(candidateLines([big]).some((l) => /30 minutes/.test(l.text)), false, 'without a question the first 12 lines are kept, as before');
+  const kept = candidateLines([big], { question: 'How long does a test ride last?' });
+  assert.equal(kept.length, 12);
+  assert.ok(kept.some((l) => /30 minutes/.test(l.text)), 'the answer line survives the cap');
+  assert.deepEqual(kept.map((l) => l.n), kept.map((_, i) => i + 1), 'numbering stays 1..N in reading order');
+});
+
+test('answer selection: every Lumen Bikes sample question picks a line that answers it; probes still refuse (coarse atoms, any selector)', async (t) => {
+  const qs = JSON.parse(fs.readFileSync(path.join(LUMEN, 'questions.json'), 'utf8'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kb-lumen-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const f of fs.readdirSync(LUMEN).filter((x) => !x.endsWith('.json'))) {
+    const raw = fs.readFileSync(path.join(LUMEN, f), 'utf8');
+    fs.writeFileSync(path.join(dir, f.replace(/\.\w+$/, '.md')), f.endsWith('.html') ? htmlToText(raw, { main: true, minLevel: 2 }) : raw);
+  }
+  // 120-350 word atoms (~150-500 tokens), like production's
+  const r = new LocalRetriever({ corpusDir: dir, watch: false });
+  await r.ready;
+  assert.ok(r.chunks.length >= 12 && r.chunks.every((c) => c.text.split(/\s+/).length <= 420), 'coarse atoms');
+  const sourcesFor = async (q) => {
+    let res = (await r.search(q, 6)).results;
+    // selection quality, not retrieval: make sure the atom holding each expected answer is among the six, mid-list
+    for (const e of qs.expect[q] || []) if (!res.some((x) => x.text.includes(e))) {
+      const c = r.chunks.find((x) => x.text.includes(e));
+      assert.ok(c, `${q}: "${e}" is in the samples`);
+      res = [...res.slice(0, 2), { file_id: `local:${c.filename}#${r.chunks.indexOf(c)}`, filename: c.filename, title: c.title, url: null, score: 0.2, text: c.text, ...(c.section ? { section: c.section } : {}) }, ...res.slice(2)].slice(0, 6);
+    }
+    return res;
+  };
+  const selectors = { overlap: overlapPicker, unusable: () => 'Sorry, I am not sure.', empty: () => '' };
+  const questions = [...new Set([...qs.starters, ...qs.proof, ...Object.values(qs.byFile).flat(), 'How long is the warranty on an e-bike battery?'])];
+  for (const q of questions) {
+    const results = await sourcesFor(q);
+    const expect = qs.expect[q] || (/e-bike battery/.test(q) ? ['2 years', '800'] : []);
+    assert.ok(expect.length || !qs.starters.includes(q), `${q}: starters carry expected answers`);
+    for (const [name, sel] of Object.entries(selectors)) {
+      const { fin } = await answerFromSources({ question: q, results, voice: true, complete: async (m) => sel(m) });
+      assert.equal(fin.refused, false, `${name}: ${q}`);
+      for (const e of expect) assert.ok(fin.text.includes(e), `${name}: ${q} → ${fin.text}`);
+      assert.ok(fin.citations.length >= 1 && fin.text.split('\n').filter((l) => /“/.test(l)).length <= 4, `${name}: ${q}: short, cited`);
+      assert.deepEqual(requireCitations(fin).text, fin.text, `${name}: ${q}: the citation gate keeps the whole voiced answer`);
+      // grounding: every quote is the knowDrive's own words (table rows are rendered "Column: value")
+      for (const quote of quotesOf(fin.text)) {
+        if (/: [^;]+; /.test(quote)) continue;
+        assert.ok(results.some((x) => flat(x.text).includes(flat(quote))), `${name}: ${q}: “${quote}” is verbatim`);
+      }
+    }
+  }
+  // multi-part questions cite both files
+  for (const q of qs.multiSource) {
+    const { fin } = await answerFromSources({ question: q, results: await sourcesFor(q), voice: true, complete: async () => '' });
+    assert.equal(new Set(fin.citations.map((c) => c.filename)).size, 2, q);
+  }
+  // the starters, specifically, lead with the answering line
+  const lead = { 'How long is the frame warranty?': /lifetime/, 'What are your opening hours on Sunday?': /Sunday 11am–4pm/ };
+  for (const [q, re] of Object.entries(lead)) {
+    const { fin } = await answerFromSources({ question: q, results: await sourcesFor(q), voice: true, complete: async (m) => overlapPicker(m) });
+    assert.match(quotesOf(fin.text)[0], re, q);
+  }
+  for (const q of qs.probes) for (const [name, sel] of Object.entries(selectors)) {
+    const { fin } = await answerFromSources({ question: q, results: (await r.search(q, 6)).results, voice: true, complete: async (m) => sel(m) });
+    assert.equal(fin.text, NOT_IN_DATA, `${name}: probe ${q}`);
+    assert.equal(fin.refused, true);
+  }
 });
