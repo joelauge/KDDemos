@@ -1221,6 +1221,7 @@ function setChips(rec, chips, { still = false } = {}) {
   const seenIds = new Set(); list = list.filter((c) => (seenIds.has(c.id) ? false : (seenIds.add(c.id), true))).slice(0, 4);
   const offered = list.find(isNamingChip);
   if (offered) namingOffer = { chip: offered, name: String(offered.label).replace(/^Call it\s+/, '').replace(/\?$/, '') };
+  else if (namingOffer && (getState().trial.converted || getState().milestones.launched)) namingOffer = null;   // integrator r8: a live bot gets no setup chips back
   else if (namingOffer && list.length && !rec.decision && getState().spec.name !== namingOffer.name && getState().spec.name === 'SampleBot') {
     list = [namingOffer.chip, ...list.filter((c) => c.id !== namingOffer.chip.id).map((c) => (c.kind === 'primary' ? { ...c, kind: 'default' } : c))].slice(0, 4);
   } else if (namingOffer && getState().spec.name !== 'SampleBot') namingOffer = null;
@@ -3904,7 +3905,9 @@ function sayLive({ restored = false } = {}) {
     : samplesOnly
       ? `${name} is live. Sample files were removed at launch, so it has no files yet: add your docs and it starts answering from them.`
       : `${name} is live. ${restored ? 'Its files now live in your KnowDrive account. ' : ''}Paste the embed snippet on your site, add more docs, or connect a channel.`;
-  const chips = liveChips(samplesOnly);
+  // integrator r8: with the SuccessCard on screen the chips follow checkout.js (fixer r7 D8): they never repeat the card's
+  // buttons (Copy embed, Add your files), so only the channel/API next actions; the text-only Live line keeps all three.
+  const chips = restored && store.hasCard('success') ? liveCardChips() : liveChips(samplesOnly);
   if (restored && store.hasCard('success')) {
     // a return visit shows the SuccessCard again (hosted link + embed), not just a line of text
     const n = own || (samplesOnly ? 0 : null);
@@ -3928,6 +3931,12 @@ function sayLive({ restored = false } = {}) {
     return;
   }
   localSay(text, { reply: true, chips }).then((rec) => { if (rec) rec.el.dataset.anchor = `${rec.el.dataset.anchor || ''} launch`.trim(); });
+}
+function liveCardChips() {
+  return [
+    { id: 'co-channels', label: 'Set up channels', local: true, run: () => openGoLive('channels') },
+    { id: 'co-dev', label: 'Developer API', local: true, run: () => openGoLive('developers') },
+  ];
 }
 function liveChips(addFirst = false) {
   return [
