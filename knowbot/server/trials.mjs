@@ -1039,9 +1039,13 @@ export function createStudio(o = {}) {
   let remoteKb = null;
   try { remoteKb = enabled && store && o.builderKb !== false ? createBuilderKb({ kdJson, store, log, now }) : null; } catch (e) { log(`[studio] builder kb: ${e.message}`); }
   if (remoteKb) { const t = setTimeout(() => { Promise.resolve(remoteKb.ensure()).catch(() => {}); }, 3000); t.unref?.(); }
+  // The bundled copy (studio/kb, shipped with this build) is always current and answers first; the knowDrive copy
+  // (re-ingested in the background after each deploy) only helps when the bundled search finds nothing strong.
   const builderKb = { async search(q, opts) {
-    try { const r = await remoteKb?.search(q, { k: 4, signal: opts?.signal }); if (r?.sources?.length) return r; } catch { /* fall back */ }
-    return localKb.search(q, opts);
+    const local = await localKb.search(q, opts);
+    if ((local?.top ?? 0) >= 0.65 && local?.sources?.length) return local;
+    try { const r = await remoteKb?.search(q, { k: 4, signal: opts?.signal }); if (r?.sources?.length && (r.top ?? 0) > (local?.top ?? 0)) return r; } catch { /* keep local */ }
+    return local;
   } };
   let agentKey = null, agentCall = null;
   const builderAgent = studioProvider === 'anthropic' ? createBuilderEngine({

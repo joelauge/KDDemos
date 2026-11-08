@@ -32,6 +32,16 @@ export function findUrl(msg) {
   return raw;
 }
 
+const SPACED_RE = /((?:[A-Z][\w'’&-]*\s+){0,5}[A-Za-z0-9][\w'’&-]*)\.(com|net|org|io|co|ca|shop|store|ai|app|us|uk|au)\b/;
+/** "The Ultimate Game Master.com" -> theultimategamemaster.com */
+export function spacedDomainOf(msg) {
+  const m = SPACED_RE.exec(String(msg || '').replace(/\S+@\S+/g, ' '));
+  if (!m || !/\s/.test(m[1].trim())) return null;
+  const host = m[1].toLowerCase().replace(/['’]/g, '').replace(/&/g, 'and').replace(/[^a-z0-9-]+/g, '');
+  return host.length >= 2 && host.length <= 63 ? `${host}.${m[2]}` : null;
+}
+function spacedNameOf(msg) { const m = SPACED_RE.exec(String(msg || '')); return m ? m[1].trim().slice(0, 40) : null; }
+
 // ------------------------------------------------------------------------------------------------ spec fields
 const BOT_NOUN = '(?:bot|chatbot|assistant|helper|agent|guide|help ?desk|desk|concierge|faq)';
 const STOP_TAIL = /\s+(?:and|with|that|which|so|please|to|who|because|but)\b.*$/i;
@@ -155,10 +165,17 @@ export function preparse(message, state = {}) {
   if (chipHit) { res.chip = chipHit; res.command = true; return res; }
   const low = norm(msg);
   for (const [re, name] of COMMANDS) if (re.test(low)) { res.toolCalls.push({ name, input: {} }); res.command = true; return res; }
-  const url = findUrl(msg);
+  let url = findUrl(msg);
+  // "The Ultimate Game Master.com": findUrl only sees "Master.com"; the Title-Case run before it is the real site name
+  const spaced = spacedDomainOf(msg);
+  let siteName = null;
+  if (spaced && (!url || (spaced.endsWith(String(url).toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '')) && spaced.length > String(url).length))) { url = spaced; siteName = spacedNameOf(msg); }
+  // a bare host ("paddlepal.com") gives no reliable name, so only a written-out name ("The Ultimate Game Master.com") names the bot
   if (url) res.toolCalls.push({ name: 'import_website', input: { url } });
   const isQ = /[?？¿؟]\s*$/.test(msg);
   const fields = parseFields(msg);
+  // a bot for a named site takes the site's name, unless the visitor already named it
+  if (url && siteName && !fields.name && (!state.spec?.name || state.spec.name === 'SampleBot')) fields.name = siteName;
   // a question ("is it friendly?") only sets fields when it is a request to the Builder ("can you call it X?")
   if (Object.keys(fields).length && (!isQ || (fields.name && /^(?:please\s+)?(?:can|could|would|will)\s+you\b/i.test(msg)))) res.toolCalls.push({ name: 'update_bot', input: fields });
   if (isProductQuestion(msg, state)) { res.productQuestion = true; res.toolCalls.push({ name: 'kb_search', input: { query: msg.slice(0, 300) } }); }
