@@ -461,10 +461,10 @@ export function channelStatus(env = {}) {
   const emailOut = has('EMAIL_REPLY_WEBHOOK') || ((has('SENDGRID_API_KEY') || has('POSTMARK_SERVER_TOKEN')) && has('EMAIL_FROM'));
   return {
     sms: { configured: has('TWILIO_AUTH_TOKEN'), provider: 'twilio', needs: has('TWILIO_AUTH_TOKEN') ? [] : ['TWILIO_AUTH_TOKEN'] },
-    voice: { configured: has('TWILIO_AUTH_TOKEN'), provider: 'twilio', needs: has('TWILIO_AUTH_TOKEN') ? [] : ['TWILIO_AUTH_TOKEN'],
-      speech: { recognition: google.stt && has('TWILIO_ACCOUNT_SID') ? 'google' : 'twilio', synthesis: has('ELEVENLABS_API_KEY') && has('ELEVENLABS_VOICE_ID') ? 'elevenlabs' : google.tts ? 'google' : 'twilio' },
-      // phone engine: 'gemini' voice-to-voice (Twilio Media Streams ⇄ Gemini Live) when GEMINI_API_KEY is set, else the classic loop
-      engine: has('GEMINI_API_KEY') && String(env.KNOWBOT_PHONE_ENGINE || '').toLowerCase() !== 'classic' ? 'gemini' : 'classic',
+    // phone calls are Gemini Live voice-to-voice only (Twilio Media Streams ⇄ Gemini Live): engine 'gemini', or
+    // 'not_configured' without GEMINI_API_KEY (the call webhook then says the line isn't set up yet and hangs up)
+    voice: { configured: has('TWILIO_AUTH_TOKEN') && has('GEMINI_API_KEY'), provider: 'twilio', needs: ['TWILIO_AUTH_TOKEN', 'GEMINI_API_KEY'].filter((k) => !has(k)),
+      engine: has('GEMINI_API_KEY') ? 'gemini' : 'not_configured',
       texts: has('TWILIO_ACCOUNT_SID') && has('TWILIO_AUTH_TOKEN') && has('TWILIO_FROM_NUMBER') },
     whatsapp: { configured: meta || has('TWILIO_AUTH_TOKEN'), provider: meta ? 'meta' : has('TWILIO_AUTH_TOKEN') ? 'twilio' : null,
       needs: meta || has('TWILIO_AUTH_TOKEN') ? [] : ['WHATSAPP_VERIFY_TOKEN', 'WHATSAPP_APP_SECRET', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'] },

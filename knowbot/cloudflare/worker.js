@@ -25,7 +25,7 @@ export class KnowBotContainer extends Container {
       ...(env.KNOWBOT_STUDIO_MODEL ? { KNOWBOT_STUDIO_MODEL: env.KNOWBOT_STUDIO_MODEL } : {}),
       // Phone channel (server/channels/voice.mjs + voice-live.mjs) and SMS: Worker secrets, passed through only when set, so
       // a missing one leaves that feature off ("channel not configured") instead of breaking the container.
-      ...pick(env, ['GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
+      ...pick(env, ['GEMINI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
         // plain vars (wrangler.jsonc "vars" or --var), optional
         // (no SHOP_DOMAIN: product links come from each bot's own Shopify store import, never one server-wide store)
         'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS']),

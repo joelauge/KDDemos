@@ -631,13 +631,6 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
 </main></body></html>`;
   }
 
-  // ---------------------------------------------------------------- audio (Twilio <Play>)
-  const audio = new Map();
-  const audioStore = {
-    put(buf, mime) { const id = rid(20); audio.set(id, { audio: buf, mime, at: now() }); for (const [k, v] of audio) if (audio.size > 100 || now() - v.at > 600000) audio.delete(k); else break; return id; },
-    get(id) { const a = audio.get(id); return a && now() - a.at < 600000 ? a : null; },
-  };
-
   // ---------------------------------------------------------------- http helpers
   /**
    * The ONE base every URL we hand out is built on, whatever path the caller came in through: <public origin>/api, so
@@ -842,7 +835,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     const raw = req.method === 'POST' ? await o.readRaw(req, name === 'email' ? 25 * 1024 * 1024 : 1024 * 1024) : Buffer.alloc(0);
     const base = apiBase(req);
     const cx = {
-      env, req, res, url, raw, sub: sub || '', botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, base, log, audio: audioStore,
+      env, req, res, url, raw, sub: sub || '', botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, base, log,
       background: (p) => track(p),
       limited: (k) => limit(`ch:${name}:${target.id}:${hashCaller(k)}`, limits.channel).limited,
       ask: async (question, { channel, callerKey }) => {

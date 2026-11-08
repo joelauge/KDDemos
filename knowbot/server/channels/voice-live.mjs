@@ -2,7 +2,7 @@
 // Twilio Media Streams ⇄ Gemini Live, for ANY KnowBot (a Studio trial bot or a launched bot).
 //
 //   POST /v1/channels/:botId/voice   (signed)  → <Connect><Stream url="wss://…/v1/channels/:botId/voice/media"> with a
-//                                                 one-time token (voice.mjs, when GEMINI_API_KEY is set)
+//                                                 one-time token (voice.mjs; needs GEMINI_API_KEY)
 //   GET  /v1/channels/:botId/voice/media (WebSocket upgrade) → this module: Twilio sends 8 kHz μ-law audio, Gemini Live
 //                                                 listens and speaks (16 kHz PCM in, 24 kHz PCM out); no STT/TTS step.
 //
@@ -11,14 +11,15 @@
 // returns the answer already spoken with its attribution ("According to the Shipping page, …"). The model reads that,
 // never its own knowledge. Each search is logged to the questions loop with channel 'phone'.
 // Tools: search_knowledge_base, end_call (hang up after the goodbye), send_product_link (only when the bot has a Shopify
-// store: see shop.mjs; at most 3 texts per call).
+// store: see shop.mjs; items[] of up to 5 products in ONE cart link; at most 3 texts per call).
+// This is the phone channel's only engine: without GEMINI_API_KEY the call webhook says the line isn't set up and hangs up.
 // Security: the media WebSocket must present, in its first "start" message, the one-time token the signed webhook issued
 // for that CallSid and bot; anything else is closed before a Gemini session is opened.
 // Settings (names only): GEMINI_API_KEY, GEMINI_LIVE_MODEL (default gemini-3.8-live), GEMINI_VOICE (default Kore),
 // GEMINI_LIVE_URL (tests / proxies), TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN (hang-up, texts), TWILIO_FROM_NUMBER (texts).
 import { randomUUID } from 'node:crypto';
 import { NOT_IN_DATA, formatSpoken, humanTitle } from './util.mjs';
-import { createShop, toE164, handleInText, textableNumber } from './shop.mjs';
+import { createShop, toE164, handleInText, textableNumber, describeLines, MAX_LINK_ITEMS } from './shop.mjs';
 
 // ------------------------------------------------------------------ audio (Twilio 8 kHz μ-law ⇄ Gemini PCM16 LE)
 const MULAW_BIAS = 0x84;
@@ -143,11 +144,16 @@ Call flow:
   return `${base}
 
 Texting product links:
-- After you've answered about a specific product the caller seems interested in, you may offer once to text them a link that puts it in their cart and opens checkout. Vary the wording; don't push, and don't offer again if they declined.
-- Before sending, know which version they want (color, size, ...) and how many. If you don't know, ask.
+- After you've answered about a specific product the caller seems interested in, you may offer to text them a link that puts it in their cart and opens checkout.
+- Phrase the offer in your own words each time, fitted to the moment: sometimes lead with the convenience of checking out from their phone, sometimes with the item being ready in the cart, sometimes as a quick question. Keep it to one short sentence, and never reuse wording you've already used on this call.
+- Offer at most once per product, and not at all if they've already declined. Don't push.
+- If they're interested in more than one product, offer to put them all in one link rather than sending several texts.
+- Before sending, know which version of each product they want (color, size, ...) and how many of each. If you don't know, ask.
 - Texts go to the number they're calling from unless they give another. Confirm first using the last four digits you were given ("to the number ending in 0378?"). If they give a different number, read it back and get a yes.
-- Then call send_product_link with the product's handle (from the store page address in the search sources) or its name, the version, the quantity, and phone_number only if they gave a different one.
-- If the tool asks for a version, ask the caller. If the version is sold out, say so and offer an in-stock one. When it succeeds, say it's on its way and that the link opens checkout with the item already in the cart.
+- Then call send_product_link with one entry in items per product: the product's name as the files call it (or its handle if you know it), the version, and the quantity. Pass phone_number only if they gave a different number.
+- If the tool reports a problem with one item (it gives the item_number), ask about just that item. If it asks for a version, ask the caller. If a version is sold out, say so and offer an in-stock one.
+- When it succeeds, tell them it's on its way and that the link opens a new checkout with exactly these items in the cart.
+- How the link works, if they ask: it opens a fresh checkout with only the items in that link. It doesn't add to, or include, anything already in a cart on the website. If they want other items too, offer to send a new link with everything together.
 - Never read out the link itself.`;
 }
 
@@ -159,13 +165,15 @@ export function toolDeclarations({ org, productLinks = false }) {
     { name: 'end_call', description: 'Hang up after you have said goodbye to the caller.', parameters: { type: 'OBJECT', properties: {} } },
   ];
   if (productLinks) {
-    fns.splice(1, 0, { name: 'send_product_link', description: 'Text the caller a link that adds a product to their cart and opens checkout. Only after the caller agreed and confirmed the number.',
+    fns.splice(1, 0, { name: 'send_product_link', description: 'Text the caller ONE link that puts the listed products in a new cart and opens checkout. Only after the caller agreed and confirmed the number.',
       parameters: { type: 'OBJECT', properties: {
-        product: { type: 'STRING', description: "The product's handle (e.g. ultimate-bundle) or its store page URL; its name as a last resort." },
-        variant: { type: 'STRING', description: 'The version the caller wants, in plain words (e.g. "brown landscape"). Empty if there is only one.' },
-        quantity: { type: 'INTEGER', description: 'How many. Default 1.' },
+        items: { type: 'ARRAY', description: `One entry per product to include (up to ${MAX_LINK_ITEMS}).`, items: { type: 'OBJECT', properties: {
+          product: { type: 'STRING', description: "The product's handle (e.g. ultimate-bundle) or its store page URL; its name as a last resort." },
+          variant: { type: 'STRING', description: 'The version the caller wants, in plain words (e.g. "brown landscape"). Empty if there is only one.' },
+          quantity: { type: 'INTEGER', description: 'How many. Default 1.' },
+        }, required: ['product'] } },
         phone_number: { type: 'STRING', description: "Only if the caller asked for a number other than the one they're calling from, as they said it." },
-      }, required: ['product'] } });
+      }, required: ['items'] } });
   }
   return [{ functionDeclarations: fns }];
 }
@@ -249,7 +257,9 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
         if (spoken) return { status: 'error', retryable: false, reason: `Texts can only go to a mobile number in the same country as this line${own ? ', or to the number they are calling from' : ''}.` };
         return { status: 'need_phone_number', reason: "There's no usable number for this caller. Ask for their mobile number and read it back." };
       }
-      const link = await shop.buildProductLink({ product: args.product, variant: args.variant, quantity: args.quantity, callSid });
+      // items[] (one link for several products); the older single { product, variant, quantity } shape is still accepted
+      const items = Array.isArray(args.items) && args.items.length ? args.items : args.product ? [{ product: args.product, variant: args.variant, quantity: args.quantity }] : [];
+      const link = await shop.buildProductLink({ items, callSid });
       if (link.status !== 'ok') return link;
       if (textAllowed && !textAllowed(to)) {
         log(`[voice-live] ${callSid} text to ***${to.slice(-4)} refused: texts are limited`);
@@ -258,8 +268,8 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
       try {
         await sendSms(to, shop.smsBody(link));
         textsSent += 1;
-        log(`[voice-live] ${callSid} texted a ${link.kind} link for ${link.title}${link.variant ? ` (${link.variant})` : ''} to ***${to.slice(-4)}`);
-        return { status: 'ok', sent_to_last_four: to.slice(-4), opens: link.kind === 'checkout' ? 'checkout with the item in the cart' : 'the product page', product: link.title, variant: link.variant };
+        log(`[voice-live] ${callSid} texted a ${link.kind} link for ${describeLines(link.lines)} to ***${to.slice(-4)}`);
+        return { status: 'ok', sent_to_last_four: to.slice(-4), opens: link.kind === 'checkout' ? 'a new checkout with exactly these items in the cart' : 'the product page', items: link.lines };
       } catch (e) {
         log(`[voice-live] ${callSid} text failed: ${e.message}`);
         return { status: 'error', retryable: false, reason: "The text message couldn't be sent." };

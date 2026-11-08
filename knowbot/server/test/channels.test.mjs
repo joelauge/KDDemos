@@ -269,7 +269,11 @@ describe('channels: webhooks against fake providers', () => {
     assert.deepEqual(viaApi.channels, j.channels);
     for (const c of Object.values(j.channels)) for (const u of [c.webhook, c.endpoint].filter(Boolean)) assert.ok(u.startsWith(`${PUBLIC}/api/v1/`), u);
     assert.equal(j.channels.whatsapp.provider, 'meta');
-    assert.equal(j.channels.voice.speech.recognition, 'google');
+    // phone calls are Gemini Live only: no GEMINI_API_KEY here, so the voice channel is not configured (no classic loop)
+    assert.equal(j.channels.voice.engine, 'not_configured');
+    assert.equal(j.channels.voice.configured, false);
+    assert.deepEqual(j.channels.voice.needs, ['GEMINI_API_KEY']);
+    assert.equal(j.channels.voice.speech, undefined);
     assert.equal(j.channels.voiceBot.google, true);
     assert.ok(!/twilio-secret|meta-secret|gkey|mail-secret/.test(JSON.stringify(j)));
     assert.equal((await S.api('/v1/channels/nope')).status, 404);
@@ -295,29 +299,15 @@ describe('channels: webhooks against fake providers', () => {
     assert.equal(ref, NOT_IN_DATA);
   });
 
-  test('Voice (Google STT + TTS): greeting records, the recording is transcribed by Google, the answer is played', async () => {
+  test('Voice without GEMINI_API_KEY: Google speech keys do not make a phone engine; the call hears "not set up yet" and is hung up', async () => {
     const p = '/v1/channels/front-desk/voice';
+    assert.equal((await S.twilio(p, { CallSid: 'CA1', From: PHONE }, { sign: false })).status, 403);
     const first = await (await S.twilio(p, { CallSid: 'CA1', From: PHONE })).text();
-    assert.match(first, /<Play>https:\/\/kb\.example\.test\/api\/v1\/channels\/front-desk\/voice\/audio\/[A-Za-z0-9_-]+\.mp3<\/Play>/);
-    assert.match(first, /<Record action="https:\/\/kb\.example\.test\/api\/v1\/channels\/front-desk\/voice\/recording\?empty=0"/);
-    const params = { CallSid: 'CA1', From: PHONE, RecordingUrl: `${F.url}/twilio/2010-04-01/Accounts/AC1/Recordings/RE1`, RecordingSid: 'RE1' };
-    const rp = '/v1/channels/front-desk/voice/recording?empty=0';
-    const xml = await (await S.twilio(rp, params)).text();
-    const stt = F.calls.find((c) => c.path === '/google/stt/v1/speech:recognize');
-    assert.equal(stt.json.config.encoding, 'LINEAR16');
-    assert.equal(stt.json.config.sampleRateHertz, 8000);
-    const tts = F.calls.filter((c) => c.path === '/google/tts/v1/text:synthesize').map((c) => c.json.input.text);
-    assert.ok(tts.some((t) => /^According to the Returns Policy, you can return any unused item within 30 days/.test(t)), tts.join(' | '));
-    const audioUrl = /<Play>([^<]+)<\/Play>/.exec(xml)[1].replace(PUBLIC, S.base);
-    const a = await fetch(audioUrl);
-    assert.equal(a.status, 200);
-    assert.equal(a.headers.get('content-type'), 'audio/mpeg');
-    assert.match(Buffer.from(await a.arrayBuffer()).toString(), /^ID3-fake-mp3:/);
-    assert.match(xml, /<Record /, 'listens again');
-    // a recording URL that is not Twilio's is never fetched with the account credentials
-    const evil = await (await S.twilio(rp, { ...params, RecordingUrl: 'http://127.0.0.1:9/steal' })).text();
-    assert.match(evil, /voice\/recording\?empty=1/, 'treated as nothing heard: a reprompt');
-    assert.ok(!F.calls.some((c) => c.path === '/steal'));
+    assert.match(first, /^<\?xml version="1.0" encoding="UTF-8"\?>\n<Response><Say voice="[^"]+" language="en-US">Sorry, this phone line isn&apos;t set up yet\. Please try again later\. Goodbye\.<\/Say><Hangup\/><\/Response>$/);
+    assert.ok(!/<Gather|<Record|<Play|<Stream/.test(first));
+    // the classic steps are gone
+    for (const sub of ['answer?empty=0', 'recording?empty=0', 'audio/abcdefghij.mp3']) assert.equal((await S.twilio(`${p}/${sub}`, { CallSid: 'CA1', From: PHONE, SpeechResult: Q })).status, 404, sub);
+    assert.ok(!F.calls.some((c) => c.path.startsWith('/google/')), 'no Google speech call for a phone call');
   });
 
   test('WhatsApp (Meta): verify handshake, signed webhook, reply via Graph API with footnotes', async () => {
@@ -411,7 +401,7 @@ describe('channels: webhooks against fake providers', () => {
     await flushQuestions();
     const files = [...S.kd.files.values()].filter((f) => f.tags.includes('questions'));
     const chans = new Set(files.map((f) => f.tags.find((t) => t.startsWith('channel:'))));
-    for (const c of ['sms', 'voice', 'phone', 'whatsapp', 'email']) assert.ok(chans.has(`channel:${c}`), `channel:${c} logged`); // voice = browser voice bot, phone = Twilio calls
+    for (const c of ['sms', 'voice', 'whatsapp', 'email']) assert.ok(chans.has(`channel:${c}`), `channel:${c} logged`); // voice = browser voice bot (phone calls: voice-live.test.mjs)
     assert.ok(files.some((f) => f.tags.includes(`from:${hashCaller(PHONE)}`)));
     assert.ok(files.some((f) => f.tags.includes(`from:${hashCaller('jane@example.com')}`)));
     const all = files.map((f) => `${f.filename} ${f.tags.join(',')} ${f.text}`).join('\n');
@@ -420,40 +410,26 @@ describe('channels: webhooks against fake providers', () => {
   });
 });
 
-// ------------------------------------------------------------------ Twilio-only voice + unconfigured server
-describe('channels: Twilio speech fallback and missing configuration', () => {
+// ------------------------------------------------------------------ phone without Gemini + unconfigured server
+describe('channels: phone without GEMINI_API_KEY and missing configuration', () => {
   let S, N;
   before(async () => { _resetQuestions(); S = await boot({ TWILIO_AUTH_TOKEN: 'twilio-secret' }); N = await boot({}); });
   after(async () => { _resetQuestions(); await S.close(); await N.close(); });
 
-  test('Voice without Google: <Gather input="speech"> loop with <Say>, attribution, reprompt, then goodbye', async () => {
-    const p = '/v1/channels/front-desk/voice';
-    const first = await (await S.twilio(p, { CallSid: 'CA2', From: PHONE })).text();
-    assert.match(first, /<Gather input="speech" action="https:\/\/kb\.example\.test\/api\/v1\/channels\/front-desk\/voice\/answer\?empty=0" method="POST" speechTimeout="auto"/);
-    assert.match(first, /<Say voice="[^"]+" language="en-US">Hi, you&apos;ve reached Front Desk\./);
-    const ans = await (await S.twilio(`${p}/answer?empty=0`, { CallSid: 'CA2', From: PHONE, SpeechResult: Q, Confidence: '0.92' })).text();
-    assert.match(ans, /<Say[^>]*>According to the Returns Policy, you can return any unused item within 30 days/);
-    assert.match(ans, /Anything else\?<\/Say><\/Gather>/);
-    const ref = await (await S.twilio(`${p}/answer?empty=0`, { CallSid: 'CA2', From: '+14155550111', SpeechResult: OFF })).text();
-    assert.ok(ref.includes(NOT_IN_DATA.replace(/'/g, '&apos;')));
-    const e1 = await (await S.twilio(`${p}/answer?empty=0`, { CallSid: 'CA2', From: PHONE })).text();
-    assert.match(e1, /didn&apos;t catch that/);
-    assert.match(e1, /voice\/answer\?empty=1" method="POST"/, 'the empty count goes up');
-    const e2 = await (await S.twilio(`${p}/answer?empty=2`, { CallSid: 'CA2', From: PHONE })).text();
-    assert.match(e2, /Goodbye\.<\/Say><Hangup\/>/);
-    assert.equal((await S.twilio(`${p}/answer?empty=0`, { SpeechResult: Q }, { sign: false })).status, 403);
-  });
-
-  test('Voice: a first POST that already carries SpeechResult is answered (not greeted) and logged once', async () => {
+  test('Voice without GEMINI_API_KEY: a polite "not set up yet" and a hang-up, never a <Gather> answering loop', async () => {
     const p = '/v1/channels/front-desk/voice';
     const caller = '+14155550177';
     const before = (await questionsInsightsFor(S)).total;
-    const ans = await (await S.twilio(p, { CallSid: 'CA9', From: caller, SpeechResult: Q, Confidence: '0.9' })).text();
-    assert.match(ans, /<Say[^>]*>According to the Returns Policy, you can return any unused item within 30 days/);
-    assert.ok(!/you&apos;ve reached/.test(ans), 'not the greeting');
-    // Twilio retries the same webhook: still one logged question
-    await S.twilio(p, { CallSid: 'CA9', From: caller, SpeechResult: Q, Confidence: '0.9' });
-    assert.equal((await questionsInsightsFor(S)).total, before + 1);
+    for (const params of [{ CallSid: 'CA2', From: PHONE }, { CallSid: 'CA9', From: caller, SpeechResult: Q, Confidence: '0.9' }]) {
+      const xml = await (await S.twilio(p, params)).text();
+      assert.match(xml, /<Say voice="[^"]+" language="en-US">Sorry, this phone line isn&apos;t set up yet\. Please try again later\. Goodbye\.<\/Say><Hangup\/>/);
+      assert.ok(!/<Gather|According to/.test(xml), 'a question in the first POST is not answered either');
+    }
+    assert.equal((await S.twilio(`${p}/answer?empty=0`, { CallSid: 'CA2', From: PHONE, SpeechResult: Q })).status, 404);
+    assert.equal((await questionsInsightsFor(S)).total, before, 'nothing answered, nothing logged');
+    const st = await (await S.api('/v1/channels/front-desk')).json();
+    assert.equal(st.channels.voice.engine, 'not_configured');
+    assert.equal(st.channels.voice.mediaStream, undefined);
   });
 
   test('a channel with no configuration answers 503 "channel not configured" and names what to set', async () => {

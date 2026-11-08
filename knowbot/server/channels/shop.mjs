@@ -1,6 +1,6 @@
-// Texted product links for the phone channel (ported from the voice-agent demo's src/shop.js): resolve a product (and
-// variant) on a Shopify storefront, then build a cart permalink that adds it to the cart and opens checkout, tagged so a
-// sale can be attributed to the call.
+// Texted product links for the phone channel (ported from the voice-agent demo's src/shop.js, through 86135d1): resolve
+// the products (and variants) on a Shopify storefront, then build ONE cart permalink that opens checkout with them in the
+// cart, tagged so a sale can be attributed to the call.
 //
 //   shopDomainFor(target, env) → 'https://store.example' | null
 //     a trial bot whose sources came from a Shopify store import (Studio "Import a store", T.flags.storeLast, kept after
@@ -9,11 +9,16 @@
 //     another merchant's checkout links). Null means the product-link tool is not offered at all.
 //   textableNumber(raw, fromNumber) → E.164 or null: same country as the sending line, no premium-rate / short codes.
 //   createShop({ domain, env, orgName, findHandle }) → { buildProductLink, smsBody }
+//   describeLines(lines) → "2 x Dice Tray; Playmat, Red / Large and Dice Bag" (SMS text and logs)
 //
-// Variant ids come from the storefront's public /products/<handle>.js (cached for an hour). A sold-out version is refused
-// with the in-stock alternatives. If the storefront can't be reached, the link opens the product page instead.
-// Attribution on every link: utm_source / utm_medium / utm_campaign / utm_content=<handle> (LINK_UTM_* to change), plus
-// on checkout links ref=<LINK_REF> (Shopify's referral code in the order's conversion summary) and attributes[call]=<CallSid>.
+// One link holds up to 5 products: a Shopify cart permalink /cart/<variant>:<qty>,<variant>:<qty> opens a NEW checkout
+// with exactly those items (it doesn't add to, or include, a cart already open on the website). Repeats of one version are
+// merged. The first problem item (sold out, needs a version, not found) comes back with its item_number so the agent can
+// ask about just that item. Variant ids come from the storefront's public /products/<handle>.js (cached for an hour, one
+// retry on 429). If the storefront can't be reached, a single-product link opens the product page instead.
+// Attribution on every link: utm_source / utm_medium / utm_campaign / utm_content=<handle>[,<handle>…] (LINK_UTM_* to
+// change), plus on checkout links ref=<LINK_REF> (Shopify's referral code in the order's conversion summary) and
+// attributes[call]=<CallSid>.
 
 const CACHE_MS = 60 * 60 * 1000;
 
@@ -102,6 +107,17 @@ export function matchVariant(product, variantText) {
 
 const shortTitle = (title) => String(title).split(/\s+[-–|]\s+/)[0].trim();
 
+/** Most products one texted link may hold. */
+export const MAX_LINK_ITEMS = 5;
+const MAX_QTY = 10;
+
+const describeLine = ({ title, variant, quantity = 1 }) => `${quantity > 1 ? `${quantity} x ` : ''}${title}${variant ? `, ${variant}` : ''}`;
+/** "2 x Dice Tray; Playmat, Red / Large and Dice Bag": every item of a link, for the SMS text and the logs. */
+export function describeLines(lines = []) {
+  const parts = lines.map(describeLine);
+  return parts.length > 1 ? `${parts.slice(0, -1).join('; ')} and ${parts.at(-1)}` : parts[0] || '';
+}
+
 export function createShop({ domain, env = {}, orgName = 'the store', findHandle = null, fetchImpl = fetch, log = () => {} } = {}) {
   const cache = new Map(); // handle → { product, at }
   const tags = {
@@ -131,22 +147,22 @@ export function createShop({ domain, env = {}, orgName = 'the store', findHandle
     throw new Error(`storefront rate-limited the lookup for ${handle}`);
   }
 
-  const utm = (handle) => new URLSearchParams({ utm_source: tags.utm_source, utm_medium: tags.utm_medium, utm_campaign: tags.utm_campaign, utm_content: handle });
-  function cartLink(variantId, quantity, handle, callSid) {
-    const p = utm(handle);
+  const utm = (content) => new URLSearchParams({ utm_source: tags.utm_source, utm_medium: tags.utm_medium, utm_campaign: tags.utm_campaign, utm_content: content });
+  /** Cart permalink: a NEW checkout holding exactly these items (it never merges with a cart already open on the site). */
+  function cartLink(lines, callSid) {
+    const p = utm([...new Set(lines.map((l) => l.handle))].join(','));
     p.set('ref', tags.ref);
     if (callSid) p.set('attributes[call]', callSid);
-    return `${domain}/cart/${variantId}:${quantity}?${p}`;
+    return `${domain}/cart/${lines.map((l) => `${l.variantId}:${l.quantity}`).join(',')}?${p}`;
   }
   const productPageLink = (handle) => `${domain}/products/${handle}?${utm(handle)}`;
 
   /**
-   * → { status: 'ok', url, kind: 'checkout'|'product_page', title, variant, quantity }
-   *   or a status the model can act on: 'need_variant' | 'unavailable' | 'not_found' | 'error'.
+   * One requested item → { status: 'ok', handle, variantId, title, variant, quantity }, or a status the model can act on:
+   * 'need_variant' | 'unavailable' | 'not_found' (each naming the product), or 'store_unreachable' (internal).
    */
-  async function buildProductLink({ product, variant = '', quantity = 1, callSid } = {}) {
-    if (!domain) return { status: 'error', retryable: false, reason: 'Product links are not set up for this bot.' };
-    const qty = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), 10);
+  async function resolveItem({ product, variant = '', quantity = 1 } = {}) {
+    const qty = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), MAX_QTY);
     let handle = handleFrom(product);
     let data = null;
     try {
@@ -157,22 +173,57 @@ export function createShop({ domain, env = {}, orgName = 'the store', findHandle
       }
     } catch (e) {
       log(`[shop] ${e.message}`);
-      if (handle) return { status: 'ok', kind: 'product_page', url: productPageLink(handle), title: String(product), variant: String(variant || ''), quantity: qty };
-      return { status: 'error', retryable: true, reason: "The store couldn't be reached." };
+      return { status: 'store_unreachable', product: String(product || ''), handle };
     }
-    if (!data) return { status: 'not_found', reason: `No product matches "${product}". Search the knowledge base for the product, then pass its handle.` };
+    if (!data) return { status: 'not_found', product: String(product || ''), reason: `No product matches "${product}". Search the knowledge base for the product, then pass its handle.` };
     const { variant: chosen, options } = matchVariant(data, variant);
-    if (!chosen) return { status: 'need_variant', reason: 'Ask the caller which version they want, then call again with it.', valid_options: options };
+    if (!chosen) return { status: 'need_variant', product: shortTitle(data.title), reason: 'Ask the caller which version they want, then call again with it.', valid_options: options };
     if (!chosen.available) {
-      return { status: 'unavailable', reason: `${chosen.title} is sold out.`, in_stock_options: (data.variants || []).filter((v) => v.available).map((v) => v.title) };
+      return { status: 'unavailable', product: shortTitle(data.title), reason: `${chosen.title} is sold out.`, in_stock_options: (data.variants || []).filter((v) => v.available).map((v) => v.title) };
     }
-    return { status: 'ok', kind: 'checkout', url: cartLink(chosen.id, qty, data.handle || handle, callSid), title: shortTitle(data.title),
-      variant: chosen.title === 'Default Title' ? '' : chosen.title, quantity: qty };
+    return { status: 'ok', handle: data.handle || handle, variantId: chosen.id, title: shortTitle(data.title), variant: chosen.title === 'Default Title' ? '' : chosen.title, quantity: qty };
   }
 
-  function smsBody({ title, variant, quantity = 1, kind, url }) {
-    const what = `${quantity > 1 ? `${quantity} x ` : ''}${title}${variant ? `, ${variant}` : ''}`;
-    return kind === 'checkout' ? `${what} is in your cart at ${orgName}. Tap to check out: ${url}` : `Here's the ${what} from ${orgName}: ${url}`;
+  /**
+   * The requested items (up to MAX_LINK_ITEMS; the older single { product, variant, quantity } shape too) → ONE link:
+   *   { status: 'ok', kind: 'checkout'|'product_page', url, lines: [{ title, variant, quantity }] }
+   * or the FIRST problem item's status with its item_number (1-based), so the agent asks about just that item; or 'error'.
+   * Repeats of the same version are merged into one line. A single product on an unreachable store gets its product page.
+   */
+  async function buildProductLink({ items, product, variant = '', quantity = 1, callSid } = {}) {
+    if (!domain) return { status: 'error', retryable: false, reason: 'Product links are not set up for this bot.' };
+    const list = Array.isArray(items) && items.length ? items : product ? [{ product, variant, quantity }] : [];
+    const wanted = list.filter((i) => i && String(i.product || '').trim());
+    if (!wanted.length) return { status: 'error', retryable: false, reason: 'No products were given. Pass one entry per product in items.' };
+    if (wanted.length > MAX_LINK_ITEMS) return { status: 'error', retryable: false, reason: `One link holds at most ${MAX_LINK_ITEMS} products. Ask the caller which ones to include, or send the rest in a second link.` };
+
+    const resolved = await Promise.all(wanted.map(resolveItem));
+    const unreachable = resolved.filter((r) => r.status === 'store_unreachable');
+    if (unreachable.length) {
+      // a single product still gets its (tagged) product page; several can't be put in one cart without the store
+      const u = unreachable[0];
+      if (wanted.length === 1 && u.handle) {
+        const title = /^https?:\/\//i.test(u.product) ? u.handle.replace(/-/g, ' ') : u.product;
+        return { status: 'ok', kind: 'product_page', url: productPageLink(u.handle), lines: [{ title, variant: String(wanted[0].variant || ''), quantity: 1 }] };
+      }
+      return { status: 'error', retryable: true, reason: "The store couldn't be reached." };
+    }
+    const bad = resolved.findIndex((r) => r.status !== 'ok');
+    if (bad !== -1) return { ...resolved[bad], item_number: bad + 1 };
+
+    const lines = [];
+    for (const r of resolved) {
+      const same = lines.find((l) => l.variantId === r.variantId);
+      if (same) same.quantity = Math.min(same.quantity + r.quantity, MAX_QTY);
+      else lines.push({ ...r });
+    }
+    return { status: 'ok', kind: 'checkout', url: cartLink(lines, callSid), lines: lines.map(({ title, variant: v, quantity: q }) => ({ title, variant: v, quantity: q })) };
+  }
+
+  function smsBody({ lines = [], kind, url }) {
+    const what = describeLines(lines);
+    const verb = lines.length > 1 || (lines[0]?.quantity || 1) > 1 ? 'are' : 'is';
+    return kind === 'checkout' ? `${what} ${verb} in your cart at ${orgName}. Tap to check out: ${url}` : `Here's the ${what} from ${orgName}: ${url}`;
   }
 
   return { buildProductLink, smsBody, domain };

@@ -744,6 +744,8 @@ async function storeJourney(browser, dev, cell) {
     const seen = await page.waitForFunction(() => /Shopify store found/.test(document.querySelector('.st-si-run')?.innerText || '') || /Found \d/.test(document.querySelector('.st-si-found')?.textContent || '')
       || /^Found \d/.test(document.querySelector('.st-si-plan:not([hidden]) .st-si-plan-h')?.textContent || ''), null, { timeout: 15000 }).then(() => true).catch(() => false);
     check('18-store', 'progress: platform found, then counts', seen, { detail: await page.locator('.st-si').last().innerText().catch(() => '') });
+    // the plan (a finder server) or the import's own progress (an older one) comes next
+    await page.waitForFunction(() => !!document.querySelector('.st-si-plan:not([hidden]) .st-si-kbox') || /Reading|Building|Adding|Imported/.test(document.querySelector('.st-si-status')?.textContent || ''), null, { timeout: 30000 }).catch(() => {});
     const planned = await page.locator('.st-si-plan:not([hidden])').count() > 0;
     if (planned) {
       const kinds = await page.locator('.st-si-plan .st-si-kbox').evaluateAll((els) => els.map((e) => ({ kind: e.dataset.kind, on: e.checked, name: e.closest('label')?.innerText || '' })));
@@ -776,7 +778,8 @@ async function storeJourney(browser, dev, cell) {
       const has = await gb.waitFor({ state: 'attached', timeout: 15000 }).then(() => true).catch(() => false);
       if (has) {
         await gb.scrollIntoViewIfNeeded().catch(() => {});
-        if ((await gb.getAttribute('aria-expanded')) !== 'true') await gb.click();
+        // the mobile Sources list may sit in a collapsed panel: the group's own behaviour is what is checked here
+        if ((await gb.getAttribute('aria-expanded')) !== 'true') { if (await gb.isVisible()) await gb.click({ timeout: 5000 }).catch(() => gb.evaluate((x) => x.click())); else await gb.evaluate((x) => x.click()); }
         const ctl = await gb.getAttribute('aria-controls');
         const grp = await page.evaluate((id) => { const g = document.getElementById(id); return g ? { role: g.getAttribute('role'), label: g.getAttribute('aria-label'), hidden: g.hidden } : null; }, ctl);
         check('18-store', 'Sources group: button aria-controls a role=group named "<Kind> files"', !!grp && grp.role === 'group' && /Products files/.test(grp.label || '') && !grp.hidden, { detail: JSON.stringify(grp) });
@@ -784,13 +787,13 @@ async function storeJourney(browser, dev, cell) {
         const q = page.locator('#in-intake-slot .st-sgp-q').first();
         let one = false;
         if (listed) {
-          await q.fill('trail');
+          await q.evaluate((x) => { x.value = 'trail'; x.dispatchEvent(new Event('input', { bubbles: true })); });
           one = await page.waitForFunction(() => { const l = [...document.querySelectorAll('#in-intake-slot .st-sgp-l > li')]; return l.length === 1 && /Trail Pro/.test(l[0].innerText) && !!l[0].querySelector('a[target="_blank"]') && !!l[0].querySelector('input[type="checkbox"]') && /Remove/.test(l[0].innerText); }, null, { timeout: 8000 }).then(() => true).catch(() => false);
-          await q.fill('');
+          await q.evaluate((x) => { x.value = ''; x.dispatchEvent(new Event('input', { bubbles: true })); });
         }
         check('18-store', 'Sources group past the row cap: search finds any product file (link, Use switch, Remove)', listed && one,
-          { detail: await page.locator('#in-intake-slot .st-sgp').first().innerText().catch(() => '') });
-        await gb.click().catch(() => {});
+          { detail: await page.locator('#in-intake-slot .st-sg[data-sgroup="product"]').first().evaluate((x) => `${x.querySelectorAll('.st-sgp-l > li').length} rows; ${x.textContent.replace(/\s+/g, ' ').slice(0, 300)}`).catch((e) => e.message) });
+        await gb.evaluate((x) => x.click()).catch(() => {});
       } else check('18-store', 'Sources group for the imported products', false);
     }
     await press(page.locator('.st-si-actions button', { hasText: 'Import again' }).last(), 'Import again');

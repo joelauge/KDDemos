@@ -1,6 +1,6 @@
 // Phone channel, voice-to-voice engine (server/channels/voice-live.mjs) against FAKES on 127.0.0.1 only: a fake Gemini Live
-// WebSocket server that issues tool calls, a fake Twilio REST API (texts, hang-up), a fake Shopify storefront and a fake
-// ElevenLabs. Twilio's side of the media stream is played by Node's own WebSocket client. No real credentials are used.
+// WebSocket server that issues tool calls, a fake Twilio REST API (texts, hang-up) and a fake Shopify storefront. Twilio's
+// side of the media stream is played by Node's own WebSocket client. No real credentials are used.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -18,8 +18,8 @@ import {
   mulawDecode, mulawEncode, twilioToGemini, createTwilioToGemini, createGeminiToTwilio, issueStreamToken, claimStreamToken, createToolRunner,
   systemInstruction, toolDeclarations, MAX_TEXTS_PER_CALL, hasFigure, phoneLimits, phoneSessions,
 } from '../channels/voice-live.mjs';
-import { createShop, toE164, handleInText, shopDomainFor, textableNumber } from '../channels/shop.mjs';
-import { phoneEngine } from '../channels/voice.mjs';
+import { createShop, toE164, handleInText, shopDomainFor, textableNumber, describeLines, MAX_LINK_ITEMS } from '../channels/shop.mjs';
+import { phoneEngine, PHONE_NOT_SET_UP } from '../channels/voice.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,11 +42,12 @@ const Q = 'How many days do I have to return an unused item?';
 const OFF = 'What is the capital of Australia?';
 
 // ------------------------------------------------------------------ fakes
-/** Fake Shopify storefront (/products/<handle>.js) + Twilio REST + ElevenLabs. */
+/** Fake Shopify storefront (/products/<handle>.js) + Twilio REST. */
 async function startFakeProviders() {
   const calls = [];
   const products = {
     'magnetic-dice-tray': { handle: 'magnetic-dice-tray', title: 'Magnetic Dice Tray - Walnut', variants: [{ id: 4401, title: 'Default Title', option1: 'Default Title', available: true }] },
+    'dice-bag': { handle: 'dice-bag', title: 'Dice Bag', variants: [{ id: 7701, title: 'Default Title', option1: 'Default Title', available: true }] },
     playmat: { handle: 'playmat', title: 'Battle Playmat', variants: [
       { id: 501, title: 'Blue / Large', option1: 'Blue', option2: 'Large', available: false },
       { id: 502, title: 'Red / Large', option1: 'Red', option2: 'Large', available: true },
@@ -67,12 +68,6 @@ async function startFakeProviders() {
         if (req.headers.authorization !== `Basic ${Buffer.from('AC1:twilio-secret').toString('base64')}`) return json(401, {});
         call.form = Object.fromEntries(new URLSearchParams(body));
         return json(201, { sid: 'SMfake' });
-      }
-      if (u.pathname.startsWith('/eleven/v1/text-to-speech/')) {
-        if (req.headers['xi-api-key'] !== 'el-key') return json(401, {});
-        call.json = JSON.parse(body);
-        res.writeHead(200, { 'content-type': 'audio/mpeg' });
-        return res.end(Buffer.from(`ID3-eleven:${call.json.text.slice(0, 40)}`));
       }
       json(404, { error: 'no route' });
     });
@@ -258,6 +253,25 @@ describe('voice-live: prompt, tools, product links', () => {
     assert.match(systemInstruction({ botName: 'X', productLinks: true }), /send_product_link/);
   });
 
+  test('86135d1 prompt: offers in its own words and never repeated, one link for several products, version + quantity of each, how the cart works', () => {
+    const p = systemInstruction({ botName: 'Front Desk', org: 'Acme', productLinks: true });
+    assert.match(p, /Phrase the offer in your own words each time/);
+    assert.match(p, /never reuse wording you've already used on this call/);
+    assert.ok(!/"Want me to text you|"Shall I text you|"I can send that/.test(p), 'offers are described, never given as example lines');
+    assert.match(p, /more than one product, offer to put them all in one link/);
+    assert.match(p, /which version of each product they want .* and how many of each/);
+    assert.match(p, /it opens a fresh checkout with only the items in that link\. It doesn't add to, or include, anything already in a cart on the website/);
+    assert.match(p, /the link opens a new checkout with exactly these items in the cart/);
+    assert.match(p, /item_number/);
+    const decl = toolDeclarations({ org: 'Acme', productLinks: true })[0].functionDeclarations.find((f) => f.name === 'send_product_link');
+    assert.deepEqual(decl.parameters.required, ['items']);
+    assert.equal(decl.parameters.properties.items.type, 'ARRAY');
+    assert.deepEqual(Object.keys(decl.parameters.properties.items.items.properties), ['product', 'variant', 'quantity']);
+    assert.match(decl.parameters.properties.items.description, /up to 5/);
+    assert.equal(MAX_LINK_ITEMS, 5);
+    assert.ok(decl.parameters.properties.phone_number);
+  });
+
   test('shop domain: the bot\'s own Shopify import or shopDomain; SHOP_DOMAIN only for SHOP_DOMAIN_BOT, never server-wide', () => {
     const env = { SHOP_DOMAIN: 'shop.example.com/' };
     assert.equal(shopDomainFor({ id: 'front-desk', kind: 'live', inst: {} }, env), null, 'SHOP_DOMAIN alone applies to no bot');
@@ -276,7 +290,7 @@ describe('voice-live: prompt, tools, product links', () => {
     assert.equal(handleInText('Source: https://other.example/products/x', 'https://ugm.example'), null);
   });
 
-  test('cart permalink with variant lookup and attribution; sold-out refused with in-stock options; version asked for', async () => {
+  test('cart permalink with variant lookup and attribution; sold-out refused with in-stock options; version asked for (old single shape)', async () => {
     const shop = createShop({ domain: `${F.url}/shop`, orgName: 'Acme' });
     const ok = await shop.buildProductLink({ product: 'magnetic-dice-tray', quantity: 2, callSid: 'CA7' });
     assert.equal(ok.status, 'ok');
@@ -284,22 +298,81 @@ describe('voice-live: prompt, tools, product links', () => {
     const u = new URL(ok.url);
     assert.equal(u.pathname, '/shop/cart/4401:2');
     assert.deepEqual(Object.fromEntries(u.searchParams), { utm_source: 'ai-assistant', utm_medium: 'sms', utm_campaign: 'voice-agent', utm_content: 'magnetic-dice-tray', ref: 'ai-voice-agent', 'attributes[call]': 'CA7' });
-    assert.equal(ok.title, 'Magnetic Dice Tray');
-    assert.equal(shop.smsBody(ok), `2 x Magnetic Dice Tray is in your cart at Acme. Tap to check out: ${ok.url}`);
+    assert.deepEqual(ok.lines, [{ title: 'Magnetic Dice Tray', variant: '', quantity: 2 }]);
+    assert.equal(shop.smsBody(ok), `2 x Magnetic Dice Tray are in your cart at Acme. Tap to check out: ${ok.url}`);
+    const one = await shop.buildProductLink({ items: [{ product: 'magnetic-dice-tray' }] });
+    assert.equal(shop.smsBody(one), `Magnetic Dice Tray is in your cart at Acme. Tap to check out: ${one.url}`);
     const sold = await shop.buildProductLink({ product: `${F.url}/shop/products/playmat`, variant: 'large blue' });
-    assert.deepEqual(sold, { status: 'unavailable', reason: 'Blue / Large is sold out.', in_stock_options: ['Red / Large', 'Blue / Small'] });
+    assert.deepEqual(sold, { status: 'unavailable', product: 'Battle Playmat', reason: 'Blue / Large is sold out.', in_stock_options: ['Red / Large', 'Blue / Small'], item_number: 1 });
     const which = await shop.buildProductLink({ product: 'playmat', variant: 'blue' });
     assert.equal(which.status, 'need_variant');
     assert.equal(which.valid_options.length, 3);
     const red = await shop.buildProductLink({ product: 'playmat', variant: 'Red large' });
     assert.match(red.url, /\/cart\/502:1\?/);
     assert.equal((await shop.buildProductLink({ product: 'no-such-thing' })).status, 'not_found');
-    // storefront unreachable: the product page, still tagged
-    const down = await createShop({ domain: 'http://127.0.0.1:9' }).buildProductLink({ product: 'playmat' });
+    // storefront unreachable: a single product gets its product page, still tagged
+    const down = await createShop({ domain: 'http://127.0.0.1:9', orgName: 'Acme' }).buildProductLink({ items: [{ product: 'playmat', variant: 'red', quantity: 3 }] });
+    assert.equal(down.status, 'ok');
     assert.equal(down.kind, 'product_page');
     assert.match(down.url, /\/products\/playmat\?utm_source=ai-assistant&utm_medium=sms&utm_campaign=voice-agent&utm_content=playmat$/);
+    assert.deepEqual(down.lines, [{ title: 'playmat', variant: 'red', quantity: 1 }]);
     const custom = await createShop({ domain: `${F.url}/shop`, env: { LINK_REF: 'phone-line', LINK_UTM_CAMPAIGN: 'spring' } }).buildProductLink({ product: 'magnetic-dice-tray' });
     assert.match(custom.url, /utm_campaign=spring.*ref=phone-line/);
+  });
+
+  test('multi-item link (86135d1): one permalink /cart/v1:q1,v2:q2, repeats merged, utm_content lists every handle, SMS lists every item', async () => {
+    const shop = createShop({ domain: `${F.url}/shop`, orgName: 'Acme' });
+    const ok = await shop.buildProductLink({ callSid: 'CA70', items: [
+      { product: 'magnetic-dice-tray', quantity: 2 }, { product: 'playmat', variant: 'red large' }, { product: 'dice-bag' }, { product: 'magnetic-dice-tray' }] });
+    assert.equal(ok.status, 'ok', JSON.stringify(ok));
+    assert.equal(ok.kind, 'checkout');
+    const u = new URL(ok.url);
+    assert.equal(u.pathname, '/shop/cart/4401:3,502:1,7701:1', 'one cart, the repeated tray merged (2 + 1)');
+    assert.equal(u.searchParams.get('utm_content'), 'magnetic-dice-tray,playmat,dice-bag');
+    assert.equal(u.searchParams.get('ref'), 'ai-voice-agent');
+    assert.equal(u.searchParams.get('attributes[call]'), 'CA70');
+    assert.deepEqual(ok.lines, [{ title: 'Magnetic Dice Tray', variant: '', quantity: 3 }, { title: 'Battle Playmat', variant: 'Red / Large', quantity: 1 }, { title: 'Dice Bag', variant: '', quantity: 1 }]);
+    assert.equal(describeLines(ok.lines), '3 x Magnetic Dice Tray; Battle Playmat, Red / Large and Dice Bag');
+    assert.equal(shop.smsBody(ok), `3 x Magnetic Dice Tray; Battle Playmat, Red / Large and Dice Bag are in your cart at Acme. Tap to check out: ${ok.url}`);
+    // two of one item: "are"; a merge never goes past 10 of one version
+    const many = await shop.buildProductLink({ items: [{ product: 'dice-bag', quantity: 8 }, { product: 'dice-bag', quantity: 8 }] });
+    assert.equal(new URL(many.url).pathname, '/shop/cart/7701:10');
+    // the FIRST problem item comes back with its item_number, so the agent asks about just that one
+    const sold = await shop.buildProductLink({ items: [{ product: 'dice-bag' }, { product: 'playmat', variant: 'blue large' }, { product: 'playmat', variant: 'blue' }] });
+    assert.equal(sold.status, 'unavailable');
+    assert.equal(sold.item_number, 2);
+    assert.equal(sold.product, 'Battle Playmat');
+    assert.deepEqual(sold.in_stock_options, ['Red / Large', 'Blue / Small']);
+    const which = await shop.buildProductLink({ items: [{ product: 'dice-bag' }, { product: 'magnetic-dice-tray' }, { product: 'playmat', variant: 'blue' }] });
+    assert.deepEqual([which.status, which.item_number, which.product], ['need_variant', 3, 'Battle Playmat']);
+    const missing = await shop.buildProductLink({ items: [{ product: 'no-such-thing' }, { product: 'dice-bag' }] });
+    assert.deepEqual([missing.status, missing.item_number, missing.product], ['not_found', 1, 'no-such-thing']);
+    // limits and empties
+    assert.equal((await shop.buildProductLink({ items: [] })).status, 'error');
+    assert.equal((await shop.buildProductLink({ items: [{ variant: 'red' }] })).status, 'error');
+    const six = await shop.buildProductLink({ items: Array.from({ length: 6 }, () => ({ product: 'dice-bag' })) });
+    assert.equal(six.status, 'error');
+    assert.match(six.reason, /at most 5 products/);
+    // several products and the store unreachable: no partial link
+    const down = await createShop({ domain: 'http://127.0.0.1:9' }).buildProductLink({ items: [{ product: 'playmat' }, { product: 'dice-bag' }] });
+    assert.deepEqual(down, { status: 'error', retryable: true, reason: "The store couldn't be reached." });
+  });
+
+  test('storefront lookups: cached, one retry on a 429, no user-agent spoofing', async () => {
+    const seen = [];
+    let n = 0;
+    const fetchImpl = async (url, init) => {
+      seen.push({ url, headers: init.headers });
+      n += 1;
+      if (n === 1) return new Response('{}', { status: 429, headers: { 'retry-after': '0' } });
+      return new Response(JSON.stringify({ handle: 'dice-bag', title: 'Dice Bag', variants: [{ id: 7701, title: 'Default Title', option1: 'Default Title', available: true }] }), { status: 200 });
+    };
+    const shop = createShop({ domain: 'https://shop.example', fetchImpl });
+    assert.equal((await shop.buildProductLink({ items: [{ product: 'dice-bag' }] })).status, 'ok');
+    assert.equal((await shop.buildProductLink({ items: [{ product: 'dice-bag', quantity: 2 }] })).status, 'ok');
+    assert.equal(seen.length, 2, 'one retry after the 429, then the cache');
+    assert.equal(seen[0].url, 'https://shop.example/products/dice-bag.js');
+    for (const x of seen) assert.deepEqual(Object.keys(x.headers).map((k) => k.toLowerCase()), ['accept']);
   });
 
   test('tool runner: grounded search with spoken attribution, refusal, handle found from the sources, 3 texts per call', async () => {
@@ -326,11 +399,18 @@ describe('voice-live: prompt, tools, product links', () => {
     assert.equal(sent.sent_to_last_four, '0199');
     assert.equal(texts[0].to, PHONE);
     assert.match(texts[0].body, /cart\/4401:1\?.*attributes%5Bcall%5D=CA8/);
-    const sold = await run({ name: 'send_product_link', args: { product: 'playmat', variant: 'blue large' } });
+    assert.equal(sent.opens, 'a new checkout with exactly these items in the cart');
+    assert.deepEqual(sent.items, [{ title: 'Magnetic Dice Tray', variant: '', quantity: 1 }]);
+    const sold = await run({ name: 'send_product_link', args: { items: [{ product: 'dice-bag' }, { product: 'playmat', variant: 'blue large' }] } });
     assert.equal(sold.status, 'unavailable');
-    assert.equal(texts.length, 1, 'a sold-out version is never texted');
+    assert.equal(sold.item_number, 2);
+    assert.equal(texts.length, 1, 'a sold-out version is never texted, nor the rest of its link');
     assert.equal((await run({ name: 'send_product_link', args: { product: 'playmat', variant: 'red large', phone_number: '415 555 0100' } })).sent_to_last_four, '0100');
-    await run({ name: 'send_product_link', args: { product: 'magnetic-dice-tray' } });
+    // several products: one text, one link, every item listed
+    const multi = await run({ name: 'send_product_link', args: { items: [{ product: 'magnetic-dice-tray', quantity: 2 }, { product: 'dice-bag' }] } });
+    assert.equal(multi.status, 'ok', JSON.stringify(multi));
+    assert.deepEqual(multi.items, [{ title: 'Magnetic Dice Tray', variant: '', quantity: 2 }, { title: 'Dice Bag', variant: '', quantity: 1 }]);
+    assert.match(texts[2].body, /^2 x Magnetic Dice Tray and Dice Bag are in your cart at Acme\. Tap to check out: .*\/shop\/cart\/4401:2,7701:1\?.*utm_content=magnetic-dice-tray%2Cdice-bag/);
     assert.equal(texts.length, MAX_TEXTS_PER_CALL);
     assert.deepEqual(await run({ name: 'send_product_link', args: { product: 'magnetic-dice-tray' } }), { status: 'error', retryable: false, reason: 'The text limit for this call has been reached.' });
     assert.equal(texts.length, 3);
@@ -434,7 +514,7 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
       send({ serverContent: { turnComplete: true } });
       await call('t2', 'search_knowledge_base', { query: OFF });
       await call('t3', 'send_product_link', { product: 'magnetic-dice-tray', quantity: 2 });
-      await call('t4', 'send_product_link', { product: 'playmat', variant: 'blue large' });
+      await call('t4', 'send_product_link', { items: [{ product: 'dice-bag' }, { product: 'playmat', variant: 'blue large' }] });
       send({ serverContent: { outputTranscription: { text: 'Goodbye!' }, modelTurn: { parts: [{ inlineData: { data: pcm24k(600).toString('base64') } }] } } });
       await call('t5', 'end_call', {});
       send({ serverContent: { turnComplete: true } });
@@ -444,12 +524,14 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
   });
   after(async () => { _resetQuestions(); await S.close(); await G.close(); await F.close(); });
 
-  test('engine and status: gemini when GEMINI_API_KEY is set; the media stream URL is listed; no secrets', async () => {
+  test('engine and status: gemini when GEMINI_API_KEY is set (the only engine); the media stream URL is listed; no secrets', async () => {
     assert.equal(phoneEngine({ GEMINI_API_KEY: 'x' }), 'gemini');
-    assert.equal(phoneEngine({}), 'classic');
-    assert.equal(phoneEngine({ GEMINI_API_KEY: 'x', KNOWBOT_PHONE_ENGINE: 'classic' }), 'classic');
+    assert.equal(phoneEngine({}), 'not_configured');
+    assert.equal(phoneEngine({ GEMINI_API_KEY: 'x', KNOWBOT_PHONE_ENGINE: 'classic' }), 'gemini', 'there is no classic engine switch');
     const j = await (await S.api('/v1/channels/front-desk')).json();
     assert.equal(j.channels.voice.engine, 'gemini');
+    assert.equal(j.channels.voice.configured, true);
+    assert.equal(j.channels.voice.speech, undefined);
     assert.equal(j.channels.voice.texts, true);
     assert.equal(j.channels.voice.mediaStream, 'wss://kb.example.test/api/v1/channels/front-desk/voice/media');
     assert.ok(!/gkey|twilio-secret/.test(JSON.stringify(j)));
@@ -501,8 +583,9 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     assert.equal(sms.length, 1);
     assert.equal(sms[0].form.To, PHONE);
     assert.equal(sms[0].form.From, '+15550001111');
-    assert.match(sms[0].form.Body, /^2 x Magnetic Dice Tray is in your cart at .*\/shop\/cart\/4401:2\?utm_source=ai-assistant&utm_medium=sms&utm_campaign=voice-agent&utm_content=magnetic-dice-tray&ref=ai-voice-agent&attributes%5Bcall%5D=CA2$/);
+    assert.match(sms[0].form.Body, /^2 x Magnetic Dice Tray are in your cart at .*\/shop\/cart\/4401:2\?utm_source=ai-assistant&utm_medium=sms&utm_campaign=voice-agent&utm_content=magnetic-dice-tray&ref=ai-voice-agent&attributes%5Bcall%5D=CA2$/);
     assert.equal(t4.response.status, 'unavailable');
+    assert.equal(t4.response.item_number, 2, 'the sold-out item is named by its place in the list');
     assert.equal(t5.response.status, 'ok');
     // Gemini's 24 kHz audio reached Twilio as 8 kHz μ-law, then the mark, then the hang-up through the REST API
     const media = c.got.filter((m) => m.event === 'media');
@@ -648,42 +731,50 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
   });
 });
 
-describe('voice-live: classic engine (no GEMINI_API_KEY) speaks with ElevenLabs; missing secrets degrade', () => {
-  let S, F, N;
+describe('voice-live: no GEMINI_API_KEY means the phone line is not set up (no classic engine, no ElevenLabs)', () => {
+  let N, C, F;
   before(async () => {
     _resetQuestions();
     F = await startFakeProviders();
-    S = await boot({ TWILIO_AUTH_TOKEN: 'twilio-secret', ELEVENLABS_API_KEY: 'el-key', ELEVENLABS_VOICE_ID: 'voice1', ELEVENLABS_BASE_URL: `${F.url}/eleven` });
     N = await boot({ TWILIO_AUTH_TOKEN: 'twilio-secret' });
+    // the removed settings change nothing: still not set up, no <Gather> loop, no ElevenLabs request
+    C = await boot({ TWILIO_AUTH_TOKEN: 'twilio-secret', KNOWBOT_PHONE_ENGINE: 'classic', ELEVENLABS_API_KEY: 'el-key', ELEVENLABS_VOICE_ID: 'voice1', ELEVENLABS_BASE_URL: `${F.url}/eleven` });
   });
-  after(async () => { _resetQuestions(); await S.close(); await N.close(); await F.close(); });
+  after(async () => { _resetQuestions(); await N.close(); await C.close(); await F.close(); });
 
-  test('<Gather> loop; the answer is ElevenLabs audio with attribution; logged as phone', async () => {
-    const p = '/v1/channels/front-desk/voice';
-    const first = await (await S.twilio(p, { CallSid: 'CA5', From: PHONE })).text();
-    assert.match(first, /<Gather input="speech"[^>]*><Play>https:\/\/kb\.example\.test\/api\/v1\/channels\/front-desk\/voice\/audio\/[A-Za-z0-9_-]+\.mp3<\/Play>/);
-    const ans = await (await S.twilio(`${p}/answer?empty=0`, { CallSid: 'CA5', From: PHONE, SpeechResult: Q })).text();
-    const spoken = F.calls.filter((c) => c.path === '/eleven/v1/text-to-speech/voice1').map((c) => c.json.text);
-    assert.ok(spoken.some((t) => /^According to the Returns Policy, you can return any unused item within 30 days/.test(t)), spoken.join(' | '));
-    const audioUrl = /<Play>([^<]+)<\/Play>/.exec(ans)[1].replace(PUBLIC, S.base);
-    const a = await fetch(audioUrl);
-    assert.equal(a.headers.get('content-type'), 'audio/mpeg');
-    assert.match(Buffer.from(await a.arrayBuffer()).toString(), /^ID3-eleven:/);
-    const st = await (await S.api('/v1/channels/front-desk')).json();
-    assert.equal(st.channels.voice.engine, 'classic');
-    assert.equal(st.channels.voice.speech.synthesis, 'elevenlabs');
-    assert.equal(st.channels.voice.mediaStream, undefined);
-    await until(async () => { await flushQuestions(); return [...S.kd.files.values()].some((f) => f.tags.includes('questions') && f.tags.includes('channel:phone')); }, 5000, 'a phone question');
+  test('the webhook says politely that the line is not set up yet and hangs up; nothing is answered or logged', async () => {
+    for (const S of [N, C]) {
+      const xml = await (await S.twilio('/v1/channels/front-desk/voice', { CallSid: 'CA6', From: PHONE })).text();
+      assert.equal(xml, `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say voice="Polly.Joanna-Neural" language="en-US">${PHONE_NOT_SET_UP.replace(/'/g, '&apos;')}</Say><Hangup/></Response>`);
+      // even with a question already in the first POST
+      const withSpeech = await (await S.twilio('/v1/channels/front-desk/voice', { CallSid: 'CA7', From: PHONE, SpeechResult: Q })).text();
+      assert.ok(!/<Gather|<Record|<Play|<Stream|According to/.test(withSpeech), withSpeech);
+      assert.match(withSpeech, /<Hangup\/>/);
+      // the classic steps no longer exist
+      for (const sub of ['answer?empty=0', 'recording?empty=0']) assert.equal((await S.twilio(`/v1/channels/front-desk/voice/${sub}`, { CallSid: 'CA6', From: PHONE, SpeechResult: Q })).status, 404, sub);
+      assert.equal((await S.api('/v1/channels/front-desk/voice/audio/abcdefghijkl.mp3')).status, 404);
+      // unsigned is still refused
+      assert.equal((await S.twilio('/v1/channels/front-desk/voice', { CallSid: 'CA6', From: PHONE }, { sign: false })).status, 403);
+    }
+    assert.ok(!F.calls.some((c) => c.path.startsWith('/eleven/')), 'ElevenLabs is never called');
+    assert.ok(N.logs.some((l) => /voice: call on bot front-desk declined: the phone line is not set up/.test(l)));
+    await flushQuestions();
+    assert.ok(![...N.kd.files.values(), ...C.kd.files.values()].some((f) => f.tags.includes('channel:phone')), 'no phone question logged');
   });
 
-  test('without GEMINI_API_KEY the media WebSocket is refused (503) and calls use <Say>', async () => {
-    const w = new WebSocket(`${N.wsBase}/api/v1/channels/front-desk/voice/media`);
-    await new Promise((r) => { w.addEventListener('error', r); w.addEventListener('close', r); });
-    assert.notEqual(w.readyState, 1);
-    const first = await (await N.twilio('/v1/channels/front-desk/voice', { CallSid: 'CA6', From: PHONE })).text();
-    assert.match(first, /<Say /);
-    const st = await (await N.api('/v1/channels/front-desk')).json();
-    assert.equal(st.channels.voice.texts, false);
+  test('GET /v1/channels: engine not_configured (never classic or elevenlabs); the media WebSocket is refused (503)', async () => {
+    for (const S of [N, C]) {
+      const st = await (await S.api('/v1/channels/front-desk')).json();
+      assert.equal(st.channels.voice.engine, 'not_configured');
+      assert.equal(st.channels.voice.configured, false);
+      assert.deepEqual(st.channels.voice.needs, ['GEMINI_API_KEY']);
+      assert.equal(st.channels.voice.mediaStream, undefined);
+      assert.equal(st.channels.voice.texts, false);
+      assert.ok(!/classic|elevenlabs/i.test(JSON.stringify(st)), JSON.stringify(st.channels.voice));
+      const w = new WebSocket(`${S.wsBase}/api/v1/channels/front-desk/voice/media`);
+      await new Promise((r) => { w.addEventListener('error', r); w.addEventListener('close', r); });
+      assert.notEqual(w.readyState, 1);
+    }
   });
 });
 

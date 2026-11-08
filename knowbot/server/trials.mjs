@@ -2295,7 +2295,7 @@ export function createStudio(o = {}) {
    *                                          slot is charged (its own looser window), and no busy state outlives the call.
    *   GET    /trials/:id/store?since=<seq>   re-attaches to the current (or last) job: replays its events after <seq>
    *                                          (or Last-Event-ID), then streams live until `done`. 404 when none ran.
-   *   DELETE /trials/:id/store               cancels the running job; files already uploaded stay (reported).
+   *   DELETE /trials/:id/store               cancels the running job (or a running plan); files already uploaded stay.
    * Every job event also reaches the trial's events stream as `store` {job, type, seq, data} (progress ~2/s), so an
    * open Studio follows (and resumes) the import without the POST connection. The replay buffer pins the milestones
    * (detect, plan, found, building, capped, built, error, done) and keeps only the latest of every other event type
@@ -2364,6 +2364,8 @@ export function createStudio(o = {}) {
     }
     if (m === 'DELETE') {
       const job = T.storeJob;
+      // Stop during Find: a running plan (planOnly) is cancelled too; its stream ends with error aborted + done {cancelled}
+      if ((!job || job.state !== 'running') && T.storePlanAc) { T.storePlanAc.abort(); return sendJson(res, 202, { cancelled: true, plan: true }); }
       if (!job || job.state !== 'running') fail(409, 'bad_request', 'No website import is running for this bot.');
       job.ac.abort();
       return sendJson(res, 202, { cancelled: true, job: job.id });
@@ -2415,16 +2417,17 @@ export function createStudio(o = {}) {
   /**
    * The finder's plan, streamed on this request only (planOnly): detect · discovering · plan · found · done {plan}.
    * Nothing is read beyond robots, sitemaps and feed totals, nothing is uploaded or replaced, and the trial's last
-   * import job (and its replay) stays as it was. One plan at a time per trial; closing the request cancels it.
+   * import job (and its replay) stays as it was. One plan at a time per trial: a new plan cancels the one before it
+   * (the visitor pressed Stop, then Find again); closing the request cancels it too.
    */
   async function storePlan(req, res, T, rawUrl, wellFormed) {
-    if (T.storePlanBusy) fail(409, 'busy', 'A website check is already running for this bot.');
     if (wellFormed) {
       limitOrThrow(`storeplan ${T.id}`, limits.storePlanHour, 3600000, 'website checks for this bot');
       limitOrThrow(`storeplanip ${ip(req)}`, limits.storePlanIpHour, 3600000, 'website checks from this address');
     }
-    T.storePlanBusy = true;
+    try { T.storePlanAc?.abort(); } catch {}
     const ac = new AbortController();
+    T.storePlanAc = ac;
     let n = 0, closed = false;
     res.on('close', () => { if (!res.writableFinished) { closed = true; ac.abort(); } });
     res.writeHead(200, SSE_HEADERS);
@@ -2446,7 +2449,8 @@ export function createStudio(o = {}) {
       emit('error', { code, message });
       emit('done', { planOnly: true, error: true, cancelled: code === 'aborted', fileCount: 0 });
     } finally {
-      T.storePlanBusy = false; clearInterval(ping);
+      if (T.storePlanAc === ac) T.storePlanAc = null;
+      clearInterval(ping);
       try { res.end(); } catch {}
     }
   }
@@ -4028,7 +4032,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     };
     const sid = (p) => `${p}${randB32(32).replace(/[^a-z0-9]/g, '0').slice(0, 32)}`;
     if (ch === 'sms') form({ MessageSid: sid('SM'), AccountSid: sid('AC'), From: caller, To: bot, Body: question, NumMedia: '0' });
-    else if (ch === 'voice') { path0 += '/answer'; form({ CallSid: sid('CA'), AccountSid: sid('AC'), From: caller, To: bot, SpeechResult: question, Confidence: '0.93', CallStatus: 'in-progress' }); }
+    // voice: the incoming-call webhook (calls are Gemini Live voice-to-voice: the reply is <Connect><Stream>, or a short
+    // "not set up yet" <Say> without GEMINI_API_KEY; there is no per-question TwiML step to post a question to)
+    else if (ch === 'voice') form({ CallSid: sid('CA'), AccountSid: sid('AC'), From: caller, To: bot, CallStatus: 'ringing', Direction: 'inbound' });
     else if (ch === 'whatsapp') {
       if (twilioTok || !metaReady) form({ MessageSid: sid('SM'), AccountSid: sid('AC'), From: `whatsapp:${caller}`, To: `whatsapp:${bot}`, Body: question, NumMedia: '0' });
       else {

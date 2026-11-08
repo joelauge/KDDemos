@@ -369,9 +369,10 @@ export async function attachSamples(set = 'lumen-bikes') { return request('POST'
 //   Job events: detect, plan {counts:{kind:n}, samples:{kind:[url]}, total, robots:{crawlDelay,…}, helpdesks, feedTotal},
 //   found, fetching, reading {kind, done, total, read}, building {files, n}, uploaded {k, uploaded, kind, files|n},
 //   capped, built {n, bytes, written, report}, error {code, message}, done {fileCount, report, spec, cancelled?, error?}.
-// CONTRACT-GAP (F): the Studio sends planOnly:true first (the finder's plan, nothing imported, no import slot charged:
-//   detect · plan · done {plan}) and then kinds:[kind] with the visitor's ticks. Until the route honours them it starts
-//   the full import on the first request; the card notices (reading / uploaded events after the plan) and follows it.
+// The Studio sends planOnly:true first (the finder's plan: no job, nothing imported, closing the request cancels it;
+//   detect · discovering · plan · found · done {planOnly, plan}) and then kinds:[kind] with the visitor's ticks. An older
+//   route that starts the full import on the first request is still followed (reading / uploaded events after the plan),
+//   and a Stop pressed then is sent as DELETE /store when the events stream names the job.
 
 /** POST /store (SSE). onEvent(type, data, id). Resolves with the 'done' data; rejects with the importer's code/copy. */
 export async function importStore(url, { owner = true, onEvent, signal, planOnly = false, kinds = null } = {}) {

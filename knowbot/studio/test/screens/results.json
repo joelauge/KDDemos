@@ -1,17 +1,17 @@
 {
-  "at": "2026-11-08T22:16:54.020Z",
+  "at": "2026-11-08T22:31:12.688Z",
   "speed": 4,
   "results": [
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "01-landing",
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "174 ms to first Builder message"
+      "detail": "265 ms to first Builder message"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "01-landing",
       "name": "first-run choices: samples (primary), upload, store URL",
       "ok": true,
@@ -19,7 +19,7 @@
       "detail": "Use sample files · 30s demo | Upload my files | Add website | How does it avoid making things up?"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "01-landing",
       "name": "trial created (201)",
       "ok": true,
@@ -27,7 +27,7 @@
       "detail": "status 201"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "01-landing",
       "name": "price visible, non-blocking",
       "ok": true,
@@ -35,7 +35,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "01-landing",
       "name": "no console errors",
       "ok": true,
@@ -43,7 +43,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "01-landing",
       "name": "no horizontal scroll",
       "ok": true,
@@ -51,7 +51,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "01-landing",
       "name": "axe: 0 serious/critical",
       "ok": true,
@@ -59,15 +59,15 @@
       "detail": "[]"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "02-samples",
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "130 ms"
+      "detail": "164 ms"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "02-samples",
       "name": "4 FileRows appear",
       "ok": true,
@@ -75,7 +75,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "03-ingest",
       "name": "a row reached Atomize",
       "ok": true,
@@ -83,7 +83,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "03-ingest",
       "name": "HUD atoms counter > 0",
       "ok": true,
@@ -91,7 +91,7 @@
       "detail": "HUD 111"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "03-ingest",
       "name": "Builder talks during ingest (atom count)",
       "ok": true,
@@ -99,7 +99,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "03-ingest",
       "name": "no horizontal scroll",
       "ok": true,
@@ -107,7 +107,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "03-ingest",
       "name": "free text during ingest gets a reply (with the price)",
       "ok": true,
@@ -115,7 +115,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "03-ingest",
       "name": "no per-file \"Ready: … files done\" repeats",
       "ok": true,
@@ -123,7 +123,7 @@
       "detail": "0"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "04-first-ready",
       "name": "price is outline (not solid) before any answer",
       "ok": true,
@@ -131,7 +131,7 @@
       "detail": "outline"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "04-first-ready",
       "name": "spine Prove not active before the first grounded answer",
       "ok": true,
@@ -139,7 +139,7 @@
       "detail": "todo"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "04-first-ready",
       "name": "SuggestionsRow: 3 starters + 1 probe",
       "ok": true,
@@ -147,7 +147,7 @@
       "detail": "3 starters, probe true"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "04-first-ready",
       "name": "banner said \"of 4 files ready\"",
       "ok": true,
@@ -155,7 +155,7 @@
       "detail": "Partial: 1 of 4 files ready · answers improve as more finish"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "grounded answer",
       "ok": true,
@@ -163,15 +163,15 @@
       "detail": "How much is a spare E-City battery and how long is it covered?"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "17.1 s"
+      "detail": "17.8 s"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "source chips show match 55–99",
       "ok": true,
@@ -179,7 +179,7 @@
       "detail": "91"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "answer has a [1] chip",
       "ok": true,
@@ -187,7 +187,7 @@
       "detail": "1 citation buttons"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "pill starts with \"Grounded\"",
       "ok": true,
@@ -195,7 +195,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "thread gets ≥ 50% of the bot pane",
       "ok": true,
@@ -203,7 +203,7 @@
       "detail": "440/800"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "price stays outline at the first cited answer (solid only at the peak)",
       "ok": true,
@@ -211,7 +211,7 @@
       "detail": "outline"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "no horizontal scroll",
       "ok": true,
@@ -219,7 +219,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "05-first-answer",
       "name": "axe: 0 serious/critical",
       "ok": true,
@@ -227,7 +227,7 @@
       "detail": "[]"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "06-popover",
       "name": "popover shows a <mark> quote",
       "ok": true,
@@ -235,7 +235,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "07-drawer",
       "name": "drawer open",
       "ok": true,
@@ -243,7 +243,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "07-drawer",
       "name": "focus inside the drawer",
       "ok": true,
@@ -251,7 +251,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "07-drawer",
       "name": "Proof view is now on (after Enter on the chip)",
       "ok": true,
@@ -259,7 +259,7 @@
       "detail": "proof"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "07-drawer",
       "name": "Esc closes it",
       "ok": true,
@@ -267,7 +267,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "07-drawer",
       "name": "focus returns to the chip",
       "ok": true,
@@ -275,7 +275,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "08-refusal",
       "name": "refusal text equals NOT_IN_DATA",
       "ok": true,
@@ -283,7 +283,7 @@
       "detail": "I can't seem to find an answer to that in any of my current data sources."
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "08-refusal",
       "name": "[Why?] shows the FloorChart",
       "ok": true,
@@ -291,7 +291,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "09-refine",
       "name": "ConfigDiffCard row Tone",
       "ok": true,
@@ -299,7 +299,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "09-refine",
       "name": "version chip v2 or later",
       "ok": true,
@@ -307,7 +307,7 @@
       "detail": "v2, bot versions"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "09-refine",
       "name": "ConfigDiff card version = header version chip",
       "ok": true,
@@ -315,7 +315,7 @@
       "detail": "card v2 · chip v2"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "09-refine",
       "name": "\"what can you do?\" gets the Builder's capability answer",
       "ok": true,
@@ -323,7 +323,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "09-refine",
       "name": "no chip offers a change that is already set",
       "ok": true,
@@ -331,7 +331,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "10-scope",
       "name": "spec drawer lists starter questions (pinned or auto)",
       "ok": true,
@@ -339,7 +339,7 @@
       "detail": "4"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "10-scope",
       "name": "lumen-price-list-2026.md switched off",
       "ok": true,
@@ -347,7 +347,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "10-scope",
       "name": "refusal or a different citation",
       "ok": true,
@@ -355,7 +355,7 @@
       "detail": "refused "
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "10-scope",
       "name": "compare card exists",
       "ok": true,
@@ -363,7 +363,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "10-scope",
       "name": "lumen-price-list-2026.md switched back on",
       "ok": true,
@@ -371,7 +371,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "11-proof-run",
       "name": "scorecard shows 8/8 and 3/3",
       "ok": true,
@@ -379,7 +379,7 @@
       "detail": "Proof Run Passed How long is the frame warranty? match 92 · 1 citation · passed How much is a spare E-City battery and how long is it covered? match 91 · 2 cita"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "11-proof-run",
       "name": "price goes solid at the Proof Run (the peak)",
       "ok": true,
@@ -387,7 +387,7 @@
       "detail": "solid"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "11-proof-run",
       "name": "proof strip names the test once (\"Proof Run 11/11 passed\")",
       "ok": true,
@@ -395,7 +395,7 @@
       "detail": "Proof Run 11/11 passed"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "12-make-it-yours",
       "name": "make-it-yours appears (sample-only)",
       "ok": true,
@@ -403,7 +403,7 @@
       "detail": "new"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "12-make-it-yours",
       "name": "price question re-surfaces Make it yours (no second card)",
       "ok": true,
@@ -411,7 +411,7 @@
       "detail": "1 -> 1"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "12-make-it-yours",
       "name": "clicked Launch with samples anyway",
       "ok": true,
@@ -419,7 +419,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "12-make-it-yours",
       "name": "LaunchCard with $249 and the anchor line",
       "ok": true,
@@ -427,7 +427,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "13-checkout",
       "name": "one visible Launch CTA while the receipt is open",
       "ok": true,
@@ -435,7 +435,7 @@
       "detail": "1 visible"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "13-checkout",
       "name": "checkout sheet open",
       "ok": true,
@@ -443,7 +443,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "13-checkout",
       "name": "studio visible behind the sheet (scrim < 1)",
       "ok": true,
@@ -451,7 +451,7 @@
       "detail": "{\"visible\":true,\"scrimAlpha\":0.14}"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "13-checkout",
       "name": "email field has focus",
       "ok": true,
@@ -459,7 +459,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "13-checkout",
       "name": "axe: 0 serious/critical",
       "ok": true,
@@ -467,15 +467,23 @@
       "detail": "[]"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "13-checkout",
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_cuotrrnfxxzrcd5k&bot=Lumen+Help&email=smoke%40example.com&price=249&surfaces=webchat&interval=month&total=249&sig=9FgCKCCbokJIpIEu3ZgMOcwEpiOcHlzE2bHj1TTXoVU&return=http%3A%2F%2F127.0.0.1%3A40331%2Fstudio%2F%3Ft%3Dtr_cuotrrnfxxzrcd5k%26launched%3D1%26k%3DeyJ0IjoidHJfY3VvdHJybmZ4eHpyY2Q1ayIsImUiOjE3OTQ3ODA4OTE4Mzd9.JGtRW2YqZI7PMqSC-1eBumQ5%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_yulyel6uz46gazxm&bot=Lumen+Help&email=smoke%40example.com&price=249&surfaces=webchat&interval=month&total=249&sig=ihCG5NE5ZH9F_txYJyyeWDOSR15QbzpOu9g3fBjYY_g&return=http%3A%2F%2F127.0.0.1%3A37743%2Fstudio%2F%3Ft%3Dtr_yulyel6uz46gazxm%26launched%3D1%26k%3DeyJ0IjoidHJfeXVseWVsNnV6NDZnYXp4bSIsImUiOjE3OTQ3ODE3NDUzNDF9.NQXljyIBHP7TFziKmSsT4h-r%23launched"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
+      "step": "13-checkout",
+      "name": "reduced motion: no running animation > 200 ms",
+      "ok": true,
+      "soft": false,
+      "detail": ""
+    },
+    {
+      "cell": "desktop-light-reduce",
       "step": "13-checkout",
       "name": "pointer targets never covered (keyboard fallback unused)",
       "ok": true,
@@ -483,7 +491,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "14-own-file",
       "name": "picker opens from the chip",
       "ok": true,
@@ -491,7 +499,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "14-own-file",
       "name": "handbook.md reaches Ready",
       "ok": true,
@@ -499,7 +507,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "14-own-file",
       "name": "cited answer from handbook.md",
       "ok": true,
@@ -507,7 +515,7 @@
       "detail": "What do full-time employees get?"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "15-errors",
       "name": ".exe → rejected row with [Remove]",
       "ok": true,
@@ -515,7 +523,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "15-errors",
       "name": "FAIL_NO_TEXT → failed row with [Retry] [Replace] [Remove]",
       "ok": true,
@@ -523,7 +531,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "16-reload",
       "name": "Builder says \"Welcome back\"",
       "ok": true,
@@ -531,7 +539,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "16-reload",
       "name": "files restored",
       "ok": true,
@@ -539,7 +547,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "16-reload",
       "name": "no horizontal scroll",
       "ok": true,
@@ -547,7 +555,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "16-reload",
       "name": "no console errors (own-file context)",
       "ok": true,
@@ -555,7 +563,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "17-live",
       "name": "trial converted (admin, fake server)",
       "ok": true,
@@ -563,7 +571,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "17-live",
       "name": "header shows Live (no price, no trial pill)",
       "ok": true,
@@ -571,7 +579,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "17-live",
       "name": "Builder offers the live next actions (no setup chips)",
       "ok": true,
@@ -579,7 +587,7 @@
       "detail": "Set up channels Developer API"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "17-live",
       "name": "ghost answer hidden",
       "ok": true,
@@ -587,7 +595,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "Builder offers the website import",
       "ok": true,
@@ -595,7 +603,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "inline URL field (placeholder yourwebsite.com) + ownership checkbox",
       "ok": true,
@@ -603,7 +611,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "import waits for \"I own or manage this store\"",
       "ok": true,
@@ -611,23 +619,47 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "Stop during Find cancels the server job: no store files appear, the card says so",
       "ok": true,
       "soft": false,
-      "detail": "msg=Stopped. Nothing was imported. storeFiles=0 done={\"cancelled\":true,\"fileCount\":0}"
+      "detail": "msg=Stopped. storeFiles=0 done=undefined"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "progress: platform found, then counts",
       "ok": true,
       "soft": false,
-      "detail": "Enter your website\nAny website or online store\n\nFinding sources on Lumen Bikes… 4 requests so far\n\nFind\nRead\nBuild\nAdd\nStop"
+      "detail": "Enter your website\nAny website or online store\n\nShopify store found: Lumen Bikes. Finding its products, help pages, policies and manuals…\n\nFind\nRead\nBuild\nAdd\nStop"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
+      "step": "18-store",
+      "name": "finder plan: a checkbox per kind, all on, each named by its visible text",
+      "ok": true,
+      "soft": false,
+      "detail": "[{\"kind\":\"faq\",\"on\":true,\"name\":\"FAQ pages\\n1\"},{\"kind\":\"product\",\"on\":true,\"name\":\"Products\\n4\"}]"
+    },
+    {
+      "cell": "desktop-light-reduce",
+      "step": "18-store",
+      "name": "finder plan: estimate (pages, MB, minutes)",
+      "ok": true,
+      "soft": false,
+      "detail": "About 5 pages · under 0.1 MB · about 1 minute. It keeps running if you close this tab."
+    },
+    {
+      "cell": "desktop-light-reduce",
+      "step": "18-store",
+      "name": "background job: progress (finding / reading i of N / building / adding k of M)",
+      "ok": true,
+      "soft": false,
+      "detail": "Shopify store found: Lumen Bikes. Finding its products, help pages, policies and manuals…"
+    },
+    {
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "import done: \"Imported N … from …\"",
       "ok": true,
@@ -635,7 +667,7 @@
       "detail": "Imported 2 policies, 1 FAQ page and 4 products from Lumen Bikes. They're learning now; each answer links the page it quotes."
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "imported files appear and learn like uploads",
       "ok": true,
@@ -643,15 +675,39 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "librarian answer links the store page it quotes",
       "ok": true,
       "soft": false,
-      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:37629/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
+      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:38005/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
+      "step": "18-store",
+      "name": "summary lists what was imported by kind",
+      "ok": true,
+      "soft": false,
+      "detail": "Policies 2 FAQ pages 1 Example: 127.0.0.1/pages/faq (opens in a new tab) Products 4 Couldn't be read (errors or missing pages) 3"
+    },
+    {
+      "cell": "desktop-light-reduce",
+      "step": "18-store",
+      "name": "Sources group: button aria-controls a role=group named \"<Kind> files\"",
+      "ok": true,
+      "soft": false,
+      "detail": "{\"role\":\"group\",\"label\":\"Products files\",\"hidden\":false}"
+    },
+    {
+      "cell": "desktop-light-reduce",
+      "step": "18-store",
+      "name": "Sources group past the row cap: search finds any product file (link, Use switch, Remove)",
+      "ok": true,
+      "soft": false,
+      "detail": "Search products\n\n1–1 of 1 file matching \"trail\"\n\nLumen Bikes · Trail Pro\n(opens in a new tab)\nLearning\nUse\nLumen Bikes · Trail Pro\nRemove\nLumen Bikes · Trail Pro"
+    },
+    {
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "errors use the store copy with \"Try another URL\" and \"Upload files instead\"",
       "ok": true,
@@ -659,7 +715,7 @@
       "detail": "We can't import from that address. Use your store's public web address. Find Read Build Add Try another URL Upload files instead"
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "no console errors",
       "ok": true,
@@ -667,7 +723,7 @@
       "detail": ""
     },
     {
-      "cell": "desktop-light-full",
+      "cell": "desktop-light-reduce",
       "step": "18-store",
       "name": "no horizontal scroll",
       "ok": true,
@@ -675,15 +731,15 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "170 ms to first Builder message"
+      "detail": "159 ms to first Builder message"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "first-run choices: samples (primary), upload, store URL",
       "ok": true,
@@ -691,7 +747,7 @@
       "detail": "Use sample files · 30s demo | Upload my files | Add website | How does it avoid making things up?"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "trial created (201)",
       "ok": true,
@@ -699,7 +755,7 @@
       "detail": "status 201"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "price visible, non-blocking",
       "ok": true,
@@ -707,7 +763,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "no console errors",
       "ok": true,
@@ -715,7 +771,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "no horizontal scroll",
       "ok": true,
@@ -723,7 +779,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "bottom tabs exist",
       "ok": true,
@@ -731,7 +787,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "01-landing",
       "name": "axe: 0 serious/critical",
       "ok": true,
@@ -739,15 +795,15 @@
       "detail": "[]"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "02-samples",
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "140 ms"
+      "detail": "136 ms"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "02-samples",
       "name": "4 FileRows appear",
       "ok": true,
@@ -755,7 +811,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "03-ingest",
       "name": "a row reached Atomize",
       "ok": true,
@@ -763,7 +819,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "03-ingest",
       "name": "HUD atoms counter > 0",
       "ok": true,
@@ -771,7 +827,7 @@
       "detail": "HUD 111"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "03-ingest",
       "name": "Builder talks during ingest (atom count)",
       "ok": true,
@@ -779,7 +835,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "03-ingest",
       "name": "no horizontal scroll",
       "ok": true,
@@ -787,7 +843,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "03-ingest",
       "name": "free text during ingest gets a reply (with the price)",
       "ok": true,
@@ -795,7 +851,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "03-ingest",
       "name": "no per-file \"Ready: … files done\" repeats",
       "ok": true,
@@ -803,7 +859,7 @@
       "detail": "0"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "04-first-ready",
       "name": "price is outline (not solid) before any answer",
       "ok": true,
@@ -811,7 +867,7 @@
       "detail": "outline"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "04-first-ready",
       "name": "spine Prove not active before the first grounded answer",
       "ok": true,
@@ -819,7 +875,7 @@
       "detail": "todo"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "04-first-ready",
       "name": "SuggestionsRow: 3 starters + 1 probe",
       "ok": true,
@@ -827,7 +883,7 @@
       "detail": "3 starters, probe true"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "04-first-ready",
       "name": "banner said \"of 4 files ready\"",
       "ok": true,
@@ -835,7 +891,7 @@
       "detail": "Partial: 1 of 4 files ready · answers improve as more finish"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "grounded answer",
       "ok": true,
@@ -843,7 +899,7 @@
       "detail": "How much is a spare E-City battery and how long is it covered?"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "first cited answer < 45 s from landing",
       "ok": true,
@@ -851,7 +907,7 @@
       "detail": "21.4 s"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "source chips show match 55–99",
       "ok": true,
@@ -859,7 +915,7 @@
       "detail": "91"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "answer has a [1] chip",
       "ok": true,
@@ -867,7 +923,7 @@
       "detail": "1 citation buttons"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "pill starts with \"Grounded\"",
       "ok": true,
@@ -875,7 +931,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "thread gets ≥ 50% of the bot pane",
       "ok": true,
@@ -883,7 +939,7 @@
       "detail": "409/707"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "price stays outline at the first cited answer (solid only at the peak)",
       "ok": true,
@@ -891,7 +947,7 @@
       "detail": "outline"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "no horizontal scroll",
       "ok": true,
@@ -899,7 +955,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "axe: 0 serious/critical",
       "ok": true,
@@ -907,7 +963,7 @@
       "detail": "[]"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "05-first-answer",
       "name": "mobile: badge on the hidden Builder tab",
       "ok": true,
@@ -915,7 +971,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "06-popover",
       "name": "popover shows a <mark> quote",
       "ok": true,
@@ -923,7 +979,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "07-drawer",
       "name": "drawer open",
       "ok": true,
@@ -931,7 +987,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "07-drawer",
       "name": "focus inside the drawer",
       "ok": true,
@@ -939,7 +995,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "07-drawer",
       "name": "Proof view is now on (after Enter on the chip)",
       "ok": true,
@@ -947,7 +1003,7 @@
       "detail": "proof"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "07-drawer",
       "name": "Esc closes it",
       "ok": true,
@@ -955,7 +1011,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "07-drawer",
       "name": "focus returns to the chip",
       "ok": true,
@@ -963,7 +1019,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "08-refusal",
       "name": "refusal text equals NOT_IN_DATA",
       "ok": true,
@@ -971,7 +1027,7 @@
       "detail": "I can't seem to find an answer to that in any of my current data sources."
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "08-refusal",
       "name": "[Why?] shows the FloorChart",
       "ok": true,
@@ -979,7 +1035,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "09-refine",
       "name": "ConfigDiffCard row Tone",
       "ok": true,
@@ -987,7 +1043,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "09-refine",
       "name": "version chip v2 or later",
       "ok": true,
@@ -995,7 +1051,7 @@
       "detail": "v2, bot versions"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "09-refine",
       "name": "ConfigDiff card version = header version chip",
       "ok": true,
@@ -1003,7 +1059,7 @@
       "detail": "card v2 · chip v2"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "10-scope",
       "name": "spec drawer lists starter questions (pinned or auto)",
       "ok": true,
@@ -1011,7 +1067,7 @@
       "detail": "4"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "10-scope",
       "name": "lumen-price-list-2026.md switched off",
       "ok": true,
@@ -1019,7 +1075,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "10-scope",
       "name": "refusal or a different citation",
       "ok": true,
@@ -1027,7 +1083,7 @@
       "detail": "refused "
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "10-scope",
       "name": "compare card exists",
       "ok": true,
@@ -1035,7 +1091,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "10-scope",
       "name": "lumen-price-list-2026.md switched back on",
       "ok": true,
@@ -1043,7 +1099,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "11-proof-run",
       "name": "scorecard shows 8/8 and 3/3",
       "ok": true,
@@ -1051,7 +1107,7 @@
       "detail": "Proof Run Passed How long is the frame warranty? match 92 · 1 citation · passed How much is a spare E-City battery and how long is it covered? match 91 · 2 cita"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "11-proof-run",
       "name": "price goes solid at the Proof Run (the peak)",
       "ok": true,
@@ -1059,7 +1115,7 @@
       "detail": "solid"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "11-proof-run",
       "name": "proof strip names the test once (\"Proof Run 11/11 passed\")",
       "ok": true,
@@ -1067,7 +1123,7 @@
       "detail": "Proof Run 11/11passed"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "12-make-it-yours",
       "name": "make-it-yours appears (sample-only)",
       "ok": true,
@@ -1075,7 +1131,7 @@
       "detail": "new"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "12-make-it-yours",
       "name": "price question re-surfaces Make it yours (no second card)",
       "ok": true,
@@ -1083,7 +1139,7 @@
       "detail": "1 -> 1"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "12-make-it-yours",
       "name": "clicked Launch with samples anyway",
       "ok": true,
@@ -1091,7 +1147,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "12-make-it-yours",
       "name": "LaunchCard with $249 and the anchor line",
       "ok": true,
@@ -1099,7 +1155,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "13-checkout",
       "name": "checkout sheet open",
       "ok": true,
@@ -1107,7 +1163,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "13-checkout",
       "name": "studio visible behind the sheet (scrim < 1)",
       "ok": true,
@@ -1115,7 +1171,7 @@
       "detail": "{\"visible\":true,\"scrimAlpha\":0.6}"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "13-checkout",
       "name": "email field has focus",
       "ok": true,
@@ -1123,7 +1179,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "13-checkout",
       "name": "axe: 0 serious/critical",
       "ok": true,
@@ -1131,15 +1187,15 @@
       "detail": "[]"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "13-checkout",
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_mjlycao2sikv2nde&bot=Lumen+Help&email=smoke%40example.com&price=249&surfaces=webchat&interval=month&total=249&sig=2wqF77IDPZqoKBt9pBcsp2ynilKOLNhI-A5UM3GB0LA&return=http%3A%2F%2F127.0.0.1%3A36587%2Fstudio%2F%3Ft%3Dtr_mjlycao2sikv2nde%26launched%3D1%26k%3DeyJ0IjoidHJfbWpseWNhbzJzaWt2Mm5kZSIsImUiOjE3OTQ3ODA5NDkxOTB9.YcAD0ACmlMzEue3l01xvAxnN%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_yf7gmv5t22t4ta43&bot=Lumen+Help&email=smoke%40example.com&price=249&surfaces=webchat&interval=month&total=249&sig=M53K-0_CqR1r4kddM9DdU39WZ8FrSGvSubQUxRjgN98&return=http%3A%2F%2F127.0.0.1%3A42143%2Fstudio%2F%3Ft%3Dtr_yf7gmv5t22t4ta43%26launched%3D1%26k%3DeyJ0IjoidHJfeWY3Z212NXQyMnQ0dGE0MyIsImUiOjE3OTQ3ODE3OTk3ODV9.hJPXpcaufnx36bCnX8CPR-MY%23launched"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "13-checkout",
       "name": "mobile: composer tap targets ≥ 44 px",
       "ok": true,
@@ -1147,7 +1203,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "13-checkout",
       "name": "pointer targets never covered (keyboard fallback unused)",
       "ok": true,
@@ -1155,7 +1211,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "14-own-file",
       "name": "picker opens from the chip",
       "ok": true,
@@ -1163,7 +1219,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "14-own-file",
       "name": "handbook.md reaches Ready",
       "ok": true,
@@ -1171,7 +1227,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "14-own-file",
       "name": "cited answer from handbook.md",
       "ok": true,
@@ -1179,7 +1235,7 @@
       "detail": "What do full-time employees get?"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "15-errors",
       "name": ".exe → rejected row with [Remove]",
       "ok": true,
@@ -1187,7 +1243,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "15-errors",
       "name": "FAIL_NO_TEXT → failed row with [Retry] [Replace] [Remove]",
       "ok": true,
@@ -1195,7 +1251,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "16-reload",
       "name": "Builder says \"Welcome back\"",
       "ok": true,
@@ -1203,7 +1259,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "16-reload",
       "name": "files restored",
       "ok": true,
@@ -1211,7 +1267,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "16-reload",
       "name": "no horizontal scroll",
       "ok": true,
@@ -1219,7 +1275,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "16-reload",
       "name": "no console errors (own-file context)",
       "ok": true,
@@ -1227,7 +1283,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "16-reload",
       "name": "mobile: shell controls take a 44 x 44 tap",
       "ok": true,
@@ -1235,7 +1291,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "17-live",
       "name": "trial converted (admin, fake server)",
       "ok": true,
@@ -1243,7 +1299,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "17-live",
       "name": "header shows Live (no price, no trial pill)",
       "ok": true,
@@ -1251,7 +1307,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "17-live",
       "name": "Builder offers the live next actions (no setup chips)",
       "ok": true,
@@ -1259,7 +1315,7 @@
       "detail": "Set up channels Developer API"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "17-live",
       "name": "ghost answer hidden",
       "ok": true,
@@ -1267,7 +1323,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "Builder offers the website import",
       "ok": true,
@@ -1275,7 +1331,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "inline URL field (placeholder yourwebsite.com) + ownership checkbox",
       "ok": true,
@@ -1283,7 +1339,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "import waits for \"I own or manage this store\"",
       "ok": true,
@@ -1291,23 +1347,47 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "Stop during Find cancels the server job: no store files appear, the card says so",
       "ok": true,
       "soft": false,
-      "detail": "msg=Stopped. Nothing was imported. storeFiles=0 done={\"cancelled\":true,\"fileCount\":0}"
+      "detail": "msg=Stopped. storeFiles=0 done=undefined"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "progress: platform found, then counts",
       "ok": true,
       "soft": false,
-      "detail": "Enter your website\nAny website or online store\n\nFinding sources on Lumen Bikes… 4 requests so far\n\nFind\nRead\nBuild\nAdd\nStop"
+      "detail": "Enter your website\nAny website or online store\n\nShopify store found: Lumen Bikes. Finding its products, help pages, policies and manuals…\n\nFind\nRead\nBuild\nAdd\nStop"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
+      "step": "18-store",
+      "name": "finder plan: a checkbox per kind, all on, each named by its visible text",
+      "ok": true,
+      "soft": false,
+      "detail": "[{\"kind\":\"faq\",\"on\":true,\"name\":\"FAQ pages\\n1\"},{\"kind\":\"product\",\"on\":true,\"name\":\"Products\\n4\"}]"
+    },
+    {
+      "cell": "mobile-dark-full",
+      "step": "18-store",
+      "name": "finder plan: estimate (pages, MB, minutes)",
+      "ok": true,
+      "soft": false,
+      "detail": "About 5 pages · under 0.1 MB · about 1 minute. It keeps running if you close this tab."
+    },
+    {
+      "cell": "mobile-dark-full",
+      "step": "18-store",
+      "name": "background job: progress (finding / reading i of N / building / adding k of M)",
+      "ok": true,
+      "soft": false,
+      "detail": "Shopify store found: Lumen Bikes. Finding its products, help pages, policies and manuals…"
+    },
+    {
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "import done: \"Imported N … from …\"",
       "ok": true,
@@ -1315,7 +1395,7 @@
       "detail": "Imported 2 policies, 1 FAQ page and 4 products from Lumen Bikes. They're learning now; each answer links the page it quotes."
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "imported files appear and learn like uploads",
       "ok": true,
@@ -1323,15 +1403,39 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "librarian answer links the store page it quotes",
       "ok": true,
       "soft": false,
-      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:43637/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
+      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:35395/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
+      "step": "18-store",
+      "name": "summary lists what was imported by kind",
+      "ok": true,
+      "soft": false,
+      "detail": "Policies 2 FAQ pages 1 Example: 127.0.0.1/pages/faq (opens in a new tab) Products 4 Couldn't be read (errors or missing pages) 3"
+    },
+    {
+      "cell": "mobile-dark-full",
+      "step": "18-store",
+      "name": "Sources group: button aria-controls a role=group named \"<Kind> files\"",
+      "ok": true,
+      "soft": false,
+      "detail": "{\"role\":\"group\",\"label\":\"Products files\",\"hidden\":false}"
+    },
+    {
+      "cell": "mobile-dark-full",
+      "step": "18-store",
+      "name": "Sources group past the row cap: search finds any product file (link, Use switch, Remove)",
+      "ok": false,
+      "soft": false,
+      "detail": ""
+    },
+    {
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "errors use the store copy with \"Try another URL\" and \"Upload files instead\"",
       "ok": true,
@@ -1339,7 +1443,7 @@
       "detail": "We can't import from that address. Use your store's public web address. Find Read Build Add Try another URL Upload files instead"
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "no console errors",
       "ok": true,
@@ -1347,7 +1451,7 @@
       "detail": ""
     },
     {
-      "cell": "mobile-light-full",
+      "cell": "mobile-dark-full",
       "step": "18-store",
       "name": "no horizontal scroll",
       "ok": true,

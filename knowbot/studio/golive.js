@@ -416,14 +416,16 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Twilio CLI', lang: 'sh', code: `twilio phone-numbers:update +15551234567 \\\n  --sms-url="${ch('sms')}"` },
           { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token   # verifies X-Twilio-Signature' },
         ] },
-      { id: 'phone', name: 'Telephone', blurb: 'Callers ask out loud. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Twilio Voice · Google speech', hue: 3, url: ch('voice'), status: 'Needs a Twilio number', tryLabel: 'Call simulator',
-        needs: ['A Twilio account and a voice-capable phone number', 'Optional: a Google Cloud project with Speech-to-Text and Text-to-Speech for natural voices'],
-        steps: ['In Twilio, open your number and set “A call comes in” to Webhook, HTTP POST, with the URL below.', 'KnowBot replies with TwiML: a <Gather input="speech"> loop that answers each question.', 'Optional: add the Google keys so recognition and the voice use Google Cloud; otherwise Twilio speech and <Say> are used.'],
+      { id: 'phone', name: 'Telephone', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Twilio Media Streams · Gemini Live voice-to-voice', hue: 3, url: ch('voice'), status: 'Needs a Twilio number', tryLabel: 'Call simulator',
+        needs: ['A Twilio account and a voice-capable phone number', 'A Gemini API key (calls are voice-to-voice with Gemini Live)'],
+        steps: ['In Twilio, open your number and set “A call comes in” to Webhook, HTTP POST, with the URL below.',
+          'KnowBot answers with <Connect><Stream>: the call is streamed to Gemini Live, which listens and speaks in real time and looks up every answer in your files.',
+          'Without a Gemini API key the line answers that it isn\'t set up yet and hangs up.',
+          'Every question asked on a call is logged to your question insights.'],
         configs: [
           { label: 'Twilio Console', lang: 'text', code: `Phone Numbers → Active numbers → (your number) → Voice\n  A call comes in:  Webhook\n  URL:              ${ch('voice')}\n  HTTP:             POST` },
           { label: 'Twilio CLI', lang: 'sh', code: `twilio phone-numbers:update +15551234567 \\\n  --voice-url="${ch('voice')}"` },
-          // CONTRACT-GAP (F): exact env names for Google speech are F's (SPEC 11.3 says GOOGLE_STT_*); shown as documented there.
-          { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token\n# optional, natural speech via Google Cloud\nGOOGLE_STT_API_KEY=your_google_api_key\nGOOGLE_TTS_API_KEY=your_google_api_key\nGOOGLE_TTS_VOICE=en-US-Neural2-F' },
+          { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token\nGEMINI_API_KEY=your_gemini_api_key        # voice to voice on calls' },
         ] },
       { id: 'whatsapp', name: 'WhatsApp', blurb: 'Answers in WhatsApp with numbered footnotes. Meta Cloud API or Twilio.', provider: 'Meta Cloud API · Twilio', hue: 4, url: ch('whatsapp'), status: 'Needs WhatsApp Business', tryLabel: 'Preview a WhatsApp reply',
         needs: ['A Meta app with WhatsApp Business (or a Twilio WhatsApp sender)', 'The app secret (verifies X-Hub-Signature-256) and an access token to reply'],
@@ -468,20 +470,17 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         ] },
     ]);
   };
-  /** The server's phone engine (GET …/devkey → channels.voice): 'gemini' streams the call voice-to-voice (<Connect><Stream>
-   *  to Gemini Live); 'classic' (or unknown) keeps the <Gather> loop copy. Texted checkout links only when voice.texts is true. */
+  /** Phone calls are Gemini Live voice-to-voice only (GET …/devkey → channels.voice). Texted checkout links are described
+   *  only when voice.texts is true (a Shopify store for this bot, Twilio texting configured). */
   function phoneByEngine(list) {
     const v = (dev().channels && dev().channels.voice) || {};
-    if (v.engine !== 'gemini') return list;
+    if (!v.texts) return list;
     return list.map((c) => (c.id !== 'phone' ? c : { ...c,
-      blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.',
-      provider: 'Twilio Media Streams · Gemini Live voice-to-voice',
-      needs: ['A Twilio account and a voice-capable phone number', ...(v.texts ? ['Texting enabled on that number, for the checkout links it can send'] : [])],
-      steps: ['In Twilio, open your number and set “A call comes in” to Webhook, HTTP POST, with the URL below.',
-        'KnowBot answers with <Connect><Stream>: the call is streamed to Gemini Live, which listens and speaks in real time and looks up every answer in your files.',
-        ...(v.texts ? ['When a caller wants a product, it can text them a link that opens checkout with the item already in the cart (up to 3 per call).'] : []),
-        'Every question asked on a call is logged to your question insights.'],
-      configs: c.configs.map((x) => (x.label === 'Environment' ? { ...x, code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token\nGEMINI_API_KEY=your_gemini_api_key        # voice to voice on calls' + (v.texts ? '\nTWILIO_ACCOUNT_SID=your_account_sid\nTWILIO_FROM_NUMBER=+15551234567          # sends checkout links' : '') } : x)) }));
+      needs: [...c.needs, 'Texting enabled on that number, for the checkout links it can send'],
+      steps: [...c.steps.slice(0, -1),
+        'When a caller wants products, it can text them one link that opens a new checkout with exactly those items in the cart (up to 5 products per link, 3 texts per call).',
+        c.steps[c.steps.length - 1]],
+      configs: c.configs.map((x) => (x.label === 'Environment' ? { ...x, code: `${x.code}\nTWILIO_ACCOUNT_SID=your_account_sid\nTWILIO_FROM_NUMBER=+15551234567          # sends checkout links` } : x)) }));
   }
 
   let chGrid = null, chDetail = null;
@@ -670,7 +669,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const label = h('span', null, 'Send test webhook');
     const btn = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small gl-tw-btn' }, h('span', { class: 'gl-tw-ico', html: icon('play', 13) }), label);
     const q = () => (exampleExchange()?.question || starterQs()[0] || validatedQ || '');
-    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed Twilio <Gather> speech result' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS (Twilio shape)', ', asking your first starter question.');
+    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming Twilio call (the reply streams it to Gemini Live)' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS (Twilio shape)', ch === 'voice' ? '.' : ', asking your first starter question.');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       btn.disabled = true; btn.classList.add('is-busy'); label.textContent = 'Sending…';
@@ -1038,7 +1037,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(stage, status, degraded, caps, typed.form,
       h('div', { class: 'gl-vopts' }, h('label', { class: 'gl-switch', for: speakToggle.id }, speakToggle, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), 'Speak answers'), engineNote),
       h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), phone
-        ? 'Each turn posts a signed Twilio <Gather> speech result to your voice webhook and speaks the TwiML it returns: greeting, listen, answer with its source, listen again. The real line uses Google speech when configured.'
+        ? 'Each turn is answered by your bot from its files, with its source. A real call is streamed voice-to-voice to Gemini Live through your voice webhook; the TwiML that webhook returns is shown below.'
         : 'Runs in your browser: speech recognition → your bot → spoken answer with its source. Nothing is recorded or stored.'));
 
     const paintEngine = () => {
@@ -1349,14 +1348,15 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
      */
     /**
      * fixer r7 (D11): the call simulator exercises the real telephone webhook. Each caller turn goes through the Studio
-     * test route (A), which posts a signed Twilio <Gather> speech result (SpeechResult) to
-     * POST /v1/channels/:id/voice/answer; the TwiML that comes back is spoken here and shown under the captions. When
-     * the telephone channel is not configured on this server, it says so and answers via the chat API instead.
+     * test route (A), which posts a signed incoming call to POST /v1/channels/:id/voice; the TwiML that comes back
+     * (<Connect><Stream> to Gemini Live, or the "not set up yet" <Say>) is shown under the captions, and the turn itself
+     * is answered via the chat API (calls are voice-to-voice, so there is no per-question TwiML to speak).
      */
     async function askPhone(q) {
       const t = getState().trial;
       const t0 = performance.now();
       let why = 'telephone webhook unavailable here';
+      let twiml = null;
       try {
         const res = await fetch(`${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/channels/voice/test`, {
           method: 'POST', credentials: 'omit',
@@ -1372,11 +1372,15 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           const unx = (x) => String(x).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&');
           const says = [...body.matchAll(/<Say\b[^>]*>([\s\S]*?)<\/Say>/g)].map((m) => unx(m[1]).trim()).filter(Boolean);
           const plays = [...body.matchAll(/<Play\b[^>]*>([\s\S]*?)<\/Play>/g)].map((m) => unx(m[1]).trim()).filter(Boolean);
-          const spoken = says[0] || '';
+          // the call webhook streams the call (<Connect><Stream>) or, when the line isn't set up, says so and hangs up:
+          // neither is an answer to this turn, so the turn is answered via the chat API and the real TwiML is shown
+          const callTwiml = /<Connect>|<Hangup\/>/.test(body);
+          if (callTwiml) { why = /<Connect>/.test(body) ? 'real calls stream voice-to-voice to Gemini Live' : 'the phone line is not set up on this server (GEMINI_API_KEY)'; twiml = body; }
+          const spoken = callTwiml ? '' : says[0] || '';
           if (spoken) {
             const src = /^According to ([^,]{2,80}),/.exec(spoken);
             const refused = /can't seem to find an answer/i.test(spoken);
-            paintReq({ method: 'POST', path: pub((j.request && j.request.path) || `/v1/channels/${botId()}/voice/answer`), status: rs.status, ms: j.ms ?? Math.round(performance.now() - t0), note: `${j.signed ? 'signed ' : ''}SpeechResult → TwiML` });
+            paintReq({ method: 'POST', path: pub((j.request && j.request.path) || `/v1/channels/${botId()}/voice`), status: rs.status, ms: j.ms ?? Math.round(performance.now() - t0), note: `${j.signed ? 'signed ' : ''}call → TwiML` });
             paintTwiml(body);
             return { r: { text: spoken, refused, citations: [], srcNote: refused ? null : src ? `Named on the call: ${src[1]}` : null }, audio: null };
           }
@@ -1385,7 +1389,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       } catch (err) { if (err && err.status === 429) throw err; }
       const r = await askChannel(q);
       paintReq({ ...(r.req || {}), ms: r.ms, note: `answers via the chat API (${why})` });
-      paintTwiml(null);
+      paintTwiml(twiml);
       return { r, audio: null };
     }
     function paintTwiml(body) {

@@ -3171,7 +3171,7 @@ store.registerCard('store-import', (data, el) => {
   // Stop / Cancel: the server job exists as soon as the POST stream delivers any event (each carries the job's SSE id),
   // or the events stream names a running job. Until then a stop is remembered (wantStop) and sent again on the first
   // event, so a job that was being created as the visitor pressed Stop is cancelled too, never left importing.
-  let sawEvent = false, wantStop = 0;
+  let sawEvent = false, wantStop = 0, planning = false;
   let st = null;   // the job's progress as its events report it
   const fresh = () => ({ name: null, platform: null, plan: null, read: {}, readTotal: 0, uploaded: 0, built: 0, buildingSeen: false, recent: [], error: null, jobStarted: false });
   const reveal = (node) => {
@@ -3232,12 +3232,16 @@ store.registerCard('store-import', (data, el) => {
     wantStop = Date.now();
     const restore = () => { b.disabled = false; setText(b, label); wantStop = 0; };
     const hadJob = jobExists();
+    // the finder's plan (planOnly) is no job: closing its request cancels it. A server that started a job on it anyway
+    // shows the job on the events stream, where the pending stop (stopPending) cancels it.
+    if (planning && !st?.jobStarted && storeJobKnown?.state !== 'running') { if (streaming && ac) ac.abort(); return; }
     api.cancelStoreImport().then(() => { say('Stopping the import…'); }, (err) => {
       if (err?.status !== 409) { restore(); toast({ kind: 'warn', text: "Couldn't stop it just now. Try again." }); return; }
-      // 409: no job running. Either it just finished (its 'done' is on the way) or it was not created yet: the
-      // first event re-sends the cancel (onEvent). With no event at all after a grace period, the request is dropped.
-      const myAc = ac;
-      setTimeout(() => { if (streaming && myAc && ac === myAc && !sawEvent && !hadJob) myAc.abort(); }, 4000);
+      // 409: no job runs. Either this request is the finder's plan (planOnly: no job; closing the request cancels
+      // it), or the job was not created yet (the first event, or the events stream via stopPending, re-sends the
+      // cancel), or it has just finished (its 'done' is on the way: kept when the stream showed the job working)
+      if (hadJob && st?.jobStarted) return;
+      if (streaming && ac) ac.abort();
     });
   }
   const cancelBtn = () => {
@@ -3320,7 +3324,7 @@ store.registerCard('store-import', (data, el) => {
     busy = true; streaming = true; lastUrl = v; ac = new AbortController();
     form.hidden = true; plan.hidden = true; card.classList.remove('is-error', 'is-done');
     resetRun();
-    sawEvent = false; wantStop = 0;
+    sawEvent = false; wantStop = 0; planning = true;
     const stopB = btn('Stop', 'st-btn-ghost', () => requestStop(stopB, 'Stop'));
     showActions(stopB);
     reveal(run); setStep('find');
@@ -3335,14 +3339,14 @@ store.registerCard('store-import', (data, el) => {
         if (st.jobStarted && !actions.querySelector('[data-cancel]')) { const c = cancelBtn(); c.dataset.cancel = '1'; showActions(c); }
       } });
     } catch (err) {
-      streaming = false;
+      streaming = false; planning = false;
       // aborted only when no job answered the stop (requestStop) or the card was reset: nothing is claimed here; a job
       // that was created anyway is cancelled by the events stream (stopPending) and its outcome shown on this card
       if (err?.code === 'aborted' || ac?.signal?.aborted) { busy = false; ac = null; tryAnother(); setStopMsg('Stopped.'); announce('Stopped.'); return; }
       fail(err?.message && err.status !== 0 ? err.message : "Couldn't reach the studio. Nothing was imported; try again.");
       return;
     }
-    streaming = false; busy = false; ac = null;
+    streaming = false; busy = false; ac = null; planning = false;
     if (st.jobStarted || res?.cancelled || wantStop || storeNum(res?.fileCount) > 0) { done(res); return; }
     showPlan(res?.plan && res.plan.counts ? { ...st.plan, ...res.plan } : st.plan || res?.plan || { counts: {} });
   }
@@ -3402,7 +3406,7 @@ store.registerCard('store-import', (data, el) => {
     reveal(run); setStep('find');
     found.textContent = `${planFoundLine(planKinds(p).filter((k) => kinds.includes(k.kind)))}.`; reveal(found);
     say(`Starting the import from ${st.name || storeHost(lastUrl)}…`);
-    sawEvent = false; wantStop = 0;
+    sawEvent = false; wantStop = 0; planning = false;
     const c = cancelBtn(); c.dataset.cancel = '1'; showActions(c);
     lsSet(STORE_STARTED_KEY, String(Date.now()));
     try {
@@ -3421,7 +3425,7 @@ store.registerCard('store-import', (data, el) => {
     busy = true; streaming = true; ac = new AbortController();
     form.hidden = true; plan.hidden = true; card.classList.remove('is-error', 'is-done');
     if (!tries) { resetRun(); reveal(run); setStep('find'); say(`Reconnecting to the import from ${storeHost(lastUrl) || 'your website'}…`); }
-    sawEvent = false;   // a Stop still pending is re-sent on this stream's first event
+    planning = false; sawEvent = false;   // a Stop still pending is re-sent on this stream's first event
     const c = cancelBtn(); c.dataset.cancel = '1'; showActions(c);
     let res;
     try { res = await api.attachStoreImport({ since: 0, signal: ac.signal, onEvent: (type, d) => { if (!tries || type !== 'detect') onEvent(type, d); } }); }
