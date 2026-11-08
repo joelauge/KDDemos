@@ -16,7 +16,7 @@ if (!question) {
   process.exit(1);
 }
 
-requireEnv(["KNOWDRIVE_API_TOKEN", "KNOWDRIVE_VECTOR_STORE_ID", ...(say ? ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"] : [])]);
+requireEnv(["KNOWDRIVE_VECTOR_STORE_ID", ...(say ? ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"] : [])]);
 
 const passages = await searchKnowDrive(question);
 console.log(`\nSources from store ${config.knowdrive.vectorStoreId}:`);

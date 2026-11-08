@@ -13,7 +13,8 @@ export const config = {
 
   knowdrive: {
     baseUrl: (env.KNOWDRIVE_BASE_URL || "https://knowdrive.ai").replace(/\/+$/, ""),
-    apiToken: env.KNOWDRIVE_API_TOKEN || "",
+    // KNOWDRIVE_API_KEY is accepted too, the name a developer key is often stored under.
+    apiToken: env.KNOWDRIVE_API_TOKEN || env.KNOWDRIVE_API_KEY || "",
     vectorStoreId: env.KNOWDRIVE_VECTOR_STORE_ID || "",
     tagQuery: env.KNOWDRIVE_TAG_QUERY || "",
     topK: Number(env.KNOWDRIVE_TOP_K || 6),
@@ -52,6 +53,7 @@ export const config = {
 /** Throws a readable error naming every missing variable in `names`. */
 export function requireEnv(names) {
   const missing = names.filter((n) => !env[n]);
+  if (!env.KNOWDRIVE_API_TOKEN && !env.KNOWDRIVE_API_KEY) missing.unshift("KNOWDRIVE_API_TOKEN (or KNOWDRIVE_API_KEY)");
   if (missing.length) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")} (see .env.example)`);
   }

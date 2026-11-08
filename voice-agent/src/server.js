@@ -9,8 +9,7 @@ import { createTurn, endCall, getHistory, getLastQuestion, recordExchange, takeT
 
 requireEnv([
   "PUBLIC_BASE_URL",
-  "KNOWDRIVE_API_TOKEN",
-  "KNOWDRIVE_VECTOR_STORE_ID",
+    "KNOWDRIVE_VECTOR_STORE_ID",
   "ELEVENLABS_API_KEY",
   "ELEVENLABS_VOICE_ID",
   "TWILIO_AUTH_TOKEN",
