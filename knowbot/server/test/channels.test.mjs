@@ -11,7 +11,7 @@ import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { flushQuestions, configureQuestions, _resetQuestions, hashCaller } from '../questions.mjs';
-import { twilioSignature, metaSignature, mailgunSignature, formatSms, formatSpoken, formatWhatsApp, formatEmail, channelStatus, NOT_IN_DATA as UTIL_REFUSAL } from '../channels/util.mjs';
+import { twilioSignature, metaSignature, mailgunSignature, formatSms, formatSpoken, formatWhatsApp, formatEmail, channelStatus, answerSentences, NOT_IN_DATA as UTIL_REFUSAL } from '../channels/util.mjs';
 import { encodingFor } from '../channels/google.mjs';
 import { stripReply } from '../channels/email.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
@@ -176,6 +176,43 @@ describe('channels: per-medium formatting', () => {
     assert.match(e.text, /Sources\n\[1\] Returns Policy \(returns-policy\.md\)\n {4}"You can return/);
     assert.match(e.html, /<sup[^>]*>\[1\]<\/sup>/);
     assert.ok(!/<script/i.test(formatEmail({ ...r, answer: '<script>x</script> [1]' }, {}).html));
+  });
+  test('librarian voice on every channel: links become “Title” (url), quotations never split, page/section named, URLs never spoken', () => {
+    const one = { refused: false, answer: 'I think I found what you\'re looking for! In [“Owner\'s Manual”](https://x.example/manual.pdf), page 17, under “Oil filter”, it says: “Replace the oil filter every 5,000 km. Use OEM parts only” [1]. Feel free to download it if that\'s helpful.',
+      citations: [{ n: 1, file: 'manual.pdf', title: "Owner's Manual", page: 17, section: 'Oil filter', url: 'https://x.example/manual.pdf' }],
+      proof: { quoted: [{ n: 1, text: 'Replace the oil filter every 5,000 km. Use OEM parts only' }] } };
+    // a stop inside “…” never ends a sentence
+    const sn = answerSentences(one.answer);
+    assert.equal(sn.length, 3, JSON.stringify(sn));
+    assert.ok(sn[0].courtesy && sn[2].courtesy && !sn[1].courtesy);
+    assert.match(sn[1].text, /“Replace the oil filter every 5,000 km\. Use OEM parts only”$/);
+    assert.equal(sn[1].tag, ' [1]');
+    const sms = formatSms(one, 'https://kb/p/abc');
+    assert.ok(sms.length <= 320, String(sms.length));
+    assert.ok(!sms.includes('](') && sms.includes('“Owner\'s Manual” (https://x.example/manual.pdf)'), sms);
+    assert.match(sms, /only” \[1\]\. Proof: https:\/\/kb\/p\/abc$/, 'the courtesy closer gives way to the proof link');
+    // too long for one SMS: the courtesy opener goes first, the cited fact stays
+    const long = { ...one, answer: one.answer.replace('Use OEM parts only', `Use OEM parts only${' and keep the receipt'.repeat(8)}`) };
+    const ls = formatSms(long, 'https://kb/p/abc');
+    assert.ok(ls.length <= 320 && !/^I think/.test(ls), ls);
+    const w = formatWhatsApp(one, 'https://p');
+    assert.ok(!w.includes(']('), w);
+    assert.match(w, /\[1\] Owner's Manual, page 17, “Oil filter” \(manual\.pdf\)\n {4}Download: https:\/\/x\.example\/manual\.pdf/);
+    const e = formatEmail(one, { proofUrl: 'https://p' });
+    assert.ok(!e.text.includes(']('));
+    assert.match(e.html, /<a href="https:\/\/x\.example\/manual\.pdf"[^>]*>“Owner's Manual”<\/a>, page 17/);
+    assert.match(e.html, /· page 17, “Oil filter”/);
+    assert.ok(!/<a href="javascript/i.test(formatEmail({ ...one, answer: 'See [“x”](javascript:alert(1)) “y” [1]' }, {}).html), 'only http(s) links');
+    const spoken = formatSpoken(one);
+    assert.equal(spoken, 'According to page 17 of the Owner\'s Manual, replace the oil filter every 5,000 km. Use OEM parts only.');
+    // a list: opener and closer stay plain lines, one bullet per cited item; spoken from the web page without its URL
+    const list = { refused: false, answer: 'I found a few things that should help!\n- From [“Returns”](https://shop.example/returns): “Returns are accepted within 30 days” [1]\n- From “Warranty”, page 3: “Frames carry a lifetime warranty” [2]\nFeel free to open the link for the full details.',
+      citations: [{ n: 1, file: 'returns.md', title: 'Returns', url: 'https://shop.example/returns' }, { n: 2, file: 'warranty.pdf', title: 'Warranty', page: 3 }] };
+    assert.match(formatWhatsApp(list, null), /^I found a few things that should help!\n• From “Returns” \(https:\/\/shop\.example\/returns\): “Returns are accepted within 30 days” \[1\]\n• From “Warranty”, page 3: .*\[2\]\nFeel free to open the link for the full details\.\n/);
+    assert.match(formatEmail(list, {}).html, /<p[^>]*>I found a few things that should help!<\/p><ul[^>]*><li[^>]*>From <a href="https:\/\/shop\.example\/returns"/);
+    const sp = formatSpoken(list);
+    assert.equal(sp, 'According to the Returns page, returns are accepted within 30 days. And according to page 3 of the Warranty, frames carry a lifetime warranty.');
+    assert.ok(!/https?:|\]\(/.test(sp), 'a URL is never read aloud');
   });
   test('helpers: reply stripping, audio encodings, status without secrets', () => {
     assert.equal(stripReply('Do you ship to Canada?\n\nOn Mon, Jane wrote:\n> old stuff\n> more'), 'Do you ship to Canada?');

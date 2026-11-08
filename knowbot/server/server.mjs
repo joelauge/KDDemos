@@ -265,7 +265,10 @@ export function createKnowBotServer(opts = {}) {
         ? (m, c) => llmComplete(m, c?.settings || settings, inst.model || llmModel)
         : (m, c) => completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
       const r = await lib.answerFromSources({ question, results, complete, search: (x) => retriever.search(x, k), persona, minScore, k,
-        history: Array.isArray(history) ? history : [], mode: inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select', settings });
+        history: Array.isArray(history) ? history : [], mode: inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select', settings,
+        // Owner rule: every live bot answers as a kind librarian (opener, "In “Title”, page N, it says: “…” [1].", closer).
+        // An instance may opt out with voice:false; anything else (unset included) gets the guide voice.
+        voice: inst.voice ?? true });
       fin = r.fin; tGen = performance.now();
     }
     const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };

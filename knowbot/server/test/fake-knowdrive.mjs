@@ -19,6 +19,18 @@
 //   A file containing STALL stays text_extracted forever.
 // Search deliberately IGNORES `filter` and always adds one production hit tagged knowbot:ugm, so the caller's own
 // tag enforcement is what keeps results in scope.
+//
+// Production facts this fake ENFORCES (verified against production knowDrive, 2026-11-08), so the bugs they caused
+// can never pass a test again:
+//   - /ingest is a batch endpoint. Parts go tags, mime_type, then file part(s). A mime_type part after a file part is
+//     rejected (400). Any other text part (e.g. `path`) is stored as a file of its own, named after the part; the
+//     store path of a real file is its file part's filename.
+//   - created_at / updated_at are unix SECONDS (numbers), never ISO strings.
+//   - A byte-identical re-upload (same store, same bytes as a live file) is stored but is NOT searchable under the
+//     new copy's tags (search never returns it).
+//   - A pure vector search under a narrow tag filter (all_of matching fewer than `narrowRows` files, default 3) returns
+//     NOTHING, while hybrid search with the same filter still finds the atoms and every hybrid hit carries `distance`
+//     (similarity = 1 - distance/2) next to its RRF `score`.
 import http from 'node:http';
 import { createHash } from 'node:crypto';
 
@@ -213,7 +225,7 @@ const FIXTURE_UGM = Object.freeze({
  * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number }} [o]
  * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, settle: () => Promise<void> }>}
  */
-export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false } = {}) {
+export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'trial' } = {}) {
   speed = Math.max(0.01, Number(speed) || 1);
   const files = new Map();
   const calls = [];
@@ -222,16 +234,19 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   let seq = 0;
   const later = (ms, fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, Math.max(0, ms / speed)); timers.add(t); };
 
-  function add({ store = 'vs_fake', path, text, tags = [], bytes, mime = 'text/plain', pipeline = false }) {
+  const nowSec = () => Math.floor(Date.now() / 1000);
+  function add({ store = 'vs_fake', path, text, tags = [], bytes, mime = 'text/plain', pipeline = false, hash = null }) {
     // same path in the same store replaces the file (how the registry and spec docs are rewritten)
     for (const f of files.values()) if (f.store === store && f.filename === path) { for (const t of f.timers || []) clearTimeout(t); files.delete(f.id); }
     const id = `file_${(++seq).toString(36).padStart(4, '0')}${Math.random().toString(36).slice(2, 8)}`;
     const atoms = atomize(text);
-    const created = new Date().toISOString();
-    const f = { id, store, filename: path, tags: [...new Set(tags)], bytes: bytes ?? Buffer.byteLength(String(text || '')), mime_type: mime, text: String(text || ''),
+    const created = nowSec();
+    // production dedup: a byte-identical copy of a live file is stored, but never searchable under its own tags
+    const dupOf = hash ? [...files.values()].find((x) => x.store === store && x.hash === hash)?.id ?? null : null;
+    const f = { id, store, hash, dupOf, filename: path, tags: [...new Set(tags)], bytes: bytes ?? Buffer.byteLength(String(text || '')), mime_type: mime, text: String(text || ''),
       status: 'in_progress', phase: 'pending', atom_count: 0, atoms_vectorized: 0, chunk_count: 0, created_at: created, updated_at: created, last_error: null, atoms };
     files.set(id, f);
-    const touch = () => { f.updated_at = new Date().toISOString(); };
+    const touch = () => { f.updated_at = nowSec(); };
     if (!pipeline) {
       Object.assign(f, { status: 'processed', phase: 'completed', atom_count: atoms.length, atoms_vectorized: atoms.length, chunk_count: Math.max(1, Math.ceil(atoms.length / 3)) });
       return f;
@@ -292,8 +307,21 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     // for the other files' candidates. Tests keep it off so the server's own client-side scope check is exercised.
     const scopeOff = honorScope ? new Set((Array.isArray(filter?.none_of) ? filter.none_of : []).filter((t) => typeof t === 'string' && t.startsWith('tfile:'))) : null;
     const pool = [];
+    // production: a pure vector search under a narrow tag filter can come back empty (approximate index), hybrid can't
+    const allOf = (Array.isArray(filter?.all_of) ? filter.all_of : []).filter((t) => typeof t === 'string');
+    // narrowScope 'trial' (default): Studio trial scopes (trial:, sample-set:, bucket:), the filters known to be narrow in
+    // production; 'all': every all_of filter.
+    // CONTRACT-GAP: server/devapi.mjs liveSimilarities and the live-bot retrievers (server/retrievers.mjs) search in
+    // pure vector mode under a bot's tag filter and break under narrowScope:'all' (devapi/channels/questions tests);
+    // they need the same hybrid-with-distance fallback trials.mjs retrieve() has. Until then their scopes are exempt.
+    const narrowTag = (t) => narrowScope === 'all' || /^(?:trial|sample-set|bucket):/.test(t);
+    if (mode === 'vector' && allOf.some(narrowTag) && narrowRows > 0) {
+      const matching = [...files.values()].filter((f) => f.store === store && allOf.every((t) => f.tags.includes(t))).length;
+      if (matching < narrowRows) return [];
+    }
     for (const f of files.values()) {
       if (f.store !== store) continue;
+      if (f.dupOf && files.has(f.dupOf)) continue; // byte-identical re-upload: not searchable under the new tags
       if (trialTag && !f.tags.includes(trialTag)) continue;
       if (scopeOff?.size && f.tags.some((t) => scopeOff.has(t))) continue;
       const live = f.phase === 'completed' ? f.atoms.length : Math.min(f.atoms_vectorized, f.atoms.length);
@@ -345,7 +373,8 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
         content: [{ type: 'text', text: x.a.text }] };
       if (mode === 'vector') return { ...base, score: round(x.sim), distance: round(2 * (1 - x.sim)) };
       if (mode === 'fts') return { ...base, score: round(x.cos), fts_score: round(x.cos) };
-      return { ...base, score: round(1 / (60 + i + 1)), fts_score: round(x.cos ?? 0) }; // hybrid: RRF, no distance
+      // hybrid: RRF score (never a similarity) plus the hit's vector distance, like production
+      return { ...base, score: round(1 / (60 + i + 1)), fts_score: round(x.cos ?? 0), distance: round(2 * (1 - x.sim)) };
     });
   }
 
@@ -368,16 +397,30 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
           if (failNext.ingest > 0) { failNext.ingest--; return err(500, 'ingest failed (injected)'); }
           if (!call.store) return err(400, 'x-vector-store-id header required');
           const fd = await new Request('http://x/', { method: 'POST', headers: { 'content-type': req.headers['content-type'] || '' }, body }).formData();
-          const file = fd.get('file');
-          if (!file || typeof file === 'string') return err(400, 'file is required');
-          const tags = String(fd.get('tags') || '').split(',').map((t) => t.trim()).filter(Boolean);
-          const mime = String(fd.get('mime_type') || file.type || 'application/octet-stream');
-          const bytes = Buffer.from(await file.arrayBuffer());
-          const path = String(fd.get('path') || file.name || '');
-          call.ingest = { path, tags, mime, bytes: bytes.length };
-          const f = add({ store: call.store, path, text: extractText(bytes, mime, path), tags, bytes: bytes.length, mime, pipeline: !tags.includes('kind:trial-spec') && !tags.includes('kind:config') });
-          if (tags.includes('kind:trial-spec') || tags.includes('kind:config')) f.raw = bytes.toString('utf8');
-          return json(200, { object: 'list', files: [row(f)] });
+          // production batch semantics, in part order: tags, mime_type, then file parts
+          let tags = [], mime = null, sawFile = false;
+          const items = [];
+          for (const [name, v] of fd.entries()) {
+            const isFile = typeof v !== 'string';
+            if (isFile) { sawFile = true; items.push({ path: String(v.name || ''), bytes: Buffer.from(await v.arrayBuffer()), type: v.type }); continue; }
+            if (name === 'mime_type') { if (sawFile) return err(400, 'mime_type must come before the file parts'); mime = String(v); continue; }
+            if (name === 'tags' && !sawFile && mime == null) { tags = String(v).split(',').map((t) => t.trim()).filter(Boolean); continue; }
+            // any other text part is stored as a file of its own (this is how a stray `path` part became a junk file)
+            items.push({ path: name, bytes: Buffer.from(String(v), 'utf8'), type: 'text/plain', stray: true });
+          }
+          if (!items.some((x) => !x.stray)) return err(400, 'file is required');
+          const out = [];
+          for (const it of items) {
+            const m0 = it.stray ? 'text/plain' : String(mime || it.type || 'application/octet-stream');
+            const cfg = tags.includes('kind:trial-spec') || tags.includes('kind:config');
+            const hash = createHash('sha256').update(it.bytes).digest('hex');
+            const f = add({ store: call.store, path: it.path, text: extractText(it.bytes, m0, it.path), tags, bytes: it.bytes.length, mime: m0, pipeline: !cfg, hash: cfg ? null : hash });
+            if (cfg) f.raw = it.bytes.toString('utf8');
+            if (!it.stray && !call.ingest) call.ingest = { path: it.path, tags, mime: m0, bytes: it.bytes.length };
+            if (it.stray) (call.stray ||= []).push(it.path);
+            out.push(row(f));
+          }
+          return json(200, { object: 'list', files: out });
         }
 
         let m;

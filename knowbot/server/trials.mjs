@@ -1360,6 +1360,11 @@ export function createStudio(o = {}) {
     vRaw.push(...svRaw);
     hRaw.push(...shRaw);
     let vector = vRaw.map((d) => normHit(d, 'vector')).filter(ok).filter((h) => h.text);
+    // a vector-only lookup (starter validation) that came back empty still gets the hybrid fallback below
+    if (!hybrid && !vector.length) {
+      const [fb, sfb] = await Promise.all([rawSearch(query, 'hybrid', vectorK, filter, signal), sharedSet ? rawSearch(query, 'hybrid', vectorK, sharedFilter, signal) : []]);
+      hRaw.push(...fb, ...sfb);
+    }
     const hyb = hRaw.map((d) => normHit(d, 'hybrid')).filter(ok).filter((h) => h.text);
     // Production knowDrive: a pure vector search under a narrow tag filter (one trial's few files in a 600k-atom store)
     // can come back empty (the ANN index is approximate), while hybrid search with the same filter finds the atoms and
@@ -1379,10 +1384,19 @@ export function createStudio(o = {}) {
     // the service list and the warranty page instead of filling every slot from one of them
     const clauses = hybrid ? questionClauses(query) : [query];
     if (clauses.length > 1) {
-      const per = await Promise.all(clauses.map((c) => rawSearch(c, 'vector', 6, filter, signal).catch(() => [])));
+      // each clause gets the same narrow-filter fallback: an empty vector search is retried as hybrid (scored by distance)
+      const clauseSearch = async (c) => {
+        const v = await rawSearch(c, 'vector', 6, filter, signal).catch(() => []);
+        const sv = sharedSet ? await rawSearch(c, 'vector', 6, sharedFilter, signal).catch(() => []) : [];
+        if (v.length || sv.length) return [...v, ...sv].map((d) => normHit(d, 'vector'));
+        const hb = await rawSearch(c, 'hybrid', 6, filter, signal).catch(() => []);
+        const shb = sharedSet ? await rawSearch(c, 'hybrid', 6, sharedFilter, signal).catch(() => []) : [];
+        return [...hb, ...shb].map((d) => ({ ...normHit(d, 'hybrid'), mode: 'vector', viaHybrid: true, rrf: null })).filter((h) => h.similarity != null);
+      };
+      const per = await Promise.all(clauses.map(clauseSearch));
       const keyOf = (h) => h.atomId || `${h.fileId}|${h.seq}|${sha1(normText(h.text).slice(0, 200))}`;
       const byKey = new Map(vector.map((h) => [keyOf(h), h]));
-      const lists = per.map((raw) => raw.map((d) => normHit(d, 'vector')).filter(ok).filter((h) => h.text).map((h) => {
+      const lists = per.map((hits) => hits.filter(ok).filter((h) => h.text).map((h) => {
         const k = keyOf(h), cur = byKey.get(k);
         if (cur) { if ((h.similarity ?? 0) > (cur.similarity ?? 0)) cur.similarity = h.similarity; return cur; }
         byKey.set(k, h); return h;

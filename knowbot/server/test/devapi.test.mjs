@@ -121,12 +121,19 @@ describe('developer API (knowDrive mode)', () => {
     assert.equal(j.grounded, true);
     assert.match(j.answer, /30 days[^\n]*\[1\]/);
     assert.ok(!/^\s*[-*•]\s/m.test(j.answer) && !j.answer.includes('\n'), `prose like the Studio, not a bullet list: ${j.answer}`);
-    assert.match(j.answer, /^[A-Z].*\[1\][.!?]$/, 'sentences with the citation inline before the stop');
+    // the citation sits inline before the stop; the librarian voice may add one courtesy closer (no fact, no marker) after it
+    assert.match(j.answer, /^[A-Z].*\[1\][.!?](?: [A-Z][^[\]\d“”"]*[.!?])?$/, 'sentences with the citation inline before the stop');
+    assert.match(j.answer, /“[^”]*30 days[^”]*” \[1\]/, 'the librarian voice quotes the source line verbatim, in curly quotes, cited');
     assert.equal(j.format, 'prose');
     const b = await (await S.api(`/v1/bots/${bot}/chat`, { method: 'POST', headers: auth(), body: JSON.stringify({ question: Q, format: 'bullets' }) })).json();
     assert.equal(b.format, 'bullets');
     assert.match(b.answer, /30 days.*\[1\]$/m, 'format:"bullets" keeps one cited claim per line, marks at the end');
-    assert.deepEqual(Object.keys(j.citations[0]).sort(), ['excerpt', 'file', 'n', 'spans', 'title']);
+    // page and section appear only when the source really has them (url too); nothing else is added
+    const keys = Object.keys(j.citations[0]);
+    for (const k of ['excerpt', 'file', 'n', 'spans', 'title']) assert.ok(keys.includes(k), `citation has ${k}`);
+    for (const k of keys) assert.ok(['excerpt', 'file', 'n', 'spans', 'title', 'page', 'section', 'url'].includes(k), `unexpected citation key ${k}`);
+    if ('page' in j.citations[0]) assert.ok(Number.isInteger(j.citations[0].page) && j.citations[0].page > 0);
+    if ('section' in j.citations[0]) assert.equal(typeof j.citations[0].section, 'string');
     for (const c of j.citations) {
       assert.ok(!c.excerpt.includes(' … '), `one footnote is one verbatim span, never two lines stitched: ${c.excerpt}`);
       assert.equal(c.excerpt, c.spans[0], 'excerpt is the first verbatim span');

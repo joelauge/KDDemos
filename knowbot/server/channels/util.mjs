@@ -83,10 +83,49 @@ export function sendJsonRes(res, status, body, headers = {}) {
 }
 
 // ------------------------------------------------------------------ formatting
-/** Answer lines without list bullets; [n] markers kept. */
-export function answerLines(answer) {
-  return String(answer || '').split('\n').map((l) => l.replace(/^\s*[-*•]\s+/, '').trim()).filter(Boolean);
+// The librarian voice writes a source as a markdown link: In [“Returns Policy”](https://…/returns), page 3, it says: “…” [1].
+// Plain-text media get “Returns Policy” (https://…/returns) instead; only http(s) targets count as links.
+const MD_LINK = /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)<>"]+)\)/g;
+/** Markdown links → “Title” (url), for SMS, WhatsApp and plain-text e-mail. */
+export function delink(s) { return String(s ?? '').replace(MD_LINK, (_, t, u) => `${t} (${u})`); }
+/**
+ * Answer lines without list bullets; [n] markers kept. Markdown links become “Title” (url) unless `markdown` is true
+ * (the developer API returns the answer's own markdown).
+ */
+export function answerLines(answer, { markdown = false } = {}) {
+  return String(answer || '').split('\n').map((l) => l.replace(/^\s*[-*•]\s+/, '').trim()).filter(Boolean).map((l) => (markdown ? l : delink(l)));
 }
+/**
+ * The answer's lines marked as list items or not: an answer that has "- " bullets keeps exactly those as items (its
+ * opener and closer stay plain lines); an answer of several unbulleted lines is listed whole, as before.
+ */
+export function listLines(answer, { markdown = false } = {}) {
+  const raw = String(answer || '').split('\n').filter((l) => l.trim());
+  const bulleted = raw.some((l) => /^\s*[-*•]\s+/.test(l));
+  const lines = answerLines(answer, { markdown });
+  return lines.map((text, i) => ({ text, item: bulleted ? /^\s*[-*•]\s+/.test(raw[i]) : lines.length > 1 }));
+}
+// Spans a sentence never ends inside: a quotation (“…” or "…"), a markdown link target and a bare URL.
+const NO_SPLIT = /“[^”\n]*”|"[^"\n]*"|\]\(https?:\/\/[^\s)]+\)|\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)\]>"”]+/g;
+/**
+ * One line → its sentences, each with the [n] markers that follow its stop ("Returns take 30 days. [1]" stays one sentence).
+ * A stop inside a quotation or a link never ends a sentence: “Frames are covered. Paint is not.” [1] is one sentence.
+ */
+export function splitSentences(line) {
+  const src = String(line || '');
+  const masked = src.replace(NO_SPLIT, (m) => m.replace(/[.!?…]/g, '_'));
+  const out = [];
+  let from = 0;
+  for (const m of masked.matchAll(/(?<=[.!?…](?:\s*\[\d{1,3}\])*)\s+(?=\[“|["“(]?[A-Z0-9])/g)) {
+    out.push(src.slice(from, m.index).trim());
+    from = m.index + m[0].length;
+  }
+  out.push(src.slice(from).trim());
+  return out.filter(Boolean);
+}
+// A friendly opener or closer with no fact in it (the only uncited sentences lib/knowbot.js's citation gate lets through).
+const COURTESY_LEAD = /^(?:i think i(?:'ve| have)? found|good news|great news|here(?:'s| is) what i found|i(?:'ve| have)? found (?:what|it|this|that|the answer|something|a few|a couple|some)|i hope|hope (?:this|that) helps|feel free|(?:i'm |i am )?happy to help|glad|let me know|thanks for|(?:good|great) question)/i;
+export const isCourtesyLine = (s) => { const t = String(s || '').replace(/[‘’]/g, "'").trim(); return !!t && t.length <= 140 && !/\[\d{1,3}\]|\d|[$€£@“”"]|https?:/.test(t) && COURTESY_LEAD.test(t); };
 const stripMarks = (s) => String(s || '').replace(/\s*\[\d{1,3}\]/g, '').replace(/\s+([.,;:!?])/g, '$1').trim();
 const SMALL_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'but', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'vs', 'via', 'per']);
 const ACRONYMS = new Set(['faq', 'faqs', 'api', 'sms', 'usa', 'uk', 'eu', 'pdf', 'hr', 'qa', 'sla', 'tos', 'gdpr', 'hipaa', 'ceo', 'cto', 'b2b', 'b2c', 'ai', 'kb', 'url', 'diy', 'rma', 'vat', 'gst', 'hvac']);
@@ -115,6 +154,20 @@ export function docTitle(title, file) {
 }
 /** A citation's display title (see docTitle). */
 export function humanTitle(c = {}) { return docTitle(c.title, c.file || c.filename); }
+/** Where in the document a citation points: "page 17, “Oil filter”" (only what the citation really carries). */
+export function locOf(c = {}) {
+  const page = Number.isInteger(Number(c.page)) && Number(c.page) > 0 ? Number(c.page) : null;
+  const section = String(c.section || '').replace(/[“”"]/g, '').trim();
+  return [page && `page ${page}`, section && `“${section}”`].filter(Boolean).join(', ');
+}
+const httpOf = (u) => (/^https?:\/\//i.test(String(u || '')) ? String(u) : '');
+/** A plain-text source line: "[1] Owner's Manual, page 17, “Oil filter” (manual.pdf)" plus the link on the next line. */
+function noteLine(c, indent = '    ') {
+  const loc = locOf(c);
+  const file = c.file ? ` (${String(c.file).split('/').pop()})` : '';
+  const url = httpOf(c.url);
+  return `[${c.n}] ${humanTitle(c)}${loc ? `, ${loc}` : ''}${file}${url ? `\n${indent}${/\.pdf(?:[?#]|$)/i.test(url) ? 'Download' : 'Open'}: ${url}` : ''}`;
+}
 /** Cut at a word boundary to `max` characters (with an ellipsis). */
 export function clipWords(s, max) {
   s = String(s || '');
@@ -124,21 +177,30 @@ export function clipWords(s, max) {
   return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,;:.-]+$/, '')}…`;
 }
 
-/** The answer as whole sentences, each ending "… text [n]." (the line's [n] markers before the stop). */
+/**
+ * The answer as whole sentences, each ending "… text [n]." (its own [n] markers before the stop). Sentences never break
+ * inside a quotation. A friendly opener or closer carries no marker (courtesy: true); any other sentence without its own
+ * marker takes the markers of the cited sentence it belongs to in the same line ("A. B. [1]" → both [1]).
+ */
 export function answerSentences(answer) {
   const out = [];
   for (const line of answerLines(answer)) {
-    const marks = [...new Set([...line.matchAll(/\[(\d{1,3})\]/g)].map((m) => m[1]))];
-    const tag = marks.length ? ` ${marks.map((n) => `[${n}]`).join('')}` : '';
-    const body = stripMarks(line).replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ').trim();
-    if (!body) continue;
-    for (let sn of body.split(/(?<=[.!?])\s+(?=["“(]?[A-Z0-9])/)) {
-      sn = sn.trim();
+    const parts = splitSentences(line).map((sn) => ({ sn, marks: [...new Set([...sn.matchAll(/\[(\d{1,3})\]/g)].map((m) => m[1]))], courtesy: false }));
+    for (const x of parts) if (!x.marks.length) x.courtesy = isCourtesyLine(x.sn);
+    for (let i = 0; i < parts.length; i++) {
+      const x = parts[i];
+      if (x.marks.length || x.courtesy) continue;
+      const donor = parts.slice(i + 1).find((y) => y.marks.length) || parts.slice(0, i).reverse().find((y) => y.marks.length);
+      if (donor) x.marks = donor.marks;
+    }
+    for (const x of parts) {
+      const tag = x.marks.length ? ` ${x.marks.map((n) => `[${n}]`).join('')}` : '';
+      let sn = stripMarks(x.sn).replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ').trim();
       if (!sn) continue;
       let stop = '.';
       const m = /([.!?…]+|[:;,])$/.exec(sn);
       if (m) { if (/[.!?…]/.test(m[1])) stop = m[1]; sn = sn.slice(0, -m[1].length).trimEnd(); }
-      if (sn) out.push({ text: sn.charAt(0).toUpperCase() + sn.slice(1), tag, stop });
+      if (sn) out.push({ text: sn.charAt(0).toUpperCase() + sn.slice(1), tag, stop, ...(x.courtesy ? { courtesy: true } : {}) });
     }
   }
   return out;
@@ -161,7 +223,11 @@ export function formatSms(r, proofUrl, max = 320) {
   if (r.refused) return NOT_IN_DATA;
   const suffix = proofUrl ? ` Proof: ${proofUrl}` : '';
   const budget = Math.max(60, max - suffix.length);
-  const sentences = answerSentences(r.answer);
+  let sentences = answerSentences(r.answer);
+  // the proof link is the text's own closer: a courtesy line after the last cited sentence is left out
+  while (sentences.length > 1 && sentences.at(-1).courtesy) sentences = sentences.slice(0, -1);
+  // the facts come first: when the whole answer does not fit, the friendly opener and closer are the first to go
+  if (smsJoin(sentences).length > budget) sentences = sentences.filter((x) => !x.courtesy);
   let body = '';
   const picked = [];
   for (const x of sentences) {
@@ -176,9 +242,8 @@ export function formatSms(r, proofUrl, max = 320) {
 /** WhatsApp: the answer with [n] markers, then numbered source footnotes and the proof link (≤ 4096). */
 export function formatWhatsApp(r, proofUrl) {
   if (r.refused) return NOT_IN_DATA;
-  const lines = answerLines(r.answer);
-  const body = lines.length > 1 ? lines.map((l) => `• ${l}`).join('\n') : lines.join('');
-  const notes = (r.citations || []).map((c) => `[${c.n}] ${humanTitle(c)}${c.file ? ` (${String(c.file).split('/').pop()})` : ''}`);
+  const body = listLines(r.answer).map(({ text, item }) => (item ? `• ${text}` : text)).join('\n');
+  const notes = (r.citations || []).map((c) => noteLine(c));
   const out = `${body}\n\n*Sources*\n${notes.join('\n')}${proofUrl ? `\n\nSee the exact quotes: ${proofUrl}` : ''}`;
   return out.length > 4096 ? `${clipWords(out, 4000)}` : out;
 }
@@ -191,23 +256,30 @@ export function formatEmail(r, { proofUrl, botName = 'KnowBot', question = '' } 
     const html = `<div style="font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111;max-width:600px"><p>${esc(NOT_IN_DATA)}</p><p style="color:#555">${esc(botName)} answers only from its own files, so it would rather say so than guess.</p>${question ? `<p style="color:#555">You asked: “${esc(question)}”</p>` : ''}</div>`;
     return { text, html };
   }
-  const lines = answerLines(r.answer);
+  const mdItems = listLines(r.answer, { markdown: true });
   const quotes = r.proof?.quoted || [];
   const src = (r.citations || []).map((c) => {
     const q = quotes.filter((x) => x.n === c.n).map((x) => x.text);
     return { c, q: q.length ? q : (c.excerpt ? [c.excerpt] : []) };
   });
   const text = [
-    ...lines.map((l) => (lines.length > 1 ? `- ${l}` : l)), '',
-    'Sources', ...src.flatMap(({ c, q }) => [`[${c.n}] ${humanTitle(c)}${c.file ? ` (${String(c.file).split('/').pop()})` : ''}`, ...q.slice(0, 2).map((x) => `    "${x}"`)]),
+    ...listLines(r.answer).map(({ text, item }) => (item ? `- ${text}` : text)), '',
+    'Sources', ...src.flatMap(({ c, q }) => [noteLine(c), ...q.slice(0, 2).map((x) => `    "${x}"`)]),
     ...(proofUrl ? ['', `See every quote in context: ${proofUrl}`] : []), '',
     `${botName} answers only from its own files, and cites every line.`,
   ].join('\n');
   const sup = (s) => esc(s).replace(/\[(\d{1,3})\]/g, '<sup style="color:#4f46e5;font-weight:600">[$1]</sup>');
+  // the answer's markdown links ([“Title”](https://…)) become real links; esc() already made the URL attribute-safe
+  const linked = (s) => sup(s).replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)<>"]+)\)/g, '<a href="$2" style="color:#4f46e5">$1</a>');
   const html = `<div style="font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111;max-width:600px">`
-    + (lines.length > 1 ? `<ul style="padding-left:20px;margin:0 0 16px">${lines.map((l) => `<li style="margin:0 0 6px">${sup(l)}</li>`).join('')}</ul>` : `<p style="margin:0 0 16px">${sup(lines[0] || '')}</p>`)
+    + mdItems.reduce((acc, x, i) => {
+      // a friendly opener / closer is a paragraph; list items are one <ul> (one cited item per bullet)
+      const prev = mdItems[i - 1], next = mdItems[i + 1];
+      if (!x.item) return `${acc}<p style="margin:0 0 ${next?.item ? 8 : 16}px">${linked(x.text)}</p>`;
+      return `${acc}${prev?.item ? '' : '<ul style="padding-left:20px;margin:0 0 16px">'}<li style="margin:0 0 6px">${linked(x.text)}</li>${next?.item ? '' : '</ul>'}`;
+    }, '')
     + `<p style="margin:20px 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#666">Sources</p><ol style="padding-left:20px;margin:0">`
-    + src.map(({ c, q }) => `<li value="${c.n}" style="margin:0 0 10px"><strong>${esc(humanTitle(c))}</strong>${c.file ? ` <span style="color:#666">${esc(String(c.file).split('/').pop())}</span>` : ''}${q.slice(0, 2).map((x) => `<blockquote style="margin:6px 0 0;padding:4px 10px;border-left:3px solid #c7d2fe;color:#333;background:#f5f7ff">${esc(x)}</blockquote>`).join('')}</li>`).join('')
+    + src.map(({ c, q }) => `<li value="${c.n}" style="margin:0 0 10px"><strong>${httpOf(c.url) ? `<a href="${esc(httpOf(c.url))}" style="color:#111">${esc(humanTitle(c))}</a>` : esc(humanTitle(c))}</strong>${locOf(c) ? ` <span style="color:#444">· ${esc(locOf(c))}</span>` : ''}${c.file ? ` <span style="color:#666">${esc(String(c.file).split('/').pop())}</span>` : ''}${httpOf(c.url) ? ` <a href="${esc(httpOf(c.url))}" style="color:#4f46e5;font-size:13px">${/\.pdf(?:[?#]|$)/i.test(c.url) ? 'Download' : 'Open'}</a>` : ''}${q.slice(0, 2).map((x) => `<blockquote style="margin:6px 0 0;padding:4px 10px;border-left:3px solid #c7d2fe;color:#333;background:#f5f7ff">${esc(x)}</blockquote>`).join('')}</li>`).join('')
     + `</ol>${proofUrl ? `<p style="margin:16px 0 0"><a href="${esc(proofUrl)}" style="color:#4f46e5">See every quote in context →</a></p>` : ''}`
     + `<p style="margin:20px 0 0;color:#777;font-size:13px">${esc(botName)} answers only from its own files, and cites every line.</p></div>`;
   return { text, html };
@@ -258,6 +330,25 @@ export function withArticle(title) {
   // a one-word topic title reads as a file ("the Shipping file"); a document name stands on its own ("the FAQ", "the Lumen Care Plan")
   return /\s/.test(t) || DOC_NOUNS.test(t.toLowerCase()) ? `the ${t}` : `the ${t} file`;
 }
+/** Text fit to be read aloud: a markdown link is its title alone, a bare URL is dropped, curly quotes go. */
+export function speakable(s) {
+  return String(s ?? '').replace(MD_LINK, '$1').replace(/\s*\(?https?:\/\/[^\s)]+\)?/g, '').replace(/[“”]/g, '').replace(/\s+([.,;:!?])/g, '$1').replace(/\s+/g, ' ').trim();
+}
+/**
+ * How a source is named aloud, never with its URL: "page 17 of the Owner's Manual", "the Oil filter section of the
+ * Owner's Manual", "the Returns Policy page" (a web page), else "the Returns Policy" / "the Shipping file".
+ */
+export function spokenSource(c = {}) {
+  const t = humanTitle(c);
+  const page = Number.isInteger(Number(c.page)) && Number(c.page) > 0 ? Number(c.page) : null;
+  const section = String(c.section || '').replace(/[“”"]/g, '').trim();
+  const doc = /^(?:the|a|an|our|your)\s/i.test(t) ? withArticle(t) : `the ${t}`;
+  if (page) return `page ${page} of ${doc}`;
+  if (section) return `the ${section} section of ${doc}`;
+  const url = String(c.url || '');
+  if (/^https?:\/\//i.test(url) && !/\.(?:pdf|docx?|xlsx?|pptx?|csv|zip|txt)(?:[?#]|$)/i.test(url)) return /\bpage$/i.test(t) ? doc : `${doc} page`;
+  return withArticle(t);
+}
 /**
  * Voice: spoken attribution ("According to the Lumen Warranty and Returns Policy, e-bike batteries …"), no markers, at most two quoted lines,
  * ≤ ~450 characters. A refusal is the canonical sentence. `names`: the bot's name / org, whose words keep their capital.
@@ -272,13 +363,19 @@ export function formatSpoken(r, max = 450, { names = [] } = {}) {
   const proper = properWords([r.answer, ...quotes.map((q) => q.text), ...(r.citations || []).map((c) => c.excerpt)], [...names, ...titles]);
   const parts = [];
   let lastN = null;
-  const items = quotes.length ? quotes.map((q) => ({ n: q.n, text: q.text })) : answerLines(r.answer).map((l) => ({ n: Number(/\[(\d{1,3})\]/.exec(l)?.[1]) || null, text: l }));
+  // without proof quotes, speak the answer's own cited lines (never its friendly opener, never a URL)
+  const items = quotes.length ? quotes.map((q) => ({ n: q.n, text: q.text }))
+    : answerLines(r.answer, { markdown: true }).flatMap(splitSentences).flatMap((l) => {
+      // the librarian voice's quotation is what gets read; its document pointer is said by the attribution instead
+      const q = [...l.matchAll(/“([^”\n]+)”\s*\[(\d{1,3})\]/g)].map((m) => ({ n: Number(m[2]), text: m[1] }));
+      return q.length ? q : [{ n: Number(/\[(\d{1,3})\]/.exec(l)?.[1]) || null, text: speakable(l) }];
+    }).filter((x) => x.n || !isCourtesyLine(x.text));
   for (const it of items.slice(0, 2)) {
-    let s = stripMarks(it.text).replace(/[|]/g, ', ').replace(/\s*;\s*/g, '; ');
+    let s = stripMarks(speakable(it.text)).replace(/[|]/g, ', ').replace(/\s*;\s*/g, '; ');
     if (!s) continue;
     if (!/[.!?]$/.test(s)) s += '.';
     const c = byN.get(it.n);
-    if (c && it.n !== lastN) parts.push(`${parts.length ? 'And according to' : 'According to'} ${withArticle(humanTitle(c))}, ${lowerLead(s, proper)}`);
+    if (c && it.n !== lastN) parts.push(`${parts.length ? 'And according to' : 'According to'} ${spokenSource(c)}, ${lowerLead(s, proper)}`);
     else parts.push(s);
     lastN = it.n;
   }

@@ -28,7 +28,7 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sealKey, openKey } from './providers.mjs';
 import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
-import { ChannelError, channelStatus, publicBase, answerLines, NOT_IN_DATA, formatSpoken, docTitle } from './channels/util.mjs';
+import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle } from './channels/util.mjs';
 import { handleSms } from './channels/sms.mjs';
 import { handleVoice } from './channels/voice.mjs';
 import { handleWhatsApp } from './channels/whatsapp.mjs';
@@ -71,6 +71,13 @@ const stripMarks = (s) => String(s || '').replace(/\s*\[\d{1,3}\]/g, '').replace
  */
 export function proseSentence(line) {
   const body = String(line || '').replace(/^\s*[-*•]\s+/, '').trim();
+  // A line of several sentences (the librarian voice: opener, "In “Title”, it says: “…” [1].", closer) keeps each
+  // sentence's own markers in place; a sentence without markers (a courtesy opener or closer) passes through as written.
+  const parts = splitSentences(body);
+  if (parts.length > 1) return parts.map((x) => (/\[\d{1,3}\]/.test(x) ? proseOne(x) : x.trim())).filter(Boolean).join(' ');
+  return proseOne(body);
+}
+function proseOne(body) {
   const marks = [...new Set([...body.matchAll(/\[(\d{1,3})\]/g)].map((m) => m[1]))];
   let s = stripMarks(body).replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ').trim();
   if (!s) return '';
@@ -83,6 +90,25 @@ export function proseSentence(line) {
 /** A bulleted answer → the same answer as one paragraph of sentences (refusals and single plain lines pass through). */
 export function proseAnswer(answer) {
   return String(answer || '').split('\n').map((l) => l.trim()).filter(Boolean).map(proseSentence).filter(Boolean).join(' ');
+}
+/**
+ * format:"bullets": one claim per line with its marks at the end ("… “30 days” [1]" stays whole: a quotation never
+ * splits). A line of several sentences (opener, cited sentence, closer) becomes one line per sentence; list items stay.
+ */
+export function bulletsAnswer(answer) {
+  return String(answer || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).flatMap((l) => {
+    if (/^\s*[-*•]\s/.test(l)) return [l];
+    const parts = splitSentences(l);
+    if (parts.length < 2) return [l];
+    return parts.map((x) => {
+      const marks = [...new Set([...x.matchAll(/\[(\d{1,3})\]/g)].map((m) => m[1]))];
+      if (!marks.length) return x;
+      let t = stripMarks(x);
+      if (/”[.!?]?$/.test(t)) t = t.replace(/(”)[.!?]$/, '$1'); // “…” [1]: the quotation ends the claim
+      else if (!/[.!?…]$/.test(t)) t = `${t.replace(/[:;,]$/, '')}.`;
+      return `${t} ${marks.map((n) => `[${n}]`).join('')}`;
+    });
+  }).join('\n');
 }
 const textOfContent = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (typeof p === 'string' ? p : p && (p.type === 'text' || p.type === 'input_text') ? p.text || '' : '')).join('') : '');
 const approxTokens = (s) => Math.max(1, Math.ceil(String(s || '').length / 4));
@@ -411,15 +437,26 @@ export function createDevApi(o = {}) {
       tRet = performance.now();
       onRetrieval?.({ hits: (results.length ? results : candidates).slice(0, 6).map((r) => ({ ...hitView(r), title: r.title || null, kept: results.includes(r) })),
         floor: { min: floor, top: round4(top) }, ms: Math.round(tRet - t0) });
+      // voice: every bot answers as a kind librarian (lib guideText): where it found it, the exact words, one opener/closer
       const r = await lib.answerFromSources({ question: q, results, complete: safeComplete, search: retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
-        history: Array.isArray(history) ? history : [], mode, settings });
+        history: Array.isArray(history) ? history : [], mode, settings, voice: target.inst?.voice ?? true });
       fin = r.fin;
     } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
 
     const refused = !!fin.refused;
     const text = refused && !guard ? NOT_IN_DATA : String(fin.text || '');
-    const lines = refused ? [] : answerLines(text);
-    const quoted = lines.map((l) => ({ n: Number(/\[(\d{1,3})\]/.exec(l)?.[1]) || null, text: stripMarks(l).replace(/^\s*[-*•]\s+/, '') })).filter((x) => x.n && x.text)
+    const lines = refused ? [] : answerLines(text, { markdown: true });
+    // The verbatim quote of a cited line is the span inside “…” right before its [n] (the librarian voice wraps the source's
+    // exact words in curly quotes and names the document around them); a cited line with no such span is quoted whole,
+    // minus the document pointer. Lines with no [n] (a courtesy opener or closer) are never quotes.
+    const isCourtesy = typeof lib.isCourtesy === 'function' ? lib.isCourtesy : () => false;
+    const quoted = lines.flatMap((l) => {
+      const spans = [...l.matchAll(/“([^”\n]+)”\s*((?:\[\d{1,3}\]\s*)+)/g)].flatMap((m) => [...m[2].matchAll(/\[(\d{1,3})\]/g)].map((k) => ({ n: Number(k[1]), text: m[1].trim() })));
+      if (spans.length) return spans;
+      const n = Number(/\[(\d{1,3})\]/.exec(l)?.[1]) || null;
+      const t = stripMarks(l).replace(/^\s*[-*•]\s+/, '').replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g, '$1');
+      return n && !isCourtesy(t) ? [{ n, text: t }] : [];
+    }).filter((x) => x.n && x.text)
       .map((x) => { const c = (fin.citations || []).find((y) => y.n === x.n); return { ...x, file: c?.filename || null, ...(c?.file_id ? { fileId: c.file_id } : {}) }; });
     // One footnote, one verbatim span: excerpt is the FIRST line quoted under [n] exactly as written (never two lines
     // stitched together); every line quoted under [n] is listed, each verbatim, in spans (and in proof.quoted).
@@ -427,6 +464,7 @@ export function createDevApi(o = {}) {
       const qs = quoted.filter((x) => x.n === c.n).map((x) => x.text);
       const snip = String(c.snippet || '').replace(/\s+/g, ' ').trim();
       return { n: c.n, file: c.filename, title: docTitle(c.title, c.filename), excerpt: qs[0] || snip, spans: qs.length ? qs : snip ? [snip] : [], ...(c.url ? { url: c.url } : {}),
+        ...(Number.isInteger(c.page) && c.page > 0 ? { page: c.page } : {}), ...(typeof c.section === 'string' && c.section.trim() ? { section: c.section.trim() } : {}),
         similarity: round4(sims.get(c.filename) ?? null) };
     });
     const hits = (refused ? candidates : results).slice(0, 6).map(hitView);
@@ -637,12 +675,12 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     return { question: q, history };
   }
   /** The answer text as the API returns it: prose with inline [n] (the Studio's form) or, with format:"bullets", one claim per line. */
-  const answerText = (a, format = 'prose') => (a.refused || format === 'bullets' ? a.answer : proseAnswer(a.answer) || a.answer);
+  const answerText = (a, format = 'prose') => (a.refused ? a.answer : format === 'bullets' ? bulletsAnswer(a.answer) || a.answer : proseAnswer(a.answer) || a.answer);
   /** The streamed pieces of answerText: concatenating every piece's `raw` gives exactly answerText. */
   const answerPieces = (a, format = 'prose') => {
     if (a.refused) return [{ raw: a.answer, n: [] }];
-    const lines = answerLines(a.answer);
-    const parts = format === 'bullets' ? String(a.answer).split('\n').filter((l) => l.trim()) : lines.map(proseSentence).filter(Boolean);
+    const lines = answerLines(a.answer, { markdown: true });
+    const parts = format === 'bullets' ? answerText(a, 'bullets').split('\n').filter((l) => l.trim()) : lines.map(proseSentence).filter(Boolean);
     return parts.map((t, i) => ({ raw: `${i ? (format === 'bullets' ? '\n' : ' ') : ''}${t}`, text: stripMarks(t).replace(/^\s*[-*•]\s+/, ''), n: [...t.matchAll(/\[(\d{1,3})\]/g)].map((m) => Number(m[1])) }));
   };
   const formatOf = (body) => (String(body?.format || '').toLowerCase() === 'bullets' ? 'bullets' : 'prose');
@@ -651,7 +689,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
     ...(a.guard ? { guard: a.guard } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
   });
-  const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title} — ` : ''}${c.file}`).join('\n')}`.trim());
+  const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title}${c.page ? `, page ${c.page}` : ''}${c.section ? `, “${c.section}”` : ''} — ` : ''}${c.file}${c.url ? ` <${c.url}>` : ''}`).join('\n')}`.trim());
 
   // ---------------------------------------------------------------- /v1/bots/:id/chat
   async function botChat(req, res, botId) {
