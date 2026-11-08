@@ -41,25 +41,77 @@ export class KnowBotContainer extends Container {
   // below would cut a call, though, so it waits until nothing is in flight; the next request after that restarts it.
   // Checked with `wrangler dev --local-protocol https` and a stand-in container: wss upgrades on the media stream and web
   // voice paths reach the container with Upgrade: websocket and x-forwarded-proto https; other upgrade paths get 404.
+  // Background work is not a request: a website import (server/trials.mjs) runs for up to 20 minutes after its request
+  // closed. So before restarting for a new fingerprint the container is asked GET /api/internal/busy (store imports,
+  // phone calls, web voice sessions); while it says busy the restart waits like it does for in-flight requests, but
+  // never longer than MAX_RESTART_DEFER_MS after the fingerprint changed: then it restarts anyway and the server resumes
+  // the interrupted import from what it saved (server/trials.mjs resumeStoreJob).
   async fetch(request) {
     const fp = await fingerprint(this.envVars);
-    let started = null;
+    let started = null, changedAt = null;
     try { started = this.ctx.storage.kv.get(ENV_FP_KEY) ?? null; } catch { /* storage unavailable: no restart check */ }
-    const busy = this.container.running && Number(this.inflightRequests || 0) > 0;
-    if (started !== fp && !busy) {
-      if (this.container.running) {
-        await this.destroy();
-        for (let i = 0; i < 50 && this.container.running; i++) await new Promise((r) => setTimeout(r, 100));
+    try { changedAt = JSON.parse(this.ctx.storage.kv.get(ENV_FP_CHANGED_KEY) || 'null'); } catch { changedAt = null; }
+    if (started !== fp) {
+      let busy = this.container.running && Number(this.inflightRequests || 0) > 0;
+      if (!busy && this.container.running && started !== null) {
+        // when this fingerprint was first seen: the deferral is counted from there
+        if (!changedAt || changedAt.fp !== fp) {
+          changedAt = { fp, at: Date.now() };
+          try { this.ctx.storage.kv.put(ENV_FP_CHANGED_KEY, JSON.stringify(changedAt)); } catch { /* ignore */ }
+        }
+        if (Date.now() - changedAt.at < MAX_RESTART_DEFER_MS) busy = await this.backgroundBusy();
       }
-      try { this.ctx.storage.kv.put(ENV_FP_KEY, fp); } catch { /* ignore */ }
+      if (!busy) {
+        if (this.container.running) {
+          await this.destroy();
+          for (let i = 0; i < 50 && this.container.running; i++) await new Promise((r) => setTimeout(r, 100));
+        }
+        try { this.ctx.storage.kv.put(ENV_FP_KEY, fp); this.ctx.storage.kv.delete(ENV_FP_CHANGED_KEY); } catch { /* ignore */ }
+      }
     }
     return super.fetch(request);
+  }
+
+  // sleepAfter counts proxied requests only: an import running with no browser attached would be put to sleep after
+  // 15 minutes. Stay up while the server says it is busy (an import ends within its 20-minute budget).
+  async onActivityExpired() {
+    if (this.container.running && await this.backgroundBusy(true)) { this.renewActivityTimeout(); return; }
+    return super.onActivityExpired();
+  }
+
+  /**
+   * GET /api/internal/busy straight to the running container's port (no wake-up, not counted as a request), with the
+   * header secret derived from KNOWBOT_ADMIN_TOKEN. Answers are cached for BUSY_CACHE_MS. Anything but a clear
+   * {busy:true} (no admin token, an older image without the endpoint, a timeout) counts as not busy: never block a deploy.
+   */
+  async backgroundBusy(fresh = false) {
+    const token = this.envVars.KNOWBOT_ADMIN_TOKEN;
+    if (!token || !this.container.running) return false;
+    if (!fresh && this.busyCache && Date.now() - this.busyCache.at < BUSY_CACHE_MS) return this.busyCache.busy;
+    let busy = false;
+    try {
+      const res = await this.container.getTcpPort(this.defaultPort).fetch('http://container/api/internal/busy', {
+        headers: { [INTERNAL_HEADER]: await internalSecret(token) }, signal: AbortSignal.timeout(3000) });
+      if (res.ok) busy = (await res.json())?.busy === true;
+    } catch { busy = false; }
+    this.busyCache = { at: Date.now(), busy };
+    return busy;
   }
 }
 
 const pick = (env, names) => Object.fromEntries(names.filter((n) => env[n]).map((n) => [n, String(env[n])]));
 
 const ENV_FP_KEY = 'knowbot-env-fingerprint';
+const ENV_FP_CHANGED_KEY = 'knowbot-env-fingerprint-changed';
+const MAX_RESTART_DEFER_MS = 30 * 60 * 1000; // a busy container is restarted for a new deploy within 30 minutes anyway
+const BUSY_CACHE_MS = 15000;
+// Shared with server/server.mjs (INTERNAL_HEADER, internalSecret): HMAC-SHA256(KNOWBOT_ADMIN_TOKEN, label), hex.
+const INTERNAL_HEADER = 'x-knowbot-internal';
+async function internalSecret(token) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(token)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('knowbot-internal-v1')));
+  return [...sig].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 async function fingerprint(vars) {
   const data = new TextEncoder().encode(JSON.stringify(Object.entries(vars || {}).sort()));
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
@@ -76,6 +128,8 @@ export default {
       return Response.json({ service: 'knowbot-api', ok: true, site: env.SITE_URL || 'https://knowbot.knowdrive.ai' }, { headers: CORS });
     }
     if (!url.pathname.startsWith('/api/')) return new Response('not found', { status: 404, headers: CORS });
+    // internal endpoints (GET /api/internal/busy) are for this Worker only, never proxied from the internet
+    if (url.pathname.startsWith('/api/internal/')) return new Response('not found', { status: 404, headers: CORS });
     // WebSocket upgrades: only the phone channel's Twilio Media Streams path and the web voice assistant's socket go to the
     // container (the Container class proxies the socket both ways); any other upgrade is refused here.
     const upgrade = (request.headers.get('upgrade') || '').toLowerCase() === 'websocket';

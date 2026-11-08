@@ -2540,7 +2540,7 @@ export function createStudio(o = {}) {
     let resumed = 0;
     for (const r of rows) {
       const id = /^knowbot\/trials\/([^/]+)\/_spec\.json$/.exec(String(r.filename || ''))?.[1];
-      if (!id || !TRIAL_ID_RE.test(id) || deletedTrials.has(id) || closed) continue;
+      if (!id || !TRIAL_ID_RE.test(id) || deletedTrials.has(id) || closed || !(r.tags || []).includes('storejob:running')) continue;
       try { if (await resumeStoreJob(trialFor(id))) resumed++; } catch (e) { log(`[studio] store job resume ${id}: ${e.message}`); }
     }
     return { resumed };
@@ -2599,11 +2599,14 @@ export function createStudio(o = {}) {
       }
     }
   }
-  async function runStoreJob(T, job, { url, previous, wellFormed, sharedBytes, kinds }) {
+  async function runStoreJob(T, job, { url, previous, wellFormed, sharedBytes, kinds, resume = null }) {
     const send = (ev, d) => jobEmit(T, job, ev, d);
     const signal = job.ac.signal;
-    let foundAny = false, replaced = false, k = 0, uploaded = 0, quotaOut = 0, failedUp = 0;
-    const rows = [];
+    // pj: this job's persisted record (flags.storeJob), when it is the trial's current one
+    const pjOf = () => (T.flags.storeJob?.id === job.id ? T.flags.storeJob : null);
+    const prior = resume?.done || {};   // files the interrupted run(s) wrote, per page kind
+    let foundAny = !!resume, replaced = false, k = 0, uploaded = resume?.mine.length || 0, quotaOut = 0, failedUp = 0;
+    const rows = resume ? resume.mine.map((r) => rowToFile(T, r)) : [];
     const leftOutQuota = {}, leftOutFailed = {};
     const prevIds = new Set(previous.map((r) => r.id));
     const stamp = `${T.id}:store:${job.id}`;
@@ -2649,7 +2652,7 @@ export function createStudio(o = {}) {
       for (const group of groups) {
         if (signal.aborted) throw Object.assign(new Error('aborted'), { code: 'aborted' });
         const key = randB32(10);
-        const tags = [...trialTags(T), `tfile:${key}`, 'src:store', `site:${hostTagOf(group[0].f.host)}`, `page:${kind}`];
+        const tags = [...trialTags(T), `tfile:${key}`, 'src:store', `site:${hostTagOf(group[0].f.host)}`, `page:${kind}`, `sjob:${job.id}`];
         const mime = group[0].f.mime;
         const size = group.reduce((n, x) => n + x.bytes.length, 0);
         // the batch is in flight: a manual upload beside it sees these bytes in its quota check
@@ -2678,8 +2681,15 @@ export function createStudio(o = {}) {
           T.rows = [...(T.rows || []).filter((r) => r.id !== id), row]; T.rowsAt = now();
           const file = rowToFile(T, row);
           newRows.push(file); rows.push(file); uploaded++;
+          const pj = pjOf();
+          if (pj && pj.state === 'running') {
+            pj.written ||= {}; pj.done ||= {};
+            if (Object.keys(pj.written).length < 20000) pj.written[x.rel] = x.f.url;
+            pj.done[kind] = (pj.done[kind] || 0) + 1; pj.uploaded = uploaded;
+          }
         }
       }
+      if (pjOf()?.state === 'running') { pjOf().activeMs = jobActiveMs(T, job); saveJobSoon(T); }
       if (!newRows.length) return;
       T.questionsCache = null; T.lastActivityAt = now();
       k++;
@@ -2689,34 +2699,54 @@ export function createStudio(o = {}) {
     const doneFiles = () => (rows.length <= 300 ? rows : rows.map(lightRow));
     try {
       const r = await importStore(url, { remainingBytes: QUOTA_BYTES - (rowsBytes() - previous.reduce((n, x) => n + (Number(x.bytes) || 0), 0)) - sharedBytes, signal, net: o.storeNet,
-        budgetMs: storeBudgetMs, enrich: o.storeEnrich, onFiles, ...(kinds ? { kinds } : {}),
+        budgetMs: storeBudgetMs, enrich: o.storeEnrich, onFiles, ...(kinds ? { kinds } : {}), ...(resume ? { skip: resume.skip } : {}),
         onEvent: (ev, d) => {
           if (ev === 'found' || ev === 'plan') foundAny = true;
+          if (ev === 'plan' && pjOf()?.state === 'running') {
+            const pj = pjOf();
+            pj.plan = { ...d.counts };
+            pj.total = kinds ? kinds.reduce((n, kk) => n + (d.counts?.[kk] || 0), 0) : d.total ?? null;
+            saveJobSoon(T);
+          }
           if (ev === 'detect') job.hosts = storeHostsOf(d.base, []);
           if (ev === 'plan') job.hosts = storeHostsOf(job.hosts[0] ? `http://${job.hosts[0]}` : '', d.helpdesks);
           if (ev !== 'error') send(ev, d);
         } });
       if (!rows.length && failedUp) throw new StudioError(502, 'upstream', 'knowDrive did not accept the imported pages. Try again in a minute.');
+      // a resumed job: the earlier run's files count in the totals (and replace the import before it, if not yet done)
+      if (resume && rows.length) await replacePrevious();
       kickPoller(T);
       if (rows.length) applyStoreDraft(T, r.name);
-      const report = { ...r.report, uploaded, leftOut: { ...r.report.leftOut, quota: { ...r.report.leftOut.quota }, failed: { ...leftOutFailed } } };
+      const written = { ...r.report.written };
+      for (const [kind, n] of Object.entries(prior)) written[kind] = (written[kind] || 0) + n;
+      const report = { ...r.report, written, uploaded, leftOut: { ...r.report.leftOut, quota: { ...r.report.leftOut.quota }, failed: { ...leftOutFailed } },
+        ...(resume ? { resumed: { before: resume.mine.length, skipped: { ...(r.report.already || {}) } }, products: { ...r.report.products, written: written.product || 0 } } : {}) };
+      const counts = resume ? { products: written.product || 0, pages: (written.help || 0) + (written.page || 0), policies: written.policy || 0, faqs: written.faq || 0,
+        pdfs: written.pdf || 0, collections: written.collection || 0, blog: written.blog || 0 } : r.counts;
       for (const [kind, n] of Object.entries(leftOutQuota)) report.leftOut.quota[kind] = (report.leftOut.quota[kind] || 0) + n;
       let capped = r.capped;
       if (quotaOut) capped = { ...(capped || {}), bytes: { limit: QUOTA_BYTES, droppedProducts: (capped?.bytes?.droppedProducts || 0) + (leftOutQuota.product || 0), droppedSections: (capped?.bytes?.droppedSections || 0) + quotaOut, leftOut: report.leftOut.quota } };
       if (failedUp) capped = { ...(capped || {}), failed: { files: failedUp, leftOut: leftOutFailed } };
       T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, hosts: storeHostsOf(r.base, r.plan?.helpdesks), platform: r.platform, name: r.name || null, files: uploaded,
-        found: r.report.found, written: r.report.written, leftOut: report.leftOut, timeUp: !!r.report.timeUp, ...(kinds ? { kinds } : {}) };
-      saveSpecSoon(T);
+        found: r.report.found, written, leftOut: report.leftOut, timeUp: !!r.report.timeUp, ...(kinds ? { kinds } : {}) };
+      const pj = pjOf();
+      if (pj) Object.assign(pj, { state: 'done', finishedAt: now(), uploaded, done: written, activeMs: jobActiveMs(T, job) });
+      await flushSpec(T);
       const all = await filesOf(T);
       job.state = 'done'; job.finishedAt = now(); T.storeBusy = false;
-      send('done', { files: doneFiles(), fileCount: rows.length, usage: usageOf(T, all), platform: r.platform, name: r.name, base: r.base, counts: r.counts, plan: r.plan?.counts || null,
-        capped, report, spec: publicSpec(T) });
+      send('done', { files: doneFiles(), fileCount: rows.length, usage: usageOf(T, all), platform: r.platform, name: r.name, base: r.base, counts, plan: r.plan?.counts || null,
+        capped, report, spec: publicSpec(T), ...(job.resumed ? { resumed: true, elapsedMs: pj?.activeMs ?? null } : {}) });
     } catch (e) {
+      // the server is shutting down (a restart): nothing is recorded, the job stays "running" in the doc and resumes
+      if (job.shutdown) { job.state = 'interrupted'; job.finishedAt = now(); T.storeBusy = false; return; }
       const code = e?.code && STORE_ERROR_COPY[e.code] ? e.code : e instanceof StudioError ? e.code : 'upstream';
       const message = e?.code && STORE_ERROR_COPY[e.code] ? (e.message && e.message !== 'aborted' ? e.message : STORE_ERROR_COPY[e.code]) : e instanceof StudioError ? e.message : STORE_ERROR_COPY.upstream;
       if (!(e instanceof StudioError) && !e?.code) log(`[studio] store import failed: ${e?.message}`);
       if (!foundAny && wellFormed) refundStoreSlot(T);
-      if (rows.length) { kickPoller(T); T.flags.storeLast = { at: new Date(now()).toISOString(), url, hosts: job.hosts, files: uploaded, cancelled: code === 'aborted', error: code }; saveSpecSoon(T); }
+      if (rows.length) { kickPoller(T); T.flags.storeLast = { at: new Date(now()).toISOString(), url, hosts: job.hosts, files: uploaded, cancelled: code === 'aborted', error: code }; }
+      const pj = pjOf();
+      if (pj) Object.assign(pj, { state: code === 'aborted' ? 'cancelled' : 'error', ...(code === 'aborted' ? {} : { error: code }), finishedAt: pj.finishedAt || now(), uploaded, activeMs: jobActiveMs(T, job) });
+      if (rows.length || pj) await flushSpec(T);
       job.state = code === 'aborted' ? 'cancelled' : 'error'; job.finishedAt = now(); T.storeBusy = false;
       send('error', { code, message });
       let usage = null;
@@ -4283,6 +4313,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 
     if (!sub) {
       if (m === 'GET') {
+        await resumeStoreJob(T); // an import a restart interrupted goes on as soon as its bot is opened
         const files = await filesOf(T, { maxAgeMs: 0 });
         return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
           convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email,
@@ -4403,7 +4434,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     }
 
     if (sub === 'store') { allow('POST', 'GET', 'DELETE'); return storeImport(req, res, T, url); }
-    if (sub === 'events') { allow('GET'); return openEvents(req, res, T, url); }
+    if (sub === 'events') { allow('GET'); await resumeStoreJob(T); return openEvents(req, res, T, url); }
     if (sub === 'channels' && fid && sub2 === 'test') {
       allow('POST');
       limitTrialAndIp(T, req, 'chtest', 20, 60, 'test webhooks');
@@ -4532,12 +4563,23 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   function close() {
     closed = true;
     clearInterval(sweepTimer); clearTimeout(firstSweep); clearInterval(winSweep);
-    for (const T of trials.values()) { clearTimeout(T.poller); T.poller = null; if (T.specDirty) clearTimeout(T.specTimer); if (T.storeJob?.state === 'running') T.storeJob.ac.abort(); }
+    // a running website import is interrupted, not cancelled: its doc still says running, so the next server resumes it
+    for (const T of trials.values()) { clearTimeout(T.poller); T.poller = null; if (T.specDirty) clearTimeout(T.specTimer); clearTimeout(T.jobSaveTimer); if (T.storeJob?.state === 'running') { T.storeJob.shutdown = true; T.storeJob.ac.abort(); } }
+    clearTimeout(resumeTimer);
     for (const c of allClients) { try { c.drop?.(); c.res.end(); } catch {} }
     allClients.clear();
   }
 
-  return { handle, close, sweep, trials, signToken, verifyToken, signRestore, flush: async () => { for (const T of trials.values()) if (T.specDirty) await flushSpec(T); }, get enabled() { return enabled; }, store };
+  // start-up: website imports a restart interrupted resume on their own (and when their bot is next touched)
+  const resumeTimer = enabled && o.resumeStoreJobs !== false ? setTimeout(() => {
+    resumingAll = resumeAllStoreJobs().finally(() => { resumingAll = null; });
+  }, Number(o.resumeDelayMs ?? 1000)) : null;
+  resumeTimer?.unref?.();
+
+  return { handle, close, sweep, trials, signToken, verifyToken, signRestore, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
+    /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
+    busy: () => ({ storeJobs: storeJobsRunning() }),
+    resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };
 }
 
 const round4 = (x) => Math.round(Number(x) * 10000) / 10000;

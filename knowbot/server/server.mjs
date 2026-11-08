@@ -6,12 +6,22 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promises as fsp, createReadStream, existsSync, mkdirSync, appendFile, readFileSync, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual, createHmac } from 'node:crypto';
 import { createRetriever, DEFAULT_STORE, DEFAULT_PREFIX } from './retrievers.mjs';
 import { InstanceRegistry, InstanceError, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, ProviderError } from './providers.mjs';
 import { createStudio } from './trials.mjs';
 import { createDevApi, isDevApiPath, EXPOSE_HEADERS as DEV_EXPOSE_HEADERS } from './devapi.mjs';
+import { phoneSessions } from './channels/voice-live.mjs';
+import { activeWebVoiceSessions } from './channels/webvoice.mjs';
+
+/**
+ * The header the Cloudflare Worker sends on internal calls to this server (GET /api/internal/busy): an HMAC of a fixed
+ * label under KNOWBOT_ADMIN_TOKEN, a secret both already hold, so the admin token itself never travels. cloudflare/
+ * worker.js computes the same value (internalSecret). The Worker refuses /api/internal/* from the internet (404).
+ */
+export const INTERNAL_HEADER = 'x-knowbot-internal';
+export const internalSecret = (adminToken) => createHmac('sha256', String(adminToken)).update('knowbot-internal-v1').digest('hex');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -487,6 +497,21 @@ export function createKnowBotServer(opts = {}) {
 
     if (p === '/healthz' && m === 'GET') {
       return send(res, 200, { ok: true, retrieval: mode, files: local.fileCount, chunks: local.chunkCount, llm: await llmReachable(), llmBase, sseClients: clients.size });
+    }
+
+    // Restart safety: the Worker asks before it restarts the container for a new deploy (cloudflare/worker.js). Busy
+    // while a website import runs (or is about to resume) or a phone call / web voice session is open. Only the Worker
+    // may ask: the header secret is derived from KNOWBOT_ADMIN_TOKEN; without one the endpoint does not exist.
+    if (p === '/api/internal/busy') {
+      const want = adminToken ? Buffer.from(internalSecret(adminToken)) : null;
+      const got = Buffer.from(String(req.headers[INTERNAL_HEADER] || ''));
+      if (!want || got.length !== want.length || !timingSafeEqual(got, want)) throw new HttpError(404, `no such endpoint ${p}`);
+      if (m !== 'GET') throw new HttpError(405, `method ${m} not allowed on ${p}`);
+      const storeJobs = studio.busy?.().storeJobs || 0;
+      const phone = phoneSessions().total || 0;
+      const webVoice = activeWebVoiceSessions() || 0;
+      res.setHeader('cache-control', 'no-store');
+      return send(res, 200, { busy: storeJobs + phone + webVoice > 0, storeJobs, phone, webVoice });
     }
 
     if (isDevApiPath(p)) return devapi.handle(req, res, url, p, m); // /v1/*, /p/:id, bot keys + insights, trial devkey (server/devapi.mjs)
