@@ -499,7 +499,7 @@ export class InstanceRegistry {
     if (!this.retrievers.has(key)) {
       this.retrievers.set(key, new KnowDriveRetriever({
         baseUrl: this.kd.baseUrl, apiKey: this.kd.apiKey, store: this.kd.store, tag: b.tag, prefix: b.root, dirFilter: false, prefixFilter: false,
-        local: null, minSimilarity, exclude: ['kind:config'], cards: false, logger: this.log,
+        local: null, minSimilarity, exclude: ['kind:config', 'questions'], cards: false, logger: this.log,
       }));
     }
     return this.retrievers.get(key).withMask(mask || {});

@@ -1,8 +1,8 @@
 // An OpenAI-compatible model stand-in (POST /v1/chat/completions, JSON and SSE; GET /v1/models) for Studio tests and
 // the local dev server (spec 7.2). Deterministic; never talks to the network.
 //
-//   select prompts  (system contains "You select lines")  -> the 1-2 line numbers sharing the most terms with the
-//                    QUESTION, or NONE when the best overlap is under 2
+//   select prompts  (system contains "You select lines")  -> the 1-2 line numbers sharing the most concepts with the
+//                    QUESTION (a second only when nearly as dense), or NONE when the overlap is under min(2, question terms)
 //   summary prompts (system contains "summarize")          -> {"oneLine","topics"} from the first lines of the file
 //   question prompts (system contains "write test questions") -> a JSON list of heading questions
 //   setup prompts   (system contains "KnowBot Builder")    -> {"reply","patch","actions","chips"} built from the
@@ -20,22 +20,47 @@ function selectReply(messages) {
   const qb = bag(q);
   // A question line ("Can I take a test ride?") is never an answer; among equal overlaps the shorter, denser line wins.
   const lines = [...u.matchAll(/^L(\d+)\s+(.*)$/gm)].filter((m) => !/\?\s*$/.test(m[2])).map((m) => ({ n: Number(m[1]), len: m[2].length, b: bag(m[2]) }));
-  const scored = lines.map((l) => ({ n: l.n, len: l.len, hit: [...l.b.keys()].filter((w) => qb.has(w)).length })).filter((x) => x.hit >= 2)
-    .sort((a, b) => b.hit - a.hit || a.len - b.len || a.n - b.n);
+  // A one-concept question ("When are you open?") needs one shared concept; longer ones need two. Like a real
+  // selector, a second line is only added when it is nearly as much about the question as the first (term density),
+  // so a spare-battery row never rides along on "How much is the E-City?".
+  // Like a real reader, a line that only shares terms found on most lines (the brand "Lumen", "costs" in a price list)
+  // is not about the question: "How much is the Lumen Care Plan?" against a price list without the plan is NONE.
+  const df = new Map();
+  for (const l of lines) for (const w of l.b.keys()) df.set(w, (df.get(w) || 0) + 1);
+  const common = (w) => lines.length >= 3 && (df.get(w) || 0) >= 0.6 * lines.length;
+  const distinctive = [...qb.keys()].some((w) => df.has(w) && !common(w));
+  // A named thing the question asks about ("Care Plan": capitalised, not the first word) that no candidate line
+  // mentions, e.g. with the plans file switched off: a reader answers NONE rather than quoting a neighbouring price.
+  const named = q.trim().split(/\s+/).slice(1).filter((w) => /^[A-Z][A-Za-z0-9-]*[a-z0-9]/.test(w)).flatMap((w) => [...bag(w).keys()]);
+  if (named.some((w) => !df.has(w))) return 'NONE';
+  const need = Math.max(1, Math.min(2, qb.size));
+  const scored = lines.map((l) => { const shared = [...l.b.keys()].filter((w) => qb.has(w)); const hit = (distinctive && !shared.some((w) => !common(w))) ? 0 : shared.length; return { n: l.n, len: l.len, hit, dens: hit / Math.sqrt(Math.max(1, l.b.size)) }; })
+    .filter((x) => x.hit >= need).sort((a, b) => b.hit - a.hit || b.dens - a.dens || a.len - b.len || a.n - b.n);
   if (!scored.length) return 'NONE';
-  const best = scored[0].hit;
-  return scored.filter((x) => x.hit >= Math.max(2, best - 1)).slice(0, 2).map((x) => `L${x.n}`).join(', ');
+  const [top] = scored;
+  const second = scored.slice(1).find((x) => x.hit >= Math.max(need, top.hit - 1) && x.dens >= 0.6 * top.dens);
+  return [top, ...(second ? [second] : [])].map((x) => `L${x.n}`).join(', ');
 }
 
 function summaryReply(messages) {
   const u = textOf(lastUser(messages));
   const body = u.replace(/^[\s\S]*?FILE[^\n]*\n/, '');
   const heads = [...body.matchAll(/^#{1,3}\s+(.+)$/gm)].map((m) => m[1].trim());
-  const lines = body.split('\n').map((l) => l.trim()).filter((l) => l && !/^[#|]/.test(l));
-  const first = (lines[0] || 'A short document.').replace(/\s+/g, ' ');
-  const oneLine = first.length > 110 ? `${first.slice(0, 107).replace(/\s+\S*$/, '')}…` : first;
-  const topics = (heads.length ? heads : [...bag(body).entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)).slice(0, 3).map((t) => t.toLowerCase());
-  return JSON.stringify({ oneLine, topics });
+  const sentences = body.split('\n').filter((l) => l.trim() && !/^[#|]/.test(l.trim()) && !/\?\s*$/.test(l))
+    .flatMap((l) => l.split(/(?<=[.!?])\s+/)).map((x) => x.replace(/\s+/g, ' ').trim()).filter((x) => x.split(' ').length >= 8);
+  const first = sentences[0] || heads[0] || 'A short document.';
+  const oneLine = first.length > 120 ? `${first.slice(0, 117).replace(/\s+\S*$/, '')}…` : first;
+  const short = (t) => t.split(/\s+/).length <= 4;
+  const uniq = [...new Set(heads)];
+  let topics = (uniq.length > 1 ? uniq.slice(1) : uniq).filter(short).map((t) => t.toLowerCase()); // the first heading is the title
+  if (topics.length < 3) {
+    // Q&A files: the questions name the topics ("Can I take a test ride?" -> "take a test ride")
+    const qs = body.split('\n').map((l) => l.trim()).filter((l) => /\?$/.test(l))
+      .map((l) => l.replace(/\?$/, '').replace(/^(?:what|how|when|where|who|why|can|does|do|is|are)\s+(?:(?:are|is|does|do|can|i|you|we)\b\s*)?(?:(?:your|our|you|we|i)\b\s*)?/i, '').trim().toLowerCase());
+    for (const q of qs) if (topics.length < 3 && q && short(q) && !topics.includes(q)) topics.push(q);
+  }
+  if (topics.length < 3) topics = [...topics, ...[...bag(body).entries()].sort((a, b) => b[1] - a[1]).map(([w]) => w)].slice(0, 3);
+  return JSON.stringify({ oneLine, topics: topics.slice(0, 3) });
 }
 
 function questionsReply(messages) {

@@ -10,6 +10,8 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createRetriever, DEFAULT_STORE, DEFAULT_PREFIX } from './retrievers.mjs';
 import { InstanceRegistry, InstanceError, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, ProviderError } from './providers.mjs';
+import { createStudio } from './trials.mjs';
+import { createDevApi, isDevApiPath } from './devapi.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,7 +74,8 @@ export function createKnowBotServer(opts = {}) {
   const quiet = opts.quiet ?? false;
   const log = (...a) => { if (!quiet) console.log(...a); };
 
-  const { mode, retriever, local } = createRetriever({ corpusDir, env, logger: log, watch: opts.watch ?? true });
+  // Stored questions (SPEC 11.1) are never searchable, so never citable.
+  const { mode, retriever, local } = createRetriever({ corpusDir, env: { ...env, KNOWDRIVE_EXCLUDE_TAGS: [env.KNOWDRIVE_EXCLUDE_TAGS, 'questions'].filter(Boolean).join(',') }, logger: log, watch: opts.watch ?? true });
   const store = mode === 'knowdrive' ? (env.KNOWDRIVE_STORE || DEFAULT_STORE) : 'local:corpus';
 
   // ------------------------------------------------------------ chat instances (one knowDrive folder each)
@@ -91,6 +94,15 @@ export function createKnowBotServer(opts = {}) {
     secret: env.KNOWBOT_SECRET_KEY || adminToken || 'knowbot-local-dev',
     builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', tag: env.KNOWDRIVE_TAG || 'knowbot:ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
   });
+
+  // ------------------------------------------------------------ KnowBot Studio (/api/studio/*, server/trials.mjs)
+  const kdConfig = kd; // { baseUrl, apiKey, store }: the same knowDrive config as the registry (null in local mode)
+  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith,
+    rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, ...(opts.studio || {}) });
+
+  // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
+  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, readRaw, readJson, clientIp, requireAdmin,
+    logger: log, dataDir, llmModel, canonical: CANONICAL, ...(opts.devapi || {}) });
 
   // ------------------------------------------------------------ events / SSE
   mkdirSync(dataDir, { recursive: true });
@@ -474,6 +486,8 @@ export function createKnowBotServer(opts = {}) {
       return send(res, 200, { ok: true, retrieval: mode, files: local.fileCount, chunks: local.chunkCount, llm: await llmReachable(), llmBase, sseClients: clients.size });
     }
 
+    if (isDevApiPath(p)) return devapi.handle(req, res, url, p, m); // /v1/*, /p/:id, bot keys + insights, trial devkey (server/devapi.mjs)
+    if (p.startsWith('/api/studio/')) return studio.handle(req, res, url, p, m);
     if (/^\/api\/(?:instances|buckets|graph|providers|flows)(?:\/|$)/.test(p)) return instanceRoutes(req, res, url, p, m);
 
     if (p.startsWith('/api/')) {
@@ -502,7 +516,8 @@ export function createKnowBotServer(opts = {}) {
 
         case 'POST /api/chat': {
           if (rateLimited(clientIp(req))) throw new HttpError(429, 'rate limit exceeded (30/min)');
-          const body = chatBody(await readJson(req));
+          const rawBody = await readJson(req);
+          const body = chatBody(rawBody);
           const ac = new AbortController();
           res.on('close', () => { if (!res.writableFinished) ac.abort(); });
           let up;
@@ -522,6 +537,9 @@ export function createKnowBotServer(opts = {}) {
           if (!up.body) return res.end();
           const node = Readable.fromWeb(up.body);
           node.on('error', () => { try { res.end(); } catch {} });
+          let tap = ''; // the questions loop reads the reply once it has been relayed
+          node.on('data', (c) => { if (tap.length < 262144) tap += c; });
+          node.on('end', () => devapi.logChat({ body: rawBody, reply: tap, stream: body.stream, callerKey: clientIp(req) }));
           node.pipe(res);
           return;
         }
@@ -533,6 +551,7 @@ export function createKnowBotServer(opts = {}) {
           if (!question) throw new HttpError(400, 'question is required');
           if (question.length > 4000) throw new HttpError(400, 'question too long');
           const answer = await canonical({ question, sessionId: body.sessionId, turnId: body.turnId, history: body.history, instance: body.instance });
+          devapi.logLive({ instance: body.instance, question, outcome: answer.refused ? 'refused' : 'answered', citations: answer.citations, channel: 'web', callerKey: body.sessionId || clientIp(req) });
           return send(res, 200, answer);
         }
 
@@ -597,7 +616,7 @@ export function createKnowBotServer(opts = {}) {
     res.setHeader('access-control-allow-methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     res.setHeader('access-control-allow-headers', req.headers['access-control-request-headers'] || 'content-type, authorization');
     res.setHeader('access-control-expose-headers', 'content-type');
-    const isStream = req.url.startsWith('/api/stream');
+    const isStream = req.url.startsWith('/api/stream') || /^\/api\/studio\/trials\/[^/]+\/(?:events|setup|ask)/.test(req.url);
     const logUrl = req.url.replace(/([?&]token=)[^&]*/g, '$1***').slice(0, 200); // never log the operator token
     if (isStream) log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${logUrl} SSE open`);
     res.on('finish', () => {
@@ -614,19 +633,20 @@ export function createKnowBotServer(opts = {}) {
   });
 
   server.on('close', () => {
-    clearInterval(pingTimer); clearInterval(rlSweep); local.close();
+    clearInterval(pingTimer); clearInterval(rlSweep); local.close(); studio.close(); devapi.close();
     for (const c of clients) { try { c.end(); } catch {} }
   });
 
   const origClose = server.close.bind(server);
   server.close = (cb) => {
+    studio.close();
     for (const c of clients) { try { c.end(); } catch {} }
     clients.clear();
     server.closeAllConnections?.();
     return origClose(cb);
   };
 
-  return { server, retriever, registry, local, mode, ready: local.ready, flush: () => writeQueue, config: { root, corpusDir, dataDir, libPath, llmBase, llmModel } };
+  return { server, retriever, registry, studio, local, mode, ready: local.ready, flush: () => writeQueue, config: { root, corpusDir, dataDir, libPath, llmBase, llmModel } };
 }
 
 // ------------------------------------------------------------ main

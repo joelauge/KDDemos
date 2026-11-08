@@ -175,7 +175,7 @@ export async function createTrial() {
   const s = getState();
   setState({
     trial: { ...s.trial, id: r.trialId, token: r.token, expiresAt: r.expiresAt || null, status: 'ready',
-             quota: r.quota || s.trial.quota, converted: false, email: null },
+             quota: r.quota || s.trial.quota, converted: false, email: null, restoreKey: r.restoreKey || null },
     usage: r.usage || s.usage,
     spec: r.spec ? { ...s.spec, ...r.spec } : s.spec,
   }, 'trial:created');
@@ -186,7 +186,16 @@ export async function createTrial() {
 export async function getTrial() {
   const r = await request('GET', trialPath(), { root: true });
   const t = T();
+  if (r.restoreKey && r.restoreKey !== t.restoreKey) setState({ trial: { ...T(), restoreKey: r.restoreKey } }, 'trial:restoreKey');
   return { ...r, trial: { ...t, id: r.trialId || t.id, expiresAt: r.expiresAt || t.expiresAt, converted: !!r.converted, email: r.email ?? t.email } };
+}
+
+/** POST /api/studio/trials/:id/restore {k} -> exchanges a share-link restore key for this trial's bearer token. */
+export async function restoreTrial(id, k) {
+  const r = await request('POST', `/api/studio/trials/${encodeURIComponent(id)}/restore`, { trial: false, body: { k } });
+  const s = getState();
+  setState({ trial: { ...s.trial, id: r.trialId || id, token: r.token, expiresAt: r.expiresAt || null, status: 'idle', restoreKey: r.restoreKey || k } }, 'trial:restored-link');
+  return r;
 }
 
 /** PATCH /api/studio/trials/:id -> {spec}. */
@@ -270,10 +279,11 @@ export async function sendEmail(email) { return request('POST', trialPath('/emai
 /** POST /checkout -> {url}. */
 export async function checkout({ email } = {}) { return request('POST', trialPath('/checkout'), { body: email ? { email } : {} }); }
 
-/** `${origin}${pathname}?t=<id>` (never contains the token). */
+/** `${origin}${pathname}?t=<id>&k=<restore key>` (never contains the bearer token; the restore key only works on POST /restore). */
 export function shareLink() {
   const id = T().id || '';
-  return `${location.origin}${location.pathname}?t=${encodeURIComponent(id)}`;
+  const k = T().restoreKey;
+  return `${location.origin}${location.pathname}?t=${encodeURIComponent(id)}${k ? `&k=${encodeURIComponent(k)}` : ''}`;
 }
 
 /** POST /setup (SSE). onEvent(type, data, id) for typing|delta|patch|action|card|chips|done. Resolves with 'done' data. */

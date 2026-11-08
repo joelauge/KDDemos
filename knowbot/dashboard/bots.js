@@ -1045,10 +1045,73 @@ export function mountBots(ctx) {
         h('a', { class: 'btn btn-sm btn-primary', href: chatUrl(b.id), target: '_blank', rel: 'noopener', 'data-fk': 'chat', 'aria-label': `Open chat with ${b.name} in a new tab` }, 'Open chat ↗'), copyBtn),
       h('details', { class: 'inst-embed' }, h('summary', null, 'Embed code'), h('code', { class: 'mono' }, embedCode(b.id))),
       h('section', { id: 'flow-links', class: 'flow-sec' }),
+      questionsSection(b),
       h('details', { class: 'flow-settings', open: true }, h('summary', null, 'Settings'), botForm(b)),
       !b.builtin && editable() ? h('div', { class: 'flow-danger' }, h('button', { type: 'button', class: 'btn btn-sm btn-danger', onclick: () => deleteBot(b) }, 'Delete bot')) : null);
     queueMicrotask(paintLinks);
     return view;
+  }
+
+  /* ---------------------------------------------------------------- top questions (questions loop, SPEC 11.1) */
+  // What people ask this bot on every surface (web, API, SMS, voice, WhatsApp, e-mail), and what it could not answer.
+  // Read with a plain fetch so a missing token shows a hint here instead of flipping the whole panel's auth state.
+  function questionsSection(b) {
+    const body = h('div', { 'aria-live': 'polite', 'aria-busy': 'true' }, h('p', { class: 'inst-help' }, 'Loading what people ask…'));
+    const again = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-label': `Refresh top questions for ${b.name}` }, 'Refresh');
+    const sec = h('section', { class: 'flow-sec', 'aria-labelledby': 'tq-h' },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+        h('h3', { id: 'tq-h', class: 'inst-sub', style: { marginRight: 'auto' } }, 'Top questions'), again),
+      h('p', { class: 'inst-help' }, 'Every question this bot is asked, on the web, through the API and on every channel, is logged without personal data and is never used as a source. Gaps are questions it could not answer: add a file that covers them.'),
+      body);
+    const bar = (n, max, tone) => h('span', { 'aria-hidden': 'true', style: { display: 'block', height: '3px', borderRadius: '2px', marginTop: '4px', background: 'var(--line-2)', overflow: 'hidden' } },
+      h('span', { style: { display: 'block', height: '100%', width: `${Math.max(6, Math.round((n / Math.max(1, max)) * 100))}%`, background: tone === 'gap' ? 'var(--warn)' : 'var(--accent-2)' } }));
+    const list = (title, rows, tone, empty) => {
+      // Bars only mean something once a question repeats; scale against at least 3 so one repeat is not a full bar.
+      const most = rows.reduce((m, r) => Math.max(m, num(r.count) || 0), 0);
+      const max = Math.max(3, most), showBars = most >= 2;
+      return h('div', { style: { flex: '1 1 260px', minWidth: '0' } },
+        h('p', { class: 'inst-help', style: { margin: '0 0 6px', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: '600' } }, title),
+        rows.length ? h('ol', { style: { listStyle: 'none', margin: '0', padding: '0', display: 'flex', flexDirection: 'column', gap: '6px' } }, rows.map((r) => {
+          const n = num(r.count) || 0;
+          return h('li', { class: 'kp-row', style: { gap: '2px', padding: '8px 10px' } },
+            h('div', { style: { display: 'flex', gap: '8px', alignItems: 'baseline' } },
+              h('span', { style: { flex: '1', minWidth: '0', overflowWrap: 'anywhere', color: 'var(--text)' } }, str(r.q, 300)),
+              h('span', { class: 'mono inst-help', 'aria-label': `asked ${n} time${n === 1 ? '' : 's'}` }, `×${n}`)),
+            showBars ? bar(n, max, tone) : null,
+            h('span', { class: 'inst-help' }, r.lastAt && parseTs(r.lastAt) ? `last asked ${ago(parseTs(r.lastAt))}` : '', tone !== 'gap' && r.outcome === 'refused' ? ' · not in its files' : ''));
+        })) : h('p', { class: 'inst-help' }, empty));
+    };
+    const paint = (j) => {
+      body.setAttribute('aria-busy', 'false');
+      const total = num(j.total) || 0;
+      if (!total) return rc(body, h('p', { class: 'inst-help' }, 'No questions yet. Ask this bot something and it shows up here within a few seconds.'));
+      const top = Array.isArray(j.top) ? j.top : [], gaps = Array.isArray(j.gaps) ? j.gaps : [];
+      rc(body,
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+          h('span', { class: 'badge' }, plural(total, 'question')),
+          h('span', { class: 'badge badge-good' }, `${num(j.answered) || 0} answered`),
+          h('span', { class: `badge ${num(j.refused) ? 'badge-warn' : ''}` }, `${num(j.refused) || 0} not in its files`),
+          num(j.testTraffic) ? h('span', { class: 'badge', title: 'Studio setup, Proof Run and off-topic probe questions are counted but left out of the lists below.' }, `${num(j.testTraffic)} test ${num(j.testTraffic) === 1 ? 'ask' : 'asks'} hidden`) : null),
+        h('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '8px' } },
+          list('Most asked', top, 'top', 'Nothing yet.'),
+          list('Gaps: could not answer', gaps, 'gap', 'No gaps: every question so far was answered from its files.')));
+    };
+    const load = async () => {
+      again.disabled = true; body.setAttribute('aria-busy', 'true');
+      try {
+        const r = await fetch(`${S.apiBase}/api/instances/${encodeURIComponent(b.id)}/insights?limit=8`, { headers: I.token ? { authorization: `Bearer ${I.token}` } : {} });
+        let j = null; try { j = await r.json(); } catch { /* not JSON */ }
+        if (!r.ok) {
+          body.setAttribute('aria-busy', 'false');
+          return rc(body, h('p', { class: 'inst-help' }, r.status === 401 || r.status === 403 ? 'Add the admin token above to see what people ask this bot.' : `Couldn't load question insights: ${errMsg(j, r.status)}`));
+        }
+        paint(j || {});
+      } catch { body.setAttribute('aria-busy', 'false'); rc(body, h('p', { class: 'inst-help' }, `KnowBot server unreachable at ${S.apiBase}`)); }
+      finally { again.disabled = false; }
+    };
+    again.addEventListener('click', load);
+    queueMicrotask(load);
+    return sec;
   }
 
   /* ---------------------------------------------------------------- deletes */

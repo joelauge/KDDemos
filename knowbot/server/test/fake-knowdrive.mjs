@@ -19,6 +19,7 @@
 // Search deliberately IGNORES `filter` and always adds one production hit tagged knowbot:ugm, so the caller's own
 // tag enforcement is what keeps results in scope.
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 
 const STOP = new Set(`a about above after again all am an and any are as at be because been before being below between both but by can
 could did do does doing down during each few for from further had has have having he her here hers him his how i if in into is it its
@@ -34,15 +35,52 @@ export function stemWord(w) {
   if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') && !w.endsWith('us')) return w.slice(0, -1);
   return w;
 }
+// A tiny concept layer so plain paraphrases land near the facts they ask about, the way a real embedding does
+// ("annual" ~ "per year", "how much" ~ "costs", "fix" ~ "repair"). Applied after stemming, to queries and atoms alike.
+const CONCEPTS = Object.freeze({
+  annual: 'year', annually: 'year', yearly: 'year', yr: 'year',
+  much: 'cost', price: 'cost', pric: 'cost', priced: 'cost', pricing: 'cost', charge: 'cost', pay: 'cost', expensive: 'cost', cheap: 'cost',
+  fix: 'repair', mend: 'repair', servic: 'service', servicing: 'service', maintenance: 'service', maintain: 'service', tuneup: 'tune-up',
+  guarantee: 'warranty', guaranteed: 'warranty', cover: 'warranty', coverage: 'warranty',
+  hour: 'open', opening: 'open', close: 'open', closing: 'open',
+  refund: 'return', exchange: 'return', send: 'ship', deliver: 'delivery', shipping: 'ship', shipp: 'ship',
+  rental: 'rent', rented: 'rent', hire: 'rent', bicycle: 'bike', ebike: 'e-bike', membership: 'plan', subscription: 'plan', last: 'long', duration: 'long',
+  location: 'address', located: 'address',
+});
 export function bag(text) {
   const m = new Map();
-  for (const raw of String(text || '').toLowerCase().replace(/[’']/g, "'").match(/[a-z0-9][a-z0-9']*/g) || []) {
-    const w0 = raw.replace(/'s$/, '').replace(/'/g, '');
-    if (!w0 || STOP.has(raw) || STOP.has(w0)) continue;
-    const w = stemWord(w0);
-    m.set(w, (m.get(w) || 0) + 1);
+  for (const raw0 of String(text || '').toLowerCase().replace(/[’']/g, "'").match(/[a-z0-9][a-z0-9'-]*/g) || []) {
+    const raw = raw0.replace(/-+$/, '').replace(/'s$/, '');
+    for (const part of raw.includes('-') && !/^(?:e-bike|tune-up|e-city)s?$/.test(raw) ? raw.split('-') : [raw]) {
+      const w0 = part.replace(/'s$/, '').replace(/'/g, '');
+      if (!w0 || STOP.has(part) || STOP.has(w0)) continue;
+      const st = stemWord(w0);
+      const w = CONCEPTS[w0] || CONCEPTS[st] || st;
+      m.set(w, (m.get(w) || 0) + 1);
+    }
   }
   return m;
+}
+/**
+ * Fake embedding similarity in [0.55, 0.95]: a blend of bag-of-words cosine and idf-weighted query coverage (how much of
+ * what the question asks about the atom covers). Words the corpus never uses carry the highest idf, so off-topic
+ * questions stay near the 0.55 base while short paraphrases of a covered fact clear a 0.70 floor.
+ * @param {Map} q query bag  @param {Map} a atom bag  @param {(t:string)=>number} [idf]
+ */
+export function similarity(q, a, idf = () => 1) {
+  const cos = cosine(q, a);
+  let num = 0, den = 0;
+  for (const t of q.keys()) { const w = idf(t); den += w; if (a.has(t)) num += w; }
+  const cov = den ? num / den : 0;
+  const blend = Math.max(cos, 0.45 * cos + 0.55 * cov * cov);
+  return { cos, cov, sim: 0.55 + 0.4 * blend };
+}
+/** idf over a list of bags (unknown words get the highest weight). */
+export function idfOf(bags) {
+  const df = new Map();
+  for (const b of bags) for (const t of b.keys()) df.set(t, (df.get(t) || 0) + 1);
+  const n = bags.length;
+  return (t) => Math.log((n + 1) / ((df.get(t) || 0) + 1)) + 1;
 }
 export function cosine(a, b) {
   let dot = 0, na = 0, nb = 0;
@@ -54,7 +92,7 @@ export function cosine(a, b) {
 
 // ------------------------------------------------------------------ extraction + atomization
 function stripHtml(html) {
-  let s = String(html).replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ');
+  let s = String(html).replace(/<head[\s\S]*?<\/head>/i, ' ').replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ');
   // tables become Markdown pipe tables (the way knowDrive keeps table structure in extracted text)
   s = s.replace(/<table[\s\S]*?<\/table>/gi, (t) => {
     const rows = [...t.matchAll(/<tr[\s\S]*?<\/tr>/gi)].map((r) => [...r[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((c) => c[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()));
@@ -112,7 +150,7 @@ const FIXTURE_UGM = Object.freeze({
  * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number }} [o]
  * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, settle: () => Promise<void> }>}
  */
-export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1' } = {}) {
+export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false } = {}) {
   speed = Math.max(0.01, Number(speed) || 1);
   const files = new Map();
   const calls = [];
@@ -121,7 +159,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   let seq = 0;
   const later = (ms, fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, Math.max(0, ms / speed)); timers.add(t); };
 
-  function add({ store = 'vs_fake', path, text, tags = [], bytes, mime = 'text/plain', pipeline = true }) {
+  function add({ store = 'vs_fake', path, text, tags = [], bytes, mime = 'text/plain', pipeline = false }) {
     // same path in the same store replaces the file (how the registry and spec docs are rewritten)
     for (const f of files.values()) if (f.store === store && f.filename === path) { for (const t of f.timers || []) clearTimeout(t); files.delete(f.id); }
     const id = `file_${(++seq).toString(36).padStart(4, '0')}${Math.random().toString(36).slice(2, 8)}`;
@@ -136,7 +174,11 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
       return f;
     }
     const failNoText = f.text.includes('FAIL_NO_TEXT') || (!atoms.length && !/json/.test(mime));
-    later(600, () => {
+    // knowDrive works through a queue: a file that arrives while others are extracting starts a little later
+    const queued = [...files.values()].filter((x) => x !== f && x.store === store && x.phase === 'pending' && x.status === 'in_progress').length;
+    // queueStaggerMs (dev server only): extra real-time spacing per queued file, not divided by speed, so files that
+    // arrive together still finish one poll apart and the partial-readiness state is visible at FAKE_SPEED=4.
+    later(600 + Math.min(queued, 6) * 700 + Math.min(queued, 6) * Math.max(0, Number(queueStaggerMs) || 0) * speed, () => {
       if (!files.has(id)) return;
       if (failNoText) { Object.assign(f, { status: 'error', phase: 'error', last_error: 'no text layer found' }); touch(); return; }
       f.phase = 'text_extracted'; touch();
@@ -166,20 +208,46 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     atom_count: f.atom_count, atoms_vectorized: f.atoms_vectorized, chunk_count: f.chunk_count, tags: [...f.tags], created_at: f.created_at, updated_at: f.updated_at,
     ...(f.last_error ? { last_error: f.last_error } : {}) });
 
-  function hitsFor(query, store, mode, k) {
+  function hitsFor(query, store, mode, k, filter) {
     const q = bag(query);
     const scored = [];
+    // Filters are otherwise ignored on purpose (client-side tag enforcement is under test), but a trial: tag in
+    // all_of scopes the ranking like real knowDrive does, so many trials on one dev server don't crowd each other
+    // out of the top-k (identical sample atoms in other trials would otherwise fill it).
+    const trialTag = (Array.isArray(filter?.all_of) ? filter.all_of : []).find((t) => typeof t === 'string' && t.startsWith('trial:'));
+    // honorScope (dev server only): none_of tfile:<k> is applied like real knowDrive, so a switched-off file leaves room
+    // for the other files' candidates. Tests keep it off so the server's own client-side scope check is exercised.
+    const scopeOff = honorScope ? new Set((Array.isArray(filter?.none_of) ? filter.none_of : []).filter((t) => typeof t === 'string' && t.startsWith('tfile:'))) : null;
+    const pool = [];
     for (const f of files.values()) {
       if (f.store !== store) continue;
+      if (trialTag && !f.tags.includes(trialTag)) continue;
+      if (scopeOff?.size && f.tags.some((t) => scopeOff.has(t))) continue;
       const live = f.phase === 'completed' ? f.atoms.length : Math.min(f.atoms_vectorized, f.atoms.length);
       for (const a of f.atoms.slice(0, live)) {
-        const cos = cosine(q, bag(`${a.breadcrumb.split(" > ").pop()} ${a.text}`)); // the nearest heading travels with its atom
-        scored.push({ f, a, sim: 0.55 + 0.4 * cos, cos });
+        a.bag ||= bag(`${a.breadcrumb.split(' > ').pop()} ${a.text}`); // the nearest heading travels with its atom
+        pool.push({ f, a });
       }
+    }
+    const idf = idfOf(pool.map((x) => x.a.bag));
+    for (const { f, a } of pool) {
+      const { sim, cos } = similarity(q, a.bag, idf);
+      // unrelated text still sits a little above the base, like a real embedding (deterministic, < 0.03)
+      const jitter = (parseInt(createHash('sha1').update(`${query}|${f.id}|${a.seq}`).digest('hex').slice(0, 6), 16) / 0xffffff) * 0.03;
+      scored.push({ f, a, sim: Math.min(0.95, sim + (cos > 0 ? 0 : jitter)), cos });
     }
     scored.sort((x, y) => y.sim - x.sim || x.f.id.localeCompare(y.f.id) || x.a.seq - y.a.seq);
     let list = scored;
     if (mode === 'fts') list = scored.filter((x) => x.cos > 0);
+    // none_of tags other than tfile: (questions, kind:config, kind:trial-spec …) are applied like real knowDrive, so
+    // logged questions — which repeat the question verbatim — never crowd real atoms out of the top-k. The single best
+    // excluded hit still leaks through (like the production fixture), so client-side tag enforcement stays under test.
+    const noneOf = (Array.isArray(filter?.none_of) ? filter.none_of : []).filter((t) => typeof t === 'string' && !t.startsWith('tfile:'));
+    if (noneOf.length) {
+      const out = (x) => x.f.tags.some((t) => noneOf.includes(t));
+      const leak = list.find(out);
+      list = [...(leak ? [leak] : []), ...list.filter((x) => !out(x))];
+    }
     const fixture = { f: { id: FIXTURE_UGM.file_id, filename: FIXTURE_UGM.filename, tags: FIXTURE_UGM.tags }, a: { seq: 3, text: FIXTURE_UGM.text, offset: 120, len: FIXTURE_UGM.text.length, kind: 'paragraph', breadcrumb: 'Shipping' }, sim: 0.93 };
     list = [fixture, ...list].slice(0, k);
     return list.map((x, i) => {
@@ -232,7 +300,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
           const b = JSON.parse(body.toString('utf8') || '{}');
           call.body = b;
           const mode = b.mode || 'hybrid';
-          const data = hitsFor(String(b.query || ''), decodeURIComponent(m[1]), mode, Math.max(1, Math.min(50, Number(b.max_num_results) || 10)));
+          const data = hitsFor(String(b.query || ''), decodeURIComponent(m[1]), mode, Math.max(1, Math.min(50, Number(b.max_num_results) || 10)), b.filter);
           return json(200, { object: 'vector_store.search_results.page', search_query: b.query, total_count: data.length, has_more: false,
             score_kind: mode === 'vector' ? 'distance' : mode === 'fts' ? 'fts' : 'rrf', data });
         }

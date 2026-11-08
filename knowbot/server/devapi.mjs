@@ -1,0 +1,859 @@
+// KnowBot developer platform (SPEC 11.2 + 11.3): the /v1 API, per-bot API keys, channel webhooks and proof links.
+//
+//   POST /v1/bots/:botId/chat          {question | messages, stream?, channel?}  → JSON answer, or SSE retrieval/delta/final/done
+//   POST /v1/chat/completions          OpenAI-compatible (model = bot id); chat.completion / chat.completion.chunk objects,
+//                                      citations as numbered footnotes in `content` AND a structured `knowbot` field
+//   GET  /v1/models                    the bot this key can use, OpenAI list shape
+//   POST /v1/bots/:botId/voice         audio in (or {text}) → transcript → answer → audio out (Google STT/TTS)
+//   GET  /v1, /v1/openapi.json         API index and an OpenAPI 3.1 description
+//   *    /v1/channels/:botId/<sms|voice|whatsapp|email>   provider webhooks (server/channels/*)
+//   GET  /v1/channels/:botId           which channels this server can run, with the webhook URLs
+//   GET  /p/:id (and /v1/p/:id)        public proof page of one answer: the question, the answer, every quoted line
+//
+//   admin (KNOWBOT_ADMIN_TOKEN):
+//   GET|POST /api/instances/:id/keys, DELETE /api/instances/:id/keys/:keyId   live keys (kb_live_…), shown once
+//   GET  /api/instances/:id/insights                                           top questions and gaps (questions.mjs)
+//   trial (Studio bearer token):
+//   GET  /api/studio/trials/:id/devkey                                         the trial's kb_trial_ key
+//
+// Keys: kb_live_<32 random bytes, base64url>. Only a SHA-256 of each key is kept, in a registry document that is itself
+// AES-256-GCM sealed (the same sealing as provider keys) and stored in knowDrive at knowbot/_config/devkeys.json
+// (kind:config, so never searchable) or, without knowDrive, in <dataDir>/devkeys.json. Trial keys are stateless:
+// kb_trial_<payload>.<hmac>, scoped to one trial and expiring with it.
+//
+// Every answer goes through the same pipeline as the widget (guard → retrieval that excludes `questions` and
+// `kind:config` → lib answerFromSources → requireCitations) and is logged to the questions loop with its channel.
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import path from 'node:path';
+import { promises as fsp } from 'node:fs';
+import { sealKey, openKey } from './providers.mjs';
+import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
+import { ChannelError, channelStatus, publicBase, answerLines, NOT_IN_DATA, formatSpoken } from './channels/util.mjs';
+import { handleSms } from './channels/sms.mjs';
+import { handleVoice } from './channels/voice.mjs';
+import { handleWhatsApp } from './channels/whatsapp.mjs';
+import { handleEmail } from './channels/email.mjs';
+import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
+
+export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
+export const KEY_RE = /^kb_(live|trial)_[A-Za-z0-9_.-]{20,600}$/;
+const TRIAL_ID_RE = /^tr_[a-z2-7]{16}$/;
+const BOT_ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+const PROOF_ID_RE = /^[A-Za-z0-9_-]{10,24}$/;
+const CHAT_ROLES = new Set(['system', 'user', 'assistant', 'developer']);
+const MAX_Q = 1000;
+
+/** True for the paths createDevApi().handle serves (the one dispatch test server.mjs uses). */
+// Every /v1 route is also served under /api/v1 (and /p under /api/p): the production Worker forwards only /api/*.
+export const isDevApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p === '/api/v1' || p.startsWith('/api/v1/') || /^\/(?:api\/)?p\/[A-Za-z0-9_-]+$/.test(p)
+  || /^\/api\/instances\/[^/]+\/(?:keys|insights)(?:\/[^/]*)?$/.test(p) || /^\/api\/studio\/trials\/[^/]+\/devkey$/.test(p);
+
+export class ApiError extends Error {
+  constructor(status, code, message, extra = {}, headers = {}) { super(message); this.status = status; this.code = code; this.extra = extra; this.headers = headers; }
+}
+const TYPES = { 400: 'invalid_request_error', 401: 'authentication_error', 403: 'permission_error', 404: 'not_found_error', 405: 'invalid_request_error',
+  409: 'conflict_error', 413: 'invalid_request_error', 415: 'invalid_request_error', 429: 'rate_limit_error', 503: 'service_unavailable' };
+
+const b64u = (b) => Buffer.from(b).toString('base64url');
+const sha256 = (s) => createHash('sha256').update(String(s)).digest('hex');
+const round4 = (x) => (x == null || !Number.isFinite(Number(x)) ? null : Math.round(Number(x) * 10000) / 10000);
+const yyyymmdd = (t) => new Date(t).toISOString().slice(0, 10).replace(/-/g, '');
+const rid = (n = 12) => randomBytes(n).toString('base64url').replace(/[-_]/g, '').slice(0, n) || randomBytes(n).toString('hex').slice(0, n);
+const eq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y); };
+const stripMarks = (s) => String(s || '').replace(/\s*\[\d{1,3}\]/g, '').replace(/\s+([.,;:!?])/g, '$1').trim();
+/**
+ * One answer line ("- Returns are accepted within 30 days. [1]") → one prose sentence with its citation marks inline
+ * before the final stop ("Returns are accepted within 30 days [1]."), the way the Studio's SampleBot shows it.
+ */
+export function proseSentence(line) {
+  const body = String(line || '').replace(/^\s*[-*•]\s+/, '').trim();
+  const marks = [...new Set([...body.matchAll(/\[(\d{1,3})\]/g)].map((m) => m[1]))];
+  let s = stripMarks(body).replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  let stop = '.';
+  const m = /([.!?…]+|[:;,])$/.exec(s);
+  if (m) { if (/[.!?…]/.test(m[1])) stop = m[1]; s = s.slice(0, -m[1].length).trimEnd(); }
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  return `${s}${marks.length ? ` ${marks.map((n) => `[${n}]`).join('')}` : ''}${stop}`;
+}
+/** A bulleted answer → the same answer as one paragraph of sentences (refusals and single plain lines pass through). */
+export function proseAnswer(answer) {
+  return String(answer || '').split('\n').map((l) => l.trim()).filter(Boolean).map(proseSentence).filter(Boolean).join(' ');
+}
+const textOfContent = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (typeof p === 'string' ? p : p && (p.type === 'text' || p.type === 'input_text') ? p.text || '' : '')).join('') : '');
+const approxTokens = (s) => Math.max(1, Math.ceil(String(s || '').length / 4));
+
+/**
+ * @param {{ env: object, registry: object, studio?: object, kd?: object|null, loadLib: Function, llmComplete: Function,
+ *           completeWith: Function, readRaw: Function, readJson: Function, clientIp: Function, requireAdmin: Function,
+ *           logger?: Function, dataDir: string, llmModel?: string, canonical?: object, secret?: string, now?: Function }} o
+ */
+export function createDevApi(o = {}) {
+  const env = o.env || {};
+  const log = o.logger || (() => {});
+  const registry = o.registry;
+  const studio = o.studio || null;
+  const kd = o.kd || null;
+  const now = typeof o.now === 'function' ? o.now : () => Date.now();
+  const llmModel = o.llmModel || env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
+  const CANON = o.canonical || { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
+  const sealSecret = String(o.secret || registry?.secret || env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || 'knowbot-local-dev');
+  const trialSecret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || randomBytes(32).toString('hex');
+  const limits = {
+    live: Number(env.KNOWBOT_API_RATE_LIMIT || 60),        // requests per minute per live key
+    trial: Number(env.KNOWBOT_API_TRIAL_RATE_LIMIT || 20), // per trial key
+    channel: Number(env.KNOWBOT_CHANNEL_RATE_LIMIT || 12), // per caller per bot per channel
+    ...(o.limits || {}),
+  };
+  const background = new Set();
+  const track = (p) => { const q = Promise.resolve(p).catch(() => {}).finally(() => background.delete(q)); background.add(q); return q; };
+
+  // ---------------------------------------------------------------- rate limits (sliding minute)
+  const windows = new Map();
+  function limit(key, n) {
+    if (!n) return { limited: false, remaining: Infinity, reset: 0 };
+    const t = now();
+    const arr = (windows.get(key) || []).filter((x) => t - x < 60000);
+    const reset = Math.ceil(((arr[0] ?? t) + 60000 - t) / 1000);
+    if (arr.length >= n) { windows.set(key, arr); return { limited: true, remaining: 0, reset, retryAfter: Math.max(1, reset) }; }
+    arr.push(t); windows.set(key, arr);
+    return { limited: false, remaining: n - arr.length, reset };
+  }
+  const sweep = setInterval(() => { const t = now(); for (const [k, a] of windows) if (!a.some((x) => t - x < 60000)) windows.delete(k); }, 60000);
+  sweep.unref?.();
+
+  // ---------------------------------------------------------------- live keys (hashed, sealed)
+  const K = { list: [], byHash: new Map(), loaded: null, chain: Promise.resolve() };
+  const kdKey = () => (typeof kd?.apiKey === 'function' ? kd.apiKey() : kd?.apiKey);
+  const kdFetch = (p, init = {}) => fetch(`${kd.baseUrl}${p}`, { ...init, headers: { authorization: `Bearer ${kdKey()}`, ...(init.headers || {}) }, signal: AbortSignal.timeout(init.timeout || 20000) });
+  function indexKeys() { K.byHash = new Map(K.list.filter((k) => !k.revokedAt).map((k) => [k.hash, k])); }
+  function loadKeys() {
+    if (!K.loaded) {
+      K.loaded = (async () => {
+        let raw = null;
+        if (kd) {
+          const res = await kdFetch(`/api/v1/vector_stores/${encodeURIComponent(kd.store)}/path/content/${DEVKEYS_PATH.split('/').map(encodeURIComponent).join('/')}`);
+          if (res.ok) raw = await res.text(); else if (res.status !== 404) throw new Error(`knowDrive HTTP ${res.status} reading API keys`);
+        } else {
+          try { raw = await fsp.readFile(path.join(o.dataDir, 'devkeys.json'), 'utf8'); } catch { /* none yet */ }
+        }
+        if (raw) {
+          const doc = JSON.parse(raw);
+          const inner = JSON.parse(openKey(doc.sealed, sealSecret));
+          K.list = Array.isArray(inner.keys) ? inner.keys.filter((k) => k && typeof k.hash === 'string' && BOT_ID_RE.test(String(k.bot))) : [];
+        }
+        indexKeys();
+      })().catch((e) => { K.loaded = null; throw new ApiError(503, 'keys_unavailable', `API keys could not be loaded: ${e.message}`); });
+    }
+    return K.loaded;
+  }
+  function saveKeys() {
+    const doc = JSON.stringify({ v: 1, kind: 'knowbot-devkeys', sealed: sealKey(JSON.stringify({ keys: K.list }), sealSecret) });
+    K.chain = K.chain.catch(() => {}).then(async () => {
+      if (!kd) {
+        await fsp.mkdir(o.dataDir, { recursive: true });
+        await fsp.writeFile(path.join(o.dataDir, 'devkeys.json'), doc, { mode: 0o600 });
+        return;
+      }
+      const fd = new FormData();
+      fd.append('tags', 'knowbot,kind:config');
+      fd.append('mime_type', 'application/json');
+      fd.append('file', new Blob([doc], { type: 'application/json' }), DEVKEYS_PATH);
+      const res = await kdFetch('/api/v1/ingest', { method: 'POST', headers: { 'x-vector-store-id': kd.store }, body: fd, timeout: 30000 });
+      if (!res.ok) throw new ApiError(502, 'upstream', `saving API keys failed: knowDrive HTTP ${res.status}`);
+    });
+    return K.chain;
+  }
+  const keyView = (k) => ({ id: k.id, bot: k.bot, name: k.name || null, prefix: 'kb_live_', last4: k.last4, createdAt: k.createdAt, lastUsedAt: k.lastUsedAt || null, revokedAt: k.revokedAt || null });
+  async function createKey(botId, name) {
+    await loadKeys();
+    const key = `kb_live_${b64u(randomBytes(32))}`;
+    const rec = { id: `key_${rid(14)}`, bot: botId, name: String(name || '').trim().slice(0, 60) || null, hash: sha256(key), last4: key.slice(-4), createdAt: new Date(now()).toISOString() };
+    const before = K.list;
+    K.list = [...K.list, rec]; indexKeys();
+    try { await saveKeys(); } catch (e) { K.list = before; indexKeys(); throw e; }
+    return { ...keyView(rec), key };
+  }
+  async function revokeKey(botId, keyId) {
+    await loadKeys();
+    const rec = K.list.find((k) => k.id === keyId && k.bot === botId);
+    if (!rec) throw new ApiError(404, 'not_found', 'No such key for this bot.');
+    if (rec.revokedAt) return keyView(rec);
+    const before = K.list;
+    K.list = K.list.map((k) => (k === rec ? { ...k, revokedAt: new Date(now()).toISOString() } : k)); indexKeys();
+    try { await saveKeys(); } catch (e) { K.list = before; indexKeys(); throw e; }
+    return keyView(K.list.find((k) => k.id === keyId));
+  }
+
+  // ---------------------------------------------------------------- trial keys (stateless)
+  const trialSig = (payload) => createHmac('sha256', `knowbot-devkey\n${trialSecret}`).update(payload).digest().subarray(0, 18).toString('base64url');
+  function trialKey(trialId, expiresAt) {
+    const payload = b64u(JSON.stringify({ t: trialId, e: Number(expiresAt) }));
+    return `kb_trial_${payload}.${trialSig(payload)}`;
+  }
+  function openTrialKey(key) {
+    const body = key.slice('kb_trial_'.length);
+    const dot = body.lastIndexOf('.');
+    if (dot < 1) return null;
+    const payload = body.slice(0, dot), sig = body.slice(dot + 1);
+    if (!eq(sig, trialSig(payload))) return null;
+    try { const d = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return TRIAL_ID_RE.test(d.t) && Number(d.e) > 0 ? d : null; } catch { return null; }
+  }
+
+  // ---------------------------------------------------------------- auth
+  const bearerOf = (req) => { const a = String(req.headers.authorization || ''); return /^Bearer\s+/i.test(a) ? a.replace(/^Bearer\s+/i, '').trim() : ''; };
+  /** → {kind, bot, keyId, expiresAt?}. Throws 401/403. */
+  async function authKey(req, botId = null) {
+    const token = bearerOf(req);
+    if (!token) throw new ApiError(401, 'missing_api_key', 'Send your KnowBot API key as "Authorization: Bearer kb_…".');
+    if (!KEY_RE.test(token)) throw new ApiError(401, 'invalid_api_key', 'That is not a KnowBot API key (they start with kb_live_ or kb_trial_).');
+    let who;
+    if (token.startsWith('kb_trial_')) {
+      const d = openTrialKey(token);
+      if (!d) throw new ApiError(401, 'invalid_api_key', 'This API key is not valid.');
+      if (!(d.e > now())) throw new ApiError(401, 'expired_api_key', 'This trial key expired with its trial.');
+      who = { kind: 'trial', bot: d.t, keyId: `trial:${d.t}`, expiresAt: d.e };
+    } else {
+      await loadKeys();
+      const rec = K.byHash.get(sha256(token));
+      if (!rec) throw new ApiError(401, 'invalid_api_key', 'This API key is not valid, or it was revoked.');
+      rec.lastUsedAt = new Date(now()).toISOString();
+      who = { kind: 'live', bot: rec.bot, keyId: rec.id };
+    }
+    if (botId && String(botId).toLowerCase() !== who.bot) throw new ApiError(403, 'wrong_bot', 'This key is not valid for this bot.'); // never echo the key's own bot id
+    return who;
+  }
+  function rateLimit(res, who) {
+    const n = who.kind === 'trial' ? limits.trial : limits.live;
+    const r = limit(`key:${who.keyId}`, n);
+    if (Number.isFinite(n) && n > 0) {
+      res.setHeader('x-ratelimit-limit', String(n));
+      res.setHeader('x-ratelimit-remaining', String(Math.max(0, r.remaining)));
+      res.setHeader('x-ratelimit-reset', String(r.reset));
+    }
+    if (r.limited) throw new ApiError(429, 'rate_limit_exceeded', `Rate limit reached (${n} requests per minute for this key). Retry in ${r.retryAfter}s.`, {}, { 'retry-after': String(r.retryAfter) });
+  }
+
+  // ---------------------------------------------------------------- targets (live bot or Studio trial)
+  async function loadTrialDoc(id) {
+    if (!kd || !studio?.store) return null;
+    try {
+      const res = await kdFetch(`/api/v1/vector_stores/${encodeURIComponent(studio.store)}/path/content/${`knowbot/trials/${id}/_spec.json`.split('/').map(encodeURIComponent).join('/')}`, { timeout: 10000 });
+      if (!res.ok) return null;
+      return JSON.parse(await res.text());
+    } catch { return null; }
+  }
+  async function resolveTarget(botId, who = null) {
+    const id = String(botId || '').toLowerCase();
+    if (TRIAL_ID_RE.test(id)) {
+      if (!studio?.enabled) throw new ApiError(503, 'no_store', 'Trial bots need the Studio (a knowDrive store) on this server.');
+      const T = studio.trials?.get?.(id) || null;
+      let spec = T?.specLoaded ? T.spec : null;
+      let expiresAt = who?.expiresAt || T?.expiresAt || null;
+      if (!spec) {
+        const doc = await loadTrialDoc(id);
+        if (doc?.spec) { spec = doc.spec; expiresAt = expiresAt || Date.parse(doc.expiresAt) || null; }
+      }
+      if (!spec && T?.spec) spec = T.spec;
+      if (!spec) throw new ApiError(404, 'bot_not_found', `No bot "${id}".`);
+      if (expiresAt && expiresAt <= now()) throw new ApiError(404, 'bot_not_found', 'This trial expired and its files were deleted.');
+      return { kind: 'trial', id, T, spec, expiresAt: expiresAt || now() + 86400000, name: spec.name || 'Your bot' };
+    }
+    if (!BOT_ID_RE.test(id)) throw new ApiError(404, 'bot_not_found', `No bot "${botId}".`);
+    await registry.ready;
+    let inst;
+    try { inst = registry.get(id); } catch { throw new ApiError(404, 'bot_not_found', `No bot "${id}".`); }
+    if (inst.id !== id) throw new ApiError(404, 'bot_not_found', `No bot "${id}".`);
+    return { kind: 'live', id, inst, name: inst.botName || inst.name || inst.org || id };
+  }
+
+  // ---------------------------------------------------------------- retrieval
+  const isQuestionFile = (name) => !!parseQuestionPath(name) || /(^|\/)_config\//.test(String(name || ''));
+  const contentText = (d) => (Array.isArray(d.content) ? d.content.filter((c) => c && typeof c.text === 'string').map((c) => c.text).join('\n') : typeof d.content === 'string' ? d.content : String(d.text || ''));
+  const simOf = (d) => (d.distance != null && Number.isFinite(Number(d.distance)) ? 1 - Number(d.distance) / 2 : Number(d.score));
+
+  const chunkKey = (file, text) => `${file}\u0000${String(text || '').replace(/\s+/g, ' ').trim().slice(0, 160)}`;
+  /** Vector similarities (never RRF) for a live bot's hits, by file and by chunk; absent where the retriever has none. */
+  async function liveSimilarities(retriever, question) {
+    const sims = new Map();
+    const parts = Array.isArray(retriever?.parts) ? retriever.parts.map((p) => p.retriever) : [retriever];
+    await Promise.all(parts.filter((r) => r && typeof r.query === 'function' && typeof r.mapResult === 'function').map(async (r) => {
+      try {
+        for (const d of await r.query(question, 8, 'vector')) {
+          const m = r.mapResult(d);
+          if (!m || !m.text) continue;
+          const s = simOf(d);
+          if (!Number.isFinite(s)) continue;
+          sims.set(m.filename, Math.max(sims.get(m.filename) ?? 0, s));
+          sims.set(chunkKey(m.filename, m.text), Math.max(sims.get(chunkKey(m.filename, m.text)) ?? 0, s));
+        }
+      } catch { /* similarity stays unknown */ }
+    }));
+    return sims;
+  }
+
+  async function trialSearch(t, question) {
+    const store = studio.store;
+    const none = [...NEVER_CITE_TAGS, 'kind:trial-spec'];
+    const disabled = new Set(Object.entries(t.spec.sources || {}).filter(([, v]) => v === false).map(([k]) => k));
+    const shared = t.T?.flags?.sharedSet && t.T?.flags?.sharedAt ? t.T.flags.sharedSet : null;
+    const filters = [{ all_of: [`trial:${t.id}`], none_of: none }, ...(shared ? [{ all_of: [`sample-set:${shared}`, 'kind:trial-sample'], none_of: none }] : [])];
+    const pages = await Promise.all(filters.map(async (filter) => {
+      const res = await kdFetch(`/api/v1/vector_stores/${encodeURIComponent(store)}/search`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 10000,
+        body: JSON.stringify({ query: question, max_num_results: 12, mode: 'vector', text: 'raw', filter, fields: 'tags,uri,score,text,file_id,metadata' }),
+      });
+      if (!res.ok) throw new ApiError(502, 'upstream', `knowDrive search failed (HTTP ${res.status})`);
+      const j = await res.json();
+      return Array.isArray(j.data) ? j.data : [];
+    }));
+    const seen = new Set();
+    const hits = [];
+    for (const d of pages.flat()) {
+      const tags = Array.isArray(d.tags) ? d.tags.map(String) : null;
+      if (!tags) continue; // fail closed: an untagged hit cannot be proven in scope
+      const inScope = tags.includes(`trial:${t.id}`) || (shared && tags.includes(`sample-set:${shared}`) && tags.includes('kind:trial-sample'));
+      if (!inScope || none.some((x) => tags.includes(x)) || disabled.has(d.file_id) || isQuestionFile(d.filename)) continue;
+      const text = contentText(d);
+      if (!text) continue;
+      const k = `${d.file_id}|${sha256(text).slice(0, 16)}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const filename = String(d.filename || '').split('/').pop();
+      hits.push({ file_id: d.file_id, filename, title: d.attributes?.breadcrumb ? String(d.attributes.breadcrumb).split(' > ')[0] : filename.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[-_]+/g, ' '), url: null, score: round4(simOf(d)), similarity: round4(simOf(d)), text });
+    }
+    hits.sort((a, b) => b.similarity - a.similarity);
+    return hits;
+  }
+
+  // ---------------------------------------------------------------- the answer pipeline
+  /**
+   * @returns {Promise<{ id, bot, botName, question, answer, refused, grounded, citations, proof, latencyMs, guard? }>}
+   */
+  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval } = {}) {
+    const t0 = performance.now();
+    const lib = await o.loadLib();
+    const q = String(question || '').replace(/\s+/g, ' ').trim().slice(0, MAX_Q);
+    let persona, profile, results = [], sims = new Map(), floor = null, retriever = null, mode = 'select', complete, settings = { ...CANON, ...(lib.CANONICAL || {}) };
+    if (target.kind === 'trial') {
+      const s = target.spec;
+      persona = { name: s.name || 'KnowBot', org: s.org || s.name || 'this company', ...(s.instructions ? { instructions: s.instructions } : {}) };
+      profile = 'general';
+      floor = Number(s.floor) || 0.7;
+      complete = (m, c) => o.llmComplete(m, c?.settings || settings);
+    } else {
+      const inst = target.inst;
+      persona = { name: 'KnowBot', org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}), ...(inst.instructions ? { instructions: inst.instructions } : {}) };
+      profile = inst.guards || 'general';
+      mode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
+      const provider = inst.provider || 'local';
+      complete = provider === 'local'
+        ? (m, c) => o.llmComplete(m, c?.settings || settings, inst.model || llmModel)
+        : (m, c) => o.completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
+      retriever = registry.retriever(inst.id);
+    }
+    // In select mode an unreachable model falls back to the keyword selector rather than failing the answer.
+    const safeComplete = mode === 'select' ? async (m, c) => { try { return await complete(m, c); } catch (e) { log(`[devapi] model failed (${e.message}); keyword fallback`); return ''; } } : complete;
+
+    // A hit's similarity is its own chunk's vector similarity; a hit only the keyword side found is labelled, not scored.
+    const hitView = (r) => {
+      const sim = sims.get(chunkKey(r.filename, r.text));
+      return { file: r.filename, similarity: round4(sim ?? null), ...(sim == null ? { label: 'keyword match' } : {}), excerpt: String(r.text || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+    };
+    const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(q, persona, { profile }) : null;
+    let fin = guard, tRet = performance.now(), top = null, candidates = [];
+    if (!guard) {
+      if (target.kind === 'trial') {
+        const hits = await trialSearch(target, q);
+        top = hits.length ? hits[0].similarity : 0;
+        candidates = hits.slice(0, 5);
+        results = hits.filter((h) => h.similarity >= floor).slice(0, 6);
+        for (const h of hits) { sims.set(h.filename, Math.max(sims.get(h.filename) ?? 0, h.similarity)); sims.set(chunkKey(h.filename, h.text), h.similarity); }
+      } else {
+        const [ret, s] = await Promise.all([retriever.search(q, 6), liveSimilarities(retriever, q)]);
+        sims = s;
+        // never cite a stored question or a config file, whatever the retriever returned
+        results = (ret.results || []).filter((r) => r && r.text && !isQuestionFile(r.filename));
+        top = ret.floor?.top ?? (sims.size ? Math.max(...sims.values()) : null);
+        floor = ret.floor?.min ?? null;
+        candidates = results.slice(0, 5);
+      }
+      tRet = performance.now();
+      onRetrieval?.({ hits: (results.length ? results : candidates).slice(0, 6).map((r) => ({ ...hitView(r), title: r.title || null, kept: results.includes(r) })),
+        floor: { min: floor, top: round4(top) }, ms: Math.round(tRet - t0) });
+      const r = await lib.answerFromSources({ question: q, results, complete: safeComplete, search: retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
+        history: Array.isArray(history) ? history : [], mode, settings });
+      fin = r.fin;
+    } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
+
+    const refused = !!fin.refused;
+    const text = refused && !guard ? NOT_IN_DATA : String(fin.text || '');
+    const lines = refused ? [] : answerLines(text);
+    const quoted = lines.map((l) => ({ n: Number(/\[(\d{1,3})\]/.exec(l)?.[1]) || null, text: stripMarks(l).replace(/^\s*[-*•]\s+/, '') })).filter((x) => x.n && x.text)
+      .map((x) => ({ ...x, file: (fin.citations || []).find((c) => c.n === x.n)?.filename || null }));
+    const citations = refused ? [] : (fin.citations || []).map((c) => {
+      const qs = quoted.filter((x) => x.n === c.n).map((x) => x.text);
+      return { n: c.n, file: c.filename, title: c.title || c.filename, excerpt: (qs.join(' … ') || String(c.snippet || '')).slice(0, 400), ...(c.url ? { url: c.url } : {}),
+        similarity: round4(sims.get(c.filename) ?? null) };
+    });
+    const hits = (refused ? candidates : results).slice(0, 6).map(hitView);
+    const latencyMs = Math.round(performance.now() - t0);
+    const out = {
+      id: `ans_${rid(16)}`, bot: target.id, botName: target.name, question: q, answer: text, refused, grounded: !refused && citations.length > 0, citations,
+      proof: { hits, quoted, floor: { min: floor, top: round4(top) } }, latencyMs, retrievalMs: Math.round(tRet - t0), ...(guard ? { guard: guard.guard || 'guard' } : {}),
+    };
+    logAnswer(target, out, channel, callerKey);
+    return out;
+  }
+
+  /** Fire-and-forget: the questions loop (never delays or fails an answer). */
+  function logAnswer(target, a, channel, callerKey) {
+    try {
+      const ch = CHANNELS.includes(channel) ? channel : 'api';
+      const base = { question: a.question, outcome: a.refused ? 'refused' : 'answered', citations: a.citations.map((c) => ({ file: c.file })),
+        topScore: a.proof.floor.top ?? a.citations[0]?.similarity ?? null, channel: ch, callerKey };
+      const p = target.kind === 'trial'
+        ? logQuestion({ ...base, kd: kd ? { ...kd, store: studio.store } : null, store: studio?.store, scopeTags: [`trial:${target.id}`, 'kind:trial', `expires:${yyyymmdd(target.expiresAt)}`], root: `knowbot/trials/${target.id}/` })
+        : logQuestion({ ...base, kd, store: kd?.store, scopeTags: [`bot:${target.id}`], root: `knowbot/_bots/${target.id}/` });
+      track(p);
+    } catch (e) { log(`[devapi] question log failed: ${e.message}`); }
+  }
+
+  /**
+   * For server.mjs's own answer paths (/api/canonical, /api/chat): log a live-bot question. Never throws.
+   * @param {{ instance?: string, question: string, outcome: string, citations?: object[], topScore?: number|null, channel?: string, callerKey?: string }} a
+   */
+  function logLive(a) {
+    try {
+      Promise.resolve(registry.ready).then(() => {
+        let id;
+        try { id = registry.get(a.instance).id; } catch { return; }
+        const citations = (a.citations || []).map((c) => ({ file: c.filename || c.file || c.title }));
+        track(logQuestion({ kd, store: kd?.store, scopeTags: [`bot:${id}`], root: `knowbot/_bots/${id}/`, question: a.question, outcome: a.outcome,
+          citations, topScore: a.topScore ?? null, channel: CHANNELS.includes(a.channel) ? a.channel : 'web', callerKey: a.callerKey }));
+      }).catch(() => {});
+    } catch { /* never affects the answer */ }
+  }
+  /** /api/chat relay: the question from the prompt, the outcome from the model's reply text (JSON or SSE). */
+  function logChat({ body, reply = '', stream = false, callerKey }) {
+    try {
+      const question = questionFromChat(body?.messages);
+      if (!question) return;
+      let text = '';
+      if (stream) {
+        for (const line of String(reply).split('\n')) {
+          const m = /^data:\s*(\{.*\})\s*$/.exec(line);
+          if (!m) continue;
+          try { const j = JSON.parse(m[1]); text += j?.choices?.[0]?.delta?.content || ''; } catch { /* partial */ }
+        }
+      } else { try { text = JSON.parse(reply)?.choices?.[0]?.message?.content || ''; } catch { text = ''; } }
+      if (!String(text).trim()) return;
+      const refused = /^\s*none\b/i.test(text) || text.includes(NOT_IN_DATA);
+      logLive({ instance: body?.instance, question, outcome: refused ? 'refused' : 'answered', channel: 'web', callerKey });
+    } catch { /* never affects the relay */ }
+  }
+
+  // ---------------------------------------------------------------- proofs (/p/:id)
+  const proofs = new Map();
+  const proofDir = path.join(o.dataDir || '.', 'proofs');
+  function saveProof(a, channel) {
+    const id = rid(12);
+    const rec = { id, bot: a.bot, botName: a.botName, question: scrubQuestion(a.question), answer: a.answer, refused: a.refused, citations: a.citations, quoted: a.proof.quoted,
+      hits: a.proof.hits, channel, at: new Date(now()).toISOString() };
+    proofs.set(id, rec);
+    if (proofs.size > 2000) proofs.delete(proofs.keys().next().value);
+    track(fsp.mkdir(proofDir, { recursive: true }).then(() => fsp.writeFile(path.join(proofDir, `${id}.json`), JSON.stringify(rec))).catch(() => {}));
+    return id;
+  }
+  async function getProof(id) {
+    if (proofs.has(id)) return proofs.get(id);
+    try { const rec = JSON.parse(await fsp.readFile(path.join(proofDir, `${id}.json`), 'utf8')); proofs.set(id, rec); return rec; } catch { return null; }
+  }
+  function proofHtml(p) {
+    const e = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const lines = answerLines(p.answer);
+    const sup = (s) => e(s).replace(/\[(\d{1,3})\]/g, '<a class="n" href="#s$1" aria-label="source $1">$1</a>');
+    const when = new Date(p.at);
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Answer proof · ${e(p.botName)}</title><meta name="robots" content="noindex">
+<style>
+:root{--bg:#f7f7f5;--card:#fff;--ink:#16161a;--mute:#5d5d66;--line:#e6e4df;--acc:#4f46e5;--accbg:#eef0ff;--mark:#fff3b0;--ok:#0f7a4a}
+@media (prefers-color-scheme:dark){:root{--bg:#0f0f12;--card:#17171c;--ink:#ececf1;--mute:#a1a1ad;--line:#2a2a33;--acc:#a5b4fc;--accbg:#1e1f3a;--mark:rgba(250,204,21,.2);--ok:#4ade80}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:680px;margin:0 auto;padding:32px 16px 64px}
+.k{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:0 0 6px}
+h1{font-size:22px;line-height:1.3;margin:0 0 20px;font-weight:650}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:0 0 16px}
+.pill{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--ok);font-weight:600;margin:0 0 10px}
+.pill.r{color:var(--mute)}ul{margin:0;padding-left:20px}li{margin:0 0 6px}
+a.n{display:inline-block;min-width:20px;padding:0 5px;margin-left:3px;border-radius:6px;background:var(--accbg);color:var(--acc);font-size:12px;font-weight:700;text-align:center;text-decoration:none;vertical-align:1px}
+a.n:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+ol{list-style:none;margin:0;padding:0}ol li{margin:0 0 14px;scroll-margin-top:16px}
+.src{font-weight:600}.file{color:var(--mute);font-size:13px;margin-left:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+blockquote{margin:8px 0 0;padding:8px 12px;border-left:3px solid var(--acc);background:var(--accbg);border-radius:0 8px 8px 0}
+mark{background:var(--mark);color:inherit;padding:0 2px;border-radius:3px}.sim{font-size:12px;color:var(--mute);margin-top:4px}
+footer{color:var(--mute);font-size:13px;margin-top:24px}
+</style></head><body><main>
+<p class="k">${e(p.botName)} · ${e(when.toUTCString().replace(/:\d\d GMT$/, ' UTC'))}</p>
+<h1>${e(p.question)}</h1>
+<section class="card" aria-label="Answer"><p class="pill${p.refused ? ' r' : ''}">${p.refused ? 'Not in its files' : `Grounded · ${p.citations.length} source${p.citations.length === 1 ? '' : 's'}`}</p>
+${p.refused ? `<p>${e(p.answer)}</p>` : lines.length > 1 ? `<ul>${lines.map((l) => `<li>${sup(l)}</li>`).join('')}</ul>` : `<p>${sup(lines[0] || '')}</p>`}</section>
+${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k" id="srch">Every line, quoted from its source</p><ol>${p.citations.map((c) => {
+    const qs = (p.quoted || []).filter((x) => x.n === c.n);
+    return `<li id="s${c.n}"><span class="src">[${c.n}] ${e(c.title || c.file)}</span><span class="file">${e(String(c.file || '').split('/').pop())}</span>${(qs.length ? qs.map((x) => `<blockquote><mark>${e(x.text)}</mark></blockquote>`) : c.excerpt ? [`<blockquote>${e(c.excerpt)}</blockquote>`] : []).join('')}${c.similarity != null ? `<div class="sim">match ${Math.round(c.similarity * 100)}</div>` : ''}</li>`;
+  }).join('')}</ol></section>` : ''}
+<footer>This bot answers only from its own files. Every sentence above is a line from the cited file.</footer>
+</main></body></html>`;
+  }
+
+  // ---------------------------------------------------------------- audio (Twilio <Play>)
+  const audio = new Map();
+  const audioStore = {
+    put(buf, mime) { const id = rid(20); audio.set(id, { audio: buf, mime, at: now() }); for (const [k, v] of audio) if (audio.size > 100 || now() - v.at > 600000) audio.delete(k); else break; return id; },
+    get(id) { const a = audio.get(id); return a && now() - a.at < 600000 ? a : null; },
+  };
+
+  // ---------------------------------------------------------------- http helpers
+  /** The base every URL we hand out is built on: the public origin, plus /api when the caller came in through /api/v1. */
+  const apiBase = (req) => publicBase(req, env) + (req.kbApiPrefix || '');
+  function send(res, status, body, headers = {}) {
+    if (res.headersSent) { try { res.end(); } catch {} return; }
+    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
+    res.end(JSON.stringify(body));
+  }
+  function sendErr(res, e) {
+    const status = Number(e?.status) || 500;
+    const code = e?.code || (status === 404 ? 'not_found' : status >= 500 ? 'internal_error' : 'bad_request');
+    if (status >= 500 && !(e instanceof ApiError) && !(e instanceof ChannelError)) log(`[devapi] ${e?.stack || e}`);
+    send(res, status, { error: { message: e?.message || 'internal error', type: TYPES[status] || (status >= 500 ? 'api_error' : 'invalid_request_error'), code, param: null, status, ...(e?.extra || {}) } }, e?.headers || {});
+  }
+  async function bodyJson(req) {
+    try { return await o.readJson(req); } catch (e) { throw new ApiError(Number(e.status) || 400, Number(e.status) === 413 ? 'body_too_large' : 'invalid_json', e.message || 'invalid JSON body'); }
+  }
+  const sseHead = (res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    res.flushHeaders?.();
+  };
+
+  /** Question + history from a /chat or /completions body. */
+  function readConversation(body) {
+    if (body == null || typeof body !== 'object' || Array.isArray(body)) throw new ApiError(400, 'invalid_request', 'Body must be a JSON object.');
+    if (typeof body.question === 'string' && body.question.trim()) {
+      const q = body.question.trim();
+      if (q.length > MAX_Q) throw new ApiError(400, 'question_too_long', `question must be ${MAX_Q} characters or fewer`);
+      return { question: q, history: [] };
+    }
+    const msgs = body.messages;
+    if (!Array.isArray(msgs) || !msgs.length) throw new ApiError(400, 'invalid_request', 'Send "question" (a string) or "messages" ([{role, content}]).');
+    if (msgs.length > 50) throw new ApiError(400, 'invalid_request', 'Too many messages (max 50).');
+    const clean = msgs.map((m) => {
+      if (!m || !CHAT_ROLES.has(m.role)) throw new ApiError(400, 'invalid_request', 'Each message needs role user|assistant|system and content.');
+      return { role: m.role, content: textOfContent(m.content) };
+    });
+    const lastUser = [...clean].reverse().find((m) => m.role === 'user');
+    if (!lastUser || !lastUser.content.trim()) throw new ApiError(400, 'invalid_request', 'The conversation needs a user message.');
+    const q = lastUser.content.trim();
+    if (q.length > MAX_Q) throw new ApiError(400, 'question_too_long', `The last user message must be ${MAX_Q} characters or fewer.`);
+    const idx = clean.lastIndexOf(lastUser);
+    const history = clean.slice(0, idx).filter((m) => m.role === 'user' || m.role === 'assistant').slice(-8).map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }));
+    return { question: q, history };
+  }
+  /** The answer text as the API returns it: prose with inline [n] (the Studio's form) or, with format:"bullets", one claim per line. */
+  const answerText = (a, format = 'prose') => (a.refused || format === 'bullets' ? a.answer : proseAnswer(a.answer) || a.answer);
+  /** The streamed pieces of answerText: concatenating every piece's `raw` gives exactly answerText. */
+  const answerPieces = (a, format = 'prose') => {
+    if (a.refused) return [{ raw: a.answer, n: [] }];
+    const lines = answerLines(a.answer);
+    const parts = format === 'bullets' ? String(a.answer).split('\n').filter((l) => l.trim()) : lines.map(proseSentence).filter(Boolean);
+    return parts.map((t, i) => ({ raw: `${i ? (format === 'bullets' ? '\n' : ' ') : ''}${t}`, text: stripMarks(t).replace(/^\s*[-*•]\s+/, ''), n: [...t.matchAll(/\[(\d{1,3})\]/g)].map((m) => Number(m[1])) }));
+  };
+  const formatOf = (body) => (String(body?.format || '').toLowerCase() === 'bullets' ? 'bullets' : 'prose');
+  const publicAnswer = (a, base, format = 'prose') => ({
+    id: a.id, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: a.bot, question: a.question, answer: answerText(a, format), format: a.refused ? 'text' : format, citations: a.citations.map(({ similarity, ...c }) => c),
+    refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor }, ...(a.proofId ? { proofUrl: `${base}/p/${a.proofId}` } : {}),
+    ...(a.guard ? { guard: a.guard } : {}), usage: { latencyMs: a.latencyMs },
+  });
+  const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title} — ` : ''}${c.file}`).join('\n')}`.trim());
+
+  // ---------------------------------------------------------------- /v1/bots/:id/chat
+  async function botChat(req, res, botId) {
+    const who = await authKey(req, botId);
+    rateLimit(res, who);
+    const body = await bodyJson(req);
+    const { question, history } = readConversation(body);
+    const target = await resolveTarget(botId, who);
+    const channel = typeof body.channel === 'string' && CHANNELS.includes(body.channel) ? body.channel : 'api';
+    const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
+    const base = apiBase(req);
+    const format = formatOf(body);
+    if (body.stream === true) {
+      sseHead(res);
+      let n = 0;
+      const emit = (event, data) => { try { res.write(`id: ${++n}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {} };
+      try {
+        const a = await answer(target, question, { history, channel, callerKey, onRetrieval: (r) => emit('retrieval', r) });
+        a.proofId = a.refused ? null : saveProof(a, channel);
+        for (const piece of answerPieces(a, format)) emit('delta', { text: piece.text ?? piece.raw, n: piece.n, raw: piece.raw });
+        emit('final', publicAnswer(a, base, format));
+        emit('done', { latencyMs: a.latencyMs });
+      } catch (e) {
+        emit('error', { code: e.code || 'internal_error', message: e instanceof ApiError ? e.message : "Couldn't answer right now." });
+        emit('done', { error: true });
+      }
+      return res.end();
+    }
+    const a = await answer(target, question, { history, channel, callerKey });
+    a.proofId = a.refused ? null : saveProof(a, channel);
+    return send(res, 200, publicAnswer(a, base, format));
+  }
+
+  // ---------------------------------------------------------------- /v1/chat/completions (OpenAI-compatible)
+  async function completions(req, res) {
+    const body = await bodyJson(req);
+    const who = await authKey(req);
+    const model = typeof body.model === 'string' ? body.model.trim().toLowerCase() : '';
+    if (model && model !== who.bot && model !== 'knowbot') throw new ApiError(404, 'model_not_found', `The model "${body.model}" does not exist or this key cannot use it. Use your bot id ("${who.bot}") as the model.`);
+    rateLimit(res, who);
+    const { question, history } = readConversation(body);
+    const target = await resolveTarget(who.bot, who);
+    const id = `chatcmpl-${rid(24)}`, created = Math.floor(now() / 1000), modelName = who.bot;
+    const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
+    const base = apiBase(req);
+    const format = formatOf(body);
+    const ext = (a) => ({ citations: a.citations.map(({ similarity, ...c }) => c), refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor },
+      ...(a.proofId ? { proofUrl: `${base}/p/${a.proofId}` } : {}), latencyMs: a.latencyMs });
+    const usage = (a) => { const p = approxTokens(history.map((m) => m.content).join(' ') + question), c = approxTokens(footnotes(a, format)); return { prompt_tokens: p, completion_tokens: c, total_tokens: p + c }; };
+    if (body.stream === true) {
+      sseHead(res);
+      const chunk = (delta, finish = null, extra = {}) => ({ id, object: 'chat.completion.chunk', created, model: modelName, system_fingerprint: 'knowbot-v1', choices: [{ index: 0, delta, logprobs: null, finish_reason: finish }], ...extra });
+      const write = (o2) => { try { res.write(`data: ${JSON.stringify(o2)}\n\n`); } catch {} };
+      write(chunk({ role: 'assistant', content: '' }));
+      try {
+        const a = await answer(target, question, { history, channel: 'api', callerKey });
+        a.proofId = a.refused ? null : saveProof(a, 'api');
+        const content = footnotes(a, format);
+        const parts = content.split(/(?<=\n)/);
+        for (const p of parts) write(chunk({ content: p }));
+        write(chunk({}, 'stop', { knowbot: ext(a) }));
+        if (body.stream_options?.include_usage) write({ id, object: 'chat.completion.chunk', created, model: modelName, system_fingerprint: 'knowbot-v1', choices: [], usage: usage(a) });
+      } catch (e) {
+        write({ error: { message: e instanceof ApiError ? e.message : "Couldn't answer right now.", type: 'api_error', code: e.code || 'internal_error' } });
+      }
+      try { res.write('data: [DONE]\n\n'); } catch {}
+      return res.end();
+    }
+    const a = await answer(target, question, { history, channel: 'api', callerKey });
+    a.proofId = a.refused ? null : saveProof(a, 'api');
+    return send(res, 200, {
+      id, object: 'chat.completion', created, model: modelName, system_fingerprint: 'knowbot-v1',
+      choices: [{ index: 0, message: { role: 'assistant', content: footnotes(a, format), refusal: null }, logprobs: null, finish_reason: 'stop' }],
+      usage: usage(a), knowbot: ext(a),
+    });
+  }
+
+  // ---------------------------------------------------------------- /v1/bots/:id/voice (browser voice bot)
+  async function botVoice(req, res, botId) {
+    const who = await authKey(req, botId);
+    rateLimit(res, who);
+    const g = googleConfig(env);
+    const ct = String(req.headers['content-type'] || '').toLowerCase();
+    let transcript = '', confidence = null;
+    if (/json/.test(ct)) {
+      const body = await bodyJson(req);
+      if (typeof body.text === 'string' && body.text.trim()) transcript = body.text.trim().slice(0, MAX_Q);
+      else if (typeof body.audio === 'string' && body.audio) {
+        if (!g.stt) throw new ApiError(503, 'voice_not_configured', 'Google speech-to-text is not configured on this server. Recognize speech in the browser and send {"text": …}.', { fallback: 'browser' });
+        const r = await transcribe(Buffer.from(body.audio, 'base64'), { env, mime: body.mime || 'audio/webm' }).catch((e) => { throw new ApiError(e.status || 502, 'speech_failed', e.message); });
+        transcript = r.transcript; confidence = r.confidence;
+      } else throw new ApiError(400, 'invalid_request', 'Send audio (raw body with an audio/* content type, or {"audio": base64, "mime"}) or {"text": …}.');
+    } else {
+      if (!/^audio\/|^application\/octet-stream/.test(ct)) throw new ApiError(415, 'unsupported_media_type', 'Send the clip with an audio/* content type (audio/webm, audio/ogg, audio/wav, audio/mpeg).');
+      if (!g.stt) { req.resume(); throw new ApiError(503, 'voice_not_configured', 'Google speech-to-text is not configured on this server. Recognize speech in the browser and send {"text": …}.', { fallback: 'browser' }); }
+      const buf = await o.readRaw(req, 8 * 1024 * 1024).catch((e) => { throw new ApiError(e.status || 400, 'body_too_large', e.message); });
+      const r = await transcribe(buf, { env, mime: ct }).catch((e) => { throw new ApiError(e.status || 502, 'speech_failed', e.message); });
+      transcript = r.transcript; confidence = r.confidence;
+    }
+    const target = await resolveTarget(botId, who);
+    const base = apiBase(req);
+    if (!transcript) return send(res, 200, { transcript: '', answer: null, text: null, spoken: "Sorry, I didn't catch that.", citations: [], refused: false, grounded: false, audio: null, mime: null, heard: false });
+    const a = await answer(target, transcript, { channel: 'voice', callerKey: who.keyId });
+    a.proofId = a.refused ? null : saveProof(a, 'voice');
+    const spoken = formatSpoken(a);
+    let audioOut = null, mime = null;
+    if (g.tts) {
+      try { const s = await synthesize(spoken, { env }); audioOut = s.audio.toString('base64'); mime = s.mime; } catch (e) { log(`[devapi] TTS failed: ${e.message}`); }
+    }
+    return send(res, 200, { ...publicAnswer(a, base), transcript, confidence, text: answerText(a), spoken, audio: audioOut, mime, heard: true, speech: { recognition: 'google', synthesis: audioOut ? 'google' : 'browser' } });
+  }
+
+  // ---------------------------------------------------------------- channels
+  const CHANNEL_HANDLERS = { sms: handleSms, voice: handleVoice, whatsapp: handleWhatsApp, email: handleEmail };
+  async function channelRoute(req, res, url, botId, name, sub) {
+    const h = CHANNEL_HANDLERS[name];
+    if (!h) throw new ApiError(404, 'not_found', `No channel "${name}". Channels: ${Object.keys(CHANNEL_HANDLERS).join(', ')}.`);
+    const target = await resolveTarget(botId);
+    const raw = req.method === 'POST' ? await o.readRaw(req, name === 'email' ? 25 * 1024 * 1024 : 1024 * 1024) : Buffer.alloc(0);
+    const base = apiBase(req);
+    const cx = {
+      env, req, res, url, raw, sub: sub || '', botId: target.id, botName: target.name, base, log, audio: audioStore,
+      background: (p) => track(p),
+      limited: (k) => limit(`ch:${name}:${target.id}:${hashCaller(k)}`, limits.channel).limited,
+      ask: async (question, { channel, callerKey }) => {
+        const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel, callerKey });
+        a.proofId = a.refused ? null : saveProof(a, channel);
+        a.proofUrl = a.proofId ? `${base}/p/${a.proofId}` : null;
+        return a;
+      },
+    };
+    return h(cx);
+  }
+  function channelsInfo(req, botId) {
+    const base = apiBase(req);
+    const st = channelStatus(env);
+    const url = (n) => `${base}/v1/channels/${encodeURIComponent(botId)}/${n}`;
+    return {
+      bot: botId,
+      channels: {
+        sms: { ...st.sms, webhook: url('sms'), method: 'POST' },
+        voice: { ...st.voice, webhook: url('voice'), method: 'POST' },
+        whatsapp: { ...st.whatsapp, webhook: url('whatsapp'), method: 'POST', verify: 'GET (hub.challenge)' },
+        email: { ...st.email, webhook: url('email'), method: 'POST' },
+        // the widget is a static file at the site root (never under the /api prefix the API may be served from)
+        chat: { configured: true, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/chat`, embed: `${publicBase(req, env)}/lib/embed.js` },
+        voiceBot: { ...st.voiceBot, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/voice` },
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- docs
+  function index(req) {
+    const base = apiBase(req);
+    return {
+      object: 'knowbot.api', version: 'v1', docs: `${base}/v1/openapi.json`,
+      auth: 'Authorization: Bearer kb_live_… (or a Studio trial key, kb_trial_…)',
+      endpoints: [
+        { method: 'POST', path: '/v1/bots/{botId}/chat', about: 'Answer one question with citations. JSON, or SSE with "stream": true (events: retrieval, delta, final, done).' },
+        { method: 'POST', path: '/v1/chat/completions', about: 'OpenAI-compatible. model = your bot id. Citations as footnotes in content plus a "knowbot" field.' },
+        { method: 'GET', path: '/v1/models', about: 'The bot this key can use (OpenAI list shape).' },
+        { method: 'POST', path: '/v1/bots/{botId}/voice', about: 'Audio in → transcript → cited answer → audio out (Google speech when configured).' },
+        { method: 'GET', path: '/v1/channels/{botId}', about: 'Channel status and webhook URLs.' },
+        { method: 'POST', path: '/v1/channels/{botId}/{sms|voice|whatsapp|email}', about: 'Provider webhooks (Twilio, Meta, SendGrid/Postmark/Mailgun).' },
+      ],
+      refusal: NOT_IN_DATA,
+    };
+  }
+  function openapi(req) {
+    const base = apiBase(req);
+    const citation = { type: 'object', properties: { n: { type: 'integer' }, file: { type: 'string' }, title: { type: 'string' }, excerpt: { type: 'string' }, url: { type: 'string' } }, required: ['n', 'file', 'excerpt'] };
+    const proof = { type: 'object', properties: { hits: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, similarity: { type: ['number', 'null'], description: 'Vector similarity 0–1 (never a rank-fusion score); null with label "keyword match" when unknown.' } } } },
+      quoted: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, text: { type: 'string' }, file: { type: 'string' } } } } } };
+    const answerSchema = { type: 'object', properties: { id: { type: 'string' }, answer: { type: 'string' }, citations: { type: 'array', items: citation }, refused: { type: 'boolean' }, grounded: { type: 'boolean' }, proof, proofUrl: { type: 'string' }, usage: { type: 'object', properties: { latencyMs: { type: 'integer' } } } } };
+    const errors = { 401: { description: 'Missing, invalid, revoked or expired key' }, 403: { description: 'This key is not valid for this bot' }, 404: { description: 'No such bot' }, 429: { description: 'Rate limit (see retry-after, x-ratelimit-*)' } };
+    return {
+      openapi: '3.1.0', info: { title: 'KnowBot API', version: '1.0.0', description: `Grounded answers with citations. A question the files do not answer gets exactly: "${NOT_IN_DATA}"` },
+      servers: [{ url: base }], components: { securitySchemes: { bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'kb_live_… | kb_trial_…' } }, schemas: { Answer: answerSchema, Citation: citation } },
+      security: [{ bearer: [] }],
+      paths: {
+        '/v1/bots/{botId}/chat': { post: { summary: 'Ask a bot', parameters: [{ name: 'botId', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { question: { type: 'string', maxLength: MAX_Q }, messages: { type: 'array' }, stream: { type: 'boolean' }, format: { type: 'string', enum: ['prose', 'bullets'], default: 'prose', description: 'prose: sentences with inline [n] (as the Studio shows it); bullets: one cited claim per line' }, user: { type: 'string', description: 'Your end-user id (hashed, for de-duplication only)' } } } } } },
+          responses: { 200: { description: 'Answer (JSON) or text/event-stream', content: { 'application/json': { schema: { $ref: '#/components/schemas/Answer' } } } }, ...errors } } },
+        '/v1/chat/completions': { post: { summary: 'OpenAI-compatible chat completion (model = bot id)', responses: { 200: { description: 'chat.completion with a knowbot extension field, or chat.completion.chunk SSE ending in [DONE]' }, ...errors } } },
+        '/v1/models': { get: { summary: 'The bot this key can use', responses: { 200: { description: 'OpenAI list' } } } },
+        '/v1/bots/{botId}/voice': { post: { summary: 'Voice: audio or text in, cited answer and speech out', responses: { 200: { description: '{transcript, answer, citations, refused, spoken, audio (base64), mime}' }, 503: { description: 'Google speech not configured (use browser speech and send {"text"})' } } } },
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------- dispatch
+  async function route(req, res, url, p, m) {
+    res.setHeader('access-control-expose-headers', 'content-type, retry-after, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset');
+    let mt;
+    // admin: keys + insights for live bots
+    if ((mt = /^\/api\/instances\/([^/]+)\/(keys|insights)(?:\/([^/]*))?$/.exec(p))) {
+      const [, rawId, what, sub] = mt;
+      o.requireAdmin(req);
+      await registry.ready;
+      let inst;
+      try { inst = registry.get(decodeURIComponent(rawId)); } catch (e) { throw new ApiError(404, 'bot_not_found', e.message); }
+      if (what === 'insights') {
+        if (m !== 'GET' || sub) throw new ApiError(405, 'method_not_allowed', 'GET only');
+        const lim = Math.max(1, Math.min(50, Number(url.searchParams.get('limit')) || 10));
+        const r = await questionInsights({ kd, store: kd?.store, scopeTags: [`bot:${inst.id}`], limit: lim })
+          .catch((e) => { throw new ApiError(502, 'upstream', `question insights failed: ${e.message}`); });
+        return send(res, 200, { bot: inst.id, ...r });
+      }
+      if (!sub && m === 'GET') { await loadKeys(); return send(res, 200, { bot: inst.id, keys: K.list.filter((k) => k.bot === inst.id).map(keyView) }); }
+      if (!sub && m === 'POST') { const body = await bodyJson(req); return send(res, 201, await createKey(inst.id, body.name)); }
+      if (sub && m === 'DELETE') return send(res, 200, await revokeKey(inst.id, decodeURIComponent(sub)));
+      throw new ApiError(405, 'method_not_allowed', `${m} not allowed on ${p}`);
+    }
+    // Studio: the trial's own key
+    if ((mt = /^\/api\/studio\/trials\/([^/]+)\/devkey$/.exec(p))) {
+      if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      if (!studio?.enabled) throw new ApiError(503, 'no_store', 'Studio needs a knowDrive store.');
+      const id = decodeURIComponent(mt[1]);
+      if (!TRIAL_ID_RE.test(id)) throw new ApiError(404, 'not_found', 'No such trial.');
+      const data = studio.verifyToken(bearerOf(req), id); // throws 401 unauthorized / expired
+      req.kbApiPrefix = '/api'; // hand out the /api/v1 form: it works behind the production Worker as well as locally
+      const g = googleConfig(env);
+      const base = apiBase(req);
+      return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, expiresAt: new Date(Number(data.e)).toISOString(), scope: 'trial',
+        rateLimit: { perMinute: limits.trial }, voice: { google: g.stt && g.tts, stt: g.stt ? 'google' : 'browser', tts: g.tts ? 'google' : 'browser' },
+        endpoints: { chat: `${base}/v1/bots/${id}/chat`, completions: `${base}/v1/chat/completions`, voice: `${base}/v1/bots/${id}/voice`, channels: `${base}/v1/channels/${id}` },
+        channels: channelsInfo(req, id).channels });
+    }
+    // proof pages
+    if ((mt = /^\/(?:v1\/)?p\/([A-Za-z0-9_-]+)$/.exec(p))) {
+      if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      const pr = PROOF_ID_RE.test(mt[1]) ? await getProof(mt[1]) : null;
+      if (url.searchParams.get('format') === 'json') { if (!pr) throw new ApiError(404, 'not_found', 'This proof link has expired.'); return send(res, 200, pr); }
+      const html = pr ? proofHtml(pr) : '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Proof not found</title><body style="font:16px/1.6 system-ui,sans-serif;max-width:560px;margin:48px auto;padding:0 16px"><h1 style="font-size:20px">This proof link has expired</h1><p>Ask the bot again to get a fresh answer with its sources.</p></body></html>';
+      res.writeHead(pr ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:" });
+      return res.end(m === 'HEAD' ? undefined : html);
+    }
+    if (p === '/v1' || p === '/v1/') { if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only'); return send(res, 200, index(req)); }
+    if (p === '/v1/openapi.json') { if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only'); return send(res, 200, openapi(req)); }
+    if (p === '/v1/models') {
+      if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      const who = await authKey(req);
+      return send(res, 200, { object: 'list', data: [{ id: who.bot, object: 'model', created: 0, owned_by: 'knowbot' }] });
+    }
+    if ((mt = /^\/v1\/models\/([^/]+)$/.exec(p)) && m === 'GET') {
+      const who = await authKey(req);
+      if (decodeURIComponent(mt[1]).toLowerCase() !== who.bot) throw new ApiError(404, 'model_not_found', 'No such model for this key.');
+      return send(res, 200, { id: who.bot, object: 'model', created: 0, owned_by: 'knowbot' });
+    }
+    if (p === '/v1/chat/completions') { if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only'); return completions(req, res); }
+    if ((mt = /^\/v1\/bots\/([^/]+)\/(chat|voice)$/.exec(p))) {
+      if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only');
+      const botId = decodeURIComponent(mt[1]);
+      return mt[2] === 'chat' ? botChat(req, res, botId) : botVoice(req, res, botId);
+    }
+    if ((mt = /^\/v1\/channels\/([^/]+)\/?$/.exec(p))) {
+      if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      const t = await resolveTarget(decodeURIComponent(mt[1]));
+      return send(res, 200, channelsInfo(req, t.id));
+    }
+    if ((mt = /^\/v1\/channels\/([^/]+)\/([a-z]+)(?:\/(.+))?$/.exec(p))) return channelRoute(req, res, url, decodeURIComponent(mt[1]), mt[2], mt[3] ? decodeURIComponent(mt[3]) : '');
+    throw new ApiError(404, 'not_found', `No such endpoint ${m} ${p}. See ${apiBase(req)}/v1 for the API index.`);
+  }
+
+  async function handle(req, res, url, p, m) {
+    url = url || new URL(req.url, 'http://localhost');
+    p = p || url.pathname;
+    m = m || req.method;
+    if (/^\/api\/(?:v1(?:\/|$)|p\/)/.test(p)) { req.kbApiPrefix = '/api'; p = p.slice(4); }
+    try { await route(req, res, url, p, m); } catch (e) {
+      if (!['GET', 'HEAD'].includes(m) && !req.readableEnded) req.resume();
+      if (res.headersSent) { try { res.end(); } catch {} return; }
+      sendErr(res, e);
+    }
+  }
+
+  return {
+    handle, answer, resolveTarget, logLive, logChat, trialKey, createKey, revokeKey,
+    /** Resolves when background work (question logs, WhatsApp replies, proof files) has settled. Tests. */
+    idle: async () => { while (background.size) await Promise.all([...background]); },
+    close() { clearInterval(sweep); },
+  };
+}

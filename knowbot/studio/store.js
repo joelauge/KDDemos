@@ -174,6 +174,7 @@ export function persist() {
 }
 
 function writeNow() {
+  persistTimer = 0;
   const s = state;
   const data = {
     trial: { id: s.trial.id, token: s.trial.token, expiresAt: s.trial.expiresAt },

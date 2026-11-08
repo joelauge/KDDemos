@@ -131,7 +131,7 @@ describe('chat instances', () => {
     const j = await search('front-desk');
     const [body] = lastSearches(1);
     assert.deepEqual(body.filter.all_of, ['bucket:acme'], 'scope is the bucket tag only');
-    assert.deepEqual(body.filter.none_of, ['kind:config'], 'the registry file is never a source');
+    assert.deepEqual(body.filter.none_of, ['kind:config', 'questions'], 'the registry file and stored questions are never a source');
     assert.equal(body.fields, 'tags,uri,score,text,file_id,metadata', 'tags are requested so hits can be checked');
     assert.deepEqual(j.results.map((r) => [r.bucket, r.filename]), [['acme', 'elsewhere/lunch.md'], ['acme', 'hours.md'], ['acme', 'menus/menu.pdf']],
       'hits from another bucket or without tags are dropped; where a file is stored does not matter');
@@ -143,7 +143,7 @@ describe('chat instances', () => {
     const j = await search('front-desk');
     const [body] = lastSearches(1);
     assert.deepEqual(body.filter.all_of, ['bucket:acme', 'f1:menus']);
-    assert.deepEqual(body.filter.none_of, ['kind:config', 'format:pdf']);
+    assert.deepEqual(body.filter.none_of, ['kind:config', 'questions', 'format:pdf']);
     assert.deepEqual(j.results.map((r) => r.filename), ['elsewhere/lunch.md'], 'only the menus folder, no PDFs');
     const g = await (await api('/api/graph')).json();
     assert.deepEqual(g.bots.find((b) => b.id === 'front-desk').buckets[0].mask, { require: ['f1:menus'], exclude: ['format:pdf'] });
