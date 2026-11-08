@@ -80,6 +80,9 @@ const MARK = /\[(\d{1,2})\]/g;
 // money, durations, percentages: a product-ish number that needs a citation unless it is a fact from the state
 const FACT_NUM = /[$€£]\s?\d[\d,.]*|\b\d[\d,.]*\s*(?:%|percent\b|per\s+(?:month|year)\b|\/\s?(?:mo|month|yr|year)\b|days?\b|weeks?\b|months?\b|years?\b|mb\b|gb\b|minutes?\b|seconds?\b)/gi;
 const PRODUCT_WORDS = /\b(?:price|pricing|priced|costs?|per month|a month|monthly|annual(?:ly)?|discount\w*|coupons?|promo|refunds?|credit card|card required|cancel(?:lation)? anytime|subscription|billing|billed|free trial|trial|no account|gdpr|hipaa|soc ?2|encrypt\w*|languages?|plans?)\b|\bfree\b(?!\s+to\b)/i;
+// a product word only needs a citation when the sentence is about KnowBot itself (not "your files cover service plans")
+const PRODUCT_SUBJECT = /\b(?:knowbot|knowdrive|studio|launch\w*|go(?:es|ing)? live|account|sign ?up|signup|trial|subscription|billing|billed|you(?:'ll| will)? pay|checkout|cancel)\b/i;
+const QUESTIONISH = /\?\s*$|^(?:how|what|whats|what's|when|where|which|who|why|is|are|do|does|can|could|will|would|should|tell me|explain)\b/i;
 const RISKY_WORDS = /\b(?:discount\w*|coupons?|promo(?:tion)?s?|lifetime|% off|percent off|money-?back|guarantee\w*|annual plan|yearly plan|enterprise plan|starter plan|pro plan|free forever|unlimited)\b/i;
 /** A sentence claiming an action happened, and the tools that make the claim true. */
 const CLAIMS = [
@@ -94,7 +97,7 @@ const CLAIMS = [
 ];
 const ABBR = /(?:\b(?:e\.g|i\.e|etc|vs|approx|no)\.)$/i;
 export function sentencesOf(text) {
-  const t = oneLine(String(text || '').replace(/<\/?[a-z_][\w-]*[^>]*>/gi, ' ')).replace(/([.!?])\s*((?:\[\d{1,2}\]\s*)+)(?=\s|$)/g, (m, p, marks) => `${marks.trim()}${p}`);
+  const t = oneLine(String(text || '').replace(/<\/?[a-z_][\w-]*[^>]*>/gi, ' ')).replace(/([.!?])\s*((?:\[\d{1,2}\]\s*)+)(?=\s|$)/g, (m, p, marks) => ` ${marks.trim()}${p}`);
   const out = [];
   let cur = '';
   const parts = t.split(/(?<=[.!?])\s+(?=[A-Z0-9"“$(])/);
@@ -129,7 +132,7 @@ export function gateReply(text, { cited = new Map(), okTools = new Set(), stateT
       continue;
     }
     // uncited: no product claims, no product-ish numbers unless the number is a fact of the visitor's own state
-    if (PRODUCT_WORDS.test(s) || RISKY_WORDS.test(s)) { dropped.push(s0); continue; }
+    if ((PRODUCT_WORDS.test(s) && PRODUCT_SUBJECT.test(s)) || RISKY_WORDS.test(s)) { dropped.push(s0); continue; }
     if (facts.some((f) => !stateText.includes(numKey(f)))) { dropped.push(s0); continue; }
     kept.push(s);
   }
@@ -362,7 +365,8 @@ export function createBuilderEngine(o = {}) {
       const actions = [];
       for (const r of ok) if (r.res.action && CLIENT_ACTIONS.has(r.res.action.type) && !OFFER_ONLY_ACTIONS.has(r.res.action.type) && !actions.some((a) => a.type === r.res.action.type)) actions.push(r.res.action);
       const kbCalled = results.some((r) => r.name === 'kb_search');
-      const productQ = pre.productQuestion || kbCalled;
+      // a product question: the pre-parser saw one, or the model searched the KB for a message that asks something
+      const productQ = pre.productQuestion || (kbCalled && QUESTIONISH.test(msg));
       const g = gateReply(text, { cited, okTools, stateText });
       let reply = g.text;
       let citations = g.citations.map((c) => ({ ...cited.get(c.from), n: c.n }));

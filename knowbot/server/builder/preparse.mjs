@@ -51,7 +51,8 @@ export function parseFields(message) {
     if (name.length >= 2 && !/^(?:something|anything|whatever|it|that|this)$/i.test(name)) out.name = name.slice(0, 40);
   }
   // the name clause is cut out before anything else is read, so a name word is never a tone, purpose or org
-  const rest = m && out.name ? msg.replace(m[0], ' ') : msg;
+  // (only "call it <name>" is cut: the regex may have read on past the name, e.g. "… Help and make answers shorter")
+  const rest = m && out.name ? msg.replace(`${m[0].slice(0, m[0].length - m[1].length)}${m[1].slice(0, m[1].indexOf(out.name) + out.name.length)}`, ' ') : msg;
   if (/\b(?:friendly|friendlier|casual|warm|warmer|less formal)\b/i.test(rest)) out.tone = 'friendly';
   else if (/\b(?:formal|professional)\b/i.test(rest)) out.tone = 'formal';
   else if (/\bneutral\b/i.test(rest)) out.tone = 'neutral';

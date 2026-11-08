@@ -10,7 +10,7 @@ No. You can build and test a KnowBot in KnowBot Studio without an account. An ac
 
 Source: /studio/
 
-Yes, in two ways. Building and testing a bot in KnowBot Studio is free and needs no account. When you launch, your KnowDrive account at $249 per month starts with the first 30 days free.
+Yes, in two ways. Building and testing a bot in KnowBot Studio is free and needs no account. When you launch, your KnowDrive account ($249 per month or $2,499 per year, for up to 100 MB) starts with the first 30 days free. For more than 100 MB, contact enterprise sales at sales@recoursellm.com.
 
 ## Do I need a credit card?
 

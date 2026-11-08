@@ -625,8 +625,8 @@ function rstem(w) {
   if (w.length > 4 && /ies$/.test(w)) w = w.slice(0, -3) + 'y';
   else if (w.length > 4 && /(?:ss|x|z|ch|sh)es$/.test(w)) w = w.slice(0, -2);
   else if (w.length > 3 && /[^su]s$/.test(w)) w = w.slice(0, -1);
-  if (w.length > 5 && /ing$/.test(w)) w = w.slice(0, -3);
-  else if (w.length > 4 && /ed$/.test(w)) w = w.slice(0, -2);
+  if (w.length > 5 && /ing$/.test(w)) w = w.slice(0, -3).replace(/([b-df-hj-kmnp-rtv-z])\1$/, '$1'); // "fitting" → fit
+  else if (w.length > 4 && /ed$/.test(w)) w = w.slice(0, -2).replace(/([b-df-hj-kmnp-rtv-z])\1$/, '$1');
   if (w.length > 4 && /e$/.test(w)) w = w.slice(0, -1);
   return RSYN.get(w) || w;
 }
@@ -872,7 +872,7 @@ export function answerFirst(question, lines = [], picks = [], { onTopic = () => 
     // no hard answer type to check against: the model's picks stand when one of them clearly answers ("Can I return
     // after 5 weeks?" → "After 30 days a return is not accepted"); when none does, the line that does leads
     // ("financing or payment plans" → the financing line, not the Care Plan line; "Can I return a bike?" → the rule)
-    const good = (n) => r.clauses.some((c, ci) => strong(n - 1, ci) && (!c.intents.length || r.answers[n - 1][ci]));
+    const good = (n) => r.clauses.some((c, ci) => (c.intents.length ? strong(n - 1, ci) && r.answers[n - 1][ci] : strong(n - 1, ci) || r.cover[n - 1][ci] >= 0.5));
     if (picks.some(good)) return [...picks.filter(good), ...picks.filter((n) => !good(n))];
   }
   const chosen = [], leadOf = [];
@@ -1029,18 +1029,18 @@ export function guideText(items, sources, seed = '') {
     return `${OPENERS[h % OPENERS.length]} In ${whereOf(sources[x.si], x.section)}, it says: “${quoteText(x.text)}” [${x.n}]. ${closer}`;
   }
   const opener = LIST_OPENERS[h % LIST_OPENERS.length];
-  const one = items.every((x) => x.si === items[0].si || x.n === items[0].n); // one file (atoms of one file share a citation)
+  const one = items.every((x) => x.si === items[0].si);
   const sameAt = items.every((x) => x.section === items[0].section) ? items[0].section : null;
   if (one) return [`${opener} Here's what ${whereOf(sources[items[0].si], sameAt)} says [${items[0].n}]:`, ...items.map((x) => `- “${quoteText(x.text)}” [${x.n}]`), closer].join('\n');
-  // Several places: items from the same place are said together under one lead-in, in the order the places first appear.
+  // Several places: items from the same place (one file, one heading) are said together under one lead-in, in the
+  // order the places first appear; the place's further quotes follow as sub-items, never with the lead-in repeated.
   const groups = [];
   for (const x of items) {
     const g = groups.find((y) => y.n === x.n && (y.section || null) === (x.section || null));
     if (g) g.items.push(x); else groups.push({ si: x.si, n: x.n, section: x.section, items: [x] });
   }
-  const body = groups.flatMap((g) => (g.items.length === 1
-    ? [`- From ${whereOf(sources[g.si], g.section)}: “${quoteText(g.items[0].text)}” [${g.items[0].n}]`]
-    : [`- From ${whereOf(sources[g.si], g.section)}, it says [${g.items[0].n}]:`, ...g.items.map((x) => `  - “${quoteText(x.text)}” [${x.n}]`)]));
+  const body = groups.flatMap((g) => [`- From ${whereOf(sources[g.si], g.section)}: “${quoteText(g.items[0].text)}” [${g.items[0].n}]`,
+    ...g.items.slice(1).map((x) => `  - “${quoteText(x.text)}” [${x.n}]`)]);
   return [opener, ...body, closer].join('\n');
 }
 

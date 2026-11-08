@@ -36,4 +36,10 @@ The store and website importer only reads public pages, follows robots.txt, and 
 
 Source: /studio/
 
-API keys are stored only as hashes, and stored provider keys are sealed with AES-256-GCM encryption. TODO(owner): state the policy on model training with customer data; nothing in the product documentation covers it yet, so the Builder must not make a claim about it.
+API keys are stored only as hashes, and stored provider keys are sealed with AES-256-GCM encryption.
+
+## No training on your data
+
+Source: /studio/
+
+KnowBot does not train AI models on your files or on your customers' questions. Its knowledge engine, KnowDB, reads (attends to) your files at the moment it answers a question; it does not learn from them or train on them.

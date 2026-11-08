@@ -46,8 +46,9 @@ export async function startFakeAnthropic({ latencyMs = 0, handler = null } = {})
     let item = queue.length ? queue.shift() : fallbackHandler ? fallbackHandler : text('OK.');
     if (typeof item === 'function') item = await item(body, i);
     const wait = Number(item?.delayMs ?? 0) + latency;
-    if (wait > 0) await new Promise((r) => { const t = setTimeout(r, wait); req.on('close', () => { clearTimeout(t); r(); }); });
-    if (res.destroyed || req.destroyed) return;
+    // (a fully read request is auto-destroyed, so only the response side tells whether the client went away)
+    if (wait > 0) await new Promise((r) => { const t = setTimeout(r, wait); res.on('close', () => { clearTimeout(t); r(); }); });
+    if (res.destroyed || res.writableEnded) return;
     if (item?.status && item.status >= 400) {
       const type = { 400: 'invalid_request_error', 401: 'authentication_error', 404: 'not_found_error', 429: 'rate_limit_error', 529: 'overloaded_error' }[item.status] || 'api_error';
       return send(item.status, { type: 'error', error: { type, message: String(item.error || 'error') } });
