@@ -247,6 +247,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const c = cfg(); const v = c.voice || c.channels?.voice || dev().voice || {};
     return v.google === true || v.provider === 'google';
   };
+  // web voice assistant: the server says which engine runs (GET …/devkey → channels.webVoice)
+  const liveVoice = () => !!(dev().channels && dev().channels.webVoice && dev().channels.webVoice.live);
+  const webVoiceUrl = () => (dev().channels && dev().channels.webVoice && dev().channels.webVoice.endpoint) || `${apiRoot.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId())}/voice/live`;
   const verifyToken = `kb_verify_${rid(10)}`;
 
   // ------------------------------------------------------------ frame
@@ -449,14 +452,19 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Inline panel', lang: 'html', code: `<div id="help"></div>\n${embed.replace('<script ', '<script data-mode="inline" data-target="#help" ')}` },
           { label: 'Full-page link', lang: 'text', code: `${siteBase}demo/chat.html?instance=${id}` },
         ] },
-      { id: 'voice', name: 'Voice chatbot', blurb: 'Visitors talk to your bot in the browser and hear the answer with its source.', provider: googleVoice() ? 'Google Cloud speech' : 'Browser speech · Google when configured', hue: 5, url: `${apiRoot}/v1/bots/${id}/voice`, status: 'Try it now', tryLabel: 'Talk to your bot',
-        needs: ['Nothing to try it: your browser\'s speech engine works today', 'For production voices: Google Cloud Speech-to-Text and Text-to-Speech keys on your KnowBot server'],
-        steps: ['Record a clip in the browser (MediaRecorder) and POST it to the voice endpoint below.', 'You get the transcript, the cited answer, and the spoken answer as audio.', `Or keep it client-side: Web Speech API recognition → ${pub(`/v1/bots/${id}/chat`)} → speechSynthesis, as in Try it.`],
+      // Web voice assistant (lib/voice-widget.js over GET /v1/bots/:id/voice/live, server/channels/webvoice.mjs): Gemini Live
+      // voice to voice when GEMINI_API_KEY is set on the server, else browser speech; sources as chips while it speaks.
+      { id: 'voice', name: 'Web voice assistant', blurb: 'Visitors talk to your bot from a mic button on your site and hear the answer, with its sources on screen as it speaks.', provider: liveVoice() ? 'Gemini Live voice to voice' : googleVoice() ? 'Google Cloud speech' : 'Browser speech · live voice when configured', hue: 5, url: `${apiRoot}/v1/bots/${id}/voice`, status: 'Try it now', tryLabel: 'Talk to your bot',
+        needs: ['Nothing to try it: your browser\'s speech engine works today', 'For live voice to voice: a Gemini API key (GEMINI_API_KEY) on your KnowBot server', 'Optional, for the clip endpoint: Google Cloud Speech-to-Text and Text-to-Speech keys'],
+        steps: ['Paste the embed below on your site: a mic button that opens the voice assistant (tap to talk, or hold to talk).', 'It streams the visitor\'s voice over a WebSocket and speaks the answer from your sources, naming each one; the sources show as links while it speaks.', 'Without a Gemini key it still works: the browser recognizes speech and reads the cited answer aloud. Or record a clip and POST it to the voice endpoint below.'],
         configs: [
+          // a trial bot needs its trial key in the embed (masked on screen, real on Copy); a launched bot's voice socket is public
+          { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-talk="hold" for push-to-talk; data-target="#id" to place it inline -->` },
+          { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
           // CONTRACT-GAP (F): response shape of POST /v1/bots/:id/voice is not fixed in SPEC 11.3; documented as below.
           // Same trial key as the Developers tab: masked on screen (Show key reveals it), the real key on Copy.
           { label: 'Browser (fetch)', lang: 'js', secret: true, code: (mode) => `// clip: a Blob from MediaRecorder (audio/webm)\nconst res = await fetch("${apiRoot}/v1/bots/${id}/voice", {\n  method: "POST",\n  headers: { Authorization: "Bearer ${keyFor(mode)}", "Content-Type": clip.type },\n  body: clip,\n});\nconst { transcript, answer, citations, audio, mime } = await res.json();\nnew Audio(\`data:\${mime};base64,\${audio}\`).play();` },
-          { label: 'Environment', lang: 'sh', code: 'GOOGLE_STT_API_KEY=your_google_api_key\nGOOGLE_TTS_API_KEY=your_google_api_key\nGOOGLE_TTS_VOICE=en-US-Neural2-F' },
+          { label: 'Environment', lang: 'sh', code: 'GEMINI_API_KEY=your_gemini_api_key        # live voice to voice (web voice assistant + phone)\nGOOGLE_STT_API_KEY=your_google_api_key   # optional: the clip endpoint\nGOOGLE_TTS_API_KEY=your_google_api_key\nGOOGLE_TTS_VOICE=en-US-Neural2-F' },
         ] },
     ];
   };
@@ -709,7 +717,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   // ------------------------------------------------------------ Try it
   function buildTry(c, el) {
     el.append(h('div', { class: 'gl-try-head' }, h('span', { class: 'gl-try-k' }, 'Try it'), h('b', null, c.tryLabel)));
-    if (c.id === 'voice') { voices.push(voiceTry(el, { mode: 'browser' })); return; }
+    if (c.id === 'voice') { webVoiceTry(el); return; }
     if (c.id === 'phone') { voices.push(voiceTry(el, { mode: 'phone' })); return; }
     if (c.id === 'text') { widgetTry(el); return; }
     previewTry(el, c.id);
@@ -958,6 +966,27 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       out.append(p);
     }
     if ((r.citations || []).length) out.append(h('p', { class: 'gl-wsrc' }, `Sources: ${r.citations.map((c) => `[${c.n}] ${c.file}`).join(' · ')}`));
+  }
+
+  // ------------------------------------------------------------ Web voice assistant preview (the real embeddable widget)
+  // Mounts lib/voice-widget.js inline with this trial's key, exactly what the embed snippet does on a site. The older
+  // clip-based voice bot (POST /v1/bots/:id/voice) stays one click away for servers with Google speech.
+  function webVoiceTry(el) {
+    const host = h('div', { class: 'gl-webvoice' });
+    const note = h('p', { class: 'gl-tw-hint', role: 'status' }, 'Loading the voice assistant…');
+    const classic = h('details', { class: 'gl-json' }, h('summary', null, 'Clip endpoint (record → POST /voice)'));
+    let classicMounted = false;
+    classic.addEventListener('toggle', () => { if (classic.open && !classicMounted) { classicMounted = true; voices.push(voiceTry(classic, { mode: 'browser' })); } });
+    el.append(note, host, classic);
+    let widget = null, stopped = false;
+    voices.push({ stop() { stopped = true; try { widget && widget.destroy(); } catch { /* ignore */ } widget = null; } });
+    loadDev().then(() => import(`${siteBase}lib/voice-widget.js?v=484b978`)).then(({ mountVoice }) => {
+      if (stopped || closing) return;
+      const d = dev();
+      if (d.status !== 'ok' || !d.key) { note.textContent = 'The voice assistant needs your trial key; it is not available right now. The clip endpoint below still works.'; return; }
+      note.textContent = liveVoice() ? 'Live voice: speak and it answers out loud, with the sources as links while it speaks.' : 'This server has no Gemini key, so your browser recognizes speech and reads the answer aloud. Same sources, same citations.';
+      widget = mountVoice(host, { endpoint: webVoiceUrl(), bot: botId(), key: d.key, name: botName() });
+    }).catch(() => { if (!stopped) note.textContent = "The voice assistant couldn't load here. The clip endpoint below still works."; });
   }
 
   // ------------------------------------------------------------ Voice: browser chatbot + call simulator

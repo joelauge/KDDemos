@@ -636,6 +636,14 @@ export function createKnowBotServer(opts = {}) {
     }
   });
 
+  // WebSocket upgrades: only the phone channel's Twilio Media Streams path (/v1/channels/:botId/voice/media, and its /api
+  // alias) is served; anything else is refused. The production Worker forwards these upgrades to this container.
+  server.on('upgrade', (req, socket, head) => {
+    let handled = false;
+    try { handled = devapi.upgrade(req, socket, head); } catch (e) { log(`[error] upgrade ${req.url}: ${e.message}`); }
+    if (!handled) { try { socket.end('HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n'); } catch {} }
+  });
+
   server.on('close', () => {
     clearInterval(pingTimer); clearInterval(rlSweep); local.close(); studio.close(); devapi.close();
     for (const c of clients) { try { c.end(); } catch {} }

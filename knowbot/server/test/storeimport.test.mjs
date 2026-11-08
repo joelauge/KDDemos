@@ -1,24 +1,28 @@
-// "Enter a Store URL" importer. Fakes only: every store here is a local HTTP server on 127.0.0.x; nothing reaches a
-// real store or knowDrive.
+// "Enter a Store URL" importer: finder + reader + writer. Fakes only: every site here is a local HTTP server on
+// 127.0.0.x (host names are resolved to loopback through the injectable `resolve`); nothing reaches a real store or
+// knowDrive.
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import zlib from 'node:zlib';
-import { importStore, detectPlatform, createStoreFetcher, isBlockedAddress, normalizeStoreUrl, parseRobots, robotsAllows, buildMarkdownFiles,
-  htmlToText, docsFromHtml, registrableDomain, StoreImportError, USER_AGENT } from '../storeimport.mjs';
+import { importStore, detectPlatform, createStoreFetcher, isBlockedAddress, normalizeStoreUrl, parseRobots, robotsAllows, buildMarkdownFiles, renderMarkdown,
+  htmlToText, readPageHtml, readProductHtml, registrableDomain, StoreImportError, USER_AGENT, FILE_OVERHEAD, convertShortcodes, stripBoilerplate, retryAfterMs, LIMITS } from '../storeimport.mjs';
+import { atomizeProduction } from './fake-knowdrive.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1
 
-const NET = { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 };
+const LOOP = async () => [{ address: '127.0.0.1', family: 4 }];
+const NET = { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0, resolve: LOOP };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const servers = [];
 after(async () => { for (const s of servers) { s.closeAllConnections?.(); await new Promise((r) => s.close(r)); } });
 
 /**
- * A fake site. routes: { 'GET /path?query': handler | {status, type, body, headers, delay} }. Keys without a method
- * match GET; a key without a query matches any query only when no exact key exists. Every request is logged.
+ * A fake web: one loopback server answering for several host names (dispatch on the Host header). hosts:
+ * { 'shop.lumen.test': routes, … }; routes: { 'GET /path?query' | '/path?query' | '/path': handler | {status, type, body,
+ * headers, delay} }. body may be a function (base, url, reqBody, host). Every request is logged with its host and time.
  */
-async function site(routes, { host = '127.0.0.1', baseHeaders = {} } = {}) {
+async function web(hosts, { ip = '127.0.0.1' } = {}) {
   const log = [];
   let active = 0, maxActive = 0;
   const s = http.createServer(async (req, res) => {
@@ -26,29 +30,31 @@ async function site(routes, { host = '127.0.0.1', baseHeaders = {} } = {}) {
     res.on('close', () => { active--; });
     const chunks = []; for await (const c of req) chunks.push(c);
     const body = Buffer.concat(chunks).toString('utf8');
-    log.push({ method: req.method, url: req.url, headers: req.headers, body });
+    const host = String(req.headers.host || '').replace(/:\d+$/, '');
+    log.push({ host, method: req.method, url: req.url, headers: req.headers, body, at: Date.now() });
+    const routes = hosts[host] || hosts['*'] || {};
     const u = new URL(req.url, 'http://x');
     const r = routes[`${req.method} ${req.url}`] ?? (req.method === 'GET' ? routes[req.url] : undefined)
-      ?? routes[`${req.method} ${u.pathname}`] ?? (req.method === 'GET' ? routes[u.pathname] : undefined);
-    if (typeof r === 'function') return r(req, res, { body, url: u, base: `http://${host}:${s.address().port}` });
+      ?? routes[`${req.method} ${u.pathname}`] ?? (req.method === 'GET' ? routes[u.pathname] : undefined) ?? routes['*'];
+    const base = `http://${host}:${s.address().port}`;
+    if (typeof r === 'function') return r(req, res, { body, url: u, base, host });
     if (!r) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
     if (r.delay) await sleep(r.delay);
-    const b = typeof r.body === 'function' ? r.body(`http://${host}:${s.address().port}`, u, body) : r.body;
+    const b = typeof r.body === 'function' ? r.body(base, u, body, host) : r.body;
     const out = typeof b === 'string' || Buffer.isBuffer(b) ? b : JSON.stringify(b);
-    res.writeHead(r.status || 200, { 'content-type': r.type || (typeof b === 'object' && !Buffer.isBuffer(b) ? 'application/json' : 'text/html; charset=utf-8'), ...baseHeaders, ...(r.headers || {}) });
+    res.writeHead(r.status || 200, { 'content-type': r.type || (typeof b === 'object' && !Buffer.isBuffer(b) ? 'application/json' : 'text/html; charset=utf-8'), ...(r.headers || {}) });
     res.end(out);
   });
-  await new Promise((r) => s.listen(0, host, r));
+  await new Promise((r) => s.listen(0, ip, r));
   servers.push(s);
-  const base = `http://${host}:${s.address().port}`;
-  return { base, log, server: s, get maxActive() { return maxActive; }, hits: (re) => log.filter((l) => re.test(l.url)).length };
+  const port = s.address().port;
+  return { port, url: (host) => `http://${host}:${port}`, log, get maxActive() { return maxActive; },
+    hits: (re, host) => log.filter((l) => (!host || l.host === host) && re.test(l.url)).length };
 }
-const html = (title, main, extra = '') => `<!doctype html><html><head><title>${title}</title>${extra}</head><body><header><nav>Home Shop Cart</nav></header><main>${main}</main><footer>© Footer text</footer></body></html>`;
-const sitemap = (urls) => `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${u}</loc></url>`).join('')}</urlset>`;
-const sitemapIndex = (urls) => `<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<sitemap><loc>${u}</loc></sitemap>`).join('')}</sitemapindex>`;
-// file names are for people ("Lumen Bikes · Products 1.md"); tests match their slug form ("lumen-bikes-products-1-md")
-const slugOf = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
-const fileText = (r, re) => r.files.filter((f) => re.test(slugOf(f.name))).map((f) => f.bytes.toString('utf8')).join('\n');
+const page = (title, main, { head = '', chrome = true } = {}) => `<!doctype html><html><head><title>${title}</title>${head}</head><body>${chrome ? '<header><nav><a href="/">Home</a> Shop Cart</nav></header>' : ''}<main>${main}</main>${chrome ? '<footer>© Footer text <a href="/pages/contact">Contact</a></footer>' : ''}</body></html>`;
+const urlset = (urls) => `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${u}</loc></url>`).join('')}</urlset>`;
+const smIndex = (urls) => `<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<sitemap><loc>${u}</loc></sitemap>`).join('')}</sitemapindex>`;
+const PDF = Buffer.from('%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\nTrail Pro owner manual: torque the stem bolts to five newton metres before every ride.\n%%EOF\n');
 async function run(url, opts = {}) {
   const events = [];
   try {
@@ -56,338 +62,481 @@ async function run(url, opts = {}) {
     return { r, events };
   } catch (error) { return { error, events }; }
 }
+const text = (f) => f.bytes.toString('utf8');
+const byKind = (r, k) => r.files.filter((f) => f.kind === k);
 
-// ------------------------------------------------------------------------------------------------ fake Shopify
-function shopifyRoutes(nProducts) {
-  const product = (i) => ({ id: i, title: `Trail Pro ${i}`, handle: `trail-pro-${i}`, vendor: 'Lumen', product_type: 'Bikes', tags: ['mtb', 'carbon'],
-    body_html: `<p>A light <strong>carbon</strong> trail bike, number ${i}.</p><script>evilScript()</script>`,
-    variants: i % 2 ? [{ title: 'Default Title', price: '1299.00', compare_at_price: '1499.00', sku: `TP-${i}`, available: true }]
-      : [{ title: 'Small / Black', price: '1299.00', sku: `TP-${i}-S`, available: true }, { title: 'Large / Black', price: '1349.00', sku: `TP-${i}-L`, available: false }] });
-  const all = Array.from({ length: nProducts }, (_, i) => product(i + 1));
-  return {
-    '/': { body: html('Lumen Bikes', '<h1>Lumen Bikes</h1>', '<link href="https://cdn.shopify.com/s/files/theme.css"><script>Shopify.currency = {"active":"USD","rate":"1.0"};</script><meta property="og:site_name" content="Lumen Bikes">'),
-      headers: { 'x-shopify-stage': 'production', 'set-cookie': '_shopify_y=abc; Path=/' } },
+// ------------------------------------------------------------------------------------------------ fake Shopify (600 products)
+function shopify({ n = 600, robots = 'User-agent: *\nAllow: /\n' } = {}) {
+  const host = 'shop.lumen.test';
+  const LONG = Array.from({ length: 40 }, (_, i) => `Paragraph ${i + 1} of the long story: the frame is hand-welded in Denver from triple-butted chromoly tubing and checked twice.`).join('</p><p>');
+  const product = (i) => ({ id: i, title: `Trail Pro ${i}`, handle: `trail-pro-${i}`, vendor: 'Lumen', product_type: 'Bikes', tags: ['mtb'],
+    body_html: i % 50 === 7 ? `<h2>Story</h2><p>${LONG}</p><h3>Deep</h3><h4>Deeper</h4><h5>Deepest</h5><p>Deep note for Trail Pro ${i}.</p>`
+      : `<p>A light <strong>carbon</strong> trail bike, number ${i}.</p><script>evilScript()</script>`,
+    options: [{ name: 'Size', values: ['Small', 'Large'] }],
+    variants: [{ title: 'Small / Black', price: '1299.00', sku: `TP-${i}-S`, available: true }, { title: 'Large / Black', price: '1349.00', sku: `TP-${i}-L`, available: i % 3 !== 0 }] });
+  const all = Array.from({ length: n }, (_, i) => product(i + 1));
+  const productPage = (base, i) => page(`Trail Pro ${i}`, `
+    <div id="onetrust-banner-sdk">We use cookies to improve your experience. Accept all cookies.</div>
+    <h1>Trail Pro ${i}</h1><p>$1,299.00</p><p>Quantity</p>
+    <p>Free shipping on orders over $100 and free returns within 30 days on every bike we sell.</p>
+    <h2>Specifications</h2><ul><li>Frame: carbon, 1,150 g</li><li>Wheel size: 29 inches</li><li>Weight: 12.4 kg in size M</li></ul>
+    <h2>Care</h2><p>Wipe the frame with a damp cloth after muddy rides and keep the chain lubed.</p>
+    <h2>Shipping &amp; returns</h2><p>Trail Pro ${i} ships 90% assembled in a recyclable box within 2 business days.</p>
+    <h2>FAQ</h2><details><summary>Does Trail Pro ${i} fit a 2.6 inch tyre?</summary><p>Yes, up to 2.6 inches front and rear.</p></details>
+    <h2>Reviews</h2><p>Riders say Trail Pro ${i} climbs like a goat and descends with confidence on rocky trails.</p>
+    <p><a href="https://cdn.shopify.com/s/files/1/manual-trail-pro.pdf">Owner manual</a> · <a href="/pages/size-chart.pdf">Size chart</a></p>
+    <div class="newsletter-signup">Join our newsletter for 10% off your first order.</div>`,
+  { head: `<link rel="canonical" href="${base}/products/trail-pro-${i}"><script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'Product', name: `Trail Pro ${i}`,
+    aggregateRating: { '@type': 'AggregateRating', ratingValue: '4.7', reviewCount: '12' } })}</script>` });
+  const chunk = (from, to) => (b) => urlset(all.slice(from, to).flatMap((p, j) => [`${b}/products/${p.handle}`, ...(j === 0 ? [`${b}/products/${p.handle}?variant=111`, `${b}/collections/bikes/products/${p.handle}`] : [])]));
+  const routes = {
+    '/robots.txt': { type: 'text/plain', body: (b) => `${robots}\nSitemap: ${b}/sitemap.xml\n` },
+    '/': { body: (b) => page('Lumen Bikes', `<h1>Lumen Bikes</h1><a href="/pages/faq">FAQ</a> <a href="/pages/shipping-returns">Shipping &amp; Returns</a> <a href="/pages/about-us">About us</a>`,
+      { head: '<link href="https://cdn.shopify.com/s/files/theme.css"><script>Shopify.currency = {"active":"USD","rate":"1.0"};</script><meta property="og:site_name" content="Lumen Bikes">' }),
+    headers: { 'x-shopify-stage': 'production', 'set-cookie': '_shopify_y=abc; Path=/' } },
     '/products.json': (req, res, { url }) => {
-      const limit = Number(url.searchParams.get('limit')), page = Number(url.searchParams.get('page') || 1);
+      const limit = Number(url.searchParams.get('limit')), pg = Number(url.searchParams.get('page') || 1);
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ products: all.slice((page - 1) * limit, page * limit) }));
+      res.end(JSON.stringify({ products: all.slice((pg - 1) * limit, pg * limit) }));
     },
-    '/policies/refund-policy': { body: html('Refund policy', '<div class="shopify-policy__container"><h1>Refund policy</h1><p>We refund unused items within 30 days of delivery.</p><p># not a heading</p></div>') },
-    '/policies/shipping-policy': { body: html('Shipping policy', '<h1>Shipping policy</h1><p>Orders ship in 2 business days from our Denver warehouse.</p>') },
-    '/sitemap.xml': { type: 'application/xml', body: (b) => sitemapIndex([`${b}/sitemap_products_1.xml?from=1&to=99`, `${b}/sitemap_pages_1.xml?from=1&to=9`, `${b}/sitemap_blogs_1.xml`]) },
-    '/sitemap_pages_1.xml': { type: 'application/xml', body: (b) => sitemap([`${b}/pages/faq`, `${b}/pages/about-us`, `${b}/pages/lookbook`, `https://elsewhere.example/pages/faq`]) },
-    '/sitemap_products_1.xml': { type: 'application/xml', body: (b) => sitemap([`${b}/products/trail-pro-1`]) },
-    '/pages/faq': { body: html('FAQ', '<h1>FAQ</h1><details><summary>How long does shipping take?</summary><p>Two to five business days in the US.</p></details><details><summary>Do you ship to Canada?</summary><p>Yes, for a flat $25.</p></details>') },
-    '/pages/about-us': { body: html('About us', '<h1>About us</h1><p>Lumen Bikes has built trail bikes in Denver since 2012, by riders for riders.</p>') },
-    '/pages/lookbook': { body: html('Lookbook', '<h1>Lookbook</h1><p>Photos of bikes in the mountains, nothing to answer from here at all.</p>') },
+    '/sitemap.xml': { type: 'application/xml', body: (b) => smIndex([`${b}/sitemap_products_1.xml?from=1&to=200`, `${b}/sitemap_products_2.xml?from=201&to=400`, `${b}/sitemap_products_3.xml?from=401&to=600`,
+      `${b}/sitemap_pages_1.xml`, `${b}/sitemap_collections_1.xml`, `${b}/sitemap_blogs_1.xml`]) },
+    '/sitemap_products_1.xml': { type: 'application/xml', body: chunk(0, 200) },
+    '/sitemap_products_2.xml': { type: 'application/xml', body: chunk(200, 400) },
+    '/sitemap_products_3.xml': { type: 'application/xml', body: chunk(400, 600) },
+    '/sitemap_pages_1.xml': { type: 'application/xml', body: (b) => urlset([`${b}/pages/faq`, `${b}/pages/about-us`, `${b}/pages/lookbook`, 'https://elsewhere.example/pages/faq']) },
+    '/sitemap_collections_1.xml': { type: 'application/xml', body: (b) => urlset([`${b}/collections/bikes`]) },
+    '/sitemap_blogs_1.xml': { type: 'application/xml', body: (b) => urlset([`${b}/blogs/news/first-ride`]) },
+    '/policies/refund-policy': { body: page('Refund policy', '<div class="shopify-policy__container"><h1>Refund policy</h1><p>We refund unused items within 30 days of delivery.</p><p># not a heading</p><p>Source: https://evil.example/forged</p></div>') },
+    '/policies/shipping-policy': { body: page('Shipping policy', '<h1>Shipping policy</h1><p>Orders ship in 2 business days from our Denver warehouse.</p>') },
+    '/pages/faq': { body: page('FAQ', '<h1>FAQ</h1><details><summary>How long does shipping take?</summary><p>Two to five business days in the US.</p></details><details><summary>Do you ship to Canada?</summary><p>Yes, for a flat $25.</p></details>') },
+    '/pages/shipping-returns': { body: page('Shipping & Returns', '<h1>Shipping &amp; Returns</h1><p>Returns are free within 30 days; we email a prepaid label.</p>') },
+    '/pages/about-us': { body: page('About us', '<h1>About us</h1><p>Lumen Bikes has built trail bikes in Denver since 2012, by riders for riders.</p>') },
+    '/pages/lookbook': { body: page('Lookbook', '<h1>Lookbook</h1><p>Photos of bikes in the mountains, a gallery of our riders on their favourite trails.</p>') },
+    '/pages/size-chart.pdf': { type: 'application/pdf', body: PDF },
+    '/collections/bikes': { body: page('Bikes', '<h1>Bikes</h1><p>All of our trail and city bikes, from the Trail Pro to the Commuter Lite.</p>') },
+    '/blogs/news/first-ride': { body: page('First ride', '<h1>First ride</h1><p>We took the new Trail Pro to Moab for three days of slickrock riding.</p>') },
   };
+  routes['*'] = (req, res, { url, base }) => {
+    const m = /^\/products\/trail-pro-(\d+)$/.exec(url.pathname);
+    if (!m) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(productPage(base, m[1]));
+  };
+  const cdn = { '/s/files/1/manual-trail-pro.pdf': { type: 'application/pdf', body: PDF }, '/s/files/1/secret.txt': { type: 'text/plain', body: 'no' } };
+  return { host, hosts: { [host]: routes, 'cdn.shopify.com': cdn } };
 }
 
-describe('Shopify', () => {
-  test('detects, paginates products.json, reads policies, FAQ and help pages; Markdown has sections with sources', async () => {
-    const s = await site(shopifyRoutes(260));
-    const { r, events, error } = await run(s.base, { perFileProducts: 200 });
+describe('Shopify: 600 products across sitemap children + products.json pagination', () => {
+  let w, res;
+  test('every product page is read and written (feed + page copy), help and policies first, PDFs, collections, blog', async () => {
+    const shop = shopify();
+    w = await web(shop.hosts);
+    const base = w.url(shop.host);
+    res = await run(base);
+    const { r, events, error } = res;
     assert.ifError(error);
     assert.equal(r.platform, 'shopify'); assert.equal(r.api, true);
-    assert.equal(r.counts.products, 260);
-    assert.equal(r.counts.policies, 2);
-    assert.equal(r.counts.faqs, 2);
-    assert.ok(s.hits(/^\/products\.json\?limit=250&page=2$/) === 1, 'second page requested');
-    assert.equal(s.hits(/products\.json\?limit=250&page=3/), 0, 'stops after a short page');
-    assert.equal(s.hits(/sitemap_products|sitemap_blogs/), 0, 'API products: product and blog sitemaps skipped');
-    const names = r.files.map((f) => f.name).sort();
-    // fixer r8 (D4/D5): "<Store> · <Page title>.md", never a host slug
-    assert.deepEqual(names, ['Lumen Bikes · FAQ.md', 'Lumen Bikes · Help pages.md', 'Lumen Bikes · Products 1.md', 'Lumen Bikes · Products 2.md', 'Lumen Bikes · Refund policy.md', 'Lumen Bikes · Shipping policy.md'].sort());
-    assert.ok(names.every((n) => !/127|-md$/.test(n)), names.join(', '));
-    const prod = fileText(r, /products-1/);
-    assert.match(prod, /^# Products: Lumen Bikes \(part 1 of 2\)/);
-    assert.match(prod, /\n## Trail Pro 1\n\nSource: http:\/\/127\.0\.0\.1:\d+\/products\/trail-pro-1\n- Trail Pro 1 price: 1,299\.00 USD \(was 1,499\.00 USD\)\n- Trail Pro 1 brand: Lumen\n- Trail Pro 1 type: Bikes\n- Trail Pro 1 SKU: TP-1\n- Trail Pro 1 availability: in stock\n- Trail Pro 1 tags: mtb, carbon\n\nA light carbon trail bike, number 1\./);
-    assert.match(prod, /## Trail Pro 2\n[\s\S]*?- Trail Pro 2 price: 1,299\.00 USD to 1,349\.00 USD[\s\S]*?- Trail Pro 2 variants:\n {2}- Trail Pro 2 Small \/ Black: 1,299\.00 USD, SKU TP-2-S, in stock\n {2}- Trail Pro 2 Large \/ Black: 1,349\.00 USD, SKU TP-2-L, out of stock/);
-    // fixer r8 (D5): mixed stock never reads "in stock" at product level (it contradicted the Large / Black line)
-    assert.match(prod, /- Trail Pro 2 availability: only some options in stock \(Small \/ Black\)\n/);
-    assert.doesNotMatch(prod, /- Trail Pro 2 availability: in stock/);
-    assert.ok(!/evilScript/.test(prod), 'scripts stripped');
-    assert.equal(r.files.find((f) => /products-1/.test(slugOf(f.name))).docs, 200);
-    const faq = fileText(r, /faq/);
-    assert.match(faq, /## FAQ\n\nSource: http:\/\/127\.0\.0\.1:\d+\/pages\/faq\n\n### How long does shipping take\?\nTwo to five business days in the US\.\n\n### Do you ship to Canada\?\nYes, for a flat \$25\./);
-    const refund = fileText(r, /refund-policy/);
-    assert.match(refund, /## Refund policy\n\nSource: .*\/policies\/refund-policy\nWe refund unused items within 30 days of delivery\.\n\n\\# not a heading/);
-    assert.ok(!/Footer text|Home Shop Cart/.test(refund), 'nav and footer dropped');
-    assert.match(fileText(r, /pages/), /## About us\n\nSource: .*\/pages\/about-us\nLumen Bikes has built/);
-    assert.equal(s.hits(/lookbook/), 1, 'small store: non-matching page is checked by title');
-    assert.ok(!/Lookbook/.test(r.files.map((f) => f.bytes.toString()).join('')), 'non-help page not imported');
-    // politeness and privacy
-    for (const l of s.log) { assert.equal(l.headers['user-agent'], USER_AGENT); assert.equal(l.headers.cookie, undefined); assert.equal(l.headers.authorization, undefined); }
-    assert.ok(s.maxActive <= 4);
-    // events
+    // the plan comes before any reading, with counts per kind and samples
     const ev = events.map((x) => x.e);
-    assert.deepEqual([...new Set(ev)].filter((e) => e !== 'fetching'), ['detect', 'found', 'building', 'done']);
-    assert.deepEqual(events.find((x) => x.e === 'detect').d, { platform: 'shopify', api: true, base: s.base, name: 'Lumen Bikes' });
-    assert.deepEqual(events.find((x) => x.e === 'found').d, { products: 260, pages: 1, policies: 2, faqs: 2 });
-    const fe = events.filter((x) => x.e === 'fetching').at(-1).d; assert.equal(fe.done, fe.total);
-    const done = events.find((x) => x.e === 'done').d;
-    assert.ok(done.files.every((f) => typeof f.bytes === 'number' && f.docs > 0));
-    for (const f of r.files) { assert.equal(f.mime, 'text/markdown'); assert.ok(Buffer.isBuffer(f.bytes)); assert.equal(f.size, f.bytes.length); }
+    assert.ok(ev.indexOf('detect') < ev.indexOf('plan') && ev.indexOf('plan') < ev.indexOf('found') && ev.indexOf('found') < ev.indexOf('reading') && ev.indexOf('building') < ev.indexOf('built'), ev.filter((e) => e !== 'fetching').join(','));
+    const plan = events.find((x) => x.e === 'plan').d;
+    assert.equal(plan.counts.product, 600, 'variant and collection-scoped URLs fold into their product');
+    assert.equal(plan.counts.faq, 1); assert.equal(plan.counts.collection, 1); assert.equal(plan.counts.blog, 1);
+    assert.ok(plan.counts.policy >= 1 && plan.counts.help >= 1, JSON.stringify(plan.counts));
+    assert.equal(plan.samples.product.length, 3);
+    assert.deepEqual(events.find((x) => x.e === 'found').d.products, 600);
+    // every product: feed pages 1..3 (the third is short), then every product page for the full copy
+    assert.equal(w.hits(/^\/products\.json\?limit=250&page=1$/), 1, 'the first feed page is read once (plan + feed)');
+    assert.equal(w.hits(/^\/products\.json\?limit=250&page=3$/), 1);
+    assert.equal(w.hits(/^\/products\.json\?limit=250&page=4$/), 0, 'stops after a short page');
+    assert.equal(w.hits(/^\/products\/trail-pro-\d+$/), 600, 'every product page was read, once');
+    assert.equal(w.hits(/variant=|\/collections\/bikes\/products\//), 0, 'duplicates never fetched');
+    assert.equal(r.report.products.read, 600);
+    const prods = byKind(r, 'product');
+    assert.equal(prods.length, 600);
+    assert.equal(new Set(prods.map((f) => f.path)).size, 600);
+    assert.ok(prods.every((f) => /^site\/shop\.lumen\.test\/product\/trail-pro-\d+\.md$/.test(f.path) && f.mime === 'text/markdown'));
+    // the page itself: H1 with the canonical URL, Source line, then the real copy in sections
+    const p2 = text(prods.find((f) => f.path.endsWith('/trail-pro-2.md')));
+    const url2 = `${base}/products/trail-pro-2`;
+    assert.ok(p2.startsWith(`# Trail Pro 2 · ${url2}\n\nSource: ${url2}\n\n## Price and availability\n\n- Trail Pro 2 price: 1,299.00 USD to 1,349.00 USD\n`), p2.slice(0, 300));
+    assert.match(p2, /- Trail Pro 2 variants:\n {2}- Trail Pro 2 Small \/ Black: 1,299\.00 USD, SKU TP-2-S, in stock\n {2}- Trail Pro 2 Large \/ Black: 1,349\.00 USD, SKU TP-2-L, in stock/);
+    assert.match(p2, /- Trail Pro 2 options: Size \(Small, Large\)/);
+    assert.match(p2, /\n## Description\n\nA light carbon trail bike, number 2\./);
+    assert.match(p2, /\n## Specs\n\n- Frame: carbon, 1,150 g\n- Wheel size: 29 inches\n- Weight: 12\.4 kg in size M/);
+    assert.match(p2, /\n## Care\n\nWipe the frame/);
+    assert.match(p2, /\n## Shipping and returns\n\nTrail Pro 2 ships 90% assembled/);
+    assert.match(p2, /\n## FAQ\n\n### Does Trail Pro 2 fit a 2\.6 inch tyre\?\nYes, up to 2\.6 inches front and rear\./);
+    assert.match(p2, /\n## Reviews\n\nRiders say Trail Pro 2 climbs like a goat/);
+    assert.match(p2, /\n## Downloads\n\n- Owner manual \(PDF\): https:\/\/cdn\.shopify\.com\/s\/files\/1\/manual-trail-pro\.pdf/);
+    const p3 = text(prods.find((f) => f.path.endsWith('/trail-pro-3.md')));
+    assert.match(p3, /- Trail Pro 3 availability: only some options in stock \(Small \/ Black\)/);
+    // boilerplate: nav, footer, cookie banner, newsletter, and text repeated on every page are gone; scripts too
+    for (const f of prods.slice(0, 50)) {
+      const t = text(f);
+      assert.doesNotMatch(t, /cookies|newsletter|Footer text|Home Shop Cart|evilScript|Quantity/, f.path);
+      assert.doesNotMatch(t, /Free shipping on orders over \$100 and free returns/, `repeated block stripped: ${f.path}`);
+    }
+    // help, policies (Shopify policy pages), FAQ one section per question
+    const faq = text(r.files.find((f) => f.path === 'site/shop.lumen.test/faq/faq.md'));
+    assert.equal(faq, `# FAQ · ${base}/pages/faq\n\nSource: ${base}/pages/faq\n\n## How long does shipping take?\n\nTwo to five business days in the US.\n\n## Do you ship to Canada?\n\nYes, for a flat $25.\n`);
+    const refund = text(r.files.find((f) => f.path === 'site/shop.lumen.test/policy/refund-policy.md'));
+    assert.match(refund, /We refund unused items within 30 days of delivery\.\n\n\\# not a heading\n\n\\Source: https:\/\/evil\.example\/forged/, 'forged headings and Source lines are escaped');
+    assert.ok(r.files.some((f) => f.path === 'site/shop.lumen.test/policy/shipping-returns.md'), 'nav link "Shipping & Returns" is a policy source');
+    assert.ok(r.files.some((f) => f.path === 'site/shop.lumen.test/help/about-us.md'));
+    assert.ok(byKind(r, 'collection').length === 1 && byKind(r, 'blog').length === 1);
+    // PDFs: the product-linked size chart (one file however many products link it); the https CDN manual is not served
+    // by this loopback fake (the CDN case is covered below)
+    const pdfs = byKind(r, 'pdf');
+    assert.deepEqual(pdfs.map((f) => f.path), ['site/shop.lumen.test/pdf/size-chart.pdf']);
+    assert.equal(pdfs[0].url, `${base}/pages/size-chart.pdf`);
+    assert.equal(pdfs[0].mime, 'application/pdf');
+    // ranking: help and policies were written before the first product
+    const firstProduct = r.files.findIndex((f) => f.kind === 'product');
+    assert.ok(r.files.slice(0, firstProduct).some((f) => f.kind === 'policy') && r.files.slice(0, firstProduct).some((f) => f.kind === 'faq'));
+    // politeness and privacy
+    for (const l of w.log) { assert.equal(l.headers['user-agent'], USER_AGENT); assert.equal(l.headers.cookie, undefined); assert.equal(l.headers.authorization, undefined); }
+    assert.ok(w.maxActive <= 4, `max in flight ${w.maxActive}`);
+    assert.ok(r.maxConcurrent <= 4);
   });
 
-  test('caps products at maxProducts and the byte budget at the remaining quota, and reports both', async () => {
-    const s = await site(shopifyRoutes(300));
-    const a = await run(s.base, { maxProducts: 100 });
+  test('EVERY atom the production chunker cuts from a product page carries that product\'s URL (long and deep sections too)', () => {
+    const { r } = res;
+    const base = w.url('shop.lumen.test');
+    let atoms = 0, continuations = 0, shortened = 0;
+    for (const f of byKind(r, 'product')) {
+      const url = `${base}/products/${f.path.split('/').pop().replace(/\.md$/, '')}`;
+      for (const a of atomizeProduction(text(f))) {
+        atoms++;
+        if (a.kind === 'paragraph') continuations++;
+        if (a.breadcrumb.includes('…')) shortened++;
+        assert.ok(a.text.includes(url), `${f.path} atom ${a.seq} lacks its URL:\n${a.text.slice(0, 300)}`);
+        assert.ok(!a.text.includes(`${base}/products/trail-pro-${Number(/(\d+)\.md$/.exec(f.path)[1]) + 1}\n`), 'no other product URL');
+      }
+    }
+    assert.ok(atoms > 600 * 4, `atoms ${atoms}`);
+    assert.ok(continuations > 0, 'long descriptions were cut into continuation fragments');
+    assert.ok(shortened > 0, 'deep heading paths were shortened (H1 > … > last)');
+    // the old layout ("## Product / Source: url" in a shared file) does NOT survive the same chunker: proof the check bites
+    const old = `# Products: Lumen\n\n${byKind(r, 'product').slice(0, 3).map((f) => text(f).replace(/^# (.*) · (\S+)\n\nSource: \S+\n/, '## $1\n\nSource: $2\n').replace(/^## (?!Trail)/gm, '### ')).join('\n')}`;
+    const bad = atomizeProduction(old).filter((a) => !/\/products\/trail-pro-\d+/.test(a.text));
+    assert.ok(bad.length > 0, 'old layout leaves atoms without a URL');
+  });
+
+  test('deterministic Markdown: the same site imports to the same bytes', async () => {
+    const shop = shopify({ n: 30 });
+    const w2 = await web(shop.hosts);
+    const a = await run(w2.url(shop.host)), b = await run(w2.url(shop.host));
+    assert.ifError(a.error); assert.ifError(b.error);
+    const map = (r) => new Map(r.files.map((f) => [f.path, f.bytes.toString('base64')]));
+    assert.deepEqual(map(a.r), map(b.r));
+  });
+
+  test('caps: maxProducts (reported, feed stops), quota (never exceeded, policies first, left-out counts)', async () => {
+    const shop = shopify({ n: 300 });
+    const w3 = await web(shop.hosts);
+    const a = await run(w3.url(shop.host), { maxProducts: 100, enrich: 'none' });
     assert.ifError(a.error);
-    assert.equal(a.r.counts.products, 100);
+    assert.equal(byKind(a.r, 'product').length, 100);
     assert.deepEqual(a.r.capped.products, { limit: 100, kept: 100, more: true });
-    assert.deepEqual(a.events.find((x) => x.e === 'capped').d.products, { limit: 100, kept: 100, more: true });
-    assert.equal(s.hits(/products\.json\?limit=250/), 1, 'stops paginating at the cap');
-
-    const b = await run(s.base, { remainingBytes: 12000 });
+    assert.ok(a.r.report.leftOut.cap.product >= 150);
+    assert.equal(w3.hits(/products\.json\?limit=250&page=2/), 1, 'the second page was needed to know there were more');
+    const b = await run(w3.url(shop.host), { remainingBytes: 20000, enrich: 'none' });
     assert.ifError(b.error);
-    const total = b.r.files.reduce((n, f) => n + f.size, 0);
-    assert.ok(total <= 12000, `total ${total} ≤ remaining quota`);
+    const used = b.r.files.reduce((n, f) => n + f.size + FILE_OVERHEAD, 0);
+    assert.ok(used <= 20000, `used ${used} ≤ remaining quota`);
+    assert.ok(b.r.report.leftOut.quota.product > 200, JSON.stringify(b.r.report.leftOut));
     assert.ok(b.r.capped.bytes.droppedProducts > 200);
-    assert.ok(b.r.files.some((f) => /refund-policy/.test(slugOf(f.name))), 'policies are kept first');
-    assert.ok(b.r.files.some((f) => /faq/.test(slugOf(f.name))), 'FAQ kept before products');
-
-    const c = await run(s.base, { remainingBytes: 0 });
+    assert.ok(byKind(b.r, 'policy').length >= 1 && byKind(b.r, 'faq').length === 1, 'policies and FAQ are kept first');
+    const c = await run(w3.url(shop.host), { remainingBytes: 0 });
     assert.equal(c.error.code, 'quota');
   });
 
-  test('products.json disabled: falls back to product pages (JSON-LD) from the products sitemap', async () => {
-    const routes = shopifyRoutes(1);
-    routes['/products.json'] = { status: 404, body: 'nope' };
-    routes['/products/trail-pro-1'] = { body: html('Trail Pro 1', '<h1>Trail Pro 1</h1>', `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'Product', name: 'Trail Pro 1', sku: 'TP-1', brand: { '@type': 'Brand', name: 'Lumen' }, offers: { '@type': 'Offer', price: '1299.00', priceCurrency: 'USD', availability: 'https://schema.org/InStock' }, description: 'Carbon trail bike.' })}</script>`) };
-    const s = await site(routes);
-    const { r, error } = await run(s.base);
+  test('plan only: the finder reports what it found, nothing is read', async () => {
+    const shop = shopify({ n: 40 });
+    const w4 = await web(shop.hosts);
+    const { r, error } = await run(w4.url(shop.host), { planOnly: true });
     assert.ifError(error);
-    assert.equal(r.platform, 'shopify'); assert.equal(r.api, false);
-    assert.equal(r.counts.products, 1);
-    assert.match(fileText(r, /products/), /## Trail Pro 1\n\nSource: .*\/products\/trail-pro-1\n- Trail Pro 1 price: 1,299\.00 USD\n- Trail Pro 1 brand: Lumen\n- Trail Pro 1 SKU: TP-1\n- Trail Pro 1 availability: in stock\n\nCarbon trail bike\./);
-    assert.ok(r.warnings.some((w) => /products\.json/.test(w)));
+    assert.equal(r.plan.counts.product, 40);
+    assert.ok(r.plan.sources.length > 40);
+    assert.equal(w4.hits(/^\/products\/trail-pro/), 0);
+    assert.equal(w4.hits(/^\/pages\//), 0);
   });
 });
 
-// ------------------------------------------------------------------------------------------------ fake Magento 2
-function magentoRoutes({ graphql = true } = {}) {
-  const items = [
-    { __typename: 'SimpleProduct', name: 'Hydro Bottle', sku: 'HB-1', url_key: 'hydro-bottle', url_suffix: '.html', stock_status: 'IN_STOCK', categories: [{ name: 'Gear' }],
-      price_range: { minimum_price: { regular_price: { value: 25, currency: 'EUR' }, final_price: { value: 19.5, currency: 'EUR' } }, maximum_price: { final_price: { value: 19.5, currency: 'EUR' } } },
-      short_description: { html: '<p>Keeps water cold for 24 hours.</p>' }, description: { html: '' } },
-    { __typename: 'ConfigurableProduct', name: 'Rain Jacket', sku: 'RJ', url_key: 'rain-jacket', url_suffix: '.html', stock_status: 'IN_STOCK', categories: [],
-      price_range: { minimum_price: { regular_price: { value: 120, currency: 'EUR' }, final_price: { value: 120, currency: 'EUR' } }, maximum_price: { final_price: { value: 130, currency: 'EUR' } } },
-      short_description: { html: '' }, description: { html: '<p>Waterproof shell.</p>' },
-      variants: [{ attributes: [{ label: 'M', code: 'size' }, { label: 'Blue', code: 'color' }], product: { sku: 'RJ-M-B', stock_status: 'OUT_OF_STOCK', price_range: { minimum_price: { final_price: { value: 120, currency: 'EUR' } } } } }] },
-    { __typename: 'SimpleProduct', name: 'Bike Light', sku: 'BL-1', url_key: 'bike-light', url_suffix: '.html', stock_status: 'IN_STOCK', categories: [],
-      price_range: { minimum_price: { regular_price: { value: 40, currency: 'EUR' }, final_price: { value: 40, currency: 'EUR' } }, maximum_price: { final_price: { value: 40, currency: 'EUR' } } },
-      short_description: { html: '' }, description: { html: '<p>300 lumens.</p>' } },
-  ];
-  return {
-    '/': { body: html('Velo Shop', '<h1>Velo</h1>', '<script type="text/x-magento-init">{}</script>'), headers: { 'x-magento-cache-debug': 'MISS', 'set-cookie': 'PHPSESSID=x; mage-cache-sessid=true' } },
-    'POST /graphql': (req, res, { body }) => {
-      if (!graphql) { res.writeHead(403, { 'content-type': 'text/html' }); return res.end('Forbidden'); }
-      const { query, variables } = JSON.parse(body);
+describe('PDFs, help-centre subdomain and a hosted help desk linked from the site', () => {
+  test('PDFs on the site and on the allowed asset CDN are uploaded as they are; other CDN files and unlinked desks are refused', async () => {
+    const host = 'shop.lumen.test';
+    const zen = { '/api/v2/help_center/articles.json': (req, res, { base }) => {
       res.writeHead(200, { 'content-type': 'application/json' });
-      if (/storeConfig/.test(query)) return res.end(JSON.stringify({ data: { storeConfig: { store_name: 'Velo Shop', base_currency_code: 'EUR' } } }));
-      if (/products\(/.test(query)) {
-        const { page, size } = variables;
-        return res.end(JSON.stringify({ data: { products: { total_count: items.length, page_info: { current_page: page, total_pages: Math.ceil(items.length / size) }, items: items.slice((page - 1) * size, page * size) } } }));
-      }
-      if (/cmsPage/.test(query)) {
-        const data = {}; const errors = [];
-        for (const m of query.matchAll(/(p\d+): cmsPage\(identifier:"([^"]+)"\)/g)) {
-          if (m[2] === 'faq') data[m[1]] = { title: 'FAQ', url_key: 'faq', content: '<h2>Can I return a bike?</h2><p>Yes, within 14 days.</p><h2>Do you offer financing?</h2><p>Yes, 0% for 12 months.</p>' };
-          else if (m[2] === 'shipping') data[m[1]] = { title: 'Shipping', url_key: 'shipping', content: '<p>We ship across the EU in 3 to 5 days, free above 50 EUR.</p>' };
-          else { data[m[1]] = null; errors.push({ message: `The CMS page with the "${m[2]}" ID doesn't exist.` }); }
-        }
-        return res.end(JSON.stringify({ data, errors }));
-      }
-      res.end(JSON.stringify({ errors: [{ message: 'bad query' }] }));
-    },
-    '/sitemap.xml': { type: 'application/xml', body: (b) => sitemap([`${b}/hydro-bottle.html`, `${b}/customer-service`, `${b}/faq`]) },
-    '/customer-service': { body: html('Customer Service', '<h1>Customer Service</h1><p>Call us Monday to Friday, 9 to 5, at +49 30 1234.</p>') },
-    '/hydro-bottle.html': { body: html('Hydro Bottle', '<h1>Hydro Bottle</h1>', `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@graph': [{ '@type': 'Organization', name: 'Velo' }, { '@type': 'Product', name: 'Hydro Bottle', sku: 'HB-1', offers: { '@type': 'Offer', price: 19.5, priceCurrency: 'EUR', availability: 'http://schema.org/InStock' } }] })}</script>`) },
-  };
-}
-describe('Magento 2', () => {
-  test('GraphQL products (paged, configurable variants) + cmsPage + sitemap help pages', async () => {
-    const s = await site(magentoRoutes());
-    const { r, events, error } = await run(s.base, { pageSize: 2 });
+      res.end(JSON.stringify({ count: 2, next_page: null, articles: [
+        { html_url: `${base}/hc/en-us/articles/101-How-do-I-return-a-bike`, title: 'How do I return a bike?', body: '<p>Start a return from your order page within 30 days.</p>', draft: false },
+        { html_url: `${base}/hc/en-us/articles/102-Warranty-registration`, title: 'Warranty registration', body: '<p>Register your frame within 60 days to get the lifetime warranty.</p>', draft: false },
+      ] }));
+    } };
+    const help = {
+      '/': { body: page('Lumen Help', '<h1>Lumen Help</h1>') },
+      '/sitemap.xml': { type: 'application/xml', body: (b) => urlset([`${b}/articles/tyre-pressure`, `${b}/articles/brake-bleed`]) },
+      '/articles/tyre-pressure': { body: page('Tyre pressure guide', '<h1>Tyre pressure guide</h1><p>Run 22 to 25 psi on the trail with tubeless tyres.</p>') },
+      '/articles/brake-bleed': { body: page('Brake bleed', '<h1>Brake bleed</h1><p>Bleed hydraulic brakes once a year with mineral oil only.</p>') },
+    };
+    const w = await web({
+      [host]: {
+        '/': { body: (b) => page('Lumen', `<h1>Lumen</h1>`, { head: '<meta property="og:site_name" content="Lumen">' }).replace('</footer>', `<a href="${b.replace(host, 'help.lumen.test')}/">Help centre</a> <a href="${b.replace(host, 'lumen.zendesk.com')}/hc/en-us">Support</a> <a href="/docs/manual.pdf">Manual (PDF)</a> <a href="${b.replace(host, 'cdn.shopify.com')}/s/files/sizes.pdf">Size chart</a></footer>`) },
+        '/docs/manual.pdf': { type: 'application/pdf', body: PDF },
+        '/products/widget': { body: (b) => page('Widget', `<h1>Widget</h1><p>The widget does useful things for riders every day.</p><a href="${b.replace(host, 'cdn.shopify.com')}/s/files/widget-spec.pdf">Spec sheet</a> <a href="${b.replace(host, 'cdn.shopify.com')}/s/files/notes.txt">notes</a>`, { head: `<script type="application/ld+json">{"@type":"Product","name":"Widget","offers":{"price":"5.00","priceCurrency":"USD"}}</script>` }) },
+        '/sitemap.xml': { type: 'application/xml', body: (b) => urlset([`${b}/products/widget`]) },
+      },
+      'help.lumen.test': help,
+      'lumen.zendesk.com': zen,
+      'other.zendesk.com': zen,
+      'cdn.shopify.com': { '/s/files/sizes.pdf': { type: 'application/pdf', body: PDF }, '/s/files/widget-spec.pdf': { type: 'application/pdf', body: PDF }, '/s/files/notes.txt': { type: 'text/plain', body: 'x' } },
+    });
+    const { r, error, events } = await run(w.url(host));
     assert.ifError(error);
-    assert.equal(r.platform, 'magento'); assert.equal(r.api, true);
-    assert.equal(events.find((x) => x.e === 'detect').d.name, 'Velo Shop');
-    assert.equal(r.counts.products, 3);
-    assert.equal(s.log.filter((l) => l.method === 'POST' && /products\(/.test(l.body)).length, 2, 'two GraphQL pages');
-    const prod = fileText(r, /products/);
-    assert.match(prod, /## Hydro Bottle\n\nSource: http:\/\/127\.0\.0\.1:\d+\/hydro-bottle\.html\n- Hydro Bottle price: 19\.50 EUR \(was 25\.00 EUR\)\n- Hydro Bottle SKU: HB-1\n- Hydro Bottle availability: in stock\n- Hydro Bottle categories: Gear\n\nKeeps water cold/);
-    assert.match(prod, /## Rain Jacket[\s\S]*?- Rain Jacket type: Configurable[\s\S]*?- Rain Jacket variants:\n {2}- Rain Jacket M \/ Blue: 120\.00 EUR, SKU RJ-M-B, out of stock/);
-    const faq = fileText(r, /faq/);
-    assert.match(faq, /### Can I return a bike\?\nYes, within 14 days\./);
-    assert.match(fileText(r, /shipping/), /We ship across the EU/);
-    assert.match(fileText(r, /pages/), /## Customer Service\n\nSource: .*\/customer-service\nCall us Monday/);
-    assert.equal(s.hits(/^\/faq$/), 0, 'CMS page already read through GraphQL is not fetched again');
-    assert.equal(s.hits(/hydro-bottle\.html/), 0, 'API products: product pages not crawled');
-  });
-  test('GraphQL blocked: falls back to the generic sitemap + JSON-LD path', async () => {
-    const s = await site(magentoRoutes({ graphql: false }));
-    const { r, error } = await run(s.base);
-    assert.ifError(error);
-    assert.equal(r.platform, 'magento'); assert.equal(r.api, false);
-    assert.equal(r.counts.products, 1);
-    assert.match(fileText(r, /products/), /## Hydro Bottle\n[\s\S]*- Hydro Bottle price: 19\.50 EUR/);
+    const plan = events.find((x) => x.e === 'plan').d;
+    assert.deepEqual(plan.helpdesks.map((d) => d.type).sort(), ['subdomain', 'zendesk']);
+    const paths = r.files.map((f) => f.path).sort();
+    assert.ok(paths.includes('site/help.lumen.test/help/tyre-pressure.md') && paths.includes('site/help.lumen.test/help/brake-bleed.md'), paths.join('\n'));
+    // returns and warranty articles rank with the policies
+    assert.ok(paths.includes('site/lumen.zendesk.com/policy/101-how-do-i-return-a-bike.md'), paths.join('\n'));
+    assert.ok(paths.includes('site/lumen.zendesk.com/policy/102-warranty-registration.md'), paths.join('\n'));
+    assert.equal(w.hits(/\/hc\/en-us\/articles\//, 'lumen.zendesk.com'), 0, 'Zendesk articles came from its API, not one page each');
+    const zf = text(r.files.find((f) => f.path.endsWith('101-how-do-i-return-a-bike.md')));
+    assert.ok(zf.startsWith(`# How do I return a bike? · ${w.url('lumen.zendesk.com')}/hc/en-us/articles/101-How-do-I-return-a-bike\n`), zf);
+    const pdfs = byKind(r, 'pdf');
+    assert.deepEqual(pdfs.map((f) => f.path).sort(), ['site/shop.lumen.test/pdf/manual.pdf', 'site/shop.lumen.test/pdf/sizes.pdf', 'site/shop.lumen.test/pdf/widget-spec.pdf']);
+    assert.ok(pdfs.every((f) => f.mime === 'application/pdf' && f.bytes.subarray(0, 5).toString() === '%PDF-' && /^http:\/\//.test(f.url)));
+    assert.equal(w.hits(/notes\.txt/, 'cdn.shopify.com'), 0, 'a non-PDF on the CDN is never fetched');
+    assert.equal(w.log.filter((l) => l.host === 'other.zendesk.com').length, 0, 'an unlinked help desk is never contacted');
+    const f = createStoreFetcher(NET);
+    f.allowSite(host);
+    await assert.rejects(f.fetch(`${w.url('other.zendesk.com')}/api/v2/help_center/articles.json`), { code: 'blocked_host' });
   });
 });
 
-// ------------------------------------------------------------------------------------------------ fake Squarespace
-function squarespaceRoutes({ robots = '' } = {}) {
-  const item = (slug, title, value, extra = {}) => ({ title, fullUrl: `/shop/p/${slug}`, body: `<p>${title} is handmade.</p>`, tags: ['ceramic'], recordTypeLabel: 'store-item',
-    structuredContent: { productType: 1 }, variants: [{ sku: `${slug}-1`, priceMoney: { currency: 'GBP', value: value }, stock: { unlimited: false, quantity: 3 }, attributes: {} }], ...extra });
-  return {
-    '/robots.txt': { type: 'text/plain', body: robots },
-    '/': (req, res, { url }) => {
-      if (url.searchParams.get('format') === 'json') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ website: { siteTitle: 'Clay Studio' } })); }
-      res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(html('Clay Studio', '<h1>Clay</h1>', '<link rel="stylesheet" href="https://static1.squarespace.com/static/site.css">'));
-    },
-    '/sitemap.xml': { type: 'application/xml', body: (b) => sitemap([`${b}/shop/p/mug`, `${b}/shop/p/bowl`, `${b}/faq`, `${b}/returns`]) },
-    '/shop': (req, res, { url }) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      if (url.searchParams.get('offset') === '2') return res.end(JSON.stringify({ items: [item('bowl', 'Bowl', '30.00', { variants: [{ sku: 'b-s', priceMoney: { currency: 'GBP', value: '30.00' }, stock: { quantity: 0 }, attributes: { Size: 'Small' } }, { sku: 'b-l', priceMoney: { currency: 'GBP', value: '42.00' }, stock: { quantity: 2 }, attributes: { Size: 'Large' } }] })], pagination: { nextPage: false } }));
-      res.end(JSON.stringify({ collection: { title: 'Shop' }, items: [item('mug', 'Mug', '18.00')], pagination: { nextPage: true, nextPageOffset: 2 } }));
-    },
-    '/shop/p/mug': { body: html('Mug', '<h1>Mug</h1>', `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: 'Mug', offers: [{ '@type': 'Offer', price: '18.00', priceCurrency: 'GBP' }] })}</script>`) },
-    '/shop/p/bowl': { body: html('Bowl', '<h1>Bowl</h1>', `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: 'Bowl', offers: { '@type': 'AggregateOffer', lowPrice: '30.00', highPrice: '42.00', priceCurrency: 'GBP' } })}</script>`) },
-    '/faq': { body: html('FAQ', '<h1>FAQ</h1><h2>Are mugs dishwasher safe?</h2><p>Yes, top rack.</p><h2>Do you take commissions?</h2><p>Twice a year; join the list.</p>') },
-    '/returns': { body: html('Returns', '<h1>Returns</h1><p>Return any piece within 30 days for a full refund.</p>') },
-  };
-}
-describe('Squarespace', () => {
-  test('?format=json collections (with pagination) + sitemap pages', async () => {
-    const s = await site(squarespaceRoutes());
-    const { r, error } = await run(s.base);
-    assert.ifError(error);
-    assert.equal(r.platform, 'squarespace'); assert.equal(r.api, true);
-    assert.equal(r.counts.products, 2);
-    const prod = fileText(r, /products/);
-    assert.match(prod, /## Mug\n\nSource: http:\/\/127\.0\.0\.1:\d+\/shop\/p\/mug\n- Mug price: 18\.00 GBP\n- Mug SKU: mug-1\n- Mug availability: in stock\n- Mug tags: ceramic\n\nMug is handmade\./);
-    assert.match(prod, /## Bowl[\s\S]*?- Bowl price: 30\.00 GBP to 42\.00 GBP[\s\S]*?- Bowl variants:\n {2}- Bowl Size: Small: 30\.00 GBP, SKU b-s, out of stock\n {2}- Bowl Size: Large: 42\.00 GBP, SKU b-l, in stock/);
-    assert.match(fileText(r, /faq/), /### Are mugs dishwasher safe\?\nYes, top rack\./);
-    assert.match(fileText(r, /returns/), /Return any piece within 30 days/);
-    assert.equal(s.hits(/^\/shop\/p\//), 0, 'API path: product pages not fetched');
-  });
-  test('robots.txt disallows ?format=json: never requested; products come from JSON-LD on product pages', async () => {
-    const s = await site(squarespaceRoutes({ robots: 'User-agent: *\nDisallow: /*?format=json\nDisallow: /*&format=json\n' }));
-    const { r, error } = await run(s.base);
-    assert.ifError(error);
-    assert.equal(r.platform, 'squarespace'); assert.equal(r.api, false);
-    assert.equal(s.hits(/format=json/), 0);
-    assert.equal(r.counts.products, 2);
-    assert.match(fileText(r, /products/), /## Bowl\n[\s\S]*- Bowl price: 30\.00 GBP to 42\.00 GBP/);
-  });
-});
-
-// ------------------------------------------------------------------------------------------------ fake WooCommerce
-function wooRoutes(n) {
-  const all = Array.from({ length: n }, (_, i) => ({ id: i + 1, name: `Espresso Grinder &#8211; Mk ${i + 1}`, permalink: `BASE/product/grinder-${i + 1}/`, sku: `EG-${i + 1}`,
-    prices: { price: '129900', regular_price: '149900', sale_price: '129900', currency_code: 'AUD', currency_minor_unit: 2 }, is_in_stock: true,
-    attributes: [{ name: 'Colour', terms: [{ name: 'Black' }, { name: 'Steel' }] }], categories: [{ name: 'Grinders' }], tags: [],
-    short_description: '<p>Flat burrs.</p>', description: '<p>64 mm flat burrs, stepless.</p>' }));
-  return {
-    '/': { body: html('Bean Co', '<h1>Bean Co</h1>', '<link rel="https://api.w.org/" href="/wp-json/"><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css">') },
-    '/wp-json/wc/store/v1/products': (req, res, { url, base }) => {
-      const per = Number(url.searchParams.get('per_page')), page = Number(url.searchParams.get('page') || 1);
-      res.writeHead(200, { 'content-type': 'application/json', 'x-wp-total': String(all.length), 'x-wp-totalpages': String(Math.ceil(all.length / per)) });
-      res.end(JSON.stringify(all.slice((page - 1) * per, page * per)).replaceAll('BASE', base));
-    },
-    '/wp-json/wp/v2/pages': (req, res, { base }) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify([
-        { link: `${base}/faq/`, title: { rendered: 'FAQ' }, content: { rendered: '<h3>How fine can it grind?</h3><p>Fine enough for Turkish coffee.</p><h3>Is there a warranty?</h3><p>Two years.</p>' } },
-        { link: `${base}/shipping-returns/`, title: { rendered: 'Shipping &amp; Returns' }, content: { rendered: '<p>Free shipping in Australia over 100 AUD. Returns within 30 days.</p>' } },
-        { link: `${base}/gallery/`, title: { rendered: 'Gallery' }, content: { rendered: '<p>Pictures.</p>' } },
-      ]));
-    },
-  };
-}
+// ------------------------------------------------------------------------------------------------ WooCommerce, Magento
 describe('WooCommerce', () => {
-  test('Store API products (minor units, pages) + WordPress pages', async () => {
-    const s = await site(wooRoutes(3));
-    const { r, error } = await run(s.base, { pageSize: 2 });
+  test('Store API products (minor units, paged by X-WP-TotalPages) + WordPress pages (Divi shortcodes → FAQ; empty content → page HTML)', async () => {
+    const host = 'wyrm.test';
+    const prods = Array.from({ length: 5 }, (_, i) => ({ id: i + 1, name: `Toad Vault ${i + 1}`, permalink: `http://${host}:PORT/products/toad-vault-${i + 1}/`, sku: `TV-${i + 1}`,
+      prices: { price: '4999', regular_price: '5999', currency_code: 'USD', currency_minor_unit: 2 }, is_in_stock: i !== 4,
+      description: '<p>A walnut dice vault with a magnetic lid.</p>'.repeat(12), short_description: '', categories: [{ name: 'Vaults' }], attributes: [] }));
+    const w = await web({ [host]: {
+      '/': { body: page('Wyrmwood', '<h1>Wyrmwood</h1>', { head: '<link rel="stylesheet" href="/wp-content/plugins/woocommerce/style.css"><meta property="og:site_name" content="Wyrmwood">' }) },
+      '/wp-json/wc/store/v1/products': (req, res, { url }) => {
+        const pp = Number(url.searchParams.get('per_page')), pg = Number(url.searchParams.get('page'));
+        const port = req.headers.host.split(':')[1];
+        res.writeHead(200, { 'content-type': 'application/json', 'x-wp-total': '5', 'x-wp-totalpages': String(Math.ceil(5 / pp)) });
+        res.end(JSON.stringify(prods.slice((pg - 1) * pp, pg * pp)).replace(/PORT/g, port));
+      },
+      '/wp-json/wp/v2/pages': (req, res, { base }) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify([
+          { link: `${base}/faq/`, title: { rendered: 'FAQ' }, content: { rendered: '[et_pb_section][et_pb_accordion][et_pb_accordion_item title="How long does shipping take?" open="on"]<p>Most orders ship in 5 days.</p>[/et_pb_accordion_item][et_pb_accordion_item title="Do you ship worldwide?"]<p>Yes, to 40 countries.</p>[/et_pb_accordion_item][/et_pb_accordion][/et_pb_section]' } },
+          { link: `${base}/shipping/`, title: { rendered: 'Shipping' }, content: { rendered: '' } },
+          { link: `${base}/gallery/`, title: { rendered: 'Gallery' }, content: { rendered: '<p>Pictures.</p>' } },
+        ]));
+      },
+      '/shipping/': { body: page('Shipping', '<h1>Shipping</h1><p>We ship from Pennsylvania with tracking on every order.</p>') },
+      '/products/toad-vault-1/': { body: page('Toad Vault 1', '<h1>Toad Vault 1</h1><h2>Dimensions</h2><p>Inside: 4 by 4 by 2 inches; holds three full dice sets.</p>') },
+    } });
+    const { r, error } = await run(w.url(host), { pageSize: 2 });
     assert.ifError(error);
-    assert.equal(r.platform, 'woocommerce'); assert.equal(r.api, true);
-    assert.equal(r.counts.products, 3);
-    assert.equal(s.hits(/\/wc\/store\/v1\/products\?per_page=2&page=\d/), 2);
-    const prod = fileText(r, /products/);
-    assert.match(prod, /## Espresso Grinder – Mk 1\n\nSource: http:\/\/127\.0\.0\.1:\d+\/product\/grinder-1\/\n- Espresso Grinder – Mk 1 price: 1,299\.00 AUD \(was 1,499\.00 AUD\)\n- Espresso Grinder – Mk 1 SKU: EG-1\n- Espresso Grinder – Mk 1 availability: in stock\n- Espresso Grinder – Mk 1 options: Colour \(Black, Steel\)\n- Espresso Grinder – Mk 1 categories: Grinders\n\nFlat burrs\.\n\n64 mm flat burrs, stepless\./);
-    assert.match(fileText(r, /faq/), /### Is there a warranty\?\nTwo years\./);
-    assert.match(fileText(r, /shipping-returns/), /## Shipping & Returns\n\nSource: .*\/shipping-returns\/\nFree shipping in Australia/);
-    assert.ok(!r.files.some((f) => /gallery/i.test(f.bytes.toString())), 'non-help pages skipped');
+    assert.equal(r.platform, 'woocommerce');
+    assert.equal(w.hits(/wc\/store\/v1\/products\?per_page=2&page=3/), 1);
+    assert.equal(w.hits(/wc\/store\/v1\/products\?per_page=2&page=4/), 0);
+    assert.equal(byKind(r, 'product').length, 5);
+    const t1 = text(r.files.find((f) => f.path.endsWith('/product/toad-vault-1.md')));
+    assert.ok(t1.startsWith(`# Toad Vault 1 · ${w.url(host)}/products/toad-vault-1/\n`), t1.slice(0, 200)); // the permalink as the store gives it
+    assert.match(t1, /- Toad Vault 1 price: 49\.99 USD \(was 59\.99 USD\)/);
+    assert.match(t1, /## Specs\n\nInside: 4 by 4 by 2 inches/, 'the product page adds its dimensions');
+    assert.match(text(r.files.find((f) => f.path.endsWith('/product/toad-vault-5.md'))), /availability: out of stock/);
+    const faq = text(r.files.find((f) => f.path.endsWith('/faq/faq.md')));
+    assert.match(faq, /## How long does shipping take\?\n\nMost orders ship in 5 days\.\n\n## Do you ship worldwide\?\n\nYes, to 40 countries\./);
+    assert.doesNotMatch(faq, /et_pb_/);
+    assert.equal(w.hits(/^\/faq\/$/), 0, 'the FAQ came whole from the pages API');
+    assert.equal(w.hits(/^\/shipping\/$/), 1, 'an empty API page is read from its HTML');
+    assert.match(text(r.files.find((f) => f.path.endsWith('/policy/shipping.md'))), /ship from Pennsylvania/);
+    assert.ok(!r.files.some((f) => /gallery/.test(f.path)), 'a page that is not help, policy or FAQ is not read from the API list');
   });
 });
 
-// ------------------------------------------------------------------------------------------------ generic
-function genericRoutes() {
-  const ld = (o) => `<script type="application/ld+json">${JSON.stringify(o)}</script>`;
-  return {
-    '/robots.txt': { type: 'text/plain', body: (b) => `User-agent: *\nDisallow: /cart\n\nSitemap: ${b}/custom-sitemap.xml\n` },
-    '/': { body: (b) => html('Acme Outdoors', `<h1>Acme</h1><a href="${b}/help/faq">FAQ</a>`) },
-    '/custom-sitemap.xml': { type: 'application/xml', body: (b) => sitemapIndex([`${b}/sm-pages.xml.gz`, `${b}/sm-products.xml`, `${b}/sm-posts.xml`]) },
-    '/sm-pages.xml.gz': { type: 'application/gzip', body: (b) => zlib.gzipSync(sitemap([`${b}/help/faq`, `${b}/shipping-policy`, `${b}/about`, `${b}/blog/hello`, `${b}/cart`])) },
-    '/sm-products.xml': { type: 'application/xml', body: (b) => sitemap([`${b}/tent-2p`, `${b}/stove`]) },
-    '/tent-2p': { body: html('Tent 2P', '<h1>Tent</h1>', ld({ '@context': 'https://schema.org', '@type': 'ProductGroup', name: '2P Tent', brand: 'Acme', description: '<p>Two-person, 1.4 kg.</p>',
-      offers: { '@type': 'Offer', price: '349', priceCurrency: 'CAD', availability: 'https://schema.org/LimitedAvailability' },
-      hasVariant: [{ '@type': 'Product', name: '2P Tent Green', sku: 'T2-G', offers: { price: '349', availability: 'https://schema.org/InStock' } }] })) },
-    '/stove': { body: html('Stove', '<h1>Stove</h1><p>No structured data here.</p>') },
-    '/help/faq': { body: html('Help', '<h1>Help centre</h1>', ld({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: [
-      { '@type': 'Question', name: 'Do tents come with stakes?', acceptedAnswer: { '@type': 'Answer', text: '<p>Yes, eight aluminium stakes.</p>' } },
-      { '@type': 'Question', name: 'Can I pick up in store?', acceptedAnswer: { '@type': 'Answer', text: 'Yes, in Calgary.' } }] })) },
-    '/shipping-policy': { body: html('Shipping', '<h1>Shipping policy</h1><style>.x{color:red}</style><script>var leak = "SECRET";</script><p>Ships in 1&ndash;2 days via Canada Post.</p><ul><li>Free over 99 CAD</li><li>Tracking included</li></ul>') },
-    '/about': { body: html('About Acme', '<article><h1>About Acme</h1><p>Family-run outfitter in Calgary since 1998, gear tested in the Rockies.</p></article>') },
-    '/cart': { body: html('Cart', '<p>should never be requested</p>') },
-  };
-}
+describe('Magento 2', () => {
+  test('GraphQL products (paged, configurable variants) + cmsPage + help pages from the sitemap', async () => {
+    const host = 'velo.test';
+    const items = [
+      { __typename: 'ConfigurableProduct', name: 'Velo Jersey', sku: 'VJ', url_key: 'velo-jersey', url_suffix: '.html', stock_status: 'IN_STOCK', categories: [{ name: 'Apparel' }],
+        price_range: { minimum_price: { regular_price: { value: 59, currency: 'EUR' }, final_price: { value: 49, currency: 'EUR' } }, maximum_price: { final_price: { value: 49, currency: 'EUR' } } },
+        short_description: { html: '<p>Merino jersey.</p>' }, description: { html: '<p>Cut for the bike.</p>' },
+        variants: [{ attributes: [{ label: 'S', code: 'size' }], product: { sku: 'VJ-S', stock_status: 'IN_STOCK', price_range: { minimum_price: { final_price: { value: 49, currency: 'EUR' } } } } },
+          { attributes: [{ label: 'L', code: 'size' }], product: { sku: 'VJ-L', stock_status: 'OUT_OF_STOCK', price_range: { minimum_price: { final_price: { value: 49, currency: 'EUR' } } } } }] },
+      { __typename: 'SimpleProduct', name: 'Bottle Cage', sku: 'BC', url_key: 'bottle-cage', url_suffix: '.html', stock_status: 'IN_STOCK', categories: [],
+        price_range: { minimum_price: { regular_price: { value: 15, currency: 'EUR' }, final_price: { value: 15, currency: 'EUR' } }, maximum_price: { final_price: { value: 15, currency: 'EUR' } } },
+        short_description: { html: '' }, description: { html: '<p>Carbon cage, 18 g, fits every standard bottle.</p>' } },
+    ];
+    const w = await web({ [host]: {
+      '/': { body: page('Velo Shop', '<h1>Velo</h1>', { head: '<script type="text/x-magento-init">{}</script>' }), headers: { 'x-magento-cache-debug': 'MISS' } },
+      'POST /graphql': (req, res, { body }) => {
+        const { query, variables } = JSON.parse(body);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        if (/storeConfig/.test(query)) return res.end(JSON.stringify({ data: { storeConfig: { store_name: 'Velo Shop', base_currency_code: 'EUR' } } }));
+        if (/total_count\}\}$/.test(query.replace(/\s+/g, ''))) return res.end(JSON.stringify({ data: { products: { total_count: 2 } } }));
+        if (/products\(/.test(query)) { const pg = variables.page; return res.end(JSON.stringify({ data: { products: { total_count: 2, page_info: { current_page: pg, total_pages: 2 }, items: [items[pg - 1]] } } })); }
+        if (/cmsPage/.test(query)) return res.end(JSON.stringify({ data: { p0: { title: 'FAQ', url_key: 'faq', content: '<details><summary>Do you ship to Austria?</summary><p>Yes, in 3 days.</p></details>' } } }));
+        return res.end('{}');
+      },
+      '/sitemap.xml': { type: 'application/xml', body: (b) => urlset([`${b}/customer-service`, `${b}/velo-jersey.html`]) },
+      '/customer-service': { body: page('Customer service', '<h1>Customer service</h1><p>Call us Monday to Friday, 9 to 5, on 0800 123 456.</p>') },
+      '/velo-jersey.html': { body: page('Velo Jersey', '<h1>Velo Jersey</h1><h2>Care</h2><p>Wash cold at 30 degrees and hang to dry.</p>') },
+    } });
+    const { r, error } = await run(w.url(host), { pageSize: 1 });
+    assert.ifError(error);
+    assert.equal(r.platform, 'magento');
+    assert.equal(byKind(r, 'product').length, 2);
+    const j = text(r.files.find((f) => f.path.endsWith('/product/velo-jersey.md')));
+    assert.match(j, /- Velo Jersey price: 49\.00 EUR \(was 59\.00 EUR\)/);
+    assert.match(j, /- Velo Jersey L: 49\.00 EUR, SKU VJ-L, out of stock/);
+    assert.match(j, /## Care\n\nWash cold at 30 degrees/);
+    assert.match(text(r.files.find((f) => f.path.endsWith('/faq/faq.md'))), /## Do you ship to Austria\?\n\nYes, in 3 days\./);
+    assert.ok(r.files.some((f) => f.path.endsWith('/help/customer-service.md')));
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ generic, politeness
 describe('generic site', () => {
-  test('robots Sitemap: line, sitemap index + gz child, JSON-LD Product/ProductGroup/FAQPage, readable policy text', async () => {
-    const s = await site(genericRoutes());
-    const { r, error } = await run(`${s.base}/some/deep/link?utm=1`);
-    assert.ifError(error);
-    assert.equal(r.platform, 'generic'); assert.equal(r.api, false);
-    assert.equal(s.hits(/sm-posts|blog|cart/), 0, 'posts sitemap, blog and robots-disallowed /cart skipped');
-    assert.equal(s.hits(/^\/sitemap\.xml/), 0, 'robots Sitemap: line used instead of guessing');
-    assert.equal(r.counts.products, 1);
-    assert.match(fileText(r, /products/), /## 2P Tent\n\nSource: .*\/tent-2p\n- 2P Tent price: 349\.00 CAD\n- 2P Tent brand: Acme\n- 2P Tent availability: limited availability\n- 2P Tent variants:\n {2}- 2P Tent Green: 349\.00 CAD, SKU T2-G, in stock\n\nTwo-person, 1\.4 kg\./);
-    assert.match(fileText(r, /faq/), /## Help centre\n\nSource: .*\/help\/faq\n\n### Do tents come with stakes\?\nYes, eight aluminium stakes\.\n\n### Can I pick up in store\?\nYes, in Calgary\./);
-    const pol = fileText(r, /shipping-policy/);
-    assert.match(pol, /Ships in 1–2 days via Canada Post\.\n\n- Free over 99 CAD\n- Tracking included/);
-    assert.ok(!/SECRET|color:red/.test(pol));
-    assert.match(fileText(r, /pages/), /## About Acme\n\nSource: .*\/about\nFamily-run outfitter/);
-  });
-  test('detectPlatform on a bare site with no API says generic', async () => {
-    const s = await site({ '/': { body: html('Plain', '<h1>Plain</h1>') } });
-    const f = createStoreFetcher(NET); f.allowSite('127.0.0.1');
-    const d = await detectPlatform(s.base, f.fetch);
-    assert.equal(d.platform, 'generic'); assert.equal(d.api, false);
-    assert.ok(d.signals.length === 0 || d.signals.every((x) => !x.startsWith('api:')));
-  });
-  test('no products or help pages → no_content', async () => {
-    const s = await site({ '/': { body: html('Empty', '<div id="root"></div>') } });
-    const { error, events } = await run(s.base);
-    assert.equal(error.code, 'no_content');
-    assert.deepEqual(events.at(-1), { e: 'error', d: { code: 'no_content', message: error.message } });
-  });
-  test('time budget: slow pages are cut off, import still finishes and reports capped.time', async () => {
-    const routes = { '/': { body: html('Slow', '<h1>Slow</h1>') }, '/sitemap.xml': { type: 'application/xml', body: (b) => sitemap(Array.from({ length: 40 }, (_, i) => `${b}/products/p${i}`)) } };
-    for (let i = 0; i < 40; i++) routes[`/products/p${i}`] = { delay: 120, body: html(`P${i}`, '', `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: `Product ${i}`, offers: { price: 1, priceCurrency: 'USD' } })}</script>`) };
-    const s = await site(routes);
+  test('robots Sitemap line, index + gz child, JSON-LD Product/FAQPage, canonical dedupe, robots disallow and Crawl-delay', async () => {
+    const host = 'plain.test';
+    const prodPage = (n, canon) => page(`Lamp ${n}`, `<h1>Lamp ${n}</h1><p>Lamp ${n} gives 300 lumens of warm light for your desk at home.</p>`,
+      { head: `<link rel="canonical" href="${canon}"><script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@graph': [{ '@type': 'BreadcrumbList', itemListElement: [] }, { '@type': 'Product', name: `Lamp ${n}`, sku: `L${n}`, brand: { name: 'Glow' }, offers: { '@type': 'AggregateOffer', lowPrice: '20', highPrice: '30', priceCurrency: 'GBP', availability: 'https://schema.org/InStock' } }] })}</script>` });
+    const w = await web({ [host]: {
+      '/robots.txt': { type: 'text/plain', body: (b) => `User-agent: *\nDisallow: /secret\nCrawl-delay: 0.2\nSitemap: ${b}/maps/index.xml\n` },
+      '/': { body: page('Glow', '<h1>Glow lamps</h1>') },
+      '/maps/index.xml': { type: 'application/xml', body: (b) => smIndex([`${b}/maps/products.xml.gz`, `${b}/maps/pages.xml`]) },
+      '/maps/products.xml.gz': { type: 'application/x-gzip', body: (b) => zlib.gzipSync(urlset([`${b}/product/lamp-1`, `${b}/product/lamp-1-copy`, `${b}/product/lamp-2`])) },
+      '/maps/pages.xml': { type: 'application/xml', body: (b) => urlset([`${b}/help/faq`, `${b}/legal/returns`, `${b}/secret/plan`]) },
+      '/product/lamp-1': { body: (b) => prodPage(1, `${b}/product/lamp-1`) },
+      '/product/lamp-1-copy': { body: (b) => prodPage(1, `${b}/product/lamp-1`) },
+      '/product/lamp-2': { body: (b) => prodPage(2, `${b}/product/lamp-2`) },
+      '/help/faq': { body: page('Questions', `<h1>Questions</h1><script type="application/ld+json">{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Do lamps include bulbs?","acceptedAnswer":{"@type":"Answer","text":"<p>Yes, a 2700K LED bulb.</p>"}}]}</script>`) },
+      '/legal/returns': { body: page('Returns', '<h1>Returns</h1><p>Return any lamp within 60 days, unused, in its box.</p><style>.x{color:red}</style><script>SECRET()</script>') },
+      '/secret/plan': { body: page('Secret', '<p>SECRET plan</p>') },
+    } });
     const t0 = Date.now();
-    const { r, error } = await run(s.base, { net: { ...NET, budgetMs: 700 } });
+    const { r, error, events } = await run(w.url(host));
     assert.ifError(error);
-    assert.ok(Date.now() - t0 < 2500, 'finishes near the budget');
-    assert.ok(r.counts.products > 0 && r.counts.products < 40);
-    assert.equal(r.capped.time, true);
-    assert.ok(r.skipped.budget > 0);
-    assert.ok(s.maxActive <= 4, `max ${s.maxActive} concurrent`);
+    assert.equal(r.platform, 'generic');
+    const plan = events.find((x) => x.e === 'plan').d;
+    assert.equal(plan.robots.crawlDelay, 0.2);
+    assert.equal(plan.robots.disallowed, 1);
+    assert.equal(w.hits(/secret/), 0, 'robots disallow is honoured');
+    const prods = byKind(r, 'product');
+    assert.equal(prods.length, 2, 'the copy with the same canonical URL is one product');
+    assert.equal(r.report.skipped.duplicate, 1);
+    const l1 = text(prods.find((f) => f.path.endsWith('/lamp-1.md')));
+    assert.match(l1, /- Lamp 1 price: 20\.00 GBP to 30\.00 GBP\n- Lamp 1 brand: Glow\n- Lamp 1 SKU: L1\n- Lamp 1 availability: in stock/);
+    assert.match(l1, /Lamp 1 gives 300 lumens/);
+    assert.match(text(r.files.find((f) => f.kind === 'faq')), /## Do lamps include bulbs\?\n\nYes, a 2700K LED bulb\./);
+    const pol = text(r.files.find((f) => f.kind === 'policy'));
+    assert.match(pol, /Return any lamp within 60 days/);
+    assert.doesNotMatch(pol, /SECRET|color:red/);
+    // Crawl-delay: request starts are at least 200 ms apart once robots.txt was read
+    const starts = w.log.filter((l) => l.url !== '/robots.txt').map((l) => l.at);
+    const gaps = starts.slice(1).map((t, i) => t - starts[i]);
+    assert.ok(gaps.every((g) => g >= 170), `gaps ${gaps.join(',')}`);
+    assert.ok(Date.now() - t0 >= 200 * (starts.length - 1) - 50);
+  });
+
+  test('429 with Retry-After: waits, slows down, retries the same page; the import still completes', async () => {
+    const host = 'busy.test';
+    let n = 0;
+    const w = await web({ [host]: {
+      '/': { body: page('Busy', '<h1>Busy</h1><a href="/faq">FAQ</a>') },
+      '/faq': (req, res) => { n++; if (n === 1) { res.writeHead(429, { 'retry-after': '1', 'content-type': 'text/plain' }); return res.end('slow down'); } res.writeHead(200, { 'content-type': 'text/html' }); res.end(page('FAQ', '<h1>FAQ</h1><details><summary>Open on Sundays?</summary><p>No, closed on Sundays.</p></details>')); },
+    } });
+    const t0 = Date.now();
+    const { r, error } = await run(w.url(host));
+    assert.ifError(error);
+    assert.equal(n, 2);
+    assert.ok(Date.now() - t0 >= 950, 'waited for Retry-After');
+    assert.equal(r.report.throttled, 1);
+    assert.match(text(r.files[0]), /Open on Sundays\?/);
+    assert.equal(retryAfterMs('2'), 2000);
+    assert.ok(Math.abs(retryAfterMs(new Date(Date.now() + 3000).toUTCString()) - 3000) < 1100);
+    assert.equal(retryAfterMs(undefined), null);
+  });
+
+  test('time budget: slow product pages are cut off, the import still finishes and reports what was left out', async () => {
+    const host = 'slow.test';
+    const w = await web({ [host]: {
+      '/': { body: page('Slow', '<h1>Slow</h1>') },
+      '/sitemap.xml': { type: 'application/xml', body: (b) => urlset([`${b}/pages/faq`, ...Array.from({ length: 30 }, (_, i) => `${b}/products/p${i}`)]) },
+      '/pages/faq': { body: page('FAQ', '<h1>FAQ</h1><details><summary>Is it slow?</summary><p>Yes, very slow indeed.</p></details>') },
+      '*': (req, res, { url }) => {
+        if (!/^\/products\/p\d+$/.test(url.pathname)) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('no'); }
+        setTimeout(() => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page('P', '<h1>P</h1><p>A product page that took far too long to answer.</p>', { head: '<script type="application/ld+json">{"@type":"Product","name":"P"}</script>' })); }, 600);
+      },
+    } });
+    const { r, error } = await run(w.url(host), { budgetMs: 2500 });
+    assert.ifError(error);
+    assert.ok(r.report.timeUp);
+    assert.ok(r.report.leftOut.time.product > 0, JSON.stringify(r.report.leftOut));
+    assert.ok(r.capped.time);
+    assert.ok(r.files.some((f) => f.kind === 'faq'), 'what was read is kept');
+  });
+
+  test('cancel: an abort stops the import with aborted', async () => {
+    const shop = shopify({ n: 200 });
+    const w = await web(shop.hosts);
+    const ac = new AbortController();
+    const p = run(w.url(shop.host), { signal: ac.signal, onEvent: undefined });
+    await sleep(150);
+    ac.abort();
+    const { error } = await p;
+    assert.equal(error.code, 'aborted');
+    const a = await run('http://never.test/', { signal: AbortSignal.abort() });
+    assert.equal(a.error.code, 'aborted');
+  });
+
+  test('no products or help pages → no_content', async () => {
+    const w = await web({ 'empty.test': { '/': { body: page('Empty', '<h1>Empty</h1>') } } });
+    const { error } = await run(w.url('empty.test'));
+    assert.equal(error.code, 'no_content');
   });
 });
 
-// ------------------------------------------------------------------------------------------------ SSRF
+// ------------------------------------------------------------------------------------------------ pure helpers
+describe('HTML and Markdown helpers', () => {
+  test('boilerplate stripping, shortcodes, escaping, page and product readers', () => {
+    const h = '<div class="cookie-consent">cookies!</div><nav>menu</nav><main><div role="navigation">crumbs</div><h2>Fit</h2><p>True to size.</p><aside>related</aside></main><footer>foot</footer>';
+    assert.equal(htmlToText(h, { main: false, minLevel: 2 }), '## Fit\n\nTrue to size.');
+    assert.equal(stripBoilerplate('<div class="a"><header>x<header>y</header></header>keep</div>'), '<div class="a">keep</div>');
+    assert.match(convertShortcodes('[et_pb_toggle title="Q?"]A.[/et_pb_toggle][et_pb_text]T[/et_pb_text]'), /<details><summary>Q\?<\/summary>A\.<\/details>\s*T/);
+    assert.equal(htmlToText('<p># Title</p><p>Source: https://evil.example</p>', { main: false }), '\\# Title\n\n\\Source: https://evil.example');
+    const d = readPageHtml(page('Help', '<h1>Help</h1><p>Intro text for the help page here.</p><h2>Orders</h2><p>Track orders online.</p>'), 'https://x.test/help', { kind: 'help' });
+    assert.deepEqual(d.sections.map((s) => s.heading), [null, 'Orders']);
+    const md = renderMarkdown({ ...d, title: 'Help > Centre · https://evil.example' });
+    assert.ok(md.startsWith('# Help › Centre - https://evil.example · https://x.test/help\n\nSource: https://x.test/help\n'), md);
+    const pd = readProductHtml(page('X', '<h1>X</h1><h2>Materials</h2><p>Oak and brass, oiled by hand.</p>'), 'https://x.test/p/x', null, { requireLd: true });
+    assert.equal(pd, null, 'no Product JSON-LD and no record: not a product when required');
+  });
+  test('buildMarkdownFiles keeps one file per page, quota-bounded, best kinds first', async () => {
+    const docs = [{ kind: 'product', url: 'https://s.test/products/a', title: '# Forged > Title', sections: [{ heading: 'Description', text: 'x'.repeat(300) }] },
+      { kind: 'policy', url: 'https://s.test/policies/refund-policy', title: 'Refund policy', sections: [{ heading: null, text: 'Thirty days.' }] }];
+    const { files, leftOut } = await buildMarkdownFiles(docs, { maxTotalBytes: 400, storeName: 'S', host: 's.test' });
+    assert.deepEqual(files.map((f) => f.path), ['site/s.test/policy/refund-policy.md']);
+    assert.equal(leftOut.product, 1);
+    const all = await buildMarkdownFiles(docs, { storeName: 'S', host: 's.test' });
+    assert.ok(text(all.files[1]).startsWith('# Forged › Title · https://s.test/products/a\n'));
+    assert.equal(all.files[1].name, 'S · Forged › Title.md');
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ SSRF, robots, sizes
+const site = async (routes, { host = '127.0.0.1' } = {}) => { const w = await web({ '*': routes }, { ip: host }); return { base: `http://${host}:${w.port}`, log: w.log, hits: (re) => w.hits(re) }; };
+const html = (title, main, extra = '') => page(title, main, { head: extra });
+const NET0 = { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 };
 describe('SSRF safety', () => {
   test('isBlockedAddress: private, loopback, link-local, CGNAT, metadata, reserved and IPv6 forms', () => {
     for (const ip of ['10.0.0.1', '172.16.5.4', '172.31.255.255', '192.168.1.1', '100.64.0.1', '127.0.0.1', '127.9.9.9', '169.254.169.254', '0.0.0.0', '224.0.0.1', '255.255.255.255', '198.18.0.1',
@@ -424,51 +573,39 @@ describe('SSRF safety', () => {
     const f = createStoreFetcher({ resolve, paceMs: 0 });
     await assert.rejects(f.fetch('http://evil.example/', { anyHost: true }), { code: 'blocked_host' });
   });
-  test('error copy: an unknown host reads "couldn\'t reach", a private host on port 80 "public web address"; the port copy is only for explicit ports', async () => {
-    // a dev-style allowlist (one fake port) must not turn every other failure into the port message (fixer r8, D10)
-    const dev = { allowAddresses: ['127.0.0.1'], allowPorts: [65000], paceMs: 0, resolve: async (h) => { if (h.endsWith('.invalid')) { const e = new Error('ENOTFOUND'); e.code = 'ENOTFOUND'; throw e; } return [{ address: '93.184.216.34', family: 4 }]; } };
-    const unknown = (await run('https://example.invalid', { net: dev })).error;
-    assert.equal(unknown.code, 'not_found');
-    assert.equal(unknown.message, "We couldn't reach example.invalid. Check the address.");
-    for (const u of ['http://169.254.169.254/latest/meta-data', 'http://10.0.0.5/', 'http://[::1]/']) {
-      const e = (await run(u, { net: dev })).error;
-      assert.equal(e.code, 'blocked_host', u);
-      assert.doesNotMatch(e.message, /\bports?\b/i, u);
-    }
-    assert.match((await run('http://fine.example:8080/', { net: dev })).error.message, /standard web ports/);
-  });
-  test('redirect to 127.0.0.1 when only the store address is allowed is refused (checked on every hop)', async () => {
+  test('redirects are re-checked on every hop; loops stop after 5; off-site URLs are refused after detection', async () => {
     const inner = await site({ '/': { body: 'internal admin' } });
     const store = await site({ '/': { status: 302, headers: { location: `${inner.base}/` }, body: '' } }, { host: '127.0.0.2' });
     const { error } = await run(store.base, { net: { allowAddresses: ['127.0.0.2'], allowPorts: 'any', paceMs: 0 } });
     assert.equal(error.code, 'blocked_host');
     assert.equal(inner.log.length, 0, 'the internal server was never contacted');
-    const store2 = await site({ '/': { status: 301, headers: { location: 'http://169.254.169.254/latest/meta-data/' }, body: '' } }, { host: '127.0.0.2' });
-    assert.equal((await run(store2.base, { net: { allowAddresses: ['127.0.0.2'], allowPorts: 'any', paceMs: 0 } })).error.code, 'blocked_host');
-  });
-  test('redirect loops stop after 5 hops; off-site URLs are refused after detection', async () => {
     let n = 0;
     const s = await site({ '/': (req, res) => { n++; res.writeHead(302, { location: `/?n=${n}` }); res.end(); } });
-    const { error } = await run(s.base);
-    assert.equal(error.code, 'too_many_redirects');
+    assert.equal((await run(s.base, { net: NET0 })).error.code, 'too_many_redirects');
     assert.ok(n <= 7);
-    const resolve = async () => [{ address: '127.0.0.1', family: 4 }];
     const t = await site({ '/': { body: 'ok' } });
     const port = new URL(t.base).port;
-    const f = createStoreFetcher({ ...NET, resolve });
+    const f = createStoreFetcher({ ...NET0, resolve: LOOP });
     f.allowSite('shop.test');
     assert.equal((await f.fetch(`http://www.shop.test:${port}/`)).status, 200, 'same registrable domain is fine');
     await assert.rejects(f.fetch(`http://other.test:${port}/`), { code: 'blocked_host' });
+    f.allowPdfHost('cdn.shopify.com');
+    await assert.rejects(f.fetch(`http://cdn.shopify.com:${port}/s/files/x.txt`), { code: 'blocked_host' }, 'asset hosts are for PDFs only');
+    assert.equal((await f.fetch(`http://cdn.shopify.com:${port}/s/files/x.pdf`)).status, 404, 'a PDF path on the asset host may be fetched');
     assert.equal(registrableDomain('a.b.shop.co.uk'), 'shop.co.uk');
     assert.equal(registrableDomain('lumen.myshopify.com'), 'lumen.myshopify.com');
   });
+  test('concurrency is clamped to 4 whatever the caller asks', () => {
+    assert.equal(createStoreFetcher({ concurrency: 50 }).config.concurrency, 4);
+    assert.equal(LIMITS.maxProducts, 10000);
+    assert.equal(LIMITS.budgetMs, 20 * 60000);
+  });
 });
-
-// ------------------------------------------------------------------------------------------------ robots, timeouts, size
 describe('robots.txt', () => {
-  test('parser: most specific group, longest match, wildcards and $', () => {
-    const p = parseRobots('User-agent: *\nDisallow: /\n\nUser-agent: KnowBotStudio\nUser-agent: other\nDisallow: /private\nAllow: /private/ok$\nDisallow: /*.json$\nDisallow: /*?format=json\n\nSitemap: https://x/sm.xml');
+  test('parser: most specific group, longest match, wildcards, $ and Crawl-delay', () => {
+    const p = parseRobots('User-agent: *\nDisallow: /\n\nUser-agent: KnowBotStudio\nUser-agent: other\nDisallow: /private\nAllow: /private/ok$\nDisallow: /*.json$\nDisallow: /*?format=json\nCrawl-delay: 4\n\nSitemap: https://x/sm.xml');
     assert.deepEqual(p.sitemaps, ['https://x/sm.xml']);
+    assert.equal(p.groups[1].crawlDelay, 4);
     assert.equal(robotsAllows(p, '/'), true);
     assert.equal(robotsAllows(p, '/private/x'), false);
     assert.equal(robotsAllows(p, '/private/ok'), true);
@@ -481,26 +618,25 @@ describe('robots.txt', () => {
   });
   test('Disallow: / for everyone → robots error, nothing else fetched', async () => {
     const s = await site({ '/robots.txt': { type: 'text/plain', body: 'User-agent: *\nDisallow: /\n' }, '/': { body: html('x', 'x') } });
-    const { error } = await run(s.base);
+    const { error } = await run(s.base, { net: NET0 });
     assert.equal(error.code, 'robots');
     assert.deepEqual(s.log.map((l) => l.url), ['/robots.txt']);
   });
-  test('a rule for our UA skips just that page and is counted', async () => {
-    const routes = shopifyRoutes(2);
-    routes['/robots.txt'] = { type: 'text/plain', body: 'User-agent: *\nAllow: /\n\nUser-agent: KnowBotStudio\nDisallow: /pages/faq\nDisallow: /policies/\n' };
-    const s = await site(routes);
-    const { r, error } = await run(s.base);
+  test('a rule for our UA skips just those pages; the plan counts them', async () => {
+    const shop = shopify({ n: 3, robots: 'User-agent: *\nAllow: /\n\nUser-agent: KnowBotStudio\nDisallow: /pages/faq\nDisallow: /policies/\n' });
+    const w = await web(shop.hosts);
+    const { r, error } = await run(w.url(shop.host), { enrich: 'none' });
     assert.ifError(error);
-    assert.equal(s.hits(/pages\/faq|policies/), 0);
-    assert.equal(r.skipped.robots, 5);
-    assert.equal(r.counts.faqs, 0);
-    assert.equal(r.counts.products, 2);
+    assert.equal(w.hits(/pages\/faq|policies/), 0);
+    assert.ok(r.plan.robots.disallowed >= 6, JSON.stringify(r.plan.robots));
+    assert.equal(byKind(r, 'faq').length, 0);
+    assert.equal(byKind(r, 'product').length, 3);
   });
 });
 describe('timeouts and size caps', () => {
   test('a hanging request times out', async () => {
     const s = await site({ '/': () => {} });
-    const { error } = await run(s.base, { net: { ...NET, timeoutMs: 200 } });
+    const { error } = await run(s.base, { net: { ...NET0, timeoutMs: 200 } });
     assert.equal(error.code, 'timeout');
   });
   test('bodies over the cap are refused: content-length, chunked and gzip bombs', async () => {
@@ -511,11 +647,11 @@ describe('timeouts and size caps', () => {
       '/bomb': { headers: { 'content-encoding': 'gzip' }, body: zlib.gzipSync(Buffer.alloc(3 * 1024 * 1024)) },
       '/ok': { body: 'small' },
     });
-    const f = createStoreFetcher({ ...NET, maxBytes: 4096 });
+    const f = createStoreFetcher({ ...NET0, maxBytes: 4096 });
     f.allowSite('127.0.0.1');
     for (const p of ['/cl', '/chunked', '/bomb']) await assert.rejects(f.fetch(`${s.base}${p}`), { code: 'too_large' }, p);
     assert.equal((await f.fetch(`${s.base}/ok`)).text(), 'small');
-    const g = createStoreFetcher(NET); g.allowSite('127.0.0.1');
+    const g = createStoreFetcher(NET0); g.allowSite('127.0.0.1');
     const r = await g.fetch(`${s.base}/bomb`);
     assert.equal(r.body.length, 3 * 1024 * 1024, 'gzip is decoded under the default 5 MB cap');
   });
@@ -523,37 +659,13 @@ describe('timeouts and size caps', () => {
     const s = await site({ '/': { delay: 2000, body: 'late' } });
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 100);
-    const { error } = await run(s.base, { signal: ac.signal });
+    const { error } = await run(s.base, { signal: ac.signal, net: NET0 });
     assert.equal(error.code, 'aborted');
   });
-});
-
-// ------------------------------------------------------------------------------------------------ Markdown shape
-describe('Markdown builder', () => {
-  test('splits products, keeps a Source line per section, escapes forged headings, dedupes names', () => {
-    const docs = [
-      ...Array.from({ length: 5 }, (_, i) => ({ kind: 'product', title: `P${i}`, url: `https://s.example/p${i}`, text: `- Price: ${i}.00\n\n# forged heading` })),
-      { kind: 'policy', title: 'Refund policy', url: 'https://s.example/policies/refund-policy', text: 'Thirty days.' },
-      { kind: 'policy', title: 'Refund Policy', url: 'https://s.example/pages/refunds', text: 'Also thirty days.' },
-      { kind: 'faq', title: 'Q1?', url: 'https://s.example/faq', group: 'FAQ', text: 'A1.' },
-      { kind: 'page', title: '## About', url: 'https://s.example/about', text: 'We are nice.' },
-    ];
-    docs[0].text = htmlToText('<p># forged</p><h2>Real</h2><p>ok</p>', { main: false, minLevel: 4 });
-    const { files, capped } = buildMarkdownFiles(docs, { slug: 's.example', storeName: 'S', base: 'https://s.example', date: new Date('2026-11-08T00:00:00Z'), perFileProducts: 2 });
-    assert.equal(capped, null);
-    assert.deepEqual(files.map((f) => f.name), ['S · Refund policy.md', 'S · Refund Policy 2.md', 'S · FAQ.md', 'S · Help pages.md', 'S · Products 1.md', 'S · Products 2.md', 'S · Products 3.md']);
-    assert.deepEqual(files.map((f) => f.docs), [1, 1, 1, 1, 2, 2, 1]);
-    const p1 = files[4].bytes.toString();
-    assert.match(p1, /^# Products: S \(part 1 of 3\)\n\nImported from https:\/\/s\.example on 2026-11-08\./);
-    assert.match(p1, /## P0\n\nSource: https:\/\/s\.example\/p0\n\\# forged\n\n#### Real\n\nok\n/);
-    assert.match(p1, /## P1\n\nSource: https:\/\/s\.example\/p1\n- Price: 1\.00\n\n# forged heading/, 'builder trusts collector text (collectors escape via htmlToText)');
-    assert.match(files[3].bytes.toString(), /\n## About\n\nSource: https:\/\/s\.example\/about\n/);
-    for (const f of files) assert.equal(f.mime, 'text/markdown');
-  });
-  test('docsFromHtml extracts FAQ pairs from question headings and keeps text otherwise', () => {
-    const d = docsFromHtml(html('FAQ', '<h2>Shipping</h2><h3>When will it arrive?</h3><p>In 3 days.</p><h3>Can I change my address?</h3><p>Email us.</p>'), 'https://s.example/faq');
-    assert.deepEqual(d.map((x) => [x.kind, x.title, x.text]), [['faq', 'When will it arrive?', 'In 3 days.'], ['faq', 'Can I change my address?', 'Email us.']]);
-    const p = docsFromHtml(html('Warranty', '<h1>Warranty</h1><p>Frames carry a lifetime warranty for the first owner.</p>'), 'https://s.example/pages/warranty');
-    assert.equal(p[0].kind, 'policy');
+  test('detectPlatform on a bare site with no API says generic', async () => {
+    const s = await site({ '/': { body: html('Plain', '<h1>Plain</h1>') } });
+    const f = createStoreFetcher(NET0);
+    const d = await detectPlatform(s.base, f.fetch);
+    assert.equal(d.platform, 'generic'); assert.equal(d.api, false);
   });
 });

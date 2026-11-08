@@ -462,7 +462,10 @@ export function channelStatus(env = {}) {
   return {
     sms: { configured: has('TWILIO_AUTH_TOKEN'), provider: 'twilio', needs: has('TWILIO_AUTH_TOKEN') ? [] : ['TWILIO_AUTH_TOKEN'] },
     voice: { configured: has('TWILIO_AUTH_TOKEN'), provider: 'twilio', needs: has('TWILIO_AUTH_TOKEN') ? [] : ['TWILIO_AUTH_TOKEN'],
-      speech: { recognition: google.stt && has('TWILIO_ACCOUNT_SID') ? 'google' : 'twilio', synthesis: google.tts ? 'google' : 'twilio' } },
+      speech: { recognition: google.stt && has('TWILIO_ACCOUNT_SID') ? 'google' : 'twilio', synthesis: has('ELEVENLABS_API_KEY') && has('ELEVENLABS_VOICE_ID') ? 'elevenlabs' : google.tts ? 'google' : 'twilio' },
+      // phone engine: 'gemini' voice-to-voice (Twilio Media Streams ⇄ Gemini Live) when GEMINI_API_KEY is set, else the classic loop
+      engine: has('GEMINI_API_KEY') && String(env.KNOWBOT_PHONE_ENGINE || '').toLowerCase() !== 'classic' ? 'gemini' : 'classic',
+      texts: has('TWILIO_ACCOUNT_SID') && has('TWILIO_AUTH_TOKEN') && has('TWILIO_FROM_NUMBER') },
     whatsapp: { configured: meta || has('TWILIO_AUTH_TOKEN'), provider: meta ? 'meta' : has('TWILIO_AUTH_TOKEN') ? 'twilio' : null,
       needs: meta || has('TWILIO_AUTH_TOKEN') ? [] : ['WHATSAPP_VERIFY_TOKEN', 'WHATSAPP_APP_SECRET', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'] },
     email: { configured: emailIn, sends: emailOut, needs: emailIn ? (emailOut ? [] : ['EMAIL_REPLY_WEBHOOK or SENDGRID_API_KEY/POSTMARK_SERVER_TOKEN + EMAIL_FROM']) : ['EMAIL_WEBHOOK_SECRET or MAILGUN_SIGNING_KEY'] },

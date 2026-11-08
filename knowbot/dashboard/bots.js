@@ -1064,7 +1064,7 @@ export function mountBots(ctx) {
       h('p', { class: 'inst-help' }, 'Every question this bot is asked, on the web, through the API and on every channel, is logged without personal data and is never used as a source. Similar wordings are grouped. Gaps are questions it could not answer, each with a suggested fix and the closest file it has today.'),
       body);
     // where a question was asked: a small glyph per channel (questions.mjs top[].channels / gaps[].channels, byChannel)
-    const CH = { studio: ['Studio', '◇'], web: ['Web chat', '◯'], api: ['API', '{ }'], sms: ['SMS', '✉︎'], voice: ['Phone', '☏'], whatsapp: ['WhatsApp', 'WA'], email: ['E-mail', '@'] };
+    const CH = { studio: ['Studio', '◇'], web: ['Web chat', '◯'], api: ['API', '{ }'], sms: ['SMS', '✉︎'], voice: ['Voice bot', '♪'], phone: ['Phone', '☏'], whatsapp: ['WhatsApp', 'WA'], email: ['E-mail', '@'] };
     const chLabel = (c) => (CH[c] ? CH[c][0] : String(c));
     const chGlyphs = (list) => (Array.isArray(list) && list.length
       ? h('span', { class: 'mono', role: 'img', 'aria-label': `asked via ${list.map(chLabel).join(', ')}`, style: { display: 'inline-flex', gap: '3px', marginLeft: '6px', verticalAlign: 'baseline' } },

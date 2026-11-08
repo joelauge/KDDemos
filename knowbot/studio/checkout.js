@@ -11,6 +11,7 @@
 // SampleBot composer to focus it for "Keep testing" (the same affordance B uses).
 
 const NBSP = ' ';
+import { SURFACES, normalizeSurfaces, planTotals } from './surfaces.js?v=484b978';
 const DEFAULT_ANCHORS = { asOf: '2026-11', items: ['CustomGPT Premium $499/mo', 'Chatbase Business $500/mo (40 MB cap)', 'Botpress Team $939/mo', 'Intercom Fin $0.99 per resolution'] };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -122,14 +123,84 @@ export function mount(ctx) {
   // ---------------------------------------------------------------- derived state
 
   const cfg = () => getState().config || {};
+  // Owner pricing: one plan line per answer surface (spec.surfaces), $249/month or $2,499/year each; the visitor picks
+  // monthly or yearly here and can remove surfaces. Shown only at launch/checkout, which comes after testing.
+  let planInterval = 'month';
   const price = () => {
     const p = cfg().price || {};
-    const amount = Number(p.amount) || 249;
+    const plan = planTotals(getState().spec?.surfaces, planInterval, { month: Number(p.amount) || 249, year: Number(p.yearAmount) || 2499 });
     const cur = (p.currency || 'USD').toUpperCase();
     const sym = cur === 'USD' ? '$' : cur === 'EUR' ? '€' : cur === 'GBP' ? '£' : `${cur} `;
-    const per = p.interval === 'year' ? 'yr' : 'mo';
-    return { amount, sym, per, text: `${sym}${amount}/${per}`, today: `${sym}${amount.toFixed(2)}`, long: `${sym}${amount}/${p.interval === 'year' ? 'year' : 'month'}`, p };
+    const fmt = (n) => `${sym}${Number(n).toLocaleString('en-US')}`;
+    const amount = plan.total;
+    return { amount, amt: fmt(amount), each: fmt(plan.each), sym, per: plan.per, perLong: plan.interval, text: `${fmt(amount)}/${plan.per}`, today: `${sym}0`,
+      long: `${fmt(amount)}/${plan.interval}`, p, plan, fmt };
   };
+  /** Every price on screen carries data-co-price=<kind>; one repaint keeps them all in step with the plan. */
+  const PRICE_KINDS = {
+    amt: (pr) => pr.amt, per: (pr) => `/${pr.perLong}`, cta: (pr) => `, ${pr.text}`, submit: (pr) => `Continue to secure checkout · ${pr.text}`,
+    today: (pr) => `Today: ${pr.today} · first 30 days free, then ${pr.long} · cancel anytime. `,
+    count: (pr) => `${pr.plan.count === 1 ? '1 answer surface' : `${pr.plan.count} answer surfaces`} · ${pr.perLong === 'year' ? 'billed yearly' : 'billed monthly'}`,
+  };
+  const pspan = (kind, cls, tag = 'span') => h(tag, { class: cls, dataset: { coPrice: kind } }, PRICE_KINDS[kind](price()));
+  const planBlocks = new Set();
+  function repaintPrices() {
+    const pr = price();
+    for (const n of document.querySelectorAll('[data-co-price]')) { const f = PRICE_KINDS[n.dataset.coPrice]; if (f && !n.closest('.is-busy')) n.textContent = f(pr); }
+    for (const b of [...planBlocks]) { if (b.isConnected) b.paint(); else planBlocks.delete(b); }
+  }
+  function setSurfaces(next) {
+    const surfaces = normalizeSurfaces(next, { fallback: false });
+    if (!surfaces.length) return;
+    // optimistic: the plan and every price update now; the server (PATCH spec) confirms through spec:changed
+    setState({ spec: { ...getState().spec, surfaces } }, 'spec:plan');
+    repaintPrices();
+    emit('spec:request', { patch: { surfaces }, by: 'user', quiet: true });
+  }
+  /** The plan: monthly | yearly, one line per answer surface (removable, at least one), the live total and the terms. */
+  function planBlock() {
+    const ivGroup = h('div', { class: 'co-iv', role: 'group', 'aria-label': 'Billing period' });
+    const ivBtn = (iv, label) => {
+      const b = h('button', { type: 'button', class: 'co-iv-btn', 'aria-pressed': String(planInterval === iv) }, label);
+      b.addEventListener('click', () => { if (planInterval === iv) return; planInterval = iv; repaintPrices(); announce(`${iv === 'year' ? 'Yearly' : 'Monthly'}: ${price().long} in total.`, 'polite'); });
+      return b;
+    };
+    const mBtn = ivBtn('month', 'Monthly'), yBtn = ivBtn('year', 'Yearly');
+    ivGroup.append(mBtn, yBtn);
+    const list = h('ul', { class: 'co-surf-lines', 'aria-label': 'Answer surfaces on this plan' });
+    const add = h('div', { class: 'co-surf-add' });
+    const total = h('p', { class: 'co-surf-total' });
+    const terms = h('p', { class: 'co-surf-terms' });
+    const el = h('section', { class: 'co-surf', 'aria-label': 'Your plan' }, ivGroup, list, add, total, terms);
+    el.paint = () => {
+      const pr = price();
+      mBtn.setAttribute('aria-pressed', String(pr.plan.interval === 'month'));
+      yBtn.setAttribute('aria-pressed', String(pr.plan.interval === 'year'));
+      const had = list.contains(document.activeElement) || add.contains(document.activeElement);
+      list.innerHTML = '';
+      for (const line of pr.plan.lines) {
+        const rm = h('button', { type: 'button', class: 'co-surf-rm', 'aria-label': `Remove ${line.label}`, title: pr.plan.count === 1 ? 'Your bot needs at least one answer surface' : `Remove ${line.label}`, html: icon('x', 13) });
+        if (pr.plan.count === 1) rm.disabled = true;
+        rm.addEventListener('click', () => { setSurfaces(pr.plan.lines.map((l) => l.id).filter((id) => id !== line.id)); announce(`${line.label} removed. ${price().long} in total.`, 'polite'); });
+        list.append(h('li', { class: 'co-surf-line' }, h('span', { class: 'co-surf-name' }, line.label), h('span', { class: 'co-surf-amt' }, `${pr.fmt(line.amount)}/${pr.per}`), rm));
+      }
+      add.innerHTML = '';
+      const off = SURFACES.filter((x) => !pr.plan.lines.some((l) => l.id === x.id));
+      if (off.length) {
+        add.append(h('span', { class: 'co-surf-add-l' }, 'Add:'), ...off.map((x) => {
+          const b = h('button', { type: 'button', class: 'co-link co-surf-addbtn', 'aria-label': `Add ${x.label}` }, `+ ${x.label}`);
+          b.addEventListener('click', () => { setSurfaces([...pr.plan.lines.map((l) => l.id), x.id]); announce(`${x.label} added. ${price().long} in total.`, 'polite'); });
+          return b;
+        }));
+      }
+      total.textContent = `Total: ${pr.long} for ${pr.plan.count === 1 ? '1 answer surface' : `${pr.plan.count} answer surfaces`}`;
+      terms.textContent = `Each answer surface is ${pr.fmt(pr.p.amount || 249)}/month or ${pr.fmt(pr.p.yearAmount || 2499)}/year · first 30 days free · card required · up to 100 MB per deployment · more than 100 MB is enterprise: ${pr.p.enterpriseEmail || 'sales@recoursellm.com'}`;
+      if (had) { const f = list.querySelector('.co-surf-rm:not([disabled])') || ivGroup.querySelector('button'); if (f) f.focus(); }
+    };
+    el.paint();
+    planBlocks.add(el);
+    return el;
+  }
   const botName = () => getState().spec.name || 'Your bot';
   // fixer M r1 (D8): the trial bot is "your bot" until it is actually launched (never "live" before payment)
   const converted = () => { const s = getState(); return !!(s.trial?.converted || s.milestones?.launched); };
@@ -184,7 +255,7 @@ export function mount(ctx) {
   const isMobile = () => matchMedia('(max-width: 899px)').matches;
   // fixer r6 (D8/D9): the CTA shows "Launch <bot>" (the price is the hero beside it); the price rides in a visually
   // hidden suffix so the accessible name stays "Launch <bot>, $249/mo" (it starts with the visible label).
-  const ctaPrice = () => h('span', { class: 'co-sr co-cta-price' }, `, ${price().text}`);
+  const ctaPrice = () => pspan('cta', 'co-sr co-cta-price');
   const testsName = (t) => (t && t.full ? 'Proof Run' : 'Quick check');
   const FULL_PROOF_N = 11;   // 8 in-scope questions + 3 out-of-scope probes (SPEC 1.4 B8)
   const runFullProof = (before) => { if (before) before(); emit('proof:run', { mini: false }); };
@@ -351,14 +422,14 @@ export function mount(ctx) {
     // Order: price → CTA → reassurance first, inclusions after, so the CTA is above the fold at every size (fixer r1).
     const plan = h('section', { class: 'co-plan', 'aria-labelledby': titleId },
       h('div', { class: 'co-plan-brand' }, h('span', { class: 'co-plan-logo', 'aria-hidden': 'true', html: KD_LOGO }), 'KnowDrive'),
-      h('h3', { class: 'co-price', id: titleId }, h('span', { class: 'co-price-amt' }, `${pr.sym}${pr.amount}`), h('span', { class: 'co-price-per' }, `/${p.interval === 'year' ? 'year' : 'month'}`)),
-      h('p', { class: 'co-tagline' }, 'One flat price to build and host your KnowBot. No per-answer fees.'),
+      h('h3', { class: 'co-price', id: titleId }, pspan('amt', 'co-price-amt'), pspan('per', 'co-price-per')),
+      h('p', { class: 'co-tagline' }, 'One price per answer surface, all answering from the same sources. No per-answer fees.'),
+      planBlock(),
       where === 'chat' ? cta : null,   // inline: the card's own CTA is the only one; stage: the sticky bar is (fixer r4, D8)
       // fixer r5 (D8): on the stage the escape hatch lives directly under the sticky CTA bar (openStage), not up here
       where === 'stage' ? null : sublinks({ stage: false }),
       h('p', { class: 'co-trust', id: `${titleId}-trust` }, h('span', { html: icon('lock', 13) }), `Your files stay private to your bot. Saved for ${cfg().quota?.ttlDays || 7} days if you don't launch.`),
       h('ul', { class: 'co-incl', 'aria-label': 'Included' }, incl.map(([t]) => h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 14) }), h('span', null, t)))),
-      p.annualLine ? h('p', { class: 'co-optline' }, String(p.annualLine)) : null,
       p.guaranteeLine ? h('p', { class: 'co-optline' }, h('span', { html: icon('shieldCheck', 14) }), ' ', String(p.guaranteeLine)) : null,
       p.enterpriseEmail ? h('p', { class: 'co-optline co-enterprise' }, 'More than 100 MB? ', h('a', { href: `mailto:${p.enterpriseEmail}?subject=${encodeURIComponent('KnowBot enterprise')}` }, 'Talk to enterprise sales')) : null,
       channelsStrip,
@@ -476,8 +547,8 @@ export function mount(ctx) {
     const subEl = h('small', { class: 'co-rc-sub co-sum-sub' });
     const pills = h('p', { class: 'co-sum-pills' });
     const qaEl = h('figure', { class: 'co-sum-qa', hidden: true });
-    const amt = h('span', { class: 'co-price-amt' }, `${pr.sym}${pr.amount}`);
-    const per = h('span', { class: 'co-price-per' }, `/${pr.p.interval === 'year' ? 'year' : 'month'}`);
+    const amt = pspan('amt', 'co-price-amt');
+    const per = pspan('per', 'co-price-per');
     const cta = h('button', { type: 'button', class: 'co-cta' },
       h('span', { class: 'co-cta-label' }, `Launch ${botName()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
     const moreId = `co-sum-more-${Math.random().toString(36).slice(2, 8)}`;
@@ -526,7 +597,7 @@ export function mount(ctx) {
         h('div', { class: 'co-sum-pillrow' }, pills, fullLink),
         qaEl,
         h('div', { class: 'co-sum-gets' }, incl, thumb),
-        h('div', { class: 'co-sum-price' }, h('p', { class: 'co-price' }, amt, per), h('small', null, 'Flat price · no per-answer fees · cancel anytime')),
+        h('div', { class: 'co-sum-price' }, h('p', { class: 'co-price' }, amt, per), h('small', null, pspan('count', ''), ' · no per-answer fees · cancel anytime')),
         cta,
         h('div', { class: 'co-sum-links' },
           h('a', { class: 'co-link', href: contactHref() }, 'Questions? Talk to us'),
@@ -749,7 +820,7 @@ export function mount(ctx) {
     const footCta = h('button', { type: 'button', class: 'co-cta' }, h('span', { class: 'co-cta-label' }, `Launch ${botName()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
     const pr0 = price();
     const foot = h('div', { class: 'co-stage-foot' },
-      h('div', { class: 'co-stage-foot-bar' }, h('p', { class: 'co-stage-foot-price' }, h('span', null, h('b', null, `${pr0.sym}${pr0.amount}`), h('span', { class: 'co-stage-foot-per' }, `/${pr0.p.interval === 'year' ? 'year' : 'month'}`)), h('small', null, 'flat · cancel anytime')), footCta),
+      h('div', { class: 'co-stage-foot-bar' }, h('p', { class: 'co-stage-foot-price' }, h('span', null, pspan('amt', '', 'b'), pspan('per', 'co-stage-foot-per')), h('small', null, `${pr0.plan.count > 1 ? `${pr0.plan.count} surfaces · ` : ''}cancel anytime`)), footCta),
       sublinks({ stage: true }));
     // fixer r7 (D9): a non-modal side panel (role=region, named "Launch <bot>"): the Builder beside it stays live, the
     // covered SampleBot is inert and shown un-dimmed behind a click-to-close veil (no modal scrim)
@@ -1130,7 +1201,7 @@ export function mount(ctx) {
       'aria-describedby': 'co-email-hint', placeholder: 'you@company.com' });
     emailIn.value = t.email || '';
     const emailErr = h('p', { class: 'co-field-err', id: 'co-email-err', hidden: true });
-    const submit = h('button', { type: 'submit', class: 'co-cta co-cta-lg' }, h('span', { class: 'co-spin', 'aria-hidden': 'true' }), h('span', { class: 'co-cta-label' }, `Continue to secure checkout · ${pr.text}`), h('span', { class: 'co-cta-ico', html: icon('lock', 15) }));
+    const submit = h('button', { type: 'submit', class: 'co-cta co-cta-lg' }, h('span', { class: 'co-spin', 'aria-hidden': 'true' }), h('span', { class: 'co-cta-label', dataset: { coPrice: 'submit' } }, `Continue to secure checkout · ${pr.text}`), h('span', { class: 'co-cta-ico', html: icon('lock', 15) }));
     const errBox = h('div', { class: 'co-err', role: 'alert', hidden: true });
     const samples = sampleOnly();
     const addFirst = samples ? h('p', { class: 'co-addfirst' }, h('span', { html: icon('upload', 13) }),
@@ -1145,10 +1216,11 @@ export function mount(ctx) {
     const pay = h('section', { class: 'co-pay' },
       h('p', { class: 'co-eyebrow' }, h('span', { html: icon('rocket', 13) }), 'Launch'),
       h('h2', { class: 'co-sheet-title', id: 'co-sheet-title' }, `Launch ${botName()}`),
-      h('p', { class: 'co-sheet-desc', id: 'co-sheet-desc' }, h('b', null, `KnowDrive · ${pr.long}`), '. You finish on KnowDrive\'s secure checkout, then come straight back here.'),
+      h('p', { class: 'co-sheet-desc', id: 'co-sheet-desc' }, h('b', null, 'KnowDrive · ', pspan('amt', ''), pspan('per', '')), '. You finish on KnowDrive\'s secure checkout, then come straight back here.'),
+      planBlock(),
       form,
       h('p', { class: 'co-foot co-foot-incl' }, h('span', { html: icon('check', 13) }), `Includes hosting + embed, 6 channels + the chat API, ${stats().quotaMB} MB of storage, question insights.`),
-      h('p', { class: 'co-foot' }, `Today: ${pr.today} · renews monthly · cancel anytime. `, samples
+      h('p', { class: 'co-foot' }, pspan('today', ''), samples
         ? 'Your settings, tone and tests carry over; sample files are removed, so add your own docs after launch.'
         : 'Your bot, files and tests carry over. Nothing gets rebuilt.'),
       h('p', { class: 'co-foot co-foot-trust' }, h('span', { html: icon('lock', 12) }), `Saved for ${cfg().quota?.ttlDays || 7} days if you don't launch. `, h('a', { class: 'co-link', href: contactHref() }, 'Questions? Talk to us')),
@@ -1268,7 +1340,7 @@ export function mount(ctx) {
         // The server's /checkout flushes the spec doc (PATCH state) and stores the email before it returns the URL.
         // CONTRACT-GAP: SPEC 6.4 step 1 also emits spec:request {email}; B's drawer would render that as a ConfigDiffCard
         // in the middle of a redirect, and /checkout already persists the email, so it is not emitted here.
-        const r = await api.checkout({ email });
+        const r = await api.checkout({ email, surfaces: normalizeSurfaces(getState().spec?.surfaces), interval: planInterval });
         if (!r || !r.url) throw new Error('no url');
         try { store.persist(); } catch { /* ignore */ }
         await sleep(motion.reduced() ? 0 : 120);
@@ -1276,7 +1348,7 @@ export function mount(ctx) {
       } catch (err) {
         sheet.redirecting = false;
         submit.disabled = false; submit.removeAttribute('aria-busy'); submit.classList.remove('is-busy');
-        $('.co-cta-label', submit).textContent = `Continue to secure checkout · ${pr.text}`;
+        $('.co-cta-label', submit).textContent = PRICE_KINDS.submit(price());
         if (err && err.status === 400 && /email/i.test(err.message || '')) { emailErr.textContent = err.message; emailErr.hidden = false; emailIn.setAttribute('aria-invalid', 'true'); emailIn.focus(); return; }
         const retry = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small' }, h('span', { html: icon('refresh', 14) }), 'Try again');
         retry.addEventListener('click', () => go());
@@ -1627,7 +1699,7 @@ export function mount(ctx) {
   // ================================================================== lifecycle
 
   sub('drawer:open', () => { if (stage) closeStage({ focus: false }); });
-  sub('change:spec', () => { for (const c of launchCards) if (c.el.isConnected) c.update(); });
+  sub('change:spec', () => { for (const c of launchCards) if (c.el.isConnected) c.update(); repaintPrices(); });
   sub('change:proof', () => { for (const c of launchCards) if (c.el.isConnected) c.update(); });
   sub('change:usage', () => { for (const c of launchCards) if (c.el.isConnected) c.update(); });
   sub('answer:final', () => { for (const c of launchCards) if (c.el.isConnected) c.update(); });

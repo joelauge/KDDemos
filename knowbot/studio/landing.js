@@ -5,7 +5,10 @@
  * the Studio underneath, which has been hydrating the whole time:
  *   - window.__studio.landing(action) exists once app.js has rendered the Builder: called directly;
  *   - otherwise the action waits in window.__kbLanding, and app.js drains it right after it renders the Builder.
- * action = { text } (sent as the visitor's first Builder message) | { chip: 'use_samples' | 'upload_files' }.
+ * action = { text } (sent as the visitor's first Builder message) | { chip: 'use_samples' | 'upload_files' | 'import_store' },
+ *   plus surfaces: the "Where should it answer?" choice (studio/surfaces.js ids, at least one; website chat by default).
+ *   app.js saves it on the trial spec (spec.surfaces). No price is shown here: per-surface pricing appears only at launch,
+ *   after the visitor has tested (owner rule).
  * window.__kbLandingShow() brings the landing back (app.js calls it after "Start over").
  */
 (function () {
@@ -63,9 +66,43 @@
   input.addEventListener('input', syncValue);
   document.addEventListener('visibilitychange', function () { if (!document.hidden && showing() && !input.value && !timer) startTyping(600); });
 
+  // ------------------------------------------------------------ "Where should it answer?" (toggle buttons, multi-select)
+  var surfEl = document.getElementById('kl-surf');
+  var surfLive = document.getElementById('kl-surf-live');
+  var surfBtns = surfEl ? [].slice.call(surfEl.querySelectorAll('[data-surface]')) : [];
+  var nameOf = function (b) { var t = b.querySelector('.kl-ch-t'); return (t ? t.textContent : b.textContent || '').trim(); };
+  function selectedSurfaces() {
+    var on = surfBtns.filter(function (b) { return b.getAttribute('aria-pressed') === 'true'; }).map(function (b) { return b.getAttribute('data-surface'); });
+    return on.length ? on : ['webchat'];
+  }
+  function sayList(list) {
+    var names = surfBtns.filter(function (b) { return list.indexOf(b.getAttribute('data-surface')) >= 0; }).map(nameOf);
+    return names.length <= 1 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  }
+  function resetSurfaces() {
+    surfBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-surface') === 'webchat' ? 'true' : 'false'); });
+    if (surfEl) surfEl.classList.remove('is-nudge');
+    if (surfLive) surfLive.textContent = '';
+  }
+  if (surfEl) surfEl.addEventListener('click', function (e) {
+    var b = e.target && e.target.closest && e.target.closest('[data-surface]');
+    if (!b) return;
+    var on = b.getAttribute('aria-pressed') === 'true';
+    if (on && selectedSurfaces().length === 1 && surfBtns.filter(function (x) { return x.getAttribute('aria-pressed') === 'true'; }).length === 1) {
+      // at least one place to answer: the last one stays on, and the visitor is told why
+      surfEl.classList.add('is-nudge');
+      if (surfLive) surfLive.textContent = nameOf(b) + ' stays on: pick another place first. Your bot needs at least one.';
+      return;
+    }
+    b.setAttribute('aria-pressed', on ? 'false' : 'true');
+    surfEl.classList.remove('is-nudge');
+    if (surfLive) surfLive.textContent = nameOf(b) + (on ? ' removed. ' : ' added. ') + 'It will answer on ' + sayList(selectedSurfaces()) + '.';
+  });
+
   // ------------------------------------------------------------ hand-off into the Studio
   var leaving = false;
   function deliver(action) {
+    action.surfaces = selectedSurfaces();
     var s = window.__studio;
     if (s && typeof s.landing === 'function') s.landing(action);
     else window.__kbLanding = action;          // app.js drains this once the Builder exists
@@ -132,6 +169,7 @@
   // ------------------------------------------------------------ show (first paint, or again after "Start over")
   function show() {
     input.value = '';
+    resetSurfaces();
     el.classList.remove('has-value', 'kl-leaving');
     ex = 0; current = EXAMPLES[0]; pos = current.length; phase = 'hold'; paint();
     el.scrollTop = 0;

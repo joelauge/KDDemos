@@ -1,5 +1,5 @@
 // One-line loader:
-// <script type="module" src=".../lib/embed.js" data-api="http://localhost:8787" data-mode="widget|inline|fullpage"
+// <script type="module" src=".../lib/embed.js" data-api="http://localhost:8787" data-mode="widget|inline|fullpage|voice"
 //         data-target="#id" data-engine="server|webllm" data-org="..." data-name="KnowBot" data-starters="Q1|Q2"
 //         data-instance="acme"></script>   (data-instance: answer only from that chat instance's knowDrive folder)
 import { mount, ensureCss } from './widget.js?v=484b978';
@@ -33,7 +33,19 @@ const instanceConfig = async () => {
   if (!instance) return null;
   try { return (await (await fetch(`${apiBase}/api/config?instance=${encodeURIComponent(instance)}`)).json()).instance || null; } catch { return null; }
 };
+// data-mode="voice": the web voice assistant (lib/voice-widget.js) instead of the text widget. data-bot (or
+// data-instance) names the bot, data-key a trial key when the bot is a Studio trial, data-talk="hold" for push-to-talk.
+const startVoice = async () => {
+  const inst = await instanceConfig();
+  const { mountVoice } = await import('./voice-widget.js?v=484b978');
+  window.knowbotVoice = mountVoice(d.target || null, {
+    apiBase, endpoint: d.endpoint || undefined, bot: d.bot || instance || '', key: d.key || undefined,
+    name: d.name || inst?.botName || inst?.name || 'KnowBot', talk: d.talk === 'hold' ? 'hold' : 'toggle', position: d.position,
+    open: d.open === 'true', lang: d.lang || undefined, engine: d.engine === 'text' ? 'text' : 'auto',
+  });
+};
 const start = async () => {
+  if (d.mode === 'voice') return startVoice();
   const inst = await instanceConfig();
   window.knowbot = mount(d.mode || 'widget', d.target || null, {
     apiBase,

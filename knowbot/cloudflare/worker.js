@@ -23,6 +23,11 @@ export class KnowBotContainer extends Container {
       ...(env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY } : {}),
       ...(env.KNOWBOT_STUDIO_PROVIDER ? { KNOWBOT_STUDIO_PROVIDER: env.KNOWBOT_STUDIO_PROVIDER } : {}),
       ...(env.KNOWBOT_STUDIO_MODEL ? { KNOWBOT_STUDIO_MODEL: env.KNOWBOT_STUDIO_MODEL } : {}),
+      // Phone channel (server/channels/voice.mjs + voice-live.mjs) and SMS: Worker secrets, passed through only when set, so
+      // a missing one leaves that feature off ("channel not configured") instead of breaking the container.
+      ...pick(env, ['GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
+        // plain vars (wrangler.jsonc "vars" or --var), optional
+        'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'SHOP_DOMAIN', 'KNOWBOT_PUBLIC_URL']),
     };
   }
 
@@ -44,6 +49,8 @@ export class KnowBotContainer extends Container {
   }
 }
 
+const pick = (env, names) => Object.fromEntries(names.filter((n) => env[n]).map((n) => [n, String(env[n])]));
+
 const ENV_FP_KEY = 'knowbot-env-fingerprint';
 async function fingerprint(vars) {
   const data = new TextEncoder().encode(JSON.stringify(Object.entries(vars || {}).sort()));
@@ -61,14 +68,21 @@ export default {
       return Response.json({ service: 'knowbot-api', ok: true, site: env.SITE_URL || 'https://knowbot.knowdrive.ai' }, { headers: CORS });
     }
     if (!url.pathname.startsWith('/api/')) return new Response('not found', { status: 404, headers: CORS });
+    // WebSocket upgrades: only the phone channel's Twilio Media Streams path and the web voice assistant's socket go to the
+    // container (the Container class proxies the socket both ways); any other upgrade is refused here.
+    const upgrade = (request.headers.get('upgrade') || '').toLowerCase() === 'websocket';
+    if (upgrade && !/^\/api\/v1\/(?:channels\/[^/]+\/voice\/media|bots\/[^/]+\/voice\/live)\/?$/.test(url.pathname)) return new Response('not found', { status: 404 });
     // One instance: sessions, the dashboard event feed and SSE all live in the same Node process.
     const box = getContainer(env.KNOWBOT, 'main');
     const headers = new Headers(request.headers);
     // The server only trusts X-Forwarded-For behind a proxy (KNOWBOT_TRUST_PROXY=1): set it, never append.
     headers.set('x-forwarded-for', request.headers.get('cf-connecting-ip') || '0.0.0.0');
+    // Twilio signs the https URL it called and media streams must be wss: tell the server the public scheme.
+    headers.set('x-forwarded-proto', url.protocol.replace(':', ''));
     try {
       return await box.fetch(new Request(request, { headers }));
     } catch (e) {
+      if (upgrade) return new Response('KnowBot is waking up, try again in a few seconds', { status: 503, headers: { 'retry-after': '5' } });
       return Response.json({ error: { status: 503, message: `KnowBot is waking up, try again in a few seconds (${e.message || e})` } }, { status: 503, headers: { ...CORS, 'retry-after': '5' } });
     }
   },

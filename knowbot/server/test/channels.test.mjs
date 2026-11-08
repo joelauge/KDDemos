@@ -411,7 +411,7 @@ describe('channels: webhooks against fake providers', () => {
     await flushQuestions();
     const files = [...S.kd.files.values()].filter((f) => f.tags.includes('questions'));
     const chans = new Set(files.map((f) => f.tags.find((t) => t.startsWith('channel:'))));
-    for (const c of ['sms', 'voice', 'whatsapp', 'email']) assert.ok(chans.has(`channel:${c}`), `channel:${c} logged`);
+    for (const c of ['sms', 'voice', 'phone', 'whatsapp', 'email']) assert.ok(chans.has(`channel:${c}`), `channel:${c} logged`); // voice = browser voice bot, phone = Twilio calls
     assert.ok(files.some((f) => f.tags.includes(`from:${hashCaller(PHONE)}`)));
     assert.ok(files.some((f) => f.tags.includes(`from:${hashCaller('jane@example.com')}`)));
     const all = files.map((f) => `${f.filename} ${f.tags.join(',')} ${f.text}`).join('\n');

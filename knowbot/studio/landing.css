@@ -145,32 +145,29 @@
 .kl-alt:active { transform: scale(.97); }
 .kl-alt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 999px; }
 
-/* ---- channels: a quiet row under the hero (orbiting the hero on wide screens) */
-.kl-orbit { list-style: none; margin: 40px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+/* ---- answer surfaces: "Where should it answer?" (multi-select toggle buttons, aria-pressed; website chat by default).
+   No price here: per-surface pricing is shown only at launch, after the visitor has tested (owner rule). */
+.kl-surf { position: relative; z-index: 1; width: 100%; max-width: 760px; margin: 34px auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.kl-surf-h { margin: 0 0 12px; font: 700 clamp(17px, 1.4vw, 19px)/1.3 var(--display); letter-spacing: -.01em; color: var(--strong); }
+.kl-surf-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .kl-ch {
-  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px 0 6px; border-radius: 999px;
-  background: var(--kl-chip-bg); border: 1px solid var(--line); color: var(--text); font: 500 13.5px/1 var(--font);
+  position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px 0 6px; border-radius: 999px; cursor: pointer;
+  background: var(--kl-chip-bg); border: 1px solid var(--line); color: var(--text); font: 500 14px/1 var(--font);
   box-shadow: var(--st-shadow-1);
-  animation: kl-float 6s ease-in-out calc(var(--i) * -1.1s) infinite;
+  transition: background-color var(--dur-1), border-color var(--dur-1), color var(--dur-1), transform var(--dur-1);
 }
-.kl-ch-ico { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-2); }
+.kl-ch:hover { border-color: var(--line-2); color: var(--strong); }
+.kl-ch:active { transform: scale(.97); }
+.kl-ch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kl-ch-ico { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-2); flex: none; }
 .kl-ch-ico svg { display: block; width: 17px; height: 17px; }
-@keyframes kl-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-
-.kl-chline { position: relative; z-index: 1; margin: 14px 0 0; font-size: 14.5px; color: var(--muted); text-align: center; }
-
-@media (min-width: 1200px) and (min-height: 760px) {
-  .kl-orbit { position: absolute; inset: 0; margin: 0; display: block; pointer-events: none; }
-  .kl-ch { position: absolute; }
-  /* a gentle arc on each side: the middle chip sits furthest out */
-  .kl-ch:nth-child(1) { left: 8%;  top: 20%; }
-  .kl-ch:nth-child(2) { left: 1%;  top: 44%; }
-  .kl-ch:nth-child(3) { left: 7%;  top: 68%; }
-  .kl-ch:nth-child(4) { right: 9%; top: 20%; }
-  .kl-ch:nth-child(5) { right: 2%; top: 44%; }
-  .kl-ch:nth-child(6) { right: 8%; top: 68%; }
-  .kl-chline { margin-top: 12px; }
-}
+.kl-ch-tick { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 2px; border-radius: 50%; border: 1.5px solid var(--line-2); color: transparent; flex: none; transition: background-color var(--dur-1), border-color var(--dur-1), color var(--dur-1); }
+.kl-ch-tick svg { display: block; width: 12px; height: 12px; }
+.kl-ch[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: color-mix(in srgb, var(--accent) 9%, var(--panel)); color: var(--strong); font-weight: 600; }
+.kl-ch[aria-pressed="true"] .kl-ch-ico { background: var(--accent-2); color: var(--panel); }
+.kl-ch[aria-pressed="true"] .kl-ch-tick { background: var(--accent-2); border-color: var(--accent-2); color: var(--panel); }
+.kl-surf-note { margin: 12px 0 0; font-size: 14px; line-height: 1.45; color: var(--muted); max-width: 46ch; }
+.kl-surf.is-nudge .kl-surf-note { color: var(--strong); }
 
 /* ---- proof: one small, live-looking answer with its receipt */
 .kl-proof {
@@ -214,14 +211,14 @@
 @keyframes kl-typing { 0% { opacity: 0; } 12%, 88% { opacity: 1; } 100% { opacity: 0; } }
 
 /* first paint: the hero arrives softly */
-.kl-hero > *, .kl-chline, .kl-proof { animation: kl-rise 520ms var(--ease-out) both; }
+.kl-hero > *, .kl-surf, .kl-proof { animation: kl-rise 520ms var(--ease-out) both; }
 .kl-hero > .kl-wave { animation-delay: 0ms; }
 .kl-hero > .kl-h1 { animation-delay: 60ms; }
 .kl-hero > .kl-terms { animation-delay: 120ms; }
 .kl-hero > .kl-lede { animation-delay: 160ms; }
 .kl-hero > .kl-form { animation-delay: 210ms; }
 .kl-hero > .kl-alts { animation-delay: 260ms; }
-.kl-chline { animation-delay: 340ms; }
+.kl-surf { animation-delay: 320ms; }
 .kl-proof { animation-delay: 420ms; }
 
 /* ---- leaving (fallback when the View Transitions API is missing) */
@@ -264,10 +261,12 @@
   .kl-go { width: 100%; height: 54px; }
   .kl-alts { gap: 8px; margin-top: 14px; }
   .kl-alt { font-size: 14px; padding: 0 14px; }
-  .kl-orbit { margin-top: 26px; gap: 8px; flex-wrap: nowrap; }
-  .kl-ch { width: 44px; height: 44px; padding: 0; justify-content: center; }
-  .kl-ch-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .kl-ch-ico { width: 32px; height: 32px; }
-  .kl-chline { font-size: 14px; max-width: 30ch; margin-top: 10px; }
+  /* phones: a two-column grid of full-width toggles (visible names, 44 px targets, no horizontal scroll) */
+  .kl-surf { margin-top: 26px; }
+  .kl-surf-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+  .kl-ch { width: 100%; min-width: 0; padding: 0 10px 0 5px; font-size: 13.5px; gap: 7px; }
+  .kl-ch-t { flex: 1; min-width: 0; text-align: left; line-height: 1.2; }
+  .kl-ch-ico { width: 30px; height: 30px; }
+  .kl-surf-note { font-size: 13.5px; }
 }
-@media (max-width: 360px) { .kl-orbit { gap: 5px; } .kl-ch { width: 40px; height: 40px; } }
+@media (max-width: 340px) { .kl-surf-row { grid-template-columns: 1fr; } }

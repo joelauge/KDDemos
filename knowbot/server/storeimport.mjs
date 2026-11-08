@@ -21,6 +21,7 @@
 //
 // Events (data is one JSON object):
 //   detect   { platform, api, base, name }
+//   discovering { step:'sitemaps'|'links', urls, … } the finder at work (sitemaps crawled, links and help desks read)
 //   plan     { counts:{product,faq,policy,help,pdf,collection,blog,page}, samples:{kind:[url]}, total, robots, helpdesks,
 //              feedTotal }                          what the finder found and will read, best sources first
 //   found    { products, pages, policies, faqs, help, pdfs, collections, blog }   (the same counts, Studio copy names)
@@ -752,7 +753,7 @@ export function readProductHtml(html, pageUrl, rec = null, { requireLd = false }
   for (const s of splitSections(htmlToText(html, { main: true, minLevel: 2 }))) {
     const paras = s.text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => {
       const n = normPara(p);
-      if (!n || n.split(' ').length < 3) return false;          // "Quantity", "$799.00", "Add to cart"
+      if (!n || n.split(' ').filter((w) => /[a-z]{2}/.test(w)).length < 3) return false; // "Quantity", "$799.00", "Add to cart"
       if (descNorm && n.length > 20 && descNorm.includes(n)) return false;
       return true;
     });
@@ -767,7 +768,8 @@ export function readProductHtml(html, pageUrl, rec = null, { requireLd = false }
   const reviewsLd = ldReviews(ldp);
   for (const [heading, text] of merged) {
     if (heading === 'Reviews' && text.replace(/\s+/g, ' ').length < 40) continue;
-    doc.sections.push({ heading, text: clip(text, 12000), html: true });
+    // a recognised section (specs, care, shipping …) is product copy even when many products share it: never filtered
+    doc.sections.push({ heading, text: clip(text, 12000), html: true, ...(SECTION_NAMES.some(([n]) => n === heading) ? { keep: true } : {}) });
   }
   if (faqs.length) {
     const seen = new Set();
@@ -836,14 +838,14 @@ export function slugOf(url) {
 function createRepeatFilter() {
   const counts = new Map();
   let pages = 0;
-  const parasOf = (doc) => doc.sections.filter((s) => s.html).flatMap((s) => s.text.split(/\n{2,}/)).map(normPara).filter((n) => n.length >= 30);
+  const parasOf = (doc) => doc.sections.filter((s) => s.html && !s.keep).flatMap((s) => s.text.split(/\n{2,}/)).map(normPara).filter((n) => n.length >= 30);
   return {
     observe(doc) { const ps = new Set(parasOf(doc)); if (!ps.size) return false; pages++; for (const p of ps) counts.set(p, (counts.get(p) || 0) + 1); return true; },
     get pages() { return pages; },
     apply(doc) {
       if (pages < 4) return doc;
       const boiler = (p) => { const n = normPara(p); const c = counts.get(n) || 0; return n.length >= 30 && c >= 3 && c / pages > 0.5; };
-      const sections = doc.sections.map((s) => (s.html ? { ...s, text: s.text.split(/\n{2,}/).filter((p) => !boiler(p)).join('\n\n') } : s)).filter((s) => s.text.trim());
+      const sections = doc.sections.map((s) => (s.html && !s.keep ? { ...s, text: s.text.split(/\n{2,}/).filter((p) => !boiler(p)).join('\n\n') } : s)).filter((s) => s.text.trim());
       return { ...doc, sections };
     },
   };
@@ -860,8 +862,11 @@ function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batch
   const out = [];
   const taken = new Set();
   const batches = new Map();
-  const filter = createRepeatFilter();
-  let held = [], warm = false, q = Promise.resolve(), announced = false;
+  // repeated blocks are per template: product pages are compared with product pages, other pages with other pages
+  const filters = new Map(), held = new Map(), warm = new Set();
+  const groupOf = (doc) => (doc.kind === 'product' ? 'product' : 'page');
+  const filterOf = (g) => { if (!filters.has(g)) filters.set(g, createRepeatFilter()); return filters.get(g); };
+  let q = Promise.resolve(), announced = false;
   const inc = (o, k, n = 1) => { o[k] = (o[k] || 0) + n; };
   async function flush(kind) {
     const b = batches.get(kind);
@@ -870,7 +875,7 @@ function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batch
     if (onFiles) await onFiles({ kind, files: b.files });
   }
   async function write(doc) {
-    const d = doc.kind === 'pdf' ? doc : filter.apply(doc);
+    const d = doc.kind === 'pdf' ? doc : filterOf(groupOf(doc)).apply(doc);
     let bytes, ext, mime;
     if (d.kind === 'pdf') { bytes = d.bytes; ext = 'pdf'; mime = 'application/pdf'; }
     else {
@@ -900,10 +905,13 @@ function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batch
       out.push({ ...file, bytes: undefined });
     } else out.push(file);
   }
+  async function release(g) { const h = held.get(g) || []; held.delete(g); for (const x of h) await write(x); }
   async function addNow(doc) {
-    if (doc.kind !== 'pdf' && filter.observe(doc) && !warm) {
-      held.push(doc);
-      if (filter.pages >= warmPages) { warm = true; const h = held; held = []; for (const x of h) await write(x); }
+    const g = groupOf(doc), fl = filterOf(g);
+    if (doc.kind !== 'pdf' && fl.observe(doc) && !warm.has(g)) {
+      if (!held.has(g)) held.set(g, []);
+      held.get(g).push(doc);
+      if (fl.pages >= warmPages) { warm.add(g); await release(g); }
       return;
     }
     await write(doc);
@@ -914,16 +922,14 @@ function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batch
     /** Hand over every pending batch (between reading phases: help pages go up before the products are read). */
     flushAll() {
       q = q.then(async () => {
-        if (!warm) { warm = true; const h = held; held = []; for (const x of h) await write(x); } // what is held goes now
+        for (const g of [...held.keys()]) await release(g); // what is held goes now (later pages still warm up)
         for (const k of [...batches.keys()]) await flush(k);
       });
       return q;
     },
     async finish() {
       await q;
-      warm = true;
-      const h = held; held = [];
-      for (const x of h) await write(x);
+      for (const g of [...held.keys()]) { warm.add(g); await release(g); }
       for (const k of [...batches.keys()].sort((a, b) => (KIND_RANK[a] ?? 9) - (KIND_RANK[b] ?? 9))) await flush(k);
       return out;
     },
@@ -1199,11 +1205,11 @@ async function readPageSource(ctx, s) {
   const { f, report } = ctx;
   if (ctx.timeUp) { ctx.inc(report.leftOut.time, s.kind); return; }
   const key = urlKey(s.url);
-  if (ctx.seen.has(key)) { report.skipped.duplicate++; return; }
+  if (ctx.seen.has(key) || ctx.seenProducts.has(key)) { report.skipped.duplicate++; return; }
   ctx.seen.add(key);
   let html, url = s.url;
   const pre = ctx.prefetched.get(key) || ctx.plan.prefetched.get(key);
-  if (pre && htmlToText(pre.html, { main: true }).replace(/\s+/g, ' ').length >= 80) html = pre.html;
+  if (pre && htmlToText(pre.html, { main: true }).replace(/\s+/g, ' ').length >= 30) html = pre.html;
   else {
     let r;
     try { r = await f.get(s.url, { accept: 'text/html,application/xhtml+xml' }); } catch (e) { ctx.pageError(e, s.kind); return; }
@@ -1218,7 +1224,7 @@ async function readPageSource(ctx, s) {
   if (kind === 'page' || kind === 'help') { const k2 = classifyUrl(url, { platform: ctx.det.platform, text: pre?.title || titleOfHtml(html) }); if (['faq', 'policy', 'help'].includes(k2)) kind = k2; }
   const doc = readPageHtml(html, url, { kind, title: pre?.title || null });
   for (const p of doc.pdfs) addPdf(ctx, p);
-  if (!doc.sections.some((x) => String(x.text || '').replace(/\s+/g, ' ').length >= 20)) { report.skipped.empty++; return; }
+  if (doc.sections.reduce((n, x) => n + String(x.text || '').replace(/\s+/g, ' ').trim().length, 0) < 12) { report.skipped.empty++; return; }
   ctx.progress(doc.kind);
   await ctx.writer.add(doc);
 }
@@ -1364,7 +1370,7 @@ export async function importStore(input, o = {}) {
         emit('reading', { kind, done: report.read[kind], total: Math.max(ctx.totals[kind] || 0, report.read[kind]), read: { ...report.read } });
       } };
     const plan = await findSources(f, det, { inflate: (b) => zlib.gunzipSync(b, { maxOutputLength: f.config.maxBytes }), registrable: registrableDomain,
-      allowHelpHost: (h) => f.allowHost(h), feedTotal: () => feedTotalOf(ctx) });
+      allowHelpHost: (h) => f.allowHost(h), feedTotal: () => feedTotalOf(ctx), onDiscover: (d) => emit('discovering', d) });
     ctx.plan = plan;
     f.setCrawlDelay(plan.robots.crawlDelay);
     await prefetchPlatformPages(ctx);

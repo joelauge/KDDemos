@@ -30,7 +30,11 @@ import { sealKey, openKey } from './providers.mjs';
 import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
 import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle } from './channels/util.mjs';
 import { handleSms } from './channels/sms.mjs';
-import { handleVoice } from './channels/voice.mjs';
+import { handleVoice, phoneEngine } from './channels/voice.mjs';
+import { handleMediaStream } from './channels/voice-live.mjs';
+import { handleWebVoice, webVoiceEngine } from './channels/webvoice.mjs';
+import { acceptWebSocket, rejectUpgrade, isWebSocketUpgrade } from './channels/ws.mjs';
+import { shopDomainFor } from './channels/shop.mjs';
 import { handleWhatsApp } from './channels/whatsapp.mjs';
 import { handleEmail } from './channels/email.mjs';
 import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
@@ -847,6 +851,78 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     };
     return h(cx);
   }
+  // ---------------------------------------------------------------- phone: Twilio Media Streams WebSocket (voice-live.mjs)
+  /** Retrieval only (no answer, nothing logged): the bot's own scope. The phone channel's product-handle lookup. */
+  async function searchRaw(target, q) {
+    if (target.kind === 'trial') return (await trialSearch(target, q)).slice(0, 6).map((h) => ({ text: h.text, file: h.filename, title: h.title }));
+    const ret = await registry.retriever(target.inst.id).search(q, 6);
+    return (ret.results || []).filter((r) => r && r.text && !isQuestionFile(r.filename)).map((r) => ({ text: r.text, file: r.filename, title: r.title || null }));
+  }
+  const MEDIA_RE = /^(?:\/api)?\/v1\/channels\/([^/]+)\/voice\/media\/?$/;
+  // ---------------------------------------------------------------- web voice assistant WebSocket (webvoice.mjs)
+  // A launched bot is public (like the chat widget), limited per IP; a trial bot needs its kb_trial_ key in the start
+  // message. Questions are answered by this bot's own pipeline and logged with channel 'voice'.
+  const WEBVOICE_RE = /^(?:\/api)?\/v1\/bots\/([^/]+)\/voice\/live\/?$/;
+  const webVoiceLimit = Number(env.KNOWBOT_WEBVOICE_RATE_LIMIT || 6); // sessions per minute per IP
+  function webVoiceUpgrade(req, socket, head, botId) {
+    if (!isWebSocketUpgrade(req)) { rejectUpgrade(socket, 426, 'WebSocket only.'); return true; }
+    const ip = typeof o.clientIp === 'function' ? o.clientIp(req) : (req.socket?.remoteAddress || 'unknown');
+    if (limit(`wv:${ip}`, webVoiceLimit).limited) { rejectUpgrade(socket, 429, 'Too many voice sessions; try again in a minute.'); return true; }
+    socket.on('error', () => {});
+    (async () => {
+      let target;
+      try { target = await resolveTarget(botId); } catch { return rejectUpgrade(socket, 404, 'No such bot.'); }
+      const ws = acceptWebSocket(req, socket, head, { maxMessage: 512 * 1024 });
+      if (!ws) return;
+      handleWebVoice(ws, {
+        env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, callerKey: `ip:${ip}`,
+        authorize: async (key) => {
+          if (key) return authKey({ headers: { authorization: `Bearer ${key}` } }, target.id);
+          if (target.kind === 'live') return { keyId: null };
+          throw new ApiError(401, 'missing_api_key', 'A trial bot needs its trial key (kb_trial_…) in the start message.');
+        },
+        ask: async (question, { callerKey }) => {
+          const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'voice', callerKey });
+          a.proofId = a.refused ? null : saveProof(a, 'voice');
+          a.proofUrl = proofUrlFor(req, a.proofId);
+          return a;
+        },
+        onEnd: ({ sid, engine, questions }) => log(`[webvoice] ${sid} ended (${engine || 'not started'}, ${questions} questions)`),
+      });
+    })().catch((e) => { log(`[webvoice] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
+    return true;
+  }
+  /** server.mjs 'upgrade' listener. → true when the path is ours (handled or refused), false to let others decide. */
+  function upgrade(req, socket, head) {
+    const p = String(req.url || '').split('?')[0];
+    const wv = WEBVOICE_RE.exec(p);
+    if (wv) return webVoiceUpgrade(req, socket, head, decodeURIComponent(wv[1]));
+    const mt = MEDIA_RE.exec(p);
+    if (!mt) return false;
+    if (!isWebSocketUpgrade(req)) { rejectUpgrade(socket, 426, 'WebSocket only.'); return true; }
+    if (!env.TWILIO_AUTH_TOKEN || phoneEngine(env) !== 'gemini') { rejectUpgrade(socket, 503, 'The voice-to-voice phone engine is not configured (TWILIO_AUTH_TOKEN, GEMINI_API_KEY).'); return true; }
+    socket.on('error', () => {});
+    (async () => {
+      let target;
+      try { target = await resolveTarget(decodeURIComponent(mt[1])); } catch { return rejectUpgrade(socket, 404, 'No such bot.'); }
+      const ws = acceptWebSocket(req, socket, head, { maxMessage: 256 * 1024 });
+      if (!ws) return;
+      handleMediaStream(ws, {
+        env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null,
+        shopDomain: shopDomainFor(target, env),
+        ask: async (question) => {
+          const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'phone', callerKey: ws.callerKey || null });
+          a.proofId = a.refused ? null : saveProof(a, 'phone');
+          return a;
+        },
+        searchRaw: (q) => searchRaw(target, q),
+        onStart: ({ from }) => { ws.callerKey = from || null; },
+        onEnd: ({ callSid, transcript, answers }) => log(`[voice-live] ${callSid || '?'} ended: ${transcript.length} turns, ${answers.length} searches (${answers.filter((x) => x.refused).length} not in the files)`),
+      });
+    })().catch((e) => { log(`[voice-live] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
+    return true;
+  }
+
   function channelsInfo(req, botId) {
     const base = apiBase(req);
     const st = channelStatus(env);
@@ -855,12 +931,14 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
       bot: botId,
       channels: {
         sms: { ...st.sms, webhook: url('sms'), method: 'POST' },
-        voice: { ...st.voice, webhook: url('voice'), method: 'POST' },
+        voice: { ...st.voice, webhook: url('voice'), method: 'POST', engine: phoneEngine(env), ...(phoneEngine(env) === 'gemini' ? { mediaStream: `${url('voice').replace(/^http/, 'ws')}/media` } : {}) },
         whatsapp: { ...st.whatsapp, webhook: url('whatsapp'), method: 'POST', verify: 'GET (hub.challenge)' },
         email: { ...st.email, webhook: url('email'), method: 'POST' },
         // the widget is a static file at the site root (never under the /api prefix the API may be served from)
         chat: { configured: true, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/chat`, embed: `${publicBase(req, env)}/lib/embed.js` },
         voiceBot: { ...st.voiceBot, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/voice` },
+        webVoice: { configured: true, engine: webVoiceEngine(env), live: webVoiceEngine(env) === 'gemini', endpoint: `${base.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId)}/voice/live`,
+          embed: `${publicBase(req, env)}/lib/embed.js`, widget: `${publicBase(req, env)}/lib/voice-widget.js` },
       },
     };
   }
@@ -1085,7 +1163,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
   }
 
   return {
-    handle, answer, resolveTarget, logLive, logChat, trialKey, createKey, revokeKey,
+    handle, upgrade, answer, resolveTarget, logLive, logChat, trialKey, createKey, revokeKey,
     /** Resolves when background work (question logs, WhatsApp replies, proof files) has settled. Tests. */
     idle: async () => { while (background.size) await Promise.all([...background]); },
     close() { clearInterval(sweep); },

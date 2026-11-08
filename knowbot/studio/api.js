@@ -332,110 +332,51 @@ export async function fileAtoms(fileId, { limit = 12, around, span = 1 } = {}) {
 /** POST /samples -> {files, usage}. */
 export async function attachSamples(set = 'lumen-bikes') { return request('POST', trialPath('/samples'), { body: { set } }); }
 
-/**
- * POST /store (SSE): "Enter a Store URL". onEvent(type, data, id) for detect|fetching|found|building|capped|built|
- * uploaded|error|done. Resolves with the 'done' data ({files, usage, platform, name, counts, capped}); rejects with an
- * ApiError whose code is the importer's (bad_url, blocked_host, not_found, robots, no_content, quota, rate_limited…)
- * and whose message is the server's plain-English copy. The new files also arrive through the events stream.
- */
-export async function importStore(url, { owner = true, onEvent, signal } = {}) {
+// ------------------------------------------------------------------ the website import as a background job
+//
+// F's contract (server/trials.mjs storeImport, one job per trial, it outlives the request):
+//   POST   /store {url, owner}       starts the job and streams its events (SSE ids = job sequence numbers); 409 busy
+//   GET    /store?since=<seq>        re-attaches: replays the job's events after <seq>, then live until `done`; 404 none
+//   DELETE /store                    cancels (202 {cancelled, job}); files already added stay
+//   trial events stream: 'store' {job, type, seq, data} (progress ~2/s), 'storegroup' {kind, total, shown, ready, …};
+//   'hello' carries storeJob {id, state, seq} and groups [storegroup].
+//   Job events: detect, plan {counts:{kind:n}, samples:{kind:[url]}, total, robots:{crawlDelay,…}, helpdesks, feedTotal},
+//   found, fetching, reading {kind, done, total, read}, building {files, n}, uploaded {k, uploaded, kind, files|n},
+//   capped, built {n, bytes, written, report}, error {code, message}, done {fileCount, report, spec, cancelled?, error?}.
+// CONTRACT-GAP (F): the Studio sends planOnly:true first (the finder's plan, nothing imported, no import slot charged:
+//   detect · plan · done {plan}) and then kinds:[kind] with the visitor's ticks. Until the route honours them it starts
+//   the full import on the first request; the card notices (reading / uploaded events after the plan) and follows it.
+
+/** POST /store (SSE). onEvent(type, data, id). Resolves with the 'done' data; rejects with the importer's code/copy. */
+export async function importStore(url, { owner = true, onEvent, signal, planOnly = false, kinds = null } = {}) {
   const path = trialPath('/store');
   let errEvent = null;
-  const done = await postStream(path, { url: String(url || '').trim(), owner: !!owner }, { signal, until: 'done',
+  const body = { url: String(url || '').trim(), owner: !!owner, ...(planOnly ? { planOnly: true } : {}), ...(Array.isArray(kinds) ? { kinds } : {}) };
+  const done = await postStream(path, body, { signal, until: 'done',
     onEvent: (type, data, id) => { if (type === 'error') errEvent = data; onEvent && onEvent(type, data, id); } });
-  if (errEvent || done?.error) {
+  if ((errEvent || done?.error) && !(done && (done.fileCount > 0 || done.cancelled))) {
     const e = errEvent || {};
-    throw new ApiError(e.message || 'Something went wrong reading that store.', { status: 200, code: e.code || 'upstream', detail: e });
+    throw new ApiError(e.message || 'Something went wrong reading that website.', { status: 200, code: e.code || 'upstream', detail: e });
   }
-  return done;
+  return { ...(done || {}), ...(errEvent ? { errorEvent: errEvent } : {}) };
 }
-// ------------------------------------------------------------------ the site finder + background import job
-//
-// CONTRACT (proposed by U for F, server/trials.mjs; the card falls back to POST /store above while it is missing):
-//   POST   /store/plan {url, owner:true}  -> SSE detect {platform,name} · discovering {found, kind?} · plan {Plan} ·
-//                                            error {code,message} · done.   (A JSON reply {plan} is accepted too.)
-//          Plan = { planId, url, host, platform, name, kinds:[{ kind, label?, count, rank?, bytes?, pages?, url?,
-//                   examples?:[{title,url}] }], estimate:{ pages, bytes, minutes }, robots?:{ blocked }, notes?:[str] }
-//          kind: policies | faq | help | products | collections | blog | pdfs | pages
-//   POST   /store/job {planId, url, kinds:[kind], owner:true} -> 200/202 {job}; 409 while one runs (detail.job)
-//   GET    /store/job -> {job|null}   (the trial's running or most recent job; one job per trial)
-//   DELETE /store/job -> {job}        (cancel; files already uploaded stay)
-//   trial events stream: event 'store' data {job} on every change (throttled server-side, e.g. <= 2/s); the
-//          'hello' frame carries storeJob (the running job, else null) so a reconnect / refresh picks it up
-//   GET    /api/studio/config -> storeJobs: true  (the Studio only calls the routes above when this is set)
-//   Job = { id, state: running|done|failed|cancelled, phase: discovering|reading|building|uploading|done,
-//           url, host, name, platform, kinds, startedAt, endedAt?, budgetMs?,
-//           progress:{ discovered, read, total, built, files, uploaded },
-//           recent:[{title,url}] (newest last, <= 8), error?:{code,message}, spec?,
-//           summary?:{ imported:[{kind,count,files,url?}], skipped:{ robots, urls?:[] }, failed:{ count, urls?:[] },
-//                      leftOut:{ quota, cap, time, bytes? } } }
-// CONTRACT-GAP (F): until F lands these routes, planStore throws code 'no_plan' (404/405) and the card uses importStore.
 
-/** True when the server has no finder routes yet (the card then runs the one-shot POST /store import). */
-const noRoute = (err) => err && (err.status === 404 || err.status === 405 || err.status === 501);
-
-/**
- * POST /store/plan: the finder. onEvent(type, data) for detect|discovering|plan|error. Resolves with the Plan.
- * Rejects with ApiError code 'no_plan' when the server has no finder (older server), else the server's code/copy.
- */
-export async function planStore(url, { owner = true, onEvent, signal } = {}) {
-  const path = trialPath('/store/plan');
+/** GET /store?since (SSE): re-attaches to the running (or last) job. Resolves the 'done' data, or null when none ran. */
+export async function attachStoreImport({ since = 0, onEvent, signal } = {}) {
   let res;
   try {
-    res = await fetch(BASE + path, { method: 'POST', signal, credentials: 'omit',
-      headers: { ...authHeaders(), 'content-type': 'application/json', accept: 'text/event-stream, application/json' },
-      body: JSON.stringify({ url: String(url || '').trim(), owner: !!owner }) });
+    res = await fetch(BASE + trialPath(`/store?since=${encodeURIComponent(since)}`), { signal, credentials: 'omit', headers: { ...authHeaders(), accept: 'text/event-stream' } });
   } catch (err) { throw netError(err, signal); }
-  if (!res.ok) {
-    const err = await toError(res, { trialCall: true });
-    if (noRoute(err)) throw new ApiError('No finder on this server', { status: err.status, code: 'no_plan' });
-    throw err;
-  }
-  if (!/event-stream/i.test(res.headers.get('content-type') || '')) {
-    const j = await res.json().catch(() => null);
-    const plan = j && (j.plan || (Array.isArray(j.kinds) ? j : null));
-    if (!plan) throw new ApiError((j && j.error && j.error.message) || 'Something went wrong reading that site.', { status: 200, code: (j && j.error && j.error.code) || 'upstream' });
-    return plan;
-  }
-  let plan = null, errEvent = null;
-  try {
-    await readSSE(res, (type, data) => {
-      if (type === 'plan') plan = (data && data.plan) || data;
-      else if (type === 'error') errEvent = data;
-      onEvent && onEvent(type, data);
-    });
-  } catch (err) { if (!plan) throw netError(err, signal); }
-  if (errEvent && !plan) {
-    const e = errEvent.error || errEvent;
-    throw new ApiError(e.message || 'Something went wrong reading that site.', { status: 200, code: e.code || 'upstream', detail: e });
-  }
-  if (!plan) throw new ApiError('The finder stopped early', { status: 0, code: 'network' });
-  return plan;
+  if (res.status === 404) return null;
+  if (!res.ok) throw await toError(res, { trialCall: true });
+  let done;
+  try { await readSSE(res, (type, data, id) => { if (type === 'done') done = data; onEvent && onEvent(type, data, id); }); }
+  catch (err) { if (done === undefined) throw netError(err, signal); }
+  return done === undefined ? { running: true } : done;   // a stream that ends before 'done' (rotation): still running
 }
 
-/** POST /store/job: starts the background import. Resolves {job}; a 409 (one already running) resolves that job. */
-export async function startStoreJob({ planId, url, kinds, owner = true } = {}) {
-  try {
-    return await request('POST', trialPath('/store/job'), { body: { planId: planId || null, url: String(url || ''), kinds: kinds || [], owner: !!owner } });
-  } catch (err) {
-    if (err.status === 409) {
-      const j = err.detail && err.detail.job;
-      if (j) return { job: j, resumed: true };
-      const cur = await storeJob().catch(() => null);
-      if (cur && cur.job) return { job: cur.job, resumed: true };
-    }
-    throw err;
-  }
-}
-
-/** GET /store/job -> {job|null}; {job:null} on a server without background jobs. */
-export async function storeJob() {
-  try { return (await request('GET', trialPath('/store/job'))) || { job: null }; }
-  catch (err) { if (noRoute(err)) return { job: null }; throw err; }
-}
-
-/** DELETE /store/job: cancels the running import (what was already added stays). */
-export async function cancelStoreJob() { return request('DELETE', trialPath('/store/job')); }
+/** DELETE /store: cancels the running import (what was already added stays). */
+export async function cancelStoreImport() { return request('DELETE', trialPath('/store')); }
 
 /** DELETE the whole trial ("Start over"): its files, spec and logged questions. */
 export async function deleteTrial() { return request('DELETE', trialPath('')); }
@@ -452,8 +393,10 @@ export async function insights() { return request('GET', trialPath('/insights'))
 /** POST /email -> {sent, link}. */
 export async function sendEmail(email) { return request('POST', trialPath('/email'), { body: { email } }); }
 
-/** POST /checkout -> {url}. */
-export async function checkout({ email } = {}) { return request('POST', trialPath('/checkout'), { body: email ? { email } : {} }); }
+/** POST /checkout -> {url}. surfaces (answer surfaces on the plan) and interval ('month'|'year') ride along when set. */
+export async function checkout({ email, surfaces, interval } = {}) {
+  return request('POST', trialPath('/checkout'), { body: { ...(email ? { email } : {}), ...(Array.isArray(surfaces) && surfaces.length ? { surfaces } : {}), ...(interval ? { interval } : {}) } });
+}
 
 /** `${origin}${pathname}?t=<id>&k=<restore key>` (never contains the bearer token; the restore key only works on POST /restore). */
 export function shareLink() {
@@ -503,9 +446,18 @@ export function openEvents({ onEvent, onStatus } = {}) {
     if (type === 'hello' && data && Array.isArray(data.files)) { known.clear(); data.files.forEach(remember); }
     if (type === 'file') remember(data);
     if (type === 'file' || type === 'hello') lastChange = Date.now();
-    // the background store import's progress rides on this stream (CONTRACT above); the store card listens on the bus
-    if (type === 'store' && data && typeof data === 'object') { try { emit('store:job', data.job || data); } catch (err) { console.error(err); } }
-    if (type === 'hello' && data && data.storeJob) { try { emit('store:job', data.storeJob); } catch (err) { console.error(err); } }
+    // the website import (a background job) rides on this stream; the store card and the Sources groups listen on the bus
+    if (data && typeof data === 'object') {
+      try {
+        if (type === 'store') emit('store:event', data);
+        else if (type === 'storegroup') emit('store:group', data);
+        else if (type === 'hello') {
+          if (Array.isArray(data.files)) emit('store:rows', { rows: data.files.filter((r) => r && r.origin === 'store'), reset: true });
+          for (const g of Array.isArray(data.groups) ? data.groups : []) emit('store:group', g);
+          if (data.storeJob) emit('store:job', data.storeJob);
+        } else if (type === 'file' && data.origin === 'store') emit('store:rows', { rows: [data] });
+      } catch (err) { console.error(err); }
+    }
     try { onEvent && onEvent(type, data, id); } catch (err) { console.error(`[studio] events handler for "${type}" failed`, err); }
   };
 

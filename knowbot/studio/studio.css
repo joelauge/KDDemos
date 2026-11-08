@@ -1253,7 +1253,6 @@ textarea.st-text { resize: vertical; }
 .st-si-kbox:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
 .st-si-kname { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .st-si-kcount { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
-.st-si-kex { padding-left: 26px; font-size: 12px; line-height: 1.4; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .st-si-klink { justify-self: start; margin-left: 26px; font-size: 12px; color: var(--accent); text-underline-offset: 2px; }
 .st-si-klink:focus-visible, .st-si-recent a:focus-visible, .st-si-sum a:focus-visible { outline: var(--st-focus); outline-offset: 2px; border-radius: 3px; }
 .st-si-note { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
@@ -1290,5 +1289,10 @@ textarea.st-text { resize: vertical; }
 @media (max-width: 420px) {
   .st-si-plan .st-si-actions .st-btn, .st-si-run .st-si-actions .st-btn { flex: 1 1 auto; justify-content: center; min-height: 44px; }
   .st-si-kl { min-height: 36px; }
-  .st-si-kex { white-space: normal; }
 }
+.st-si-kinds > legend.st-si-plan-sub { padding: 0; float: left; width: 100%; }
+.st-si-kinds > legend + * { clear: both; }
+.st-si-khint { font-size: 12px; color: var(--muted); }
+.st-sg-s { flex: none; font-size: 12px; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.st-sg-more { margin: 6px 2px 0; font-size: 12px; color: var(--muted); }
+.st-sg-more[hidden] { display: none; }

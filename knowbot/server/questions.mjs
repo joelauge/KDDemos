@@ -24,7 +24,7 @@
 //   questionInsights({kd, store, scopeTags, limit, includeTest?, suggest?, nearest?}) → {total, answered, refused,
 //     top:[{q,count,lastAt,outcome,origin,channels[],variants?,similar?,similarLabel?}],
 //     gaps:[{q,count,lastAt,origin,channels[],variants?,inDomain,offTopic?,status,statusLabel?,suggestion:{kind,inDomain,status,text,nearest,action}}],
-//     byChannel:{studio,web,api,sms,voice,whatsapp,email}, offTopic, more:{top, gaps, probes}, testTraffic, testRefused, test:{total, answered, refused}, probes:[{q,count,lastAt,outcome,probe:true}], source,
+//     byChannel:{studio,web,api,sms,voice,phone,whatsapp,email}, offTopic, more:{top, gaps, probes}, testTraffic, testRefused, test:{total, answered, refused}, probes:[{q,count,lastAt,outcome,probe:true}], source,
 //     scope:{key, state:'active'|'empty'|'missing'}, missing?:true, error?:{status:410, code:'scope_gone', message}}
 //     (onMissing:'throw' → a gone trial/bucket throws InsightsScopeError {status:410, code:'scope_gone'} instead)
 //
@@ -35,7 +35,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 export const QUESTIONS_TAG = 'questions';
-export const CHANNELS = Object.freeze(['studio', 'web', 'api', 'sms', 'voice', 'whatsapp', 'email']);
+export const CHANNELS = Object.freeze(['studio', 'web', 'api', 'sms', 'voice', 'phone', 'whatsapp', 'email']);
 /** Origins that are the Studio testing the bot, never a customer: kept out of top questions and gaps. */
 export const TEST_ORIGINS = Object.freeze(['setup', 'proof', 'probe']);
 // Resolved (integrator): server/trials.mjs passes origin:'probe' | 'setup' for its probes and "Asked by Setup" asks; the
@@ -767,7 +767,7 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
     // customer traffic only: total = answered + refused = Σ top counts + more.top; refused = Σ gap counts + more.gaps
     total, answered: total - refused, refused,
     top, gaps,
-    // where customer questions come from: {studio, web, api, sms, voice, whatsapp, email} (zero-filled)
+    // where customer questions come from: {studio, web, api, sms, voice (browser voice bot), phone (Twilio calls), whatsapp, email} (zero-filled)
     byChannel,
     offTopic: gaps.filter((g) => g.offTopic).reduce((n, g) => n + g.count, 0),
     more: { top: Math.max(0, total - sum(top)), gaps: Math.max(0, refused - sum(gaps)), probes: Math.max(0, testAll.length - sum(probes)) },

@@ -4,7 +4,7 @@
 
 Source: /studio/
 
-A launched KnowBot can answer on six channels: a website chat widget, SMS, telephone, WhatsApp, email, and a voice chatbot in the browser. Every channel uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. The Channels gallery in KnowBot Studio shows each channel's webhook address and copyable setup.
+A launched KnowBot can answer on six channels: a website chat widget, SMS, telephone (phone calls), WhatsApp, email, and a voice chatbot in the browser. Every channel uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. The Channels gallery in KnowBot Studio shows each channel's webhook address and copyable setup.
 
 ## Website chat widget
 
@@ -22,7 +22,19 @@ The SMS channel uses Twilio Messaging. It needs a Twilio account, with Twilio po
 
 Source: /studio/
 
-The telephone channel uses Twilio Voice: callers ask out loud and hear the answer, with spoken attribution such as "According to your returns policy, …". Speech can be recognised with Google Cloud Speech-to-Text and spoken with Google Cloud Text-to-Speech when those are set up; otherwise Twilio's own speech recognition and voice are used. It needs a Twilio account.
+The telephone (Phone) channel uses Twilio Voice and works for any KnowBot, a trial bot in KnowBot Studio or a launched bot. Callers ask out loud and hear the answer from the bot's own files only, with spoken attribution such as "According to the Returns Policy, …". When the answer is not in the files, the caller hears the same refusal sentence as on every other channel. It needs a Twilio account, with the Twilio number's voice webhook pointed at the bot's telephone webhook address.
+
+## Telephone voice engines
+
+Source: /studio/
+
+There are two phone engines. When a Gemini API key is set up, calls are voice-to-voice: the call audio streams to Gemini Live, which listens and speaks itself, and before every answer it looks the question up in the bot's files and reads back the cited answer. Without a Gemini key, the classic engine is used: speech is recognised (Google Cloud Speech-to-Text when set up, otherwise Twilio's own recognition), the bot writes its cited answer, and it is spoken with an ElevenLabs voice when ElevenLabs is set up, otherwise Google Cloud Text-to-Speech, otherwise Twilio's own voice. Every question asked by phone shows up in the bot's question insights under Phone.
+
+## Texted checkout links on calls
+
+Source: /studio/
+
+On the voice-to-voice engine, a bot built from a Shopify store import (or with a store configured for phone links) can offer to text the caller a link that puts the product in their cart and opens checkout. It confirms the version and the number first, refuses a sold-out version and offers the in-stock ones, and sends at most 3 texts per call. Each link is tagged for attribution with UTM parameters, a referral code and the call id. Texting needs the Twilio account SID and a Twilio number to send from.
 
 ## WhatsApp
 

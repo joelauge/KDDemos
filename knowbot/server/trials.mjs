@@ -2297,7 +2297,7 @@ export function createStudio(o = {}) {
    * leaves it unset, so loopback, private and metadata addresses stay refused.
    */
   const storeBudgetMs = Math.max(1000, Number(o.storeBudgetMs ?? env.KNOWBOT_STORE_BUDGET_MS) || STORE_LIMITS.budgetMs);
-  const STORE_PROGRESS = new Set(['fetching', 'reading']);
+  const STORE_PROGRESS = new Set(['fetching', 'reading', 'discovering']);
   const hostTagOf = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'site';
   const lightRow = (f) => ({ id: f.id, name: f.name, origin: 'store', page: f.page || null, stage: f.stage, bytes: f.bytes });
   function jobEmit(T, job, event, data) {
@@ -4019,6 +4019,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         // touched. A live (converted) bot is managed from the dashboard instead.
         if (T.converted) fail(409, 'converted', 'This bot is live. Manage it from your KnowDrive dashboard.');
         T.deleted = true;
+        if (T.storeJob?.state === 'running') T.storeJob.ac.abort(); // a website import must not keep uploading into a deleted bot
         clearTimeout(T.specTimer); T.specTimer = null; T.specDirty = false;
         if (T.poller) { clearTimeout(T.poller); T.poller = null; }
         for (const c of [...T.clients]) { try { c.res.end(); } catch { /* gone */ } }
@@ -4248,7 +4249,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   function close() {
     closed = true;
     clearInterval(sweepTimer); clearTimeout(firstSweep); clearInterval(winSweep);
-    for (const T of trials.values()) { clearTimeout(T.poller); T.poller = null; if (T.specDirty) clearTimeout(T.specTimer); }
+    for (const T of trials.values()) { clearTimeout(T.poller); T.poller = null; if (T.specDirty) clearTimeout(T.specTimer); if (T.storeJob?.state === 'running') T.storeJob.ac.abort(); }
     for (const c of allClients) { try { c.drop?.(); c.res.end(); } catch {} }
     allClients.clear();
   }

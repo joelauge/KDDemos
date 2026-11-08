@@ -24,7 +24,8 @@ export function handleFrom(input) {
   return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s) ? s : null;
 }
 
-const originOf = (u) => { try { const x = new URL(/^https?:\/\//i.test(u) ? u : `https://${u}`); return /^https?:$/.test(x.protocol) ? x.origin : null; } catch { return null; } };
+/** The storefront base: origin plus any path prefix (a store under a sub-path), never a trailing slash. */
+const originOf = (u) => { try { const x = new URL(/^https?:\/\//i.test(u) ? u : `https://${u}`); return /^https?:$/.test(x.protocol) ? `${x.origin}${x.pathname.replace(/\/+$/, '')}` : null; } catch { return null; } };
 
 /** Where product links point for this bot, or null (no product links). */
 export function shopDomainFor(target, env = {}) {

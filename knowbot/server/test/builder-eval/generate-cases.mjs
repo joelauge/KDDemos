@@ -262,6 +262,10 @@ const pricing = [
   ['how much after the free month?', 'price after first 30 days', ['\\$249'], '/\\$249/'],
   ['is it per month or per year?', 'price per month', ['per month'], '/month/i'],
   ['what happens when the 30 days are over?', 'price after first 30 days free', ['\\$249'], '/\\$249/'],
+  // owner edit 2026-11-08: each answer surface (web chat, SMS, WhatsApp, email, phone, web voice) is its own plan line;
+  // never volunteered early, but a direct question gets the truthful, cited answer
+  ['do SMS and WhatsApp cost extra?', 'price per answer surface sms whatsapp', ['Each answer surface is \\$249 per month'], '/\\$249/'],
+  ['how much is it for web chat plus phone?', 'price per answer surface phone web chat', ['Each answer surface is \\$249 per month'], '/\\$249/'],
 ];
 for (const [msg, query, quotes, must] of pricing) {
   add('pricing', msg, 'samples-ready', { tools: ['kb_search'], cites: true, replyMust: [must], replyMustNot: ['/\\b\\d{1,3}\\s?% ?off/i', '/free forever/i', OTHER_PRICE], mustNotActions: NEVER_EXEC, logged: true },

@@ -49,7 +49,6 @@ export function normalizeUrl(url, base) {
   u.search = u.searchParams.toString() ? `?${u.searchParams.toString()}` : '';
   // /collections/<c>/products/<handle> is the same product page as /products/<handle> (Shopify)
   u.pathname = u.pathname.replace(/^((?:\/[a-z]{2}(?:-[a-z]{2,4})?)?)\/collections\/[^/]+\/products\/([^/]+)\/?$/i, '$1/products/$2');
-  if (u.pathname.length > 1) u.pathname = u.pathname.replace(/\/+$/, '') || '/';
   return u.href;
 }
 /** The dedupe key of a URL: normalized, no www., no locale prefix, lowercased path. */
@@ -57,7 +56,7 @@ export function urlKey(url) {
   const n = normalizeUrl(url);
   if (!n) return null;
   const u = new URL(n);
-  return `${u.hostname.replace(/^www\./, '')}${u.pathname.replace(LOCALE_SEG_RE, '').toLowerCase() || '/'}${u.search}`;
+  return `${u.hostname.replace(/^www\./, '')}${u.pathname.replace(LOCALE_SEG_RE, '').replace(/\/+$/, '').toLowerCase() || '/'}${u.search}`;
 }
 const pathOf = (url) => { try { return decodeURIComponent(new URL(url).pathname); } catch { try { return new URL(url).pathname; } catch { return String(url || ''); } } };
 const words = (s) => ` ${String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
@@ -92,14 +91,17 @@ export function sitemapHint(url) {
  * hint: what its sitemap says (product, collection, blog, page); text: the link text (nav/footer).
  */
 export function classifyUrl(url, { platform = 'generic', hint = null, text = '', helpHost = false } = {}) {
-  const p = pathOf(url);
+  const p = pathOf(url).replace(/(.)\/+$/, '$1');
   const lp = p.toLowerCase();
   if (/\.pdf$/i.test(lp)) return 'pdf';
   if (/^\/policies\/[^/]+$/.test(lp)) return /contact/.test(lp) ? 'help' : 'policy';
   const w = words(`${p.replace(/\.[a-z0-9]{2,5}$/i, '')} ${text}`);
   const pw = words(p.replace(/\.[a-z0-9]{2,5}$/i, ''));
   const prodRe = PRODUCT_PATH[platform] || PRODUCT_PATH.generic;
-  if (hint === 'product' || prodRe.test(p) || (platform !== 'shopify' && PRODUCT_PATH.generic.test(p) && !FAQ_RE.test(pw) && !POLICY_RE.test(pw) && !HELP_RE.test(pw))) {
+  const plain = !FAQ_RE.test(pw) && !POLICY_RE.test(pw) && !HELP_RE.test(pw);
+  // Magento: products and categories are both /<url-key>.html; the reader keeps only pages with Product JSON-LD
+  if (platform === 'magento' && /\.html$/i.test(lp) && plain && !BLOG_PATH.test(p) && hint !== 'page') return 'product';
+  if (hint === 'product' || prodRe.test(p) || (platform !== 'shopify' && PRODUCT_PATH.generic.test(p) && plain)) {
     if (hint !== 'page') return 'product';
   }
   if (helpHost || /\/hc\/[^/]+\/articles\//.test(lp) || /\/support\/solutions\/articles\//.test(lp) || /\/(?:article|articles)\/\d+/.test(lp) && helpHost) return FAQ_RE.test(w) ? 'faq' : POLICY_RE.test(w) ? 'policy' : 'help';
@@ -243,7 +245,8 @@ const SITEMAP_DEFAULTS = {
  *
  * @param f    createStoreFetcher() instance (allowSite already called for the store).
  * @param det  detectPlatform() result: { platform, api, base, name, home:{url, html}, apiBase? }.
- * @param o    { inflate(buf), registrable(host), feedTotal?: async () => number|null, maxHelpArticles?: 2000 }
+ * @param o    { inflate(buf), registrable(host), allowHelpHost(host), feedTotal?: async () => number|null, maxHelpArticles?: 2000,
+ *               onDiscover?({ step: 'sitemaps'|'links', urls, … }) }
  * @returns {Promise<Plan>} {
  *   base, host, platform, name,
  *   sources: [{ url, kind, rank, via, text?, lastmod?, helpdesk? }]   (ranked, de-duplicated; products included),
@@ -269,7 +272,8 @@ export async function findSources(f, det, o = {}) {
 
   const add = (url, kind, via, extra = {}) => {
     const u = normalizeUrl(url);
-    if (!u || !f.hostOkFor(u)) return null;
+    // PDFs may also live on an allowed asset CDN (cdn.shopify.com …): f.pdfOkFor says so
+    if (!u || !(kind === 'pdf' && f.pdfOkFor ? f.pdfOkFor(u) : f.hostOkFor(u))) return null;
     const k = urlKey(u);
     const cur = byKey.get(k);
     if (cur) {
@@ -294,6 +298,7 @@ export async function findSources(f, det, o = {}) {
   const seeds = (robots.sitemaps || []).map((s) => normalizeUrl(s, base)).filter((s) => s && f.hostOkFor(s));
   const defaults = (SITEMAP_DEFAULTS[platform] || SITEMAP_DEFAULTS.generic).map((p) => `${base}${p}`);
   const sm = await crawlSitemaps(f, { seeds, defaults, inflate: o.inflate, maxFiles: o.maxSitemapFiles || 300 });
+  o.onDiscover?.({ step: 'sitemaps', urls: sm.entries.length, sitemaps: sm.files });
   const productUrls = [];
   for (const e of sm.entries) {
     let kind = classifyUrl(e.loc, { platform, hint: e.hint });
@@ -330,8 +335,9 @@ export async function findSources(f, det, o = {}) {
       if (!deskOrigins.has(key)) deskOrigins.set(key, { type: desk, origin: u.origin, prefix, host: u.hostname, linkedFrom: homeUrl });
       continue;
     }
-    if (!f.hostOkFor(a.url)) continue;
     const kind = classifyUrl(a.url, { platform, text: a.text });
+    if (kind === 'pdf') { add(a.url, 'pdf', 'link', { text: a.text }); continue; }
+    if (!f.hostOkFor(a.url)) continue;
     if (kind === 'pdf') add(a.url, 'pdf', 'link', { text: a.text });
     else if (kind === 'faq' || kind === 'policy' || kind === 'help') add(a.url, kind, 'nav', { text: a.text });
     else if (kind === 'product') { add(a.url, 'product', 'nav', { text: a.text }); productUrls.push(normalizeUrl(a.url)); }
@@ -380,6 +386,7 @@ export async function findSources(f, det, o = {}) {
     helpdesks.push({ type: d.type, origin: d.origin, prefix: d.prefix, api });
   }
 
+  o.onDiscover?.({ step: 'links', urls: byKey.size, helpdesks: helpdesks.length });
   // 7. robots: count what it keeps us from (reported, never read)
   const sources = [...byKey.values()];
   const allowed = [];
