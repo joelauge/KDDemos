@@ -720,7 +720,7 @@ function helpIntent(text, label) {
   const hasFiles = s.fileOrder.some((id) => s.files[id] && s.files[id].phase !== 'rejected');
   const ready = s.fileOrder.some((id) => s.files[id]?.phase === 'ready');
   const name = botName();
-  const line = `I build ${name} with you: I turn your files into a bot that answers only from them, with a citation for every line, and I set its name, tone and strictness when you ask in plain words.`
+  const line = `I build ${name} with you: I turn your files or your website into a bot that answers only from them, with a citation for every line, and I set its name, tone and strictness when you ask in plain words.`
     + ` Then I test it (the Proof Run: real questions plus 3 it must refuse), and connect it to your site, SMS, WhatsApp, email, phone or the chat API when you launch.`;
   const chips = [];
   if (!hasFiles) chips.push({ id: 'use_samples', label: 'Use sample files', kind: 'primary', action: { type: 'attach_samples' }, local: true });
@@ -4549,7 +4549,7 @@ async function ensureTrial() {
 
 // ------------------------------------------------------------------ B0
 
-const B0_TEXT = "Hi, I'm the KnowBot Builder. I'll turn your files into a bot that answers **only** from them and shows its proof for every line. About 30 seconds with our samples, a couple of minutes with your files; no account needed. Start with your files or ours?";
+const B0_TEXT = "Hi, I'm the KnowBot Builder. I'll turn your files or your website into a bot that answers **only** from them and shows its proof for every line. About 30 seconds with our samples, a couple of minutes with your own; no account needed. Start with your files, your website or ours?";
 function renderB0() {
   // index.html paints this exact message (static) with the first frame; hydration replaces it without motion
   const hydrating = !!staticB0;
@@ -4581,7 +4581,7 @@ function renderB0() {
 function nextStepsEl() {
   const step = (n, t, sub) => h('li', null, h('b', { 'aria-hidden': 'true' }, String(n)), h('span', null, h('strong', null, t), h('span', null, sub)));
   return h('ol', { class: 'st-next', 'aria-label': 'What happens next' },
-    step(1, 'Add files', 'PDF, Word, web pages or text, up to 100 MB'),
+    step(1, 'Add files or your website', 'PDF, Word, text, or a website address · up to 100 MB'),
     step(2, 'Watch them become atoms', 'each dot on the map is one passage it can quote'),
     step(3, 'Ask, and check the proof', 'every line cites its source, or it refuses'));
 }

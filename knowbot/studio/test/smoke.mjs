@@ -227,7 +227,7 @@ async function journey(browser, dev, cell) {
   const firstMsgMs = Date.now() - t0;
   await page.waitForTimeout(700);
   const logText = await page.innerText('#st-log').catch(() => '');
-  check('01-landing', 'B0 text visible', /Start with your files or ours\?/.test(logText), { detail: `${firstMsgMs} ms to first Builder message` });
+  check('01-landing', 'B0 text visible', /Start with your files(, your website)? or ours\?/.test(logText), { detail: `${firstMsgMs} ms to first Builder message` });
   const chipTexts = await page.locator('#st-log .st-chips:not([hidden]) .st-chip').allInnerTexts();
   check('01-landing', 'first-run choices: samples (primary), upload, store URL', chipTexts.length >= 3 && /Use sample files/.test(chipTexts[0]) && /Upload my files/.test(chipTexts[1]) && /Enter (a Store URL|your website)|Add website/.test(chipTexts[2]) &&
     await page.locator('#st-log .st-chip-primary').first().innerText().then((t) => /Use sample files/.test(t)).catch(() => false), { detail: chipTexts.join(' | ') });

@@ -2882,7 +2882,7 @@ export function createStudio(o = {}) {
       case 'boot':
         // fixer r8 (D1): one time promise everywhere (about 30 seconds with our samples, a couple of minutes with yours),
         // and the same three first-run choices as the Studio (samples, upload, store URL)
-        return { reply: "Hi, I'm the KnowBot Builder. I'll turn your files into a bot that answers **only** from them and shows its proof for every line. About 30 seconds with our samples, a couple of minutes with your files; no account needed. Start with your files or ours?",
+        return { reply: "Hi, I'm the KnowBot Builder. I'll turn your files or your website into a bot that answers **only** from them and shows its proof for every line. About 30 seconds with our samples, a couple of minutes with your own; no account needed. Start with your files, your website or ours?",
           chips: [C('samples', 'Use sample files · 30s demo', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } })] };
       case 'store_imported': {
         // fixer r8 (D2): the store names the bot (og:site_name), shown as a ConfigDiff like the sample path; only the
