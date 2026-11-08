@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-08T17:25:37.034Z",
+  "at": "2026-11-08T17:29:13.336Z",
   "speed": 4,
   "results": [
     {
@@ -64,7 +64,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "110 ms"
+      "detail": "154 ms"
     },
     {
       "cell": "desktop-light-full",
@@ -472,7 +472,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_lxco753ftedi2fpx&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A41171%2Fstudio%2F%3Ft%3Dtr_lxco753ftedi2fpx%26launched%3D1%26k%3DeyJ0IjoidHJfbHhjbzc1M2Z0ZWRpMmZweCIsImUiOjE3OTQ3NjMzMTU4NDR9.7jRoT87lP4DiZLKBAXd9GKJo%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_rvwlehzfq43k7kip&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A42931%2Fstudio%2F%3Ft%3Dtr_rvwlehzfq43k7kip%26launched%3D1%26k%3DeyJ0IjoidHJfcnZ3bGVoemZxNDNrN2tpcCIsImUiOjE3OTQ3NjM1OTMyMzl9.qnKCwtB3gvYTk3-UTGEKGi1F%23launched"
     },
     {
       "cell": "desktop-light-full",
@@ -574,9 +574,9 @@
       "cell": "desktop-light-full",
       "step": "17-live",
       "name": "Builder offers the live next actions (no setup chips)",
-      "ok": false,
+      "ok": true,
       "soft": false,
-      "detail": ""
+      "detail": "Set up channels Developer API"
     },
     {
       "cell": "desktop-light-full",
@@ -592,7 +592,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "100 ms to first Builder message"
+      "detail": "129 ms to first Builder message"
     },
     {
       "cell": "desktop-dark-full",
@@ -648,7 +648,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "128 ms"
+      "detail": "158 ms"
     },
     {
       "cell": "desktop-dark-full",
@@ -752,7 +752,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "4.6 s"
+      "detail": "4.7 s"
     },
     {
       "cell": "desktop-dark-full",
@@ -1056,7 +1056,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_xqatizxnsetoo4jn&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A36327%2Fstudio%2F%3Ft%3Dtr_xqatizxnsetoo4jn%26launched%3D1%26k%3DeyJ0IjoidHJfeHFhdGl6eG5zZXRvbzRqbiIsImUiOjE3OTQ3NjMzNTkzMDF9.C3x1XDhe0zZeHZ8FWSKSIwbg%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_6hdkrbgzkznjwyvu&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A45025%2Fstudio%2F%3Ft%3Dtr_6hdkrbgzkznjwyvu%26launched%3D1%26k%3DeyJ0IjoidHJfNmhka3JiZ3prem5qd3l2dSIsImUiOjE3OTQ3NjM2MjQ5NDV9.5ZV9V_WVqeImuhAU7_wZob--%23launched"
     },
     {
       "cell": "desktop-dark-full",
@@ -1158,9 +1158,9 @@
       "cell": "desktop-dark-full",
       "step": "17-live",
       "name": "Builder offers the live next actions (no setup chips)",
-      "ok": false,
+      "ok": true,
       "soft": false,
-      "detail": ""
+      "detail": "Set up channels Developer API"
     },
     {
       "cell": "desktop-dark-full",
@@ -1184,7 +1184,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "128 ms to first Builder message"
+      "detail": "113 ms to first Builder message"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1344,7 +1344,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "4.2 s"
+      "detail": "4.0 s"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1648,7 +1648,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_wjfnnrfo43sipqtq&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A42245%2Fstudio%2F%3Ft%3Dtr_wjfnnrfo43sipqtq%26launched%3D1%26k%3DeyJ0IjoidHJfd2pmbm5yZm80M3NpcHF0cSIsImUiOjE3OTQ3NjM0MDI1MzF9.N_Etcog8m0TCpOelLRWYig0n%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_cjb3rcj4flsyl5qq&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A33305%2Fstudio%2F%3Ft%3Dtr_cjb3rcj4flsyl5qq%26launched%3D1%26k%3DeyJ0IjoidHJfY2piM3JjajRmbHN5bDVxcSIsImUiOjE3OTQ3NjM2NTYyNzl9.J549lLtVOGrSQwxrljBdOtsQ%23launched"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1758,9 +1758,9 @@
       "cell": "desktop-light-reduce",
       "step": "17-live",
       "name": "Builder offers the live next actions (no setup chips)",
-      "ok": false,
+      "ok": true,
       "soft": false,
-      "detail": ""
+      "detail": "Set up channels Developer API"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1776,7 +1776,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "128 ms to first Builder message"
+      "detail": "149 ms to first Builder message"
     },
     {
       "cell": "mobile-light-full",
@@ -1840,7 +1840,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "124 ms"
+      "detail": "110 ms"
     },
     {
       "cell": "mobile-light-full",
@@ -1904,7 +1904,7 @@
       "name": "price is outline (not solid) before any answer",
       "ok": true,
       "soft": false,
-      "detail": "solid (launch card on the table)"
+      "detail": "outline"
     },
     {
       "cell": "mobile-light-full",
@@ -1944,7 +1944,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "5.5 s"
+      "detail": "5.2 s"
     },
     {
       "cell": "mobile-light-full",
@@ -1984,7 +1984,7 @@
       "name": "price stays outline at the first cited answer (solid only at the peak)",
       "ok": true,
       "soft": false,
-      "detail": "solid (launch card on the table)"
+      "detail": "outline"
     },
     {
       "cell": "mobile-light-full",
@@ -2232,7 +2232,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_pr2sujh5jvjbfenj&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A46259%2Fstudio%2F%3Ft%3Dtr_pr2sujh5jvjbfenj%26launched%3D1%26k%3DeyJ0IjoidHJfcHIyc3VqaDVqdmpiZmVuaiIsImUiOjE3OTQ3NjM0NDM4MjF9.g2e-f7ifCgv6olLKXLwYSCdV%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_rudcpbverkxyc6dj&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A38981%2Fstudio%2F%3Ft%3Dtr_rudcpbverkxyc6dj%26launched%3D1%26k%3DeyJ0IjoidHJfcnVkY3BidmVya3h5YzZkaiIsImUiOjE3OTQ3NjM2ODQ4ODh9.67zmK__OWrNMbVFG23maXA3j%23launched"
     },
     {
       "cell": "mobile-light-full",
@@ -2350,9 +2350,9 @@
       "cell": "mobile-light-full",
       "step": "17-live",
       "name": "Builder offers the live next actions (no setup chips)",
-      "ok": false,
+      "ok": true,
       "soft": false,
-      "detail": ""
+      "detail": "Set up channels Developer API"
     },
     {
       "cell": "mobile-light-full",
@@ -2368,7 +2368,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "160 ms to first Builder message"
+      "detail": "137 ms to first Builder message"
     },
     {
       "cell": "mobile-dark-full",
@@ -2432,7 +2432,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "83 ms"
+      "detail": "93 ms"
     },
     {
       "cell": "mobile-dark-full",
@@ -2824,7 +2824,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_vck647nxqgnbb5fu&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A46463%2Fstudio%2F%3Ft%3Dtr_vck647nxqgnbb5fu%26launched%3D1%26k%3DeyJ0IjoidHJfdmNrNjQ3bnhxZ25iYjVmdSIsImUiOjE3OTQ3NjM0OTA2ODB9.x3d82jfjwL2BbKupEfgAKu1r%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_2abr5leftcficjzs&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A34529%2Fstudio%2F%3Ft%3Dtr_2abr5leftcficjzs%26launched%3D1%26k%3DeyJ0IjoidHJfMmFicjVsZWZ0Y2ZpY2p6cyIsImUiOjE3OTQ3NjM3MTkwMzZ9.ckLtEdF-tsCkZdMj74B5u43b%23launched"
     },
     {
       "cell": "mobile-dark-full",
@@ -2942,9 +2942,9 @@
       "cell": "mobile-dark-full",
       "step": "17-live",
       "name": "Builder offers the live next actions (no setup chips)",
-      "ok": false,
+      "ok": true,
       "soft": false,
-      "detail": ""
+      "detail": "Set up channels Developer API"
     },
     {
       "cell": "mobile-dark-full",
