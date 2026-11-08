@@ -980,6 +980,7 @@ export function createStudio(o = {}) {
   const pingMs = Number(o.pingMs ?? 15000);
   const rotateMs = Number(o.rotateMs ?? 10 * 60000);
   const stallMs = Number(o.stallMs ?? STALL_MS);
+  const vectorStallMs = Number(o.vectorStallMs ?? (o.stallMs != null ? o.stallMs : 10 * 60000));
   const setupTimeoutMs = Number(o.setupTimeoutMs ?? 7000);
   const poll = { fast: Number(o.pollMs ?? 1500), slow: Number(o.pollSlowMs ?? 4000), idle: Number(o.pollIdleMs ?? 15000) };
   const floorDefault = Math.max(0.7, Math.min(0.85, Number(env.KNOWBOT_STUDIO_FLOOR || 0.7) || 0.7));
@@ -1315,7 +1316,10 @@ export function createStudio(o = {}) {
       sample: tags.some((x) => x.startsWith('sample:')), ...(tags.includes('src:store') ? { origin: 'store' } : {}), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
       stageAt: { ...stamps }, createdAt: isoOf(r.created_at), updatedAt: isoOf(r.updated_at || r.created_at),
     };
-    if (!TERMINAL.has(stage) && t - since >= stallMs) file.stalledFor = t - since;
+    // knowDrive vectorizes a file's atoms as one queued batch and reports the count only when it finishes, so a flat
+    // "vectors 0/282" for minutes is normal progress, not a stall (owner). Vectorizing gets a much longer allowance.
+    const allowance = (stage === 'vectorizing' || stage === 'atomized') ? Math.max(stallMs, vectorStallMs) : stallMs;
+    if (!TERMINAL.has(stage) && t - since >= allowance) file.stalledFor = t - since;
     return file;
   }
   const isTrialFileRow = (r) => { const tags = r.tags || []; return !tags.includes('kind:trial-spec') && !tags.includes('questions') && !tags.includes('kind:config'); };
@@ -2341,7 +2345,7 @@ export function createStudio(o = {}) {
     if (input.event?.type === 'proof_done') {
       try { const qv = await questionsFor(T); input.context = { ...input.context, expectedTotal: (qv.proof?.length || 0) + (qv.probes?.length || 0) }; } catch {}
     }
-    let out, engine = 'scripted', turnTools = [], turnCitations = [];
+    let out, engine = 'scripted', turnTools = [], turnCitations = [], turnDebug = null;
     try {
       if (input.chipAction) out = { reply: chipActionReply(input.chipAction), actions: [{ ...input.chipAction.action }], chips: stepChips(T, files) };
       else if (builderAgent && anthropicKey() && input.message
@@ -2359,6 +2363,7 @@ export function createStudio(o = {}) {
         engine = r.engine === 'agent' ? 'agent' : 'scripted';
         turnTools = (r.toolCalls || []).map((t) => ({ name: t.name, ok: !!t.ok, ...(t.blocked ? { blocked: true } : {}) }));
         turnCitations = r.citations || [];
+        turnDebug = { kb: (r.toolCalls || []).filter((t) => t.name === 'kb_search').map((t) => t.results ?? t.count ?? null), dropped: (r.dropped || []).map((x) => clip(String(x), 160)), fallback: r.fallbackReason || null };
         if (r.fallbackReason) log(`[studio] builder fallback: ${r.fallbackReason}`);
       }
       // fixer r7: product questions (developer API, insights, inventory, refusal line, languages) get the scripted
@@ -2395,7 +2400,7 @@ export function createStudio(o = {}) {
     T.lastChips = chips;
     emit('chips', { chips });
     if (turnCitations.length) emit('citations', { citations: turnCitations });
-    emit('done', { turnId: `turn_${T.setupTurns}_${randB32(6)}`, engine, ms: Math.round(performance.now() - t0), step: stepOf(T, files), ...(turnTools.length ? { tools: turnTools } : {}) });
+    emit('done', { turnId: `turn_${T.setupTurns}_${randB32(6)}`, engine, ms: Math.round(performance.now() - t0), step: stepOf(T, files), ...(turnTools.length ? { tools: turnTools } : {}), ...(turnDebug ? { debug: turnDebug } : {}) });
     try { res.end(); } catch {}
   }
   /** fixer r5: the chip a typed message stands for: one on offer last turn (label or send, case- and punctuation-blind,

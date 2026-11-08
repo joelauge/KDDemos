@@ -330,7 +330,7 @@ export function createBuilderEngine(o = {}) {
     const ctxFor = (signal) => ({ signal, cite: (h) => { for (const [n, x] of cited) if (x.text === h.text) return n; const n = nextN++; cited.set(n, h); if (h.similarity != null && (topScore == null || h.similarity > topScore)) topScore = h.similarity; return n; } });
     const record = (name, input2, res, source) => {
       results.push({ name, input: input2, res, source });
-      toolCalls.push({ name, input: input2, ok: !!res.ok, source, ...(res.ok ? {} : { error: res.error, code: res.code }), ...(res.code === 'unknown_tool' ? { blocked: true } : {}) });
+      toolCalls.push({ name, input: input2, ok: !!res.ok, source, ...(name === 'kb_search' && res.ok ? { results: (res.data?.results || []).length } : {}), ...(res.ok ? {} : { error: res.error, code: res.code }), ...(res.code === 'unknown_tool' ? { blocked: true } : {}) });
     };
     const kbPassages = () => [...cited].sort((a, b) => a[0] - b[0]).map(([n, x]) => ({ ...x, n }));
     const kbHadResults = () => results.some((r) => r.name === 'kb_search' && r.res.ok && (r.res.data?.results || []).length);

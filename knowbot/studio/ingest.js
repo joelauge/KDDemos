@@ -2513,11 +2513,15 @@ export function mount(ctx) {
       text = "Can't reach Studio right now. The file keeps processing on the server; retrying every few seconds.";
       kind = 'warn';
     } else if (!TERMINAL.has(f.phase) && f.phase !== 'queued') {
-      const el = stallElapsed(f);
-      if (el) {
+      // owner: a long step is not "no progress". Only the server's stalledFor (10 min allowance while vectorizing,
+      // knowDrive reports vectors in one batch at the end) earns a warning; otherwise a calm "still working" line.
+      if (Number(f.stalledFor) > 0) {
         stall = 'yes';
-        text = `No progress for ${mmss(el)} · still ${DOING[f.phase] || 'working'} · large files can take a few minutes`;
+        text = `Taking longer than usual · still ${DOING[f.phase] || 'working'} after ${mmss(Number(f.stalledFor))} · you can ask about ready files meanwhile`;
         kind = 'stall';
+      } else if (f.phase === 'vectorizing' && stallElapsed(f)) {
+        text = `Still ${DOING[f.phase] || 'working'} · ${mmss(stallElapsed(f))} so far · the vector count updates when the batch finishes`;
+        kind = 'muted';
       }
     } else if (f.phase === 'queued') { text = 'Waiting for an upload slot…'; kind = 'muted'; }
     setDs(r.li, 'stall', stall);

@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-08T20:39:38.808Z",
+  "at": "2026-11-08T20:57:30.559Z",
   "speed": 4,
   "results": [
     {
@@ -8,7 +8,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "210 ms to first Builder message"
+      "detail": "333 ms to first Builder message"
     },
     {
       "cell": "desktop-light-full",
@@ -64,7 +64,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "168 ms"
+      "detail": "196 ms"
     },
     {
       "cell": "desktop-light-full",
@@ -472,7 +472,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_3hhvoyedmuuzekut&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A38803%2Fstudio%2F%3Ft%3Dtr_3hhvoyedmuuzekut%26launched%3D1%26k%3DeyJ0IjoidHJfM2hodm95ZWRtdXV6ZWt1dCIsImUiOjE3OTQ3NzUwODc0NzF9.jaz92u3aZ7LX9fCMUhH8qvPW%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_teguokrpyysj27km&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A32925%2Fstudio%2F%3Ft%3Dtr_teguokrpyysj27km%26launched%3D1%26k%3DeyJ0IjoidHJfdGVndW9rcnB5eXNqMjdrbSIsImUiOjE3OTQ3NzYxNTg2MDd9.HpBRzjhGzBwqf9O1_UZCBpQc%23launched"
     },
     {
       "cell": "desktop-light-full",
@@ -536,7 +536,7 @@
       "name": "librarian answer links the store page it quotes",
       "ok": true,
       "soft": false,
-      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:42701/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
+      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:46029/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
     },
     {
       "cell": "desktop-light-full",
@@ -568,7 +568,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "190 ms to first Builder message"
+      "detail": "195 ms to first Builder message"
     },
     {
       "cell": "mobile-light-full",
@@ -632,7 +632,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "111 ms"
+      "detail": "140 ms"
     },
     {
       "cell": "mobile-light-full",
@@ -1024,7 +1024,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_6gndoyeavahrl4qy&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A38627%2Fstudio%2F%3Ft%3Dtr_6gndoyeavahrl4qy%26launched%3D1%26k%3DeyJ0IjoidHJfNmduZG95ZWF2YWhybDRxeSIsImUiOjE3OTQ3NzUxMjk0MzR9.CwdvTaC3GnNfLde3Cgey7BAF%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_xyvfbliqdx3azosw&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A41939%2Fstudio%2F%3Ft%3Dtr_xyvfbliqdx3azosw%26launched%3D1%26k%3DeyJ0IjoidHJfeHl2ZmJsaXFkeDNhem9zdyIsImUiOjE3OTQ3NzYyMDA3Mjl9.RVJn47LDgtOpfwRJ3rsNaVl8%23launched"
     },
     {
       "cell": "mobile-light-full",
@@ -1096,7 +1096,7 @@
       "name": "librarian answer links the store page it quotes",
       "ok": true,
       "soft": false,
-      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:46085/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
+      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:33261/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
     },
     {
       "cell": "mobile-light-full",
