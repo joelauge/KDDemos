@@ -5,7 +5,7 @@
 //
 // Exports (exact, SPEC 3.3): getState, setState, on, once, emit, registerCard, renderCard, hydrate, persist,
 // mark, FILE_HUES. Additive helpers (B may add; existing signatures never change): off, listenerCount,
-// hasCard, setCardContext, resetTrialState, STORAGE_KEY.
+// hasCard, setCardContext, resetTrialState, STORAGE_KEY, batch.
 
 export const FILE_HUES = 8;                 // hue index = order % 8 -> CSS var(--f{i})
 export const STORAGE_KEY = 'kb-studio:v1';
@@ -64,10 +64,53 @@ export function setState(patch, reason = '') {
   for (const k of Object.keys(p)) if (prev[k] !== p[k]) keys.push(k);
   if (!keys.length) return state;
   state = Object.freeze({ ...prev, ...p });
+  if (batchDepth > 0) {
+    // Inside batch(): state is current at once, but subscribers hear about it once per batch (see flushBatch).
+    for (const k of keys) {
+      const rec = pending.get(k);
+      if (rec) { rec.reason = rec.reason === 'reset' ? 'reset' : reason; } else pending.set(k, { prev: prev[k], reason });
+    }
+    pendingReason = reason;
+    return state;
+  }
   for (const k of keys) emit('change:' + k, { value: state[k], prev: prev[k], reason });
   emit('state', { reason, keys });
   if (keys.some((k) => k === 'trial' || k === 'ui' || k === 'milestones')) persist();
   return state;
+}
+
+// ------------------------------------------------------------------ batching (additive, B)
+
+let batchDepth = 0;
+const pending = new Map();           // key -> {prev (first prev in the batch), reason (last; 'reset' sticks)}
+let pendingReason = '';
+
+/**
+ * batch(fn): run fn() with change notifications coalesced. State updates apply immediately (getState() is always
+ * current), but each changed key emits ONE 'change:<key>' {value, prev (before the batch), reason (last)} and ONE
+ * 'state' at the end of the outermost batch. Keys that end where they started are not announced. Custom events
+ * (emit) are never deferred. Used by api.js to fan out a frame's worth of SSE events with one round of re-renders.
+ */
+export function batch(fn) {
+  batchDepth++;
+  try { return fn(); } finally { if (--batchDepth === 0) flushBatch(); }
+}
+
+function flushBatch() {
+  if (!pending.size) return;
+  const recs = [...pending];
+  const reason = pendingReason;
+  pending.clear(); pendingReason = '';
+  const keys = [];
+  // Handlers that run during the flush may setState again: those notify synchronously (batchDepth is 0 here).
+  for (const [k, rec] of recs) {
+    if (state[k] === rec.prev) continue;
+    keys.push(k);
+    emit('change:' + k, { value: state[k], prev: rec.prev, reason: rec.reason });
+  }
+  if (!keys.length) return;
+  emit('state', { reason, keys });
+  if (keys.some((k) => k === 'trial' || k === 'ui' || k === 'milestones')) persist();
 }
 
 /** Subscribe. `type` may be '*' (handler(type, detail)). Returns unsubscribe. */
@@ -147,7 +190,7 @@ export function hydrate() {
   if (saved && typeof saved === 'object') {
     const t = saved.trial || {};
     if (typeof t.id === 'string' && typeof t.token === 'string') {
-      patch.trial = { ...state.trial, id: t.id, token: t.token, expiresAt: t.expiresAt || null, status: 'idle' };
+      patch.trial = { ...state.trial, id: t.id, token: t.token, expiresAt: t.expiresAt || null, status: 'idle', converted: t.converted === true };
     }
     if (saved.ui && typeof saved.ui === 'object') {
       if (saved.ui.view === 'proof' || saved.ui.view === 'bot') ui.view = saved.ui.view;
@@ -167,7 +210,7 @@ export function hydrate() {
   return state;
 }
 
-/** Writes {trial:{id,token,expiresAt}, ui:{view,mapPinned}, milestones} (debounced 300 ms). */
+/** Writes {trial:{id,token,expiresAt,converted}, ui:{view,mapPinned}, milestones} (debounced 300 ms). */
 export function persist() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(writeNow, 300);
@@ -177,7 +220,7 @@ function writeNow() {
   persistTimer = 0;
   const s = state;
   const data = {
-    trial: { id: s.trial.id, token: s.trial.token, expiresAt: s.trial.expiresAt },
+    trial: { id: s.trial.id, token: s.trial.token, expiresAt: s.trial.expiresAt, converted: !!s.trial.converted },   // converted: pre-paint Live header (index.html)
     ui: { view: s.ui.view, mapPinned: s.ui.mapPinned },
     milestones: s.milestones,
   };

@@ -102,6 +102,13 @@ async function boot(env = {}) {
     async close() { await new Promise((r) => kb.server.close(() => r())); await kd.close(); await llm.close(); await fsp.rm(dataDir, { recursive: true, force: true }); },
   };
 }
+/** The bot's admin insights after every queued question is written (customer traffic total, all channels). */
+async function questionsInsightsFor(S) {
+  await flushQuestions();
+  const r = await S.api('/api/instances/front-desk/insights?limit=50', { headers: { authorization: 'Bearer dev-admin' } });
+  assert.equal(r.status, 200);
+  return r.json();
+}
 const messageOf = (xmlText) => /<Message>([\s\S]*?)<\/Message>/.exec(xmlText)?.[1]?.replace(/&amp;/g, '&').replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 
 // ------------------------------------------------------------------ formatting units
@@ -115,20 +122,53 @@ describe('channels: per-medium formatting', () => {
     assert.ok(s.length <= 320, String(s.length));
     assert.match(s, /\[1\]/);
     assert.match(s, / Proof: https:\/\/kb\.example\.test\/p\/abcdefghijkl$/);
+    // whole sentences only, ending at a stop before the link: no clipped excerpt, no ellipsis
+    assert.ok(!s.includes('…'), s);
+    // a run of sentences from the same source carries its marker once, at the end of the run (no "[1]" after every sentence)
+    assert.match(s, /^Line 0 says something useful about returns and refunds\. Line 1 .*\[1\]\. Proof: /);
+    assert.equal((s.match(/\[1\]/g) || []).length, 1, s);
+    const mixed = formatSms({ ...r, answer: '- Frames carry a lifetime warranty. [1]\n- Paint is covered for two years. [1]\n- Returns take 30 days. [2]' }, null);
+    assert.equal(mixed, 'Frames carry a lifetime warranty. Paint is covered for two years [1]. Returns take 30 days [2].');
+    const quoteHeavy = formatSms({ ...r, answer: '- You can return any unused item within 30 days of delivery for a full refund. [1]' }, 'https://x/api/p/abc');
+    assert.equal(quoteHeavy, 'You can return any unused item within 30 days of delivery for a full refund [1]. Proof: https://x/api/p/abc', 'answer + proof link only, never citation excerpts');
     assert.equal(formatSms({ refused: true }, 'x'), NOT_IN_DATA);
     assert.equal(UTIL_REFUSAL, NOT_IN_DATA, 'the channels use the canonical refusal byte for byte');
   });
   test('voice speaks with attribution and no markers', () => {
     const s = formatSpoken(r);
-    assert.equal(s, 'According to Returns policy, you can return any unused item within 30 days of delivery for a full refund. And Refunds, refunds go back to the original payment method within 5 business days.'.replace('And Refunds, refunds', 'And Refunds, refunds'));
+    assert.equal(s, 'According to Returns Policy, you can return any unused item within 30 days of delivery for a full refund. And Refunds, refunds go back to the original payment method within 5 business days.');
+    // a name keeps its casing after the attribution (never "According to …, lumen Care Plan")
+    const named = formatSpoken({ refused: false, answer: 'x', citations: [{ n: 1, file: 'lumen-care-plan.md', title: 'lumen care plan' }], proof: { quoted: [{ n: 1, text: 'Lumen Care Plan covers accidental damage for 2 years.' }] } });
+    assert.equal(named, 'According to Lumen Care Plan, Lumen Care Plan covers accidental damage for 2 years.');
     assert.ok(!/\[\d\]/.test(s));
     assert.equal(formatSpoken({ refused: true }), NOT_IN_DATA);
   });
+  test('voice: a name that starts with an ordinary opener keeps its capital; title words count as names', () => {
+    const care = formatSpoken({ refused: false, answer: 'x', citations: [{ n: 1, file: 'care.md', title: 'Lumen Care Plan' }], proof: { quoted: [{ n: 1, text: 'The Lumen Care Plan costs $129 a year.' }] } });
+    assert.equal(care, 'According to Lumen Care Plan, The Lumen Care Plan costs $129 a year.');
+    const plain = formatSpoken({ refused: false, answer: 'x', citations: [{ n: 1, file: 'returns.md', title: 'Returns' }], proof: { quoted: [{ n: 1, text: 'The return window is 30 days.' }] } });
+    assert.equal(plain, 'According to Returns, the return window is 30 days.');
+  });
+  test('voice keeps proper nouns capitalised after the attribution', () => {
+    // the golive critic's case: never "According to …, lumen frames carry …"
+    const lumen = { refused: false, answer: 'Lumen frames carry a lifetime warranty for the original owner. [1]', citations: [{ n: 1, file: 'lumen-warranty-returns.md', title: 'Lumen Bikes Warranty and Returns Policy' }],
+      proof: { quoted: [{ n: 1, text: 'Lumen frames carry a lifetime warranty for the original owner.' }] } };
+    assert.equal(formatSpoken(lumen), 'According to Lumen Bikes Warranty and Returns Policy, Lumen frames carry a lifetime warranty for the original owner.');
+    // a common opener that the bot's own material uses as a name keeps its capital ("our Standard plan …")
+    const plan = { refused: false, answer: 'Standard covers one bike. You can upgrade to our Standard plus tier later. [1]', citations: [{ n: 1, file: 'plans.md', title: 'Plans' }],
+      proof: { quoted: [{ n: 1, text: 'Standard covers one bike.' }] } };
+    assert.equal(formatSpoken(plan), 'According to Plans, Standard covers one bike.');
+    // the bot's name / org tokens keep their capital too; ordinary openers still read naturally
+    const named = { refused: false, answer: 'x', citations: [{ n: 1, file: 'faq.md', title: 'FAQ' }], proof: { quoted: [{ n: 1, text: 'Free returns are included.' }] } };
+    assert.equal(formatSpoken(named), 'According to FAQ, free returns are included.');
+    assert.equal(formatSpoken(named, 450, { names: ['Free Wheel Co'] }), 'According to FAQ, Free returns are included.');
+    assert.equal(formatSpoken(named, 450, { names: ['Your Bike Shop'] }), 'According to FAQ, free returns are included.', 'pronouns in a name never count');
+  });
   test('WhatsApp and e-mail carry footnotes and a source list', () => {
     const w = formatWhatsApp(r, 'https://p');
-    assert.match(w, /^• You can return .*\[1\]\n• Refunds .*\[2\]\n\n\*Sources\*\n\[1\] Returns policy \(returns-policy\.md\)\n\[2\] Refunds \(refunds\.md\)\n\nSee the exact quotes: https:\/\/p$/);
+    assert.match(w, /^• You can return .*\[1\]\n• Refunds .*\[2\]\n\n\*Sources\*\n\[1\] Returns Policy \(returns-policy\.md\)\n\[2\] Refunds \(refunds\.md\)\n\nSee the exact quotes: https:\/\/p$/);
     const e = formatEmail(r, { proofUrl: 'https://p', botName: 'Front Desk' });
-    assert.match(e.text, /Sources\n\[1\] Returns policy \(returns-policy\.md\)\n {4}"You can return/);
+    assert.match(e.text, /Sources\n\[1\] Returns Policy \(returns-policy\.md\)\n {4}"You can return/);
     assert.match(e.html, /<sup[^>]*>\[1\]<\/sup>/);
     assert.ok(!/<script/i.test(formatEmail({ ...r, answer: '<script>x</script> [1]' }, {}).html));
   });
@@ -180,8 +220,9 @@ describe('channels: webhooks against fake providers', () => {
     assert.match(xml, /^<\?xml version="1.0" encoding="UTF-8"\?>\n<Response><Message>/);
     const msg = messageOf(xml);
     assert.ok(msg.length <= 320);
-    assert.match(msg, /30 days.*\[1\] Proof: https:\/\/kb\.example\.test\/p\/[A-Za-z0-9_-]+$/);
-    const id = /\/p\/([A-Za-z0-9_-]+)$/.exec(msg)[1];
+    assert.match(msg, /30 days[^.]*\[1\]\. Proof: https:\/\/kb\.example\.test\/api\/p\/[A-Za-z0-9_-]+$/);
+    assert.ok(!msg.includes('…'));
+    const id = /\/api\/p\/([A-Za-z0-9_-]+)$/.exec(msg)[1];
     const proof = await (await S.api(`/p/${id}`)).text();
     assert.ok(proof.includes('within 30 days') && proof.includes('returns-policy.md'));
     const ref = messageOf(await (await S.twilio(p, { From: '+14155550100', Body: OFF })).text());
@@ -327,6 +368,18 @@ describe('channels: Twilio speech fallback and missing configuration', () => {
     const e2 = await (await S.twilio(`${p}/answer?empty=2`, { CallSid: 'CA2', From: PHONE })).text();
     assert.match(e2, /Goodbye\.<\/Say><Hangup\/>/);
     assert.equal((await S.twilio(`${p}/answer?empty=0`, { SpeechResult: Q }, { sign: false })).status, 403);
+  });
+
+  test('Voice: a first POST that already carries SpeechResult is answered (not greeted) and logged once', async () => {
+    const p = '/v1/channels/front-desk/voice';
+    const caller = '+14155550177';
+    const before = (await questionsInsightsFor(S)).total;
+    const ans = await (await S.twilio(p, { CallSid: 'CA9', From: caller, SpeechResult: Q, Confidence: '0.9' })).text();
+    assert.match(ans, /<Say[^>]*>According to Returns Policy, you can return any unused item within 30 days/);
+    assert.ok(!/you&apos;ve reached/.test(ans), 'not the greeting');
+    // Twilio retries the same webhook: still one logged question
+    await S.twilio(p, { CallSid: 'CA9', From: caller, SpeechResult: Q, Confidence: '0.9' });
+    assert.equal((await questionsInsightsFor(S)).total, before + 1);
   });
 
   test('a channel with no configuration answers 503 "channel not configured" and names what to set', async () => {

@@ -137,6 +137,12 @@ describe('developer API (knowDrive mode)', () => {
     assert.ok(j.proof.quoted.length >= 1);
     for (const q of j.proof.quoted) assert.ok(DOC.includes(q.text.replace(/\.$/, '')), `quoted "${q.text}" is verbatim`);
     assert.equal(typeof j.usage.latencyMs, 'number');
+    assert.match(j.proofUrl, /^https?:\/\/[^/]+\/api\/p\/[A-Za-z0-9_-]+$/, 'one public proof-link form on every surface');
+    const oai = await (await S.api('/v1/chat/completions', { method: 'POST', headers: auth(), body: JSON.stringify({ model: bot, messages: [{ role: 'user', content: Q }] }) })).json();
+    assert.equal(new URL(oai.knowbot.proofUrl).pathname.replace(/[^/]+$/, ''), new URL(j.proofUrl).pathname.replace(/[^/]+$/, ''), '/v1/chat/completions and /v1/bots/:id/chat hand out the same proofUrl form');
+    for (const line of oai.choices[0].message.content.split('\n').filter((l) => /^\[\d+\] /.test(l))) {
+      assert.ok(!/^\[\d+\] [a-z]/.test(line), `footnote titles are never a lower-cased slug: ${line}`);
+    }
     const proof = await fetch(j.proofUrl.replace(/^https?:\/\/[^/]+/, S.base));
     assert.equal(proof.status, 200);
     const html = await proof.text();
@@ -187,6 +193,12 @@ describe('developer API (knowDrive mode)', () => {
     assert.deepEqual([e1.error.code, e1.error.type], ['missing_api_key', 'authentication_error']);
     assert.equal((await (await ask({ authorization: 'Bearer sk-not-ours' })).json()).error.code, 'invalid_api_key');
     assert.equal((await ask({ authorization: `Bearer kb_live_${'A'.repeat(43)}` })).status, 401);
+    // a well-prefixed key that fails to verify is called invalid/revoked/expired, never "not a KnowBot key"
+    for (const bad of ['kb_trial_bogus', `kb_live_${'B'.repeat(43)}`, `kb_trial_${'C'.repeat(40)}.x`]) {
+      const e = (await (await ask({ authorization: `Bearer ${bad}` })).json()).error;
+      assert.deepEqual([e.code, e.message], ['invalid_api_key', 'This API key is invalid, revoked or expired.'], bad);
+    }
+    assert.match((await (await ask({ authorization: 'Bearer sk-not-ours' })).json()).error.message, /start with kb_live_ or kb_trial_/);
     r = await ask({ authorization: `Bearer ${K.key}` }, 'ugm');
     assert.equal(r.status, 403);
     const wb = await r.json();
@@ -247,6 +259,9 @@ describe('developer API (knowDrive mode)', () => {
     const withChoices = chunks.filter((c) => c.choices.length);
     const content = withChoices.map((c) => c.choices[0].delta.content || '').join('');
     assert.equal(content, plain.choices[0].message.content);
+    const pieces = withChoices.map((c) => c.choices[0].delta.content).filter(Boolean);
+    assert.ok(pieces.length >= 8 && pieces.length > content.split('\n').length, `token-sized deltas, not one per line (${pieces.length})`);
+    assert.ok(pieces.every((p) => p.length < 60), 'no delta carries a whole answer');
     const last = withChoices.at(-1);
     assert.equal(last.choices[0].finish_reason, 'stop');
     assert.equal(last.knowbot.refused, false);

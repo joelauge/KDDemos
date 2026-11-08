@@ -8,6 +8,17 @@
 // CONTRACT-GAP (D, ingest.js): ribbon the map and collapse the intake to its Sources chip on the FIRST answer; on phones
 //   the busy map + intake must leave the suggestions and composer (~176 px) unclipped. B's grid (studio.css) covers the
 //   first-answer case meanwhile.
+// CONTRACT-GAP (D, ingest.js; fixer r3 perf probe at 4x CPU): the one remaining layout shift of the sample path (CLS
+//   0.035) is the intake folding to its Sources chip when every file is Ready, with no user input: the thread moves up
+//   228 px. Folding on the first ask (answer:start, an input) instead would make ingest CLS ~0. The longest frames
+//   (90-180 ms) are single ingest SSE handlers (row + map rebuild per event); B's api.js now yields between events of a
+//   burst, but one event's work can only be split inside ingest.js (cap shatter chips per frame, batch row writes).
+// CONTRACT-GAP (D, a11y): once the map is a ribbon / the intake a chip, their inner controls (legend, table, footer)
+//   should leave the tab order (tabindex -1 behind one expand button). B added "Skip to latest answer" meanwhile.
+// CONTRACT-GAP (C): with the ProofDrawer docked B shows the readiness banner as icons only; the banner's "Ask again"
+//   would read better as a chip in the thread. On a live bot the empty state still says "or try the sample files".
+// CONTRACT-GAP (A): after convert, GET /trials/:id lists no files (they were retagged to the account bucket), so a
+//   reload of a live bot has an empty map; B's Live turn says where the files are.
 //
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
@@ -58,6 +69,13 @@ function h(tag, props, ...kids) {
   return el;
 }
 const $ = (sel, root = document) => root.querySelector(sel);
+// Idempotent writers (perf, r3): header/spine refreshes run on many store changes; writing an unchanged attribute or
+// text still invalidates style, so these only touch the DOM when the value actually changes.
+const dset = (el, k, v) => { if (el && el.dataset[k] !== v) el.dataset[k] = v; };
+const setText = (el, t) => { if (el && el.textContent !== t) el.textContent = t; };
+const setHidden = (el, hid) => { if (el && el.hidden !== !!hid) el.hidden = !!hid; };
+const setAttr = (el, k, v) => { if (!el) return; if (v == null || v === false) { if (el.hasAttribute(k)) el.removeAttribute(k); } else if (el.getAttribute(k) !== String(v)) el.setAttribute(k, String(v)); };
+const setHTML = (el, html) => { if (el && el._kbHtml !== html) { el._kbHtml = html; el.innerHTML = html; } };
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 /** Builder copy is plain text with **bold**, *italic* and `code`. Escaped first, so nothing else is HTML. */
@@ -112,11 +130,17 @@ function announce(text, region = 'polite') {
 const ctx = { store, api, motion, icons, slots, announce, V };
 store.setCardContext(ctx);
 window.__studio = ctx;   // debugging + smoke-test hooks (read-only use)
+ctx.builder = { pendingDecision: (k) => { const m = pendingDecision(k); return m ? m.decision : null; }, messages: () => messages.map((m) => ({ role: m.role, decision: m.decision || null, chips: (m.chips || []).length })) };
 
 // ------------------------------------------------------------------ readiness (actions queue until the trial + modules exist)
 
 let resolveTrial, resolveModules;
 const trialP = new Promise((r) => { resolveTrial = r; });
+let trialSettled = false;
+trialP.then(() => { trialSettled = true; });
+// Trial creation is rate limited per network (offices, schools): while limited, Builder turns are answered locally
+// and the 30 s replay is offered, so nothing the visitor types ever waits on a trial that can't exist yet.
+let trialLimited = false;
 const modulesP = new Promise((r) => { resolveModules = r; });
 const readyP = Promise.all([trialP, modulesP]);
 let isReady = false;
@@ -147,8 +171,19 @@ function renderHeader() {
   const tipId = 'st-price-tip';
   const price = h('button', { type: 'button', id: 'st-price', class: 'st-price', dataset: { level: 'ghost' }, 'aria-describedby': tipId,
     onclick: () => launchOpen('header') }, h('span', { class: 'st-price-label' }));
-  const priceWrap = h('span', { class: 'st-tipwrap' }, price,
+  const priceWrap = h('span', { class: 'st-tipwrap', id: 'st-pricewrap' }, price,
     h('span', { id: tipId, role: 'tooltip', class: 'st-tip' }, 'Build and test free, no card. Pay only to go live.'));
+  // the tooltip is a hover hint: a press (or leaving / blurring the button) puts it away until the next hover
+  const tipOff = () => priceWrap.classList.add('is-tipoff');
+  price.addEventListener('pointerdown', tipOff);
+  price.addEventListener('click', tipOff);
+  price.addEventListener('blur', () => priceWrap.classList.remove('is-tipoff'));
+  priceWrap.addEventListener('pointerleave', () => { if (document.activeElement !== price) priceWrap.classList.remove('is-tipoff'); });
+  // Live (SPEC 1.4 B11): after conversion the header stops selling. A green Live pill and the dashboard link replace
+  // the price and the trial pill.
+  const livePill = h('span', { id: 'st-livepill', class: 'st-pill st-pill-live', role: 'status', hidden: true }, h('i', { 'aria-hidden': 'true' }), 'Live');
+  const dash = h('a', { id: 'st-dash', class: 'st-dash', href: 'https://knowdrive.ai/', target: '_blank', rel: 'noopener', hidden: true },
+    h('span', null, 'Dashboard'), h('span', { class: 'st-dash-ico', 'aria-hidden': 'true', html: icon('external', 13) }), h('span', { class: 'st-sr' }, ' (opens in a new tab)'));
   const theme = h('button', { type: 'button', id: 'st-theme', class: 'st-iconbtn st-hide-mobile', onclick: toggleTheme });
   const mot = h('button', { type: 'button', id: 'st-motion', class: 'st-iconbtn st-hide-mobile', onclick: toggleMotion });
   const dbg = DEBUG ? h('span', { id: 'st-debug', class: 'st-pill st-pill-debug' }, 'debug') : null;
@@ -157,7 +192,7 @@ function renderHeader() {
   el.append(
     h('h1', { class: 'st-sr' }, 'KnowBot Studio: build a bot that answers only from your files'),
     h('div', { class: 'st-header-left' }, brand, h('span', { class: 'st-hsep', 'aria-hidden': 'true' }), botchip, botchipDesc),
-    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, priceWrap, theme, mot, more),
+    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, livePill, dash, priceWrap, theme, mot, more),
   );
   updateIdentity();
   updatePrice();
@@ -176,10 +211,23 @@ function updateThemeButtons() {
 
 function toggleTheme() {
   const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  applyTheme(next, { save: true });
+}
+/** The OS colour scheme is the default (index.html pre-paint); live OS changes are followed until the person picks a theme. */
+function followOsTheme() {
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  mq.addEventListener?.('change', (e) => {
+    let saved = null; try { saved = localStorage.getItem('knowbot-theme'); } catch { /* ignore */ }
+    if (saved === 'dark' || saved === 'light') return;
+    applyTheme(e.matches ? 'dark' : 'light', { save: false });
+  });
+}
+function applyTheme(next, { save = true } = {}) {
   const root = document.documentElement;
+  if (root.getAttribute('data-theme') === next) return;
   root.classList.add('st-theming');
   root.setAttribute('data-theme', next);
-  try { localStorage.setItem('knowbot-theme', next); } catch { /* ignore */ }
+  if (save) { try { localStorage.setItem('knowbot-theme', next); } catch { /* ignore */ } }
   setState({ ui: { ...getState().ui, theme: next } }, 'theme');
   emit('theme', { theme: next });
   updateThemeButtons();
@@ -243,38 +291,91 @@ function priceText() {
   const amt = getState().config?.price?.amount ?? 249;
   return `$${amt}/mo`;
 }
+let activatingUntil = 0, activatingTimer = 0;
+/** E's return-from-checkout poll (the 'activating' card) runs ~20 s; the header says so instead of selling meanwhile. */
+function setActivating(on) {
+  clearTimeout(activatingTimer);
+  activatingUntil = on ? Date.now() + 25000 : 0;
+  if (on) activatingTimer = setTimeout(() => { activatingUntil = 0; updatePrice(); }, 25200);
+  updatePrice();
+}
+const isLive = () => !!getState().trial.converted || !!getState().milestones.launched;
+/** Activating (back from checkout) or Live: ingest progress stops narrating, so the launch moment reads clean. */
+const narrationQuiet = () => isLive() || activatingUntil > Date.now() || (params.get('launched') === '1' && !successPosted && performance.now() < 30000);
 function updatePrice() {
   const b = $('#st-price'); if (!b) return;
+  const live = isLive();
+  const activating = !live && activatingUntil > Date.now();
+  if (document.documentElement.hasAttribute('data-live') !== live) document.documentElement.toggleAttribute('data-live', live);
+  const wrap = $('#st-pricewrap'); const pill = $('#st-livepill'); const dash = $('#st-dash');
+  setHidden(wrap, live);
+  setHidden(pill, !live);
+  if (dash) { setHidden(dash, !live); setAttr(dash, 'href', getState().config?.dashboardUrl || 'https://knowdrive.ai/'); }
+  updateTrialPill();
+  if (live) return;
+  if (activating) {
+    b.dataset.level = 'activating'; b.disabled = true; b.setAttribute('aria-busy', 'true');
+    $('.st-price-label', b).innerHTML = `<span class="st-spin" aria-hidden="true"></span> Activating…`;
+    return;
+  }
+  if (b.disabled) b.disabled = false; setAttr(b, 'aria-busy', null);
   const m = getState().milestones;
   const level = m.firstCited ? 'solid' : m.firstReady ? 'outline' : 'ghost';
   const prev = b.dataset.level;
-  b.dataset.level = level;
+  dset(b, 'level', level);
   const label = $('.st-price-label', b);
   const p = priceText();
-  if (isMobile()) label.textContent = p;   // SPEC 1.2: the 48 px header shows the price only
-  else label.textContent = level === 'ghost' ? `${p} when you launch` : `Launch · ${p}`;
+  if (isMobile()) setText(label, p);   // SPEC 1.2: the 48 px header shows the price only
+  else setText(label, level === 'ghost' ? `${p} when you launch` : `Launch · ${p}`);
   // name = visible text (WCAG 2.5.3); the tooltip (aria-describedby) carries "Build and test free, no card."
-  b.removeAttribute('aria-label');
+  setAttr(b, 'aria-label', null);
   if (prev && prev !== level && level === 'solid') { b.classList.remove('is-pulse'); void b.offsetWidth; b.classList.add('is-pulse'); }
 }
 
+let trialPillKey = '', trialPillRaf = 0;
+/** Coalesced (perf r4): many store changes call this; the pill paints at most once per frame, and its clock once a minute. */
 function updateTrialPill() {
+  if (trialPillRaf) return;
+  trialPillRaf = requestAnimationFrame(() => { trialPillRaf = 0; paintTrialPill(); });
+}
+function paintTrialPill() {
+  const s = getState();
+  const t = s.trial;
+  // "Saved · 7 days" only once there is something to save (a file or an answer); never on a blank landing
+  const built = s.fileOrder.length > 0 || s.thread.length > 0 || !!s.milestones.firstFile;
+  const key = [t.id, t.status, t.expiresAt, built, isLive(), Math.floor(Date.now() / 3600000)].join('|');
+  if (key === trialPillKey) return;   // called on many store changes; nothing visible changed
+  trialPillKey = key;
+  if (document.documentElement.hasAttribute('data-built') !== built) document.documentElement.toggleAttribute('data-built', built);
   const el = $('#st-trialpill'); if (!el) return;
-  const t = getState().trial;
-  if (!t.id || t.status === 'expired' || !t.expiresAt) { el.hidden = true; return; }
+  if (!t.id || t.status === 'expired' || !t.expiresAt || !built || isLive()) { setHidden(el, true); return; }
   const ms = new Date(t.expiresAt).getTime() - Date.now();
   const days = Math.max(0, Math.ceil(ms / 86400000));
-  el.hidden = false;
+  setHidden(el, false);
   const soon = days <= 2;
-  el.classList.toggle('is-warn', soon);
-  el.innerHTML = `${icon(soon ? 'clock' : 'checkCircle', 13)}<span>${soon ? `Expires in ${days} day${days === 1 ? '' : 's'}` : 'Saved · 7 days'}</span>`;
-  el.title = `Your bot and files are saved until ${new Date(t.expiresAt).toLocaleString()}.`;
+  if (el.classList.contains('is-warn') !== soon) el.classList.toggle('is-warn', soon);
+  setHTML(el, `${icon(soon ? 'clock' : 'checkCircle', 13)}<span>${soon ? `Expires in ${days} day${days === 1 ? '' : 's'}` : 'Saved · 7 days'}</span>`);
+  // perf r4: the first toLocaleString() call loads locale data (~45 ms at 4x CPU, mid-ingest); the exact date is only
+  // a hover hint, so it is formatted on first hover / focus instead
+  if (el._kbExp !== t.expiresAt) {
+    el._kbExp = t.expiresAt; el.removeAttribute('title');
+    if (!el._kbTip) { el._kbTip = true; const tip = () => { if (!el.title && el._kbExp) el.title = `Your bot and files are saved until ${new Date(el._kbExp).toLocaleString()}.`; }; el.addEventListener('pointerenter', tip); el.addEventListener('focus', tip); }
+  }
 }
 
 let netState = 'live';
+let netShown = '';
 function updateNetPill() {
   const el = $('#st-net'); if (!el) return;
   const offline = typeof navigator.onLine === 'boolean' && !navigator.onLine;
+  // phones: the 48 px header keeps the bot name; the state is an amber dot on the BotChip avatar (data-net) instead
+  const st = offline ? 'offline' : netState === 'reconnecting' ? 'reconnecting' : '';
+  if (st !== netShown) {
+    netShown = st;
+    setAttr(document.documentElement, 'data-net', st || null);
+    setAttr($('#st-botchip'), 'title', st === 'offline' ? "You're offline. Changes will sync when you're back." : st ? 'Reconnecting…' : null);
+    if (isMobile()) announce(st === 'offline' ? "You're offline. Changes will sync when you're back." : st ? 'Reconnecting…' : 'Back online.', st === 'offline' ? 'assert' : 'polite');
+  }
   // one place only (SPEC 1.6): the header pill. On phones it is a compact chip inside the 48 px header; the full
   // sentence stays in the accessible text and the tooltip.
   if (offline) { el.hidden = false; el.dataset.state = 'offline'; el.title = "You're offline. Changes will sync when you're back."; el.innerHTML = `${icon('warn', 13)}<span class="st-net-long">You're offline. Changes will sync when you're back.</span><span class="st-net-short" aria-hidden="true">Offline</span>`; return; }
@@ -327,25 +428,34 @@ function renderSpine() {
   updateSpine(true);
 }
 
-let spinePrev = {};
+let spinePrev = {}, spineRaf = 0, spineSig = '';
+/** The step (store) updates at once; the DOM paints at most once per frame (perf r4: file events call this a lot). */
 function updateSpine(initial = false) {
   const states = stepStates();
   const activeKey = (states.find((s) => s.current) || states.find((s) => s.state === 'active' || s.state === 'warn') || states[states.length - 1]).key;
   if (getState().step !== activeKey) setState({ step: activeKey }, 'step');
+  if (initial) { if (spineRaf) { cancelAnimationFrame(spineRaf); spineRaf = 0; } paintSpine(states, activeKey, true); return; }
+  if (!spineRaf) spineRaf = requestAnimationFrame(() => { spineRaf = 0; const st = stepStates(); const k = (st.find((x) => x.current) || st.find((x) => x.state === 'active' || x.state === 'warn') || st[st.length - 1]).key; paintSpine(st, k, false); });
+}
+function paintSpine(states, activeKey, initial) {
+  const sig = states.map((x) => `${x.key}${x.state}${x.current ? '*' : ''}`).join('|') + activeKey + isMobile();
+  updateThreadPrompt();
+  if (!initial && sig === spineSig) return;
+  spineSig = sig;
   states.forEach((st, i) => {
     const li = $(`.st-node[data-step="${st.key}"]`, slots.spine);
     if (!li) return;
     const was = spinePrev[st.key];
-    li.dataset.state = st.state;
+    dset(li, 'state', st.state);
     const btn = $('.st-node-btn', li);
-    if (st.key === activeKey) btn.setAttribute('aria-current', 'step'); else btn.removeAttribute('aria-current');
-    li.classList.toggle('is-current', st.key === activeKey);
+    setAttr(btn, 'aria-current', st.key === activeKey ? 'step' : null);
+    if (li.classList.contains('is-current') !== (st.key === activeKey)) li.classList.toggle('is-current', st.key === activeKey);
     // name from content ("Purpose, step 1, done"): starts with the visible label (WCAG 2.5.3)
     const sr = $('.st-node-sr', btn);
-    if (sr) sr.textContent = `, step ${i + 1}, ${st.state === 'done' ? 'done' : st.state === 'warn' ? 'needs attention' : st.state === 'active' ? 'current' : 'not started'}${st.key === activeKey && st.state === 'done' ? ', current' : ''}`;
-    btn.disabled = false;
+    if (sr) setText(sr, `, step ${i + 1}, ${st.state === 'done' ? 'done' : st.state === 'warn' ? 'needs attention' : st.state === 'active' ? 'current' : 'not started'}${st.key === activeKey && st.state === 'done' ? ', current' : ''}`);
+    if (btn.disabled) btn.disabled = false;
     const dot = $(`.st-spine-dots i[data-step="${st.key}"]`, slots.spine);
-    if (dot) dot.dataset.state = st.state;
+    if (dot) dset(dot, 'state', st.state);
     if (!initial && was && was !== st.state && st.state === 'done') {
       motion.animate($('.st-node-dot', li), [{ transform: 'scale(.6)' }, { transform: 'scale(1.08)', offset: .6 }, { transform: 'scale(1)' }], { duration: 220, easing: 'spring' });
       const prevConn = i > 0 ? $(`.st-node[data-step="${STEPS[i - 1].key}"] .st-conn-fg`, slots.spine) : null;
@@ -356,9 +466,36 @@ function updateSpine(initial = false) {
     spinePrev[st.key] = st.state;
   });
   const cur = $('.st-spine-cur', slots.spine);
-  if (cur) cur.textContent = `${STEP_INDEX[activeKey] + 1} · ${STEPS[STEP_INDEX[activeKey]].label}`;
+  if (cur) setText(cur, `${STEP_INDEX[activeKey] + 1} · ${STEPS[STEP_INDEX[activeKey]].label}`);
   const kbd = $('#st-kbd');
-  if (kbd) kbd.hidden = isMobile() || STEP_INDEX[activeKey] < 3;
+  if (kbd) setHidden(kbd, isMobile() || STEP_INDEX[activeKey] < 3);
+}
+
+/** Files ready, nothing asked yet: the empty thread shows a one-line prompt (studio.css, #sb-thread-slot[data-prompt]). */
+function updateThreadPrompt() {
+  const s = getState();
+  const anyAnswer = !!slots.thread?.querySelector('.sb-answer');
+  dset(slots.thread, 'prompt', s.milestones.firstReady && !s.thread.length && !anyAnswer && !isLive() ? '1' : '0');
+}
+/** .st-bot[data-asked] = the thread holds a visitor answer (not a Proof Run row). Replaces a `.st-bot:has(...)` selector:
+ * a descendant :has() over the bot pane re-matched on every DOM change there and cost long frames under CPU throttle.
+ * CONTRACT-GAP (D): ingest.css:174 still uses `.st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof))`; it can use
+ * `.st-bot[data-asked="1"]` instead. The ribbon legend (map) items need file short names or aria-labels (D owns it). */
+function watchThread() {
+  if (!slots.thread || !slots.bot) return;
+  let raf = 0;
+  const sync = () => {
+    raf = 0;
+    dset(slots.bot, 'asked', slots.thread.querySelector('.sb-answer:not(.is-proof)') ? '1' : '0');
+    updateThreadPrompt();
+  };
+  // asked flips in the same frame the first answer lands (no one-frame flash of the old layout); the prompt is
+  // cosmetic and follows on the next frame
+  new MutationObserver(() => {
+    dset(slots.bot, 'asked', slots.thread.querySelector('.sb-answer:not(.is-proof)') ? '1' : '0');
+    if (!raf) raf = requestAnimationFrame(sync);
+  }).observe(slots.thread, { childList: true, subtree: true });
+  sync();
 }
 
 function spineClick(key) {
@@ -377,6 +514,8 @@ function spineClick(key) {
   }
 }
 const DUR2 = () => motion.DUR[2];
+/** Resolves after the next frame has painted (yields a long sequence of DOM work across frames). */
+const nextPaint = () => new Promise((r) => { if (document.hidden) { setTimeout(r, 0); return; } requestAnimationFrame(() => setTimeout(r, 0)); });
 
 function tagAnchor(step) {
   const msgs = $$('.st-msg-a', logEl);
@@ -397,7 +536,7 @@ function renderSetupPane() {
   hintEl = h('div', { id: 'st-hint', class: 'st-hint', role: 'status', hidden: true });
   logEl = h('div', { id: 'st-log', class: 'st-log', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions', 'aria-label': 'Builder conversation', tabindex: '0' });
   composerEl = h('textarea', { id: 'st-setup-composer', class: 'st-input', rows: '1', autocomplete: 'off', spellcheck: 'true',
-    placeholder: 'Tell the Builder anything, e.g. "a support bot for my bike shop, friendly"', 'aria-label': 'Message the Builder' });
+    placeholder: 'Tell the Builder anything…', title: 'e.g. "a support bot for my bike shop, friendly"', 'aria-label': 'Message the Builder' });
   const attach = h('button', { type: 'button', class: 'st-iconbtn st-attach', 'aria-label': 'Add files', title: 'Add files', html: icon('paperclip', 18),
     onclick: () => { emit('intake:open', {}); if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); } });
   const send = h('button', { type: 'submit', class: 'st-send', 'aria-label': 'Send to the Builder', html: icon('arrowUp', 18) });
@@ -413,7 +552,48 @@ function renderSetupPane() {
   el.append(head, hintEl, logEl, h('div', { class: 'st-composer-wrap' }, formEl));
   if (typed) { composerEl.value = typed; autoGrow(); }
   wireLogScroll();
+  requestAnimationFrame(fitPlaceholder);
 }
+/** r4 (D1): the composer teaches by example where it has room (desktop), and stays short on phones. */
+const PH_FULL = 'Tell the Builder anything, e.g. "a support bot for my bike shop, friendly"';
+const PH_MID = 'e.g. "a support bot for my bike shop"';
+let phCtx = null;
+function fitPlaceholder() {
+  if (!composerEl) return;
+  const cs = getComputedStyle(composerEl);
+  const w = composerEl.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) - 4;
+  let ph = 'Tell the Builder anything…';
+  if (!isMobile() && w > 0) {
+    try {
+      phCtx = phCtx || document.createElement('canvas').getContext('2d');
+      phCtx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      if (phCtx.measureText(PH_FULL).width <= w) ph = PH_FULL;
+      else if (phCtx.measureText(PH_MID).width <= w) ph = PH_MID;
+    } catch { /* keep the short one */ }
+  }
+  if (composerEl.placeholder !== ph) composerEl.placeholder = ph;
+}
+
+// ---- landing hero (r4, D1): before any file exists the empty bot pane carries the one primary action, the same one
+// as the Builder's first chip. It overlays the (shrunk) empty map band, so it never moves anything when it leaves.
+function renderHero() {
+  if (getState().fileOrder.length || isLive() || $('#st-hero') || !slots.bot) return;
+  const go = (id) => {
+    hideHero();
+    const chip = $(`.st-msg-a .st-chip[data-chip="${id}"]`, logEl);
+    if (chip && !chip.closest('.st-chips')?.hidden && !chip.closest('.is-stale')) { chip.click(); return; }
+    if (id === 'use_samples') { addUserMessage('Use sample files · 30s demo'); dispatchAction({ type: 'attach_samples', set: 'lumen-bikes' }, { fromClick: true }); }
+    else { addUserMessage('Upload my files'); dispatchAction({ type: 'request_upload' }, { fromClick: true }); }
+  };
+  const hero = h('div', { id: 'st-hero', class: 'st-hero' },
+    h('button', { type: 'button', class: 'st-hero-go', onclick: () => go('use_samples') },
+      h('span', { class: 'st-hero-ico', html: icon('bolt', 16) }), h('span', null, 'Use sample files'), h('span', { class: 'st-hero-sub' }, '30s demo')),
+    h('button', { type: 'button', class: 'st-hero-alt', onclick: () => go('upload_files') }, 'or add your own files'));
+  slots.bot.append(hero);
+  if (!motion.reduced()) motion.animate(hero, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], delay: 120, easing: 'out' });
+}
+function hideHero() { const el = $('#st-hero'); if (el) el.remove(); }
+on('change:fileOrder', ({ value }) => { if (value && value.length) hideHero(); });
 
 function autoGrow() {
   composerEl.style.height = 'auto';
@@ -443,32 +623,64 @@ function userSays(text, { label } = {}) {
 }
 
 function priceIntent(text, label) {
-  addUserMessage(label || text);
+  const miy = !isLive() ? pendingDecision('make-it-yours') : null;
+  addUserMessage(label || text, { keepDecision: !!miy });
+  if (miy) {
+    const amt = getState().config?.price?.amount ?? 249;
+    localSay(`Going live is **$${amt}/mo**; building and testing stay free, no card. One step first: the card above.`, { reply: true, chips: [] })
+      .then(() => surfaceDecision(miy));
+    return;
+  }
+  if (isLive()) {
+    localSay(`${botName()} is already live: your plan is active, so there's nothing more to pay here. Manage billing in your KnowDrive dashboard.`, { reply: true, chips: [
+      { id: 'live_copy', label: 'Copy embed code', kind: 'primary', local: true, run: () => { copyText(embedSnippet()); toast({ kind: 'info', text: 'Embed code copied' }); } },
+      { id: 'channels', label: 'Channels & API', local: true, run: () => openGoLive('channels') },
+    ] });
+    return;
+  }
   const c = getState().config || {};
   const amt = c.price?.amount ?? 249;
   const name = botName();
   const m = getState().milestones;
-  localSay(`Building and testing is free, no card. Going live is **$${amt}/mo** for ${name}: a hosted link, the embed snippet, all 6 channels and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { chips: [
+  localSay(`Building and testing is free, no card. Going live is **$${amt}/mo** for ${name}: a hosted link, the embed snippet, all 6 channels and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { reply: true, chips: [
     { id: 'launch', label: `Launch · $${amt}/mo`, kind: m.firstCited ? 'primary' : 'default', action: { type: 'show_launch' }, local: true },
     { id: 'what-get', label: 'What do I get?', send: 'What do I get?' },
     m.firstCited ? { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true }
       : getState().fileOrder.length ? { id: 'ask', label: 'Ask it a question first', kind: 'primary', run: focusBotComposer, local: true }
         : { id: 'use_samples', label: 'Try it free with sample files', kind: 'primary', action: { type: 'attach_samples' }, local: true },
-  ] });
+  ] }).then(() => {
+    // price intent with a bot to launch: the Launch card (or Make-it-yours) comes in the same turn, not a chip away.
+    // Only once its files have finished learning (mid-ingest the answer above is the whole reply).
+    const s = getState();
+    const files = s.fileOrder.map((id) => s.files[id]).filter((f) => f && f.phase !== 'rejected');
+    if (files.some((f) => f.phase === 'ready') && !learningFiles().length && !isLive()) launchOpen('setup');
+  });
 }
+
+const CHANNEL_HINTS = [
+  { id: 'whatsapp', re: /\bwhats ?app\b/i, name: 'WhatsApp', need: 'WhatsApp needs a WhatsApp Business number (Meta Cloud API or Twilio); your webhook is ready to paste.' },
+  { id: 'sms', re: /\b(sms|text messag\w*|texts?)\b/i, name: 'SMS', need: 'SMS needs a Twilio number; point its messaging webhook at the URL I prefilled and replies come back with [1] citations.' },
+  { id: 'phone', re: /\b(telephone|phone( calls?| line| number)?|calls?|call in)\b/i, name: 'Telephone', need: 'Phone calls need a Twilio number; callers ask out loud and it answers by voice, naming the source. Try the call simulator now.' },
+  { id: 'email', re: /\b(e-?mails?|inbox|support@)\b/i, name: 'Email', need: 'Email needs an inbound-parse webhook (SendGrid, Postmark or Mailgun); replies carry footnoted citations and a source list.' },
+  { id: 'voice', re: /\bvoice ?(bot|chat\w*|assistant|agent|channel)?\b|\bspeak|\btalk to\b/i, name: 'Voice chatbot', need: 'The voice chatbot runs in the browser, no account needed. Press Try it and talk to your bot.' },
+  { id: 'text', re: /\b(widget|embed\w*|website|my site|chat ?bubble|full-?page)\b/i, name: 'Text chatbot', need: 'The chat widget is one line of embed code; you can try it right here before you launch.' },
+];
+function channelOf(text) { const hit = CHANNEL_HINTS.find((c) => c.re.test(text)); return hit || null; }
 
 function channelsIntent(text, label) {
   addUserMessage(label || text);
   const dev = DEV_RE.test(text);
+  const ch = dev ? null : channelOf(text);
   const name = botName();
-  localSay(dev
+  const line = dev
     ? `${name} has a chat API. It's OpenAI-compatible: point any OpenAI SDK at it by changing the base URL. Every reply carries its citations, or the exact refusal. Opening the Developers tab with your trial key and live-tested snippets.`
-    : `${name} can answer on 6 channels: SMS, phone calls, WhatsApp, email, a chat widget and a voice chatbot, all with the same cited answers. Each one has its webhook ready to copy, and most have a Try it. Opening Channels.`,
-  { chips: [
-    { id: 'open_channels', label: 'Channels', kind: dev ? 'default' : 'primary', local: true, run: () => openGoLive('channels') },
+    : ch ? `Yes: ${name} can answer on ${ch.name} with the same cited answers. ${ch.need} Opening the ${ch.name} card.`
+      : `${name} can answer on 6 channels: SMS, phone calls, WhatsApp, email, a chat widget and a voice chatbot, all with the same cited answers. Each one has its webhook ready to copy, and most have a Try it. Opening Channels.`;
+  localSay(line, { reply: true, chips: [
+    { id: 'open_channels', label: ch ? `${ch.name} setup` : 'Channels', kind: dev ? 'default' : 'primary', local: true, run: () => openGoLive('channels', ch?.id) },
     { id: 'open_api', label: 'Developer API', kind: dev ? 'primary' : 'default', local: true, run: () => openGoLive('developers') },
     { id: 'launch', label: `Launch · ${priceText()}`, action: { type: 'show_launch' }, local: true },
-  ] }).then(() => openGoLive(dev ? 'developers' : 'channels'));
+  ] }).then(() => openGoLive(dev ? 'developers' : 'channels', ch?.id));
 }
 
 // The log follows new content unless the user scrolled up to read (wheel, touch, keys); scrolling back down re-arms it.
@@ -477,14 +689,38 @@ function scrollLog(force = false) {
   if (!logEl) return;
   if (force) stick = true;
   if (!stick || stickRaf) return;
+  // With a ResizeObserver the follow happens in its callback (after layout, before paint: no forced reflow). The rAF
+  // path is only the fallback for engines without it.
+  if (logRO) { if (force) { stickRaf = requestAnimationFrame(() => { stickRaf = 0; followNow(); }); } return; }
   stickRaf = requestAnimationFrame(() => { stickRaf = 0; if (stick) logEl.scrollTop = logEl.scrollHeight; });
+}
+let logRO = null;
+let followRaf = 0;
+/** perf (r4): ResizeObserver callbacks for many growing messages coalesce into one scroll write per frame. */
+function followLog() {
+  if (!stick || !logEl || followRaf) return;
+  followRaf = requestAnimationFrame(() => { followRaf = 0; followNow(); });
+}
+function followNow() {
+  if (!stick || !logEl) return;
+  const top = logEl.scrollHeight - logEl.clientHeight;
+  if (top - logEl.scrollTop > 1) logEl.scrollTop = top;
 }
 function wireLogScroll() {
   const userScroll = () => { requestAnimationFrame(() => { stick = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48; }); };
   logEl.addEventListener('wheel', userScroll, { passive: true });
   logEl.addEventListener('touchmove', userScroll, { passive: true });
   logEl.addEventListener('keydown', (e) => { if (/Page|Arrow|Home|End/.test(e.key)) userScroll(); });
-  new MutationObserver(() => scrollLog()).observe(logEl, { childList: true, subtree: true, characterData: true });
+  if (typeof ResizeObserver === 'function') {
+    // Every message is observed: a new turn (initial observation) or one that grows (typing, a card expanding) scrolls
+    // the log once per frame, after layout.
+    logRO = new ResizeObserver(() => followLog());
+    for (const c of logEl.children) logRO.observe(c);
+    logRO.observe(logEl);
+    new MutationObserver((recs) => {
+      for (const r of recs) for (const n of r.addedNodes) if (n.nodeType === 1 && n.parentNode === logEl) logRO.observe(n);
+    }).observe(logEl, { childList: true });
+  } else new MutationObserver(() => scrollLog()).observe(logEl, { childList: true, subtree: true, characterData: true });
 }
 
 // ---- messages
@@ -498,7 +734,8 @@ function trimOld() {
   all.forEach((m, i) => m.classList.toggle('is-old', i < all.length - 6));
 }
 
-function addUserMessage(text, { queued = false, tag = null } = {}) {
+function addUserMessage(text, { queued = false, tag = null, keepDecision = false } = {}) {
+  if (!keepDecision) for (const m of messages) if (m.decision) m.movedOn = true;   // the person moved on: its chips may retire
   for (const m of messages) if (m.role === 'assistant' && m.chipsEl && !m.chipsEl.hidden && m.el === logEl.lastElementChild) {
     // keep the chosen chip visible as the reply's context only if it is the row the person just used
     if (!m.chipsEl.classList.contains('has-choice')) { m.chipsEl.hidden = true; m.el.classList.add('had-chips'); }
@@ -520,10 +757,13 @@ function addUserMessage(text, { queued = false, tag = null } = {}) {
  * anchoring.
  */
 let chipIO = null;
-function retireChips() {
+function retireChips({ keepDecisions = true } = {}) {
   const last = logEl.lastElementChild;
   for (const m of messages) {
     if (m.role !== 'assistant' || !m.chipsEl || m.chipsEl.hidden || m.chipsEl.classList.contains('is-stale')) continue;
+    // r3 (D2): a pending decision (Make it yours, Launch) is never retired by a progress line; only an answer to it,
+    // a newer decision, or the person moving on (typing) retires it
+    if (keepDecisions && m.decision && !m.movedOn && !m.chipsEl.classList.contains('has-choice')) continue;
     if (m.el === last) { m.chipsEl.hidden = true; m.el.classList.add('had-chips'); continue; }
     m.chipsEl.classList.add('is-stale');
     m.chipsEl.inert = true;
@@ -540,6 +780,26 @@ function retireChips() {
     }
   }
 }
+
+/** The newest unanswered decision turn ('make-it-yours' | 'launch'), or null. */
+function pendingDecision(kind = null, { live = false } = {}) {
+  // live: still holding the floor (the person hasn't typed past it). Without it: unanswered, for dedupe.
+  return [...messages].reverse().find((m) => m.decision && (!kind || m.decision === kind) && m.el.isConnected && !(live && m.movedOn)
+    && !m.chipsEl.classList.contains('has-choice') && m.chips && m.chips.length) || null;
+}
+/** Brings a pending decision back instead of posting it again: scroll, pulse, focus its first chip, announce. */
+function surfaceDecision(m, { focus = true } = {}) {
+  if (!m) return;
+  m.movedOn = false;
+  if (m.chipsEl.hidden || m.chipsEl.classList.contains('is-stale')) reviveChips(m.chipsEl);
+  if (isMobile() && getState().ui.tab !== 'setup') setTab('setup');
+  stick = false;
+  m.el.scrollIntoView({ behavior: motion.reduced() ? 'auto' : 'smooth', block: 'nearest' });
+  const card = $('.st-card-holder > *', m.el) || m.el;
+  motion.animate(card, [{ boxShadow: '0 0 0 0 var(--accent-soft)' }, { boxShadow: '0 0 0 7px var(--accent-soft)', offset: .35 }, { boxShadow: '0 0 0 0 transparent' }], { duration: 900, essential: false });
+  if (focus) { const first = $('.st-chip', m.chipsEl); if (first) setTimeout(() => first.focus({ preventScroll: true }), motion.reduced() ? 0 : 280); }
+  announce(`Still open: ${plain(m.text).split(/(?<=[.!?])\s/)[0] || 'a choice in the Builder'}`);
+}
 function reviveChips(row) {
   row.classList.remove('is-stale'); row.inert = false; row.removeAttribute('aria-hidden'); row.hidden = false;
   row.closest('.st-msg')?.classList.remove('had-chips');
@@ -547,7 +807,7 @@ function reviveChips(row) {
 
 function chipsEl() { return h('div', { class: 'st-chips', role: 'toolbar', 'aria-label': 'Suggested replies', 'aria-orientation': 'horizontal' }); }
 
-function createAssistant({ typing = false, id, still = false } = {}) {
+function createAssistant({ typing = false, id, still = false, decision = null } = {}) {
   const textEl = h('div', { class: 'st-msg-text', 'aria-hidden': 'true' });
   const srEl = h('div', { class: 'st-sr' });
   const cardsEl = h('div', { class: 'st-msg-cards' });
@@ -561,7 +821,8 @@ function createAssistant({ typing = false, id, still = false } = {}) {
     const dots = h('span', { class: 'st-typing-dots', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'));
     textEl.append(dots); rec.dots = dots;
   }
-  retireChips();
+  retireChips({ keepDecisions: !decision });
+  rec.decision = decision;
   logEl.append(el);
   messages.push(rec); trimOld();
   if (!still) motion.animate(el, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: DUR2(), easing: 'out' });
@@ -577,20 +838,71 @@ function pushDelta(rec, text) {
   deltaQueue.push({ rec, text });
   if (!deltaRaf) deltaRaf = requestAnimationFrame(flushDeltas);
 }
+
+/**
+ * Builder copy polish (r3), applied to every Builder line before it is shown: a quoted question inside a question
+ * loses its own "?" ('about "Do you ship?"?' -> 'about "Do you ship"?'), big numbers get separators, a finished file
+ * is "ready" (not "so far"), and "built for Bike shop (friendly)" reads "for your bike shop, friendly tone".
+ */
+function polishCopy(text) {
+  let t = String(text || '');
+  t = t.replace(/\?(["”])\?/g, '$1?');
+  t = t.replace(/(\d{4,})(?= atoms\b)/g, (n) => motion.fmtNum(Number(n)));
+  t = t.replace(/\*\*([^*]+)\*\*: ([\d,]+) atoms so far\./g, (all, name, n) => {
+    const f = Object.values(getState().files).find((x) => x && x.name === name);
+    return f && f.phase === 'ready' ? `**${name}** is ready: ${n} atoms.` : all;
+  });
+  t = t.replace(/\bProof Run passed\./g, (all) => {
+    const sc = getState().proof?.score;
+    if (!sc || (sc.total || 0) >= 8) return all;   // only the full 8 + 3 run is "the Proof Run"
+    const n = (sc.total || 0) + (sc.probes || 0), ok = (sc.answered || 0) + (sc.refused || 0);
+    return `Quick check passed (${ok}/${n}).`;
+  });
+  t = t.replace(/, built for ([^(.\n]+?) \(([a-z]+)\)/g, (all, org, tone) => {
+    const o = org.trim();
+    const generic = /^[A-Z][a-z]+(?: [a-z]+)+$/.test(o) || /^[a-z]/.test(o);   // "Bike shop", "my bakery": a kind, not a name
+    return `, built for ${generic ? `your ${o.replace(/^(?:my|our|a|an|the) /i, '').toLowerCase()}` : o}, ${tone} tone`;
+  });
+  return t;
+}
+/** While streaming, a few trailing characters wait for the next delta when a polish rule could still change them. */
+const HOLD_RE = /(?:\?["”]?|\d+|\*+|`[^`]*|, built for [^.\n]*)$/;
+/** Characters to hold back so no markdown token is ever shown half-open ("**handbook.md" while it streams). */
+function holdLen(full) {
+  let hold = (full.match(HOLD_RE) || [''])[0].length;
+  // an odd number of "**" means a bold run is open: hold from its opening marker
+  const bolds = full.match(/\*\*/g);
+  if (bolds && bolds.length % 2) hold = Math.max(hold, full.length - full.lastIndexOf('**'));
+  // an odd number of backticks: hold from the open one
+  const ticks = full.match(/`/g);
+  if (ticks && ticks.length % 2) hold = Math.max(hold, full.length - full.lastIndexOf('`'));
+  return hold;
+}
 function flushDeltas() {
   deltaRaf = 0;
   const byRec = new Map();
   for (const { rec, text } of deltaQueue) byRec.set(rec, (byRec.get(rec) || '') + text);
   deltaQueue = [];
-  for (const [rec, text] of byRec) {
+  for (const [rec] of byRec) {
     if (rec.done) continue;
     if (rec.dots) {
       const dots = rec.dots; rec.dots = null;
       motion.animate(dots, [{ opacity: 1 }, { opacity: 0 }], { duration: 120, fill: 'forwards' }).finished.then(() => dots.remove());
     }
-    const span = h('span', { class: 'st-d' }, text);
+    // what is shown is the polished text, minus a tail a polish rule may still rewrite (it shows on the next delta)
+    const full = polishCopy(rec.text);
+    const shown = full.slice(0, full.length - holdLen(full));
+    const prevShown = rec.shown || '';
+    let text;
+    if (shown.startsWith(prevShown)) text = shown.slice(prevShown.length);
+    else { rec.textEl.textContent = ''; text = shown; }   // a rule rewrote earlier text: re-lay it (rare)
+    rec.shown = shown;
+    if (!text) continue;
+    // balanced markdown in, formatted spans out (shown text never ends inside a ** or ` run)
+    const span = h('span', { class: 'st-d', html: md(text) });
     rec.textEl.append(span);
-    motion.animate(span, [{ opacity: 0, filter: 'blur(3px)' }, { opacity: 1, filter: 'blur(0)' }], { duration: 160, easing: 'out', essential: false });
+    // opacity only: compositor-cheap even with many spans in flight (a per-span blur cost long frames under CPU throttle)
+    motion.animate(span, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'out', essential: false });
   }
   scrollLog();
 }
@@ -600,6 +912,7 @@ function finishAssistant(rec) {
   if (deltaRaf) { cancelAnimationFrame(deltaRaf); flushDeltas(); }
   rec.done = true;
   if (rec.dots) { rec.dots.remove(); rec.dots = null; }
+  if (rec.role !== 'user') rec.text = polishCopy(rec.text);
   rec.textEl.innerHTML = rec.text ? md(rec.text) : '';
   rec.textEl.hidden = !rec.text;
   rec.srEl.textContent = plain(rec.text);   // one announcement per completed message
@@ -670,6 +983,7 @@ function setChips(rec, chips, { still = false } = {}) {
       c.kind === 'probe' ? h('span', { class: 'st-chip-ico', html: icon('shield', 14) }) : null,
       c.kind === 'primary' ? h('span', { class: 'st-chip-ico', html: icon(c.action?.type === 'attach_samples' ? 'bolt' : c.action?.type === 'show_launch' ? 'rocket' : 'arrowRight', 14) }) : null,
       h('span', null, c.label));
+    if (String(c.label).length > 34) b.title = c.label;   // the pill may ellipsize: the full text on hover (the name is the full text)
     b.addEventListener('click', () => onChip(c, rec, b));
     row.append(b);
   });
@@ -726,31 +1040,36 @@ const SERVER_CHIP_IDS = new Set(['samples', 'upload', 'what-canonical', 'what-at
 
 // ---- persistence of the log (sessionStorage, reload case)
 
-const SKIP_RESTORE = new Set(['email-capture', 'launch', 'success', 'activating', 'expired', 'scorecard', 'insights']);
+const SKIP_RESTORE = new Set(['replay-demo', 'email-capture', 'launch', 'success', 'activating', 'expired', 'scorecard', 'insights']);
 function logKey() { return `kb-studio-log:${getState().trial.id || 'none'}`; }
 let saveTimer = 0;
 function saveLog() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     if (!getState().trial.id) return;
-    const data = messages.slice(-60).map((m) => ({ role: m.role, text: m.text, anchor: m.el?.dataset.anchor || '',
+    const data = messages.slice(-60).map((m) => ({ role: m.role, text: m.text, anchor: m.el?.dataset.anchor || '', key: m.key || undefined,
       cards: (m.cards || []).filter((c) => !SKIP_RESTORE.has(c.type)), chips: m.role === 'assistant' ? (m.chips || []).filter((c) => !c.run) : null }));
     const json = JSON.stringify(data);
     try { localStorage.setItem(logKey(), json); } catch { try { sessionStorage.setItem(logKey(), json); } catch { /* ignore */ } }
   }, 250);
 }
-function restoreLog() {
+const restoredKeys = new Set();
+function restoreLog({ retireChips: retireAll = false } = {}) {
   let data = null;
   try { data = JSON.parse(localStorage.getItem(logKey()) || sessionStorage.getItem(logKey()) || 'null'); } catch { data = null; }
   if (!Array.isArray(data) || !data.length) return false;
+  const seen = new Set();
   for (const m of data) {
     if (m.role === 'user') { addUserMessage(m.text); continue; }
+    // event lines (a stall notice, ...) carry a key: one copy survives a reload, and the live event won't repeat it
+    if (m.key) { if (seen.has(m.key)) continue; seen.add(m.key); restoredKeys.add(m.key); }
     const rec = createAssistant();
+    if (m.key) rec.key = m.key;
     rec.text = m.text || '';
     finishAssistant(rec);
     if (m.anchor) rec.el.dataset.anchor = m.anchor;
     for (const c of m.cards || []) addCard(rec, c.type, c.data);
-    if (m.chips && m.chips.length) { setChips(rec, m.chips); }
+    if (m.chips && m.chips.length && !retireAll) { setChips(rec, m.chips); }
   }
   // only the newest restored chips stay visible
   return true;
@@ -776,11 +1095,13 @@ const COALESCE = new Set(['file_atomized', 'files_queued', 'answer', 'spec_edit'
  * of every queued event, so its reply comes next; an event turn never cancels or replaces a user turn.
  */
 function sendTurn(input) {
-  const isUser = !input.event;
+  const isUser = input.local ? !!input.reply : !input.event;
   input.user = isUser;
   if (isUser) {
     const i = turnQueue.findIndex((x) => !x.user);
     if (i < 0) turnQueue.push(input); else turnQueue.splice(i, 0, input);
+  } else if (input.local) {
+    turnQueue.push(input);
   } else {
     const t = input.event.type;
     const i = COALESCE.has(t) ? turnQueue.findIndex((x) => !x.user && x.event?.type === t) : -1;
@@ -793,8 +1114,9 @@ function sendTurn(input) {
 function staleEvent(ev) {
   const m = getState().milestones;
   switch (ev?.type) {
-    case 'file_ready': return !!m.firstCited;
-    case 'file_atomized': return !!m.firstCited && getState().spec.name !== 'SampleBot';
+    case 'file_ready': case 'files_queued': case 'file_atomized':
+      if (narrationQuiet()) return true;
+      return ev.type === 'file_ready' ? !!m.firstCited : ev.type === 'file_atomized' ? !!m.firstCited && getState().spec.name !== 'SampleBot' : false;
     case 'answer': return !!m.firstRefusal;
     case 'first_answer': return false;
     default: return false;
@@ -807,9 +1129,20 @@ async function pumpTurns() {
   setState({ setup: { ...getState().setup, busy: true } }, 'setup:busy');
   formEl?.classList.add('is-busy');
   try {
-    await trialP;
     while (turnQueue.length) {
       const input = turnQueue.shift();
+      // Builder lines written locally share the one queue with server turns, so every Builder message lands in the
+      // order its cause happened (a reply to the person first, then proactive lines by event time).
+      if (input.local) { try { await input.local(); } catch (err) { console.error('[studio] local Builder line failed', err); } continue; }
+      while (!trialSettled && !trialLimited) await Promise.race([trialP, sleep(400)]);
+      if (!trialSettled && trialLimited) {
+        // no trial can start right now: a person's turn gets a scripted local answer; proactive events wait it out
+        if (!input.user) { turnQueue.push(input); if (turnQueue.every((x) => !x.user && !x.local)) { await Promise.race([trialP, sleep(1500)]); } continue; }
+        input.userEl?.classList.remove('is-queued');
+        input.userEl && $('.st-queued-tag', input.userEl)?.remove();
+        await sayNow(limitedReply(input), { reply: true, chips: limitedChips() });
+        continue;
+      }
       if (getState().trial.status === 'expired') { input.userEl?.classList.remove('is-queued'); continue; }
       if (input.event && staleEvent(input.event)) continue;
       input.userEl?.classList.remove('is-queued');
@@ -843,6 +1176,14 @@ async function runTurn(input) {
     if (!input.user && !rec.text && !st.cards) { dropEmpty(rec); return; }
     let chips = st.chips && st.chips.length >= 1 ? st.chips : defaultChips();
     if (input.event?.type === 'first_answer') chips = withChannelsChip(chips);
+    if (!input.user && pendingDecision(null, { live: true }) && !st.cards) chips = [];
+    if (st.miyDup) {
+      // the open Make it yours card answers this turn: one short line pointing at it, no second card or chip row
+      rec.text = 'One step first, in the card above: add a doc of your own, or launch with the samples.';
+      rec.textEl.innerHTML = md(rec.text); rec.srEl.textContent = plain(rec.text); rec.textEl.hidden = false;
+      chips = [];
+      saveLog();
+    }   // progress line while a decision waits: no chips
     setChips(rec, chips);
     afterAssistant(rec, input);
   } catch (err) {
@@ -867,9 +1208,9 @@ function dropEmpty(rec) {
   saveLog();
 }
 
-function openGoLive(tab = 'channels') {
+function openGoLive(tab = 'channels', channel = null) {
   whenReady(() => {
-    if (store.listenerCount('golive:open')) emit('golive:open', { tab });
+    if (store.listenerCount('golive:open')) emit('golive:open', channel ? { tab, channel } : { tab });
     else launchOpen('setup');
   });
 }
@@ -897,7 +1238,15 @@ function onTurnEvent(rec, st, type, data, input) {
       if (!data || !data.type) break;
       if (data.type === 'config-diff' && st.diffShown) break;
       if (data.type === 'config-diff') { st.diffShown = true; data.data = { ...diffVersions(null), ...(data.data || {}) }; }
-      if (data.type === 'email-capture') { if (getState().milestones.emailOffered) break; mark('emailOffered'); }
+      if (data.type === 'email-capture') { if (getState().milestones.emailOffered || launchOnTable()) break; mark('emailOffered'); }
+      if (data.type === 'launch') {
+        // a server turn can carry the Launch / Make it yours card too: same rules as setup:post (sticky, never twice)
+        const kind = data.data?.variant === 'make-it-yours' ? 'make-it-yours' : 'launch';
+        const open = kind === 'make-it-yours' ? pendingDecision('make-it-yours') : null;
+        if (open && open !== rec) { st.miyDup = true; surfaceDecision(open, { focus: false }); break; }
+        for (const m of messages) if (m !== rec && m.decision) m.decision = null;   // the newer decision replaces older ones
+        rec.decision = kind;
+      }
       addCard(rec, data.type, data.data || {}); st.cards++;
       break;
     }
@@ -915,8 +1264,8 @@ function afterAssistant(rec, input) {
   if (isMobile() && getState().ui.tab !== 'setup' && ev && MILESTONE_TURNS.has(ev)) {
     bumpBadge('setup', 'count');
     const first = plain(rec.text).split(/(?<=[.!?])\s/)[0];
-    if (first) showPeek(first);
-  }
+    if (first) showPeek(first); else hidePeek();
+  } else hidePeek();   // the next Builder line always retires an older peek: it never outlives what it summarised
 }
 
 function defaultChips() {
@@ -981,7 +1330,7 @@ function fallbackFor(input, err) {
     case 'checkout_dismissed': return { text: `No problem, ${name} is saved for 7 days. Launch whenever you're ready.`, chips: [L('launch', `Launch · ${priceText()}`, { kind: 'primary', action: { type: 'show_launch' } }), L('keep', 'Keep testing', { run: focusBotComposer })] };
     case 'returned': {
       const tests = s.proof?.score ? `, ${s.proof.score.answered + s.proof.score.refused}/${s.proof.score.total + s.proof.score.probes} tests` : '';
-      return { text: `Welcome back. ${name} is where you left it (${files.length} file${files.length === 1 ? '' : 's'}, ${atoms.toLocaleString()} atoms${tests}).`,
+      return { text: `Welcome back. ${name} is where you left it (${files.length} file${files.length === 1 ? '' : 's'}, ${motion.fmtNum(atoms)} atoms${tests}).`,
         chips: [L('ask', 'Ask it a question', { run: focusBotComposer }), L('run_proof', 'Run the Proof Run', { action: { type: 'run_proof' } }), L('launch', `Launch · ${priceText()}`, { kind: 'primary', action: { type: 'show_launch' } })] };
     }
     case 'spec_edit': return { text: 'Saved. Your bot uses the new settings from the next answer.', chips: [L('reask', 'Ask it again', { run: focusBotComposer }), L('open_spec', 'Open bot spec', { action: { type: 'open_spec' } })] };
@@ -1000,9 +1349,18 @@ function fallbackFor(input, err) {
 }
 const pct = (x) => (x == null ? '?' : Math.round(Number(x) > 1 ? Number(x) : Number(x) * 100));
 
-/** A Builder message written locally (no server turn): typed like a turn, then cards + chips. */
-async function localSay(text, { chips = null, card = null, anchor = null } = {}) {
+/** A Builder message written locally (no server turn): typed like a turn, then cards + chips. It waits its turn in the
+ * Builder queue; `reply: true` (an answer to what the person just said) goes ahead of queued proactive lines. */
+function localSay(text, opts = {}) {
+  return new Promise((resolve) => {
+    sendTurn({ local: async () => { resolve(await sayNow(text, opts)); }, reply: !!opts.reply, at: Date.now() });
+  });
+}
+async function sayNow(text, { chips = null, card = null, anchor = null, reply = false, key = null } = {}) {
+  if (key && (restoredKeys.has(key) || messages.some((m) => m.key === key))) return null;   // said once per trial, reloads included
+  if (!reply && pendingDecision(null, { live: true })) chips = [];   // a status line: the open decision keeps the only live chips
   const rec = createAssistant({ typing: !motion.reduced() });
+  if (key) rec.key = key;
   await setAssistantText(rec, text, { animate: true });
   if (card) addCard(rec, card.type, card.data);
   if (anchor) rec.el.dataset.anchor = anchor;
@@ -1015,6 +1373,8 @@ async function localSay(text, { chips = null, card = null, anchor = null } = {})
 
 function dispatchAction(a, { fromClick = false } = {}) {
   const type = a?.type;
+  // the landing's short map band opens up inside the click that starts the build (an input: never a layout shift)
+  if (fromClick && (type === 'attach_samples' || type === 'request_upload')) document.documentElement.setAttribute('data-intent', '');
   switch (type) {
     case 'request_upload':
       emit('intake:open', {});
@@ -1022,6 +1382,8 @@ function dispatchAction(a, { fromClick = false } = {}) {
       else if (isMobile()) setTab('bot');
       break;
     case 'attach_samples':
+      // no trial can start yet (network rate limit): the replay is the sample demo meanwhile
+      if (trialLimited && !trialSettled) { localSay("Your own bot can't start on this network just yet, so here is the replay of the same sample build.", { reply: true, card: { type: 'replay-demo', data: {} }, chips: limitedChips().filter((c) => c.id === 'retry_now') }); break; }
       if (isMobile()) setTab('bot', { slide: true });
       attachSamples(a.set || 'lumen-bikes');
       break;
@@ -1048,10 +1410,25 @@ function dispatchAction(a, { fromClick = false } = {}) {
 }
 
 function launchOpen(source, extra = {}) {
-  whenReady(() => {
-    if (store.listenerCount('launch:open')) emit('launch:open', { source, ...extra });
-    else toast({ kind: 'warn', text: 'Launch is loading. Try again in a moment.' });
+  whenReady(async () => {
+    if (!store.listenerCount('launch:open')) { toast({ kind: 'warn', text: 'Launch is loading. Try again in a moment.' }); return; }
+    if (needsProofFirst(extra)) {
+      // Launch intent before any Proof Run: run the full 8 + 3 with its scorecard in view, so the receipt reports the
+      // Proof Run the Builder advertises (E's launch flow waits for proof:done while it runs).
+      emit('proof:run', { mini: false });
+      const t0 = Date.now();
+      while (getState().proof?.status !== 'running' && Date.now() - t0 < 2500) await sleep(60);
+    }
+    emit('launch:open', { source, ...extra });
   });
+}
+function needsProofFirst(extra = {}) {
+  const s = getState();
+  if (isLive() || s.milestones.proofRun || s.milestones.launchShown || ['running', 'done'].includes(s.proof?.status)) return false;
+  const files = s.fileOrder.map((id) => s.files[id]).filter((f) => f && f.phase !== 'rejected' && s.spec.sources?.[f.id] !== false);
+  if (!files.length || !files.some((f) => f.phase === 'ready') || files.some((f) => !['ready', 'failed'].includes(f.phase))) return false;
+  if (files.every((f) => f.sample) && !extra.force) return false;   // E shows "Make it yours" first; no run behind it
+  return true;
 }
 
 function focusBotComposer() {
@@ -1091,7 +1468,9 @@ function attachSamples(set) {
       const un2 = on('change:fileOrder', () => { if (hasSample()) { un(); un2(); resolve(); } });
       setTimeout(() => { un(); un2(); resolve(); }, 8000);
     });
-    if (store.listenerCount('samples:attach')) { emit('samples:attach', { set }); await waitFiles; }
+    // perf: the click's frame paints the chosen chip and the reply bubble; the intake rows start on the next frame
+    // (still inside the input window, so their arrival is not a layout shift)
+    if (store.listenerCount('samples:attach')) { await nextPaint(); emit('samples:attach', { set }); await waitFiles; }
     else {
       // ingest.js is missing: attach directly so the bot still gets its sample knowledge and identity
       try { await api.attachSamples(set); } catch (err) { toast({ kind: 'error', text: `Couldn't load the sample files: ${err.message}` }); }
@@ -1102,6 +1481,7 @@ function attachSamples(set) {
     let pendingDiff = [];
     try {
       const r = await api.getTrial();
+      await nextPaint();   // perf: the identity morph gets a frame of its own (not the one that built 4 intake rows)
       if (r?.spec) pendingDiff = applySpec(r.spec, { by: 'setup' });
       if (!pendingDiff.length) pendingDiff = diffRows(before, getState().spec);
     } catch { /* the setup turn may still carry the patch */ }
@@ -1211,8 +1591,8 @@ function updateVersionChip(pulse = false) {
   if (!chip) return;
   const s = getState();
   const show = (s.spec.version || 1) > 1 && (s.thread.length > 0 || !!s.milestones.firstCited);
-  chip.hidden = !show;
-  $('.st-version-n', chip).textContent = `v${s.spec.version || 1}`;
+  setHidden(chip, !show);
+  setText($('.st-version-n', chip), `v${s.spec.version || 1}`);
   if (show && pulse) motion.animate(chip, [{ transform: 'scale(.85)', opacity: .4 }, { transform: 'scale(1.06)', offset: .6 }, { transform: 'none', opacity: 1 }], { duration: 300, easing: 'spring' });
 }
 
@@ -1250,10 +1630,17 @@ function renderBotHeader() {
   // C's partial-readiness banner lives INSIDE the fixed-height bot header (same element, same id): it can come and go
   // without pushing the map, the intake or the thread (zero layout shift), and it never costs the thread a row.
   const bannerHost = h('div', { class: 'st-bothead-banner' });
-  if (slots.banner) bannerHost.append(slots.banner);
+  // Proof Run on the stage (r4, D6): while it runs, the banner area becomes a compact runner strip (one tick per probe,
+  // the current question, refusals in the shield colour) so the bot pane shows the run, not only the Builder card.
+  bannerHost.append(h('div', { class: 'st-prun', id: 'st-prun', hidden: true, role: 'status', 'aria-live': 'off' },
+    h('span', { class: 'st-prun-ico', 'aria-hidden': 'true', html: icon('shieldCheck', 13) }),
+    h('span', { class: 'st-prun-ticks', 'aria-hidden': 'true' }),
+    h('span', { class: 'st-prun-n st-mono' }),
+    h('span', { class: 'st-prun-q' })));
+  if (slots.banner) { bannerHost.append(slots.banner); new MutationObserver(() => { if (getState().ui.drawer) syncBannerTitle(); }).observe(slots.banner, { childList: true, subtree: true, characterData: true }); }
   el.append(h('div', { class: 'st-bothead', id: 'st-bothead' },
     h('span', { class: 'st-avatar st-avatar-lg', 'aria-hidden': 'true' }),
-    h('div', { class: 'st-bothead-id' }, h('span', { class: 'st-bothead-name' }), status),
+    h('div', { class: 'st-bothead-id' }, h('h2', { class: 'st-bothead-name' }), status),
     bannerHost,
     h('div', { class: 'st-bothead-right' }, ver, seg)));
   updateIdentity();
@@ -1261,11 +1648,59 @@ function renderBotHeader() {
   updateBotStatus();
 }
 
+let prunSig = '', prunHideT = 0;
+function paintProofStrip() {
+  const el = $('#st-prun'); if (!el) return;
+  const pr = getState().proof || {};
+  const rows = pr.rows || [];
+  const host = el.parentElement;
+  if (pr.status !== 'running' && pr.status !== 'done') { setHidden(el, true); host?.removeAttribute('data-proof'); return; }
+  if (!rows.length) return;
+  const sig = rows.map((r) => r.status[0]).join('') + pr.status;
+  if (sig === prunSig) return;
+  prunSig = sig;
+  clearTimeout(prunHideT);
+  setHidden(el, false);
+  host?.setAttribute('data-proof', pr.status);
+  const ticks = $('.st-prun-ticks', el);
+  if (ticks.childElementCount !== rows.length) { ticks.innerHTML = ''; for (const r of rows) ticks.append(h('i', { dataset: { expect: r.expect } })); }
+  rows.forEach((r, i) => {
+    const t = ticks.children[i];
+    const prev = t.dataset.s;
+    dset(t, 's', r.status);
+    if (prev !== r.status && (r.status === 'pass' || r.status === 'fail')) motion.animate(t, [{ transform: 'scale(.4)' }, { transform: 'scale(1.35)', offset: .55 }, { transform: 'none' }], { duration: 320, easing: 'spring', essential: false });
+  });
+  const done = rows.filter((r) => r.status === 'pass' || r.status === 'fail').length;
+  const passed = rows.filter((r) => r.status === 'pass').length;
+  setText($('.st-prun-n', el), pr.status === 'done' ? `${passed}/${rows.length} passed` : `${done}/${rows.length}`);
+  const cur = rows.find((r) => r.status === 'running');
+  const q = $('.st-prun-q', el);
+  if (pr.status === 'done') setText(q, passed === rows.length ? 'Proof Run passed' : 'Open the failed rows in the Builder');
+  else if (cur) {
+    const txt = `${cur.expect === 'refuse' ? 'Should refuse: ' : ''}${cur.q}`;
+    if (q.textContent !== txt) { q.textContent = txt; dset(q, 'expect', cur.expect); motion.animate(q, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out', essential: false }); }
+  }
+  if (pr.status === 'done') prunHideT = setTimeout(() => { prunSig = ''; setHidden(el, true); host?.removeAttribute('data-proof'); }, 5000);
+}
+on('change:proof', () => paintProofStrip());
+
+/** With the ProofDrawer docked the readiness banner shows its icon only; its words move to a tooltip (and stay in the
+ * accessibility tree). The bot name keeps priority. */
+function syncBannerTitle() {
+  const host = $('.st-bothead-banner', slots.botHeader);
+  if (!host) return;
+  const compact = !!getState().ui.drawer;
+  const t = (slots.banner?.textContent || '').replace(/\s+/g, ' ').trim();
+  if (compact && t) host.title = t; else host.removeAttribute('title');
+  // "Partial: 3 of 4 files ready · …" -> "3/4 ready" (no unlabeled icon row while the drawer is docked)
+  const m = /(\d+)\s+of\s+(\d+)\s+files?\s+ready/i.exec(t);
+  setAttr(host, 'data-compact', compact && m ? `${m[1]}/${m[2]} ready` : null);
+}
 function updateBotStatus() {
   const el = $('#st-botstatus'); if (!el) return;
   const live = !!getState().trial.converted;
-  el.dataset.state = live ? 'live' : 'draft';
-  $('span', el).textContent = live ? 'Live' : 'Draft';
+  dset(el, 'state', live ? 'live' : 'draft');
+  setText($('span', el), live ? 'Live' : 'Draft');
 }
 
 function setView(view, reason = 'toggle') {
@@ -1276,13 +1711,15 @@ function setView(view, reason = 'toggle') {
 on('view:set', (d) => { if (d && (d.view === 'proof' || d.view === 'bot')) setView(d.view, 'auto'); });
 
 let proofToastShown = false;
+const PROOF_TOAST_KEY = 'kb-studio:proof-toast';
+function proofToastSeen() { try { const v = localStorage.getItem(PROOF_TOAST_KEY); return !!v && (v === '1' || v === getState().trial.id); } catch { return false; } }
 function updateView() {
   const v = getState().ui.view;
-  slots.bot.dataset.view = v;
-  document.documentElement.dataset.view = v;
-  for (const b of $$('.st-seg-btn', slots.botHeader)) b.setAttribute('aria-pressed', String(b.dataset.view === v));
+  dset(slots.bot, 'view', v);
+  dset(document.documentElement, 'view', v);
+  for (const b of $$('.st-seg-btn', slots.botHeader)) setAttr(b, 'aria-pressed', String(b.dataset.view === v));
   const seg = $('.st-seg', slots.botHeader);
-  if (seg) seg.hidden = !(getState().thread.length > 0 || getState().milestones.firstCited);
+  if (seg) setHidden(seg, !(getState().thread.length > 0 || getState().milestones.firstCited));
 }
 
 // ------------------------------------------------------------------ mobile tabs, badges, peek bar
@@ -1357,9 +1794,17 @@ function showPeek(text) {
   p.hidden = false;
   motion.animate(p, [{ transform: 'translateY(100%)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: DUR2(), easing: 'out' });
   clearTimeout(peekTimer);
-  peekTimer = setTimeout(hidePeek, 9000);
+  peekTimer = setTimeout(hidePeek, 6000);
+  // r4 (D10): a glance, never a fixture. Any touch, scroll or wheel in the bot pane puts it away.
+  if (!peekWired && slots.bot) {
+    peekWired = true;
+    const away = () => { if (!$('#st-peek')?.hidden) hidePeek(); };
+    for (const ev of ['pointerdown', 'wheel', 'touchmove']) slots.bot.addEventListener(ev, away, { passive: true, capture: true });
+    slots.bot.addEventListener('scroll', away, { passive: true, capture: true });
+  }
 }
-function hidePeek() { const p = $('#st-peek'); if (p) p.hidden = true; }
+let peekWired = false;
+function hidePeek() { clearTimeout(peekTimer); const p = $('#st-peek'); if (p) p.hidden = true; }
 
 function applyKeyboardInset() {
   const vv = window.visualViewport;
@@ -1383,9 +1828,28 @@ function ensureOverlay() {
   slots.overlay.append(toastWrap);
 }
 
+/** Toasts sit top-centre over the bot pane, under its header (desktop), or above the tab bar (phones): never over the
+ * Builder's cards. While a drawer or sheet is open an info toast is not shown at all (the drawer is the focus). */
+function placeToasts() {
+  if (!toastWrap) return;
+  if (isMobile()) { toastWrap.style.left = ''; toastWrap.style.top = ''; toastWrap.style.width = ''; return; }
+  const r = slots.bot.getBoundingClientRect();
+  const head = $('#st-bothead')?.getBoundingClientRect();
+  toastWrap.style.left = `${Math.round(r.left + r.width / 2)}px`;
+  toastWrap.style.top = `${Math.round((head ? head.bottom : r.top + 56) + 10)}px`;
+  toastWrap.style.width = `${Math.round(Math.min(420, r.width - 32))}px`;
+}
+const overlayOpen = () => { const ui = getState().ui; return !!(ui.drawer || ui.sheet || specOpenRec || palette); };
 /** toast {kind:'info'|'warn'|'error', text, action?:{label, event, detail} | {label, run}} — errors never auto-dismiss. */
-function toast({ kind = 'info', text = '', action = null } = {}) {
+function toast({ kind = 'info', text = '', action = null, place = null } = {}) {
   ensureOverlay();
+  if (kind === 'info' && overlayOpen()) { announce(text); return () => {}; }
+  placeToasts();
+  // 'bottom' (desktop): above the bot composer, never over the map or the header
+  if (toastWrap && place === 'bottom' && !isMobile()) {
+    const c = ($('#sb-suggest-slot:not(:empty)') || $('#sb-composer-slot'))?.getBoundingClientRect();
+    if (c && c.top > 200) toastWrap.style.top = `${Math.round(c.top - 58)}px`;
+  }
   const t = h('div', { class: `st-toast st-toast-${kind}`, role: kind === 'error' ? 'alert' : 'status' },
     h('span', { class: 'st-toast-ico', html: icon(kind === 'error' ? 'warn' : kind === 'warn' ? 'info' : 'checkCircle', 16) }),
     h('span', { class: 'st-toast-text' }, text));
@@ -1397,7 +1861,8 @@ function toast({ kind = 'info', text = '', action = null } = {}) {
   motion.animate(t, [{ opacity: 0, transform: 'translateY(8px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: DUR2(), easing: 'out' });
   let gone = false;
   function dismiss() { if (gone) return; gone = true; motion.animate(t, [{ opacity: 1 }, { opacity: 0, transform: 'translateY(4px)' }], { duration: 160, fill: 'forwards' }).finished.then(() => t.remove()); }
-  if (kind !== 'error') setTimeout(dismiss, kind === 'warn' ? 6500 : 4200);
+  t.dismiss = dismiss;
+  if (kind !== 'error') setTimeout(dismiss, kind === 'warn' ? 6500 : 4000);
   if (kind === 'error') announce(text, 'assert');
   return dismiss;
 }
@@ -1619,7 +2084,7 @@ function syncSpecForm(specOverride) {
       src.append(h('div', { class: 'st-src' },
         h('input', { type: 'checkbox', id, class: 'st-check', checked: on ? true : null, dataset: { fileId: f.id } }),
         h('label', { for: id, style: { '--hue': `var(--f${(f.hue ?? 0) % 8})` } }, h('span', { class: 'st-src-ico', html: fileIcon(f.kind, 16) }),
-          h('span', { class: 'st-src-name' }, f.name), h('span', { class: 'st-src-meta st-mono' }, `${(f.atoms || 0).toLocaleString()} atoms`), f.sample ? h('span', { class: 'st-tag' }, 'Sample') : null)));
+          h('span', { class: 'st-src-name' }, f.name), h('span', { class: 'st-src-meta st-mono' }, `${motion.fmtNum(f.atoms || 0)} atoms`), f.sample ? h('span', { class: 'st-tag' }, 'Sample') : null)));
     }
   }
 }
@@ -1657,7 +2122,66 @@ function flushSpec() {
   if (Object.keys(p).length) updateSpec(p, { by: 'user', source: 'drawer' });
 }
 
+// ------------------------------------------------------------------ suggestion row scroller (desktop)
+
+/** #sb-suggest-slot is B's slot; C's row (.sb-sugg) scrolls sideways. On desktop a chevron appears on an edge only
+ * while there is more past it (C's fade mask is scroll-aware too), so the last chip is never silently clipped. */
+function wireSuggestScroller() {
+  const slot = slots.suggest; if (!slot) return;
+  const mk = (dir) => h('button', { type: 'button', class: 'st-sugg-more', dataset: { dir }, hidden: true, tabindex: '-1',
+    'aria-label': dir === 'r' ? 'More suggested questions' : 'Previous suggested questions', title: dir === 'r' ? 'More' : 'Back', html: icon('chevronRight', 16),
+    onclick: () => { const r = $('.sb-sugg', slot); if (r) r.scrollBy({ left: (dir === 'r' ? 1 : -1) * Math.max(120, r.clientWidth * 0.7), behavior: motion.reduced() ? 'auto' : 'smooth' }); } });
+  const L = mk('l'), R = mk('r');
+  let row = null, raf = 0;
+  const sync = () => {
+    raf = 0;
+    const has = !!(row && row.isConnected) && !isMobile();
+    setHidden(L, !has || row.scrollLeft <= 2);
+    setHidden(R, !has || row.scrollLeft + row.clientWidth >= row.scrollWidth - 2);
+  };
+  const later = () => { if (!raf) raf = requestAnimationFrame(sync); };
+  const attach = () => {
+    const r = $('.sb-sugg', slot);
+    if (!r) { if (L.isConnected) { L.remove(); R.remove(); } row = null; return; }
+    if (r !== row) { row = r; row.addEventListener('scroll', later, { passive: true }); }
+    if (!L.isConnected) slot.append(L, R);
+    later();
+  };
+  new MutationObserver((recs) => {
+    if (recs.every((rc) => [...rc.addedNodes, ...rc.removedNodes].every((n) => n === L || n === R))) return;
+    attach();
+  }).observe(slot, { childList: true, subtree: true });
+  if (typeof ResizeObserver === 'function') new ResizeObserver(later).observe(slot);
+  attach();
+}
+
 // ------------------------------------------------------------------ command palette (Cmd/Ctrl+K)
+
+const PALETTE_TURNS = new Set(['launch', 'proof', 'samples']);
+/** After a palette command: the next Builder turn (a card or chips) takes focus, unless the person already moved it. */
+function focusNextBuilderTurn(timeout = 12000) {
+  const before = new Set(messages);
+  const t0 = Date.now();
+  const tick = () => {
+    const ae = document.activeElement;
+    if (ae && ae !== logEl && ae !== document.body && !(ae.closest && ae.closest('.st-msg'))) return;   // moved elsewhere
+    const rec = [...messages].reverse().find((m) => m.role === 'assistant' && !before.has(m) && m.el.isConnected && (m.cards.length || (m.chips && m.chips.length)));
+    if (rec) {
+      if (ae && rec.el.contains(ae)) return;   // the card's owner already focused something inside it
+      const head = $('.st-card-holder [tabindex="-1"], .st-card-holder h2, .st-card-holder h3, .st-card-holder .st-card-head', rec.el);
+      const target = head || $('.st-chip', rec.chipsEl);
+      if (target) {
+        if (head && !head.hasAttribute('tabindex')) head.setAttribute('tabindex', '-1');
+        target.focus({ preventScroll: true });
+        target.scrollIntoView({ behavior: motion.reduced() ? 'auto' : 'smooth', block: 'nearest' });
+        announce(`Builder: ${plain(rec.text).split(/(?<=[.!?])\s/)[0] || 'new card'}`);
+      }
+      return;
+    }
+    if (Date.now() - t0 < timeout && !overlayOpen()) setTimeout(tick, 250);
+  };
+  setTimeout(tick, 400);
+}
 
 let palette = null;
 function paletteCommands() {
@@ -1708,7 +2232,13 @@ function openPalette() {
     if (items[active]) input.setAttribute('aria-activedescendant', `st-pal-${items[active].id}`); else input.removeAttribute('aria-activedescendant');
     $(`#st-pal-${items[active]?.id}`, list)?.scrollIntoView({ block: 'nearest' });
   };
-  const run = (c) => { closeDialog(palette.rec); setTimeout(() => c.run(), 0); };
+  const run = (c) => {
+    const turn = PALETTE_TURNS.has(c.id);
+    if (turn) palette.rec.invoker = null;   // focus follows the command into the Builder, not back to the old spot
+    closeDialog(palette.rec);
+    if (turn) { if (isMobile()) setTab('setup'); logEl?.focus({ preventScroll: true }); focusNextBuilderTurn(); }
+    setTimeout(() => c.run(), 0);
+  };
   input.addEventListener('input', () => { active = 0; render(); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % Math.max(1, items.length); paint(); }
@@ -1748,6 +2278,9 @@ store.registerCard('config-diff', (data, el) => {
     const fixed = key.toLowerCase() === 'refusal';
     const pre = (v) => (v == null || v === '' ? '—' : String(v).replace(/\s*🔒\s*/gu, '').trim() || '—');
     const fromTxt = raw ? fmtValue(key, r.from) : pre(r.from), toTxt = fixed ? 'fixed' : raw ? fmtValue(key, r.to) : pre(r.to);
+    // a row that changes nothing ("Friendly → Friendly") is noise: only real changes are shown
+    const norm = (v) => String(v).toLowerCase().replace(/[\u2713\u2714\u2705✓✔]/gu, '').replace(/[^\p{L}\p{N}%.]+/gu, ' ').trim();
+    if (!fixed && norm(fromTxt) === norm(toTxt)) return;
     const toEl = h('span', { class: 'st-diff-to' });
     const row = h('div', { class: 'st-diff-row' + (fixed ? ' is-fixed' : '') },
       h('dt', null, FIELD_LABEL[key] || key),
@@ -1760,6 +2293,7 @@ store.registerCard('config-diff', (data, el) => {
     anims.push({ row, toEl, toTxt, fixed });
   });
   card.append(list);
+  if (!anims.some((a) => !a.fixed)) { el.hidden = true; return; }   // nothing actually changed: no card
   el.append(card);
   // choreography: strike the old value (200 ms), type the new one (18 ms/char, ≤500 ms), glow once (600 ms)
   (async () => {
@@ -1772,6 +2306,70 @@ store.registerCard('config-diff', (data, el) => {
       setTimeout(() => a.row.classList.remove('is-glow'), 650);
     }
   })();
+});
+
+// ---- the 30 s replay (no trial needed): a scripted, self-contained rerun of the sample build, inside the Builder.
+const REPLAY_FILES = [
+  { name: 'warranty.pdf', kind: 'pdf', atoms: 112, hue: 0 }, { name: 'service-plans.docx', kind: 'docx', atoms: 96, hue: 1 },
+  { name: 'store-faq.md', kind: 'md', atoms: 141, hue: 2 }, { name: 'price-list-2026.xlsx', kind: 'xlsx', atoms: 62, hue: 3 },
+];
+store.registerCard('replay-demo', (data, el) => {
+  let dead = false;
+  const timers = [];
+  const wait = (ms) => new Promise((r) => { if (motion.reduced()) { r(); return; } timers.push(setTimeout(r, ms)); });
+  const rows = REPLAY_FILES.map((f) => {
+    const bar = h('i', { class: 'st-rp-fill' });
+    const stage = h('span', { class: 'st-rp-stage' }, 'Queued');
+    const atoms = h('span', { class: 'st-rp-atoms st-mono', dataset: { value: '0' } }, '0');
+    const li = h('li', { class: 'st-rp-row', style: { '--hue': `var(--f${f.hue})` } },
+      h('span', { class: 'st-rp-ico', html: icons.fileIcon ? fileIcon(f.kind, 15) : '' }),
+      h('span', { class: 'st-rp-name' }, f.name), stage, h('span', { class: 'st-rp-bar', 'aria-hidden': 'true' }, bar), atoms, h('span', { class: 'st-rp-unit' }, 'atoms'));
+    return { f, li, bar, stage, atoms };
+  });
+  const status = h('p', { class: 'st-rp-status', role: 'status' }, 'Reading 4 files…');
+  const qa = h('div', { class: 'st-rp-qa' });
+  const replayBtn = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm', hidden: true, onclick: () => run() }, h('span', { html: icon('refresh', 14) }), h('span', null, 'Replay'));
+  const card = h('div', { class: 'st-card st-replay' },
+    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('play', 14) }), h('span', null, 'Replay of a real build'), h('span', { class: 'st-rp-tag st-mono' }, 'Lumen Bikes · sample'), replayBtn),
+    h('ol', { class: 'st-rp-rows', 'aria-label': 'Sample files' }, rows.map((r) => r.li)), status, qa);
+  el.append(card);
+  const STAGES = ['Reading', 'Chunking', 'Atomizing', 'Ready'];
+  async function file(r, i) {
+    await wait(i * 700);
+    for (let k = 0; k < STAGES.length && !dead; k++) {
+      r.stage.textContent = STAGES[k];
+      r.li.dataset.stage = STAGES[k].toLowerCase();
+      motion.animate(r.bar, [{ transform: `scaleX(${k / 4})` }, { transform: `scaleX(${(k + 1) / 4})` }], { duration: 900, easing: 'out', fill: 'forwards' });
+      if (k === 2) motion.ticker(r.atoms, r.f.atoms, { ms: 1100 });
+      if (motion.reduced()) { r.bar.style.transform = `scaleX(${(k + 1) / 4})`; r.atoms.textContent = String(r.f.atoms); }
+      await wait(1100);
+    }
+  }
+  const line = (q, a, src, kind) => h('div', { class: `st-rp-turn is-${kind}` },
+    h('p', { class: 'st-rp-q' }, h('span', { class: 'st-rp-k' }, 'Q'), q),
+    h('p', { class: 'st-rp-a' }, h('span', { class: 'st-rp-k' }, kind === 'refusal' ? h('span', { html: icon('shield', 12) }) : 'A'), h('span', { class: 'st-rp-text' }, a), kind === 'cited' ? h('b', { class: 'st-rp-cite', title: 'The receipt: the exact line in warranty.pdf' }, '1') : null),
+    h('p', { class: 'st-rp-src st-mono' }, src));
+  async function run() {
+    replayBtn.hidden = true; qa.innerHTML = '';
+    for (const r of rows) { r.stage.textContent = 'Queued'; r.li.dataset.stage = ''; r.bar.getAnimations?.().forEach((a) => a.cancel()); r.bar.style.transform = 'scaleX(0)'; r.atoms.dataset.value = '0'; r.atoms.textContent = '0'; }
+    status.textContent = 'Reading 4 files…';
+    await Promise.all(rows.map(file));
+    if (dead) return;
+    const total = REPLAY_FILES.reduce((a, f) => a + f.atoms, 0);
+    status.textContent = `4 files ready: ${motion.fmtNum(total)} atoms the bot can quote. Asking it two questions…`;
+    await wait(1400); if (dead) return;
+    const t1 = line('How long is the frame warranty?', 'Frames carry a lifetime warranty for the original owner.', 'warranty.pdf · §2 · match 86', 'cited');
+    qa.append(t1); motion.animate(t1, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 380, easing: 'out' });
+    await wait(4200); if (dead) return;
+    const t2 = line("What's the weather in Paris today?", NOT_IN_DATA, 'best match 41 · below the 70 floor · refused, nothing invented', 'refusal');
+    qa.append(t2); motion.animate(t2, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 380, easing: 'out' });
+    await wait(3600); if (dead) return;
+    status.textContent = 'That is the whole loop: your files in, cited answers out, honest refusals. Your own bot starts the moment the limit resets.';
+    replayBtn.hidden = false;
+    announce('Replay finished. One cited answer and one refusal.');
+  }
+  run();
+  return { update() {}, destroy() { dead = true; timers.forEach(clearTimeout); el.innerHTML = ''; } };
 });
 
 store.registerCard('email-capture', (data, el) => {
@@ -1822,31 +2420,80 @@ store.registerCard('expired', (data, el) => {
 });
 
 store.registerCard('insights', (data, el) => {
-  const top = (data.top || []).slice(0, 5); const gaps = (data.gaps || []).slice(0, 3);
-  const max = Math.max(1, ...top.map((t) => t.count || 1));
+  // SPEC 11.1. Most asked = questions the bot answered; Gaps = questions it refused (shield + the word "refused", never
+  // colour alone). update(data) re-renders in place: rows are keyed by question and FLIP to their new rank.
+  const metaEl = h('span', { class: 'st-card-meta st-mono' });
+  const topCol = h('section', { class: 'st-ins-col', 'aria-label': 'Most asked' }, h('h3', null, 'Most asked'));
+  const gapCol = h('section', { class: 'st-ins-col st-ins-gaps', 'aria-label': 'Gaps, refused questions' }, h('h3', null, h('span', { html: icon('shield', 13) }), ' Gaps · refused'));
+  const topList = h('ol', { class: 'st-ins-list' }); const gapList = h('ol', { class: 'st-ins-list' });
+  const topEmpty = h('p', { class: 'st-field-hint' }, 'No answered questions yet.');
+  const gapEmpty = h('p', { class: 'st-field-hint' }, 'No gaps: every question so far was answered from your files.');
+  topCol.append(topList, topEmpty); gapCol.append(gapList, gapEmpty);
   const card = h('div', { class: 'st-card st-insights' },
-    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('trending', 14) }), h('span', null, 'What people ask'),
-      h('span', { class: 'st-card-meta st-mono' }, `${data.total ?? top.reduce((a, t) => a + (t.count || 1), 0)} asked · ${data.answered ?? '?'} answered · ${data.refused ?? '?'} refused`)),
-    h('div', { class: 'st-ins-grid' },
-      h('section', { class: 'st-ins-col', 'aria-label': 'Most asked' }, h('h3', null, 'Most asked'),
-        top.length ? h('ol', { class: 'st-ins-list' }, top.map((t) => h('li', { class: 'st-ins-row', dataset: { outcome: t.outcome || 'answered' } },
-          h('span', { class: 'st-ins-q' }, t.q),
-          h('span', { class: 'st-ins-bar', 'aria-hidden': 'true' }, h('i', { style: { transform: `scaleX(${(t.count || 1) / max})` } })),
-          h('span', { class: 'st-ins-n st-mono' }, `×${t.count || 1}`)))) : h('p', { class: 'st-field-hint' }, 'No questions yet.')),
-      h('section', { class: 'st-ins-col st-ins-gaps', 'aria-label': 'Gaps' }, h('h3', null, h('span', { html: icon('shield', 13) }), ' Gaps (refused)'),
-        gaps.length ? h('ol', { class: 'st-ins-list' }, gaps.map((g) => h('li', { class: 'st-ins-row' }, h('span', { class: 'st-ins-q' }, g.q), h('span', { class: 'st-ins-n st-mono' }, `×${g.count || 1}`))))
-          : h('p', { class: 'st-field-hint' }, 'No gaps: every question so far was answered from your files.'))),
+    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('trending', 14) }), h('span', null, 'What people ask'), metaEl),
+    h('div', { class: 'st-ins-grid' }, topCol, gapCol),
     h('p', { class: 'st-card-foot' }, h('span', { html: icon('lock', 12) }), ' Every question is logged to your question insights. Logged questions are never used as sources.'));
   el.append(card);
-  motion.stagger($$('.st-ins-bar i', card), [{ transform: 'scaleX(0)' }, {}], { duration: motion.DUR[3], easing: 'out', essential: false }, 60);
+  const rowsByKey = new Map();
+  const row = (kind, t, max) => {
+    const key = `${kind}:${normQ(t.q)}`;
+    let li = rowsByKey.get(key);
+    if (!li) {
+      li = kind === 'top'
+        ? h('li', { class: 'st-ins-row', dataset: { outcome: 'answered' } }, h('span', { class: 'st-ins-q' }), h('span', { class: 'st-ins-bar', 'aria-hidden': 'true' }, h('i')), h('span', { class: 'st-ins-n st-mono' }))
+        : h('li', { class: 'st-ins-row', dataset: { outcome: 'refused' } }, h('span', { class: 'st-ins-q' }),
+          h('span', { class: 'st-ins-tag' }, h('span', { html: icon('shield', 11), 'aria-hidden': 'true' }), 'refused'), h('span', { class: 'st-ins-n st-mono' }));
+      li.dataset.key = key; li.dataset.new = '1';
+      rowsByKey.set(key, li);
+    }
+    const n = t.count || 1;
+    setText($('.st-ins-q', li), t.q); $('.st-ins-q', li).title = t.q;
+    setText($('.st-ins-n', li), `×${n}`);
+    setAttr($('.st-ins-n', li), 'aria-label', `asked ${n} time${n === 1 ? '' : 's'}`);
+    const bar = $('.st-ins-bar i', li);
+    if (bar) bar.style.transform = `scaleX(${n / max})`;
+    return li;
+  };
+  const render = (d, animateIn) => {
+    const answered = (d.top || []).filter((t) => t && t.outcome !== 'refused').slice(0, 5);
+    const gaps = (d.gaps || []).slice(0, 3);
+    const max = Math.max(1, ...answered.map((t) => t.count || 1));
+    metaEl.textContent = `${d.total ?? 0} asked · ${d.answered ?? 0} answered · ${d.refused ?? 0} refused`;
+    if (d.learning) metaEl.append(h('span', { class: 'st-ins-ex' }, ` (${d.learning} while ${d.learning === 1 ? 'its file was' : 'their files were'} learning)`));
+    if (d.excluded) metaEl.append(h('span', { class: 'st-ins-ex' }, ` · ${d.excluded} setup probe${d.excluded === 1 ? '' : 's'} not counted`));
+    const topEls = answered.map((t) => row('top', t, max));
+    const gapEls = gaps.map((g) => row('gap', g, 1));
+    const keep = new Set([...topEls, ...gapEls]);
+    for (const [k, li] of rowsByKey) if (!keep.has(li)) { li.remove(); rowsByKey.delete(k); }
+    topList.replaceChildren(...topEls); gapList.replaceChildren(...gapEls);
+    topList.hidden = !topEls.length; topEmpty.hidden = !!topEls.length;
+    gapList.hidden = !gapEls.length; gapEmpty.hidden = !!gapEls.length;
+    const fresh = [...keep].filter((li) => li.dataset.new); fresh.forEach((li) => delete li.dataset.new);
+    if (animateIn) motion.stagger($$('.st-ins-bar i', card), [{ transform: 'scaleX(0)' }, {}], { duration: motion.DUR[3], easing: 'out', essential: false }, 60);
+    return fresh;
+  };
+  render(data, true);
+  return {
+    update(d) {
+      let fresh = [];
+      motion.flip(() => $$('.st-ins-row', card), () => { fresh = render(d, false); }, { duration: motion.DUR[3] });
+      for (const li of fresh) motion.animate(li, [{ backgroundColor: 'var(--accent-soft)' }, { backgroundColor: 'transparent' }], { duration: 1200, essential: false });
+    },
+  };
 });
 
 let emailOffered = false;
+/** Lead capture never follows the paywall: once a Launch card is on the table, its checkout email field covers it. */
+function launchOnTable() {
+  const m = getState().milestones;
+  return !!(m.launchShown || isLive() || messages.some((x) => x.decision === 'launch' || (x.cards || []).some((c) => c.type === 'launch' && c.data?.variant !== 'make-it-yours')));
+}
 function offerEmail() {
-  if (emailOffered || getState().milestones.emailOffered) return;
+  if (emailOffered || getState().milestones.emailOffered || launchOnTable()) return;
   emailOffered = true;
   mark('emailOffered');
-  localSay("Want a link to this bot so you don't lose it? It's saved for 7 days.", { card: { type: 'email-capture', data: {} }, chips: [] });
+  // checked again when its turn comes: a Launch card posted while this line waited in the queue wins
+  sendTurn({ local: async () => { if (launchOnTable()) return; await sayNow("Want a link to this bot so you don't lose it? It's saved for 7 days.", { card: { type: 'email-capture', data: {} }, chips: [] }); }, at: Date.now() });
 }
 
 async function copyText(text, btn) {
@@ -1862,39 +2509,106 @@ async function copyText(text, btn) {
 // ------------------------------------------------------------------ question insights (SPEC 11.1)
 
 let askedCount = 0, insightsShown = 0;
+let insightsRec = null, insightsTimer = 0, followupsPending = 0;
+/** Setup traffic is not "asking": the off-topic probe, Builder-asked questions and guard refusals. */
+function isProbeAsk(a, fin) {
+  const q = fin?.question || a?.question || '';
+  return !q || (a && a.by === 'setup') || fin?.status === 'guard' || PROBE_RE.test(q) || isProbeSuggestion(q);
+}
+/** A Builder follow-up to an answer (gap, close miss, still learning, refusal turn). The insights card waits for all of
+ * them, so it never speaks about a gap before the line that flags it. */
+function followup(fn, ms) {
+  followupsPending++;
+  setTimeout(async () => { try { await fn(); } catch (err) { console.error(err); } finally { followupsPending = Math.max(0, followupsPending - 1); } }, ms);
+}
 function localInsights() {
   const thread = getState().thread.filter((a) => a && a.by !== 'proof' && a.final);
-  const norm = (q) => String(q || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
   const groups = new Map();
   for (const a of thread) {
-    const k = norm(a.question); if (!k) continue;
+    const k = normQ(a.question); if (!k) continue;
     const g = groups.get(k) || { q: a.question, count: 0, lastAt: 0, outcome: 'answered' };
     g.count++; g.lastAt = Math.max(g.lastAt, a.startedAt || Date.now());
     g.outcome = a.final.refused || a.status === 'refused' || a.status === 'guard' ? 'refused' : 'answered';
     groups.set(k, g);
   }
-  const all = [...groups.values()].sort((a, b) => b.count - a.count || b.lastAt - a.lastAt);
+  const all = [...groups.values()];
   const refused = thread.filter((a) => a.final.refused).length;
-  return { total: thread.length, answered: thread.length - refused, refused, top: all.slice(0, 5), gaps: all.filter((g) => g.outcome === 'refused').slice(0, 3) };
+  return { total: thread.length, answered: thread.length - refused, refused, top: all, gaps: all.filter((g) => g.outcome === 'refused') };
+}
+/** The server log is written in debounced batches, so it can lag this session by a question or two: merge it with the
+ * thread (max count per question; the thread decides the latest outcome). */
+function mergeInsights(server, local) {
+  if (!server || !Array.isArray(server.top)) return local;
+  const by = new Map();
+  const put = (t, src) => {
+    if (!t || !t.q) return;
+    const k = normQ(t.q); const cur = by.get(k);
+    if (!cur) { by.set(k, { ...t }); return; }
+    cur.count = Math.max(cur.count || 1, t.count || 1);
+    cur.lastAt = Math.max(Date.parse(cur.lastAt) || +cur.lastAt || 0, Date.parse(t.lastAt) || +t.lastAt || 0);
+    if (src === 'local') cur.outcome = t.outcome;
+  };
+  for (const t of server.top || []) put(t, 'server');
+  for (const g of server.gaps || []) put({ ...g, outcome: 'refused' }, 'server');
+  for (const t of local.top || []) put(t, 'local');
+  const all = [...by.values()];
+  return { ...server, total: Math.max(Number(server.total) || 0, local.total), top: all, gaps: all.filter((g) => g.outcome === 'refused') };
+}
+/** Probes (the off-topic test, Builder-asked and guard questions) are setup traffic: excluded from the card's lists and
+ * its counts alike, and the card says how many were left out. Ties rank answered questions first, then the newest. */
+function cleanInsights(raw) {
+  const thread = getState().thread.filter((a) => a && a.final && a.by !== 'proof');
+  const isProbe = (q) => !!q && (PROBE_RE.test(q) || isProbeSuggestion(q) || thread.some((a) => normQ(a.question) === normQ(q) && (a.by === 'setup' || a.final.status === 'guard')));
+  const probes = thread.filter((a) => isProbe(a.question));
+  const answeredQs = new Set(thread.filter((a) => a.final.status === 'grounded').map((a) => normQ(a.question)));
+  const rank = (a, b) => (b.count || 1) - (a.count || 1) || (Date.parse(b.lastAt) || +b.lastAt || 0) - (Date.parse(a.lastAt) || +a.lastAt || 0);
+  const all = (raw.top || []).filter((t) => t && t.q && !isProbe(t.q)).sort(rank);
+  // a gap is a question nothing in the files answers: not a probe, not answered at another time, not "still learning"
+  const gaps = (raw.gaps || []).filter((g) => g && g.q && !isProbe(g.q) && !answeredQs.has(normQ(g.q)) && !learningQs.has(normQ(g.q))).sort(rank);
+  const top = all.filter((t) => t.outcome !== 'refused' || answeredQs.has(normQ(t.q))).map((t) => ({ ...t, outcome: 'answered' }));
+  const sum = (list) => list.reduce((n, t) => n + (t.count || 1), 0);
+  const total = Math.max(sum(all), (Number(raw.total) || 0) - probes.length, 0);
+  const learning = thread.filter((a) => a.final.refused && learningQs.has(normQ(a.question))).length;
+  const refused = Math.min(total, sum(gaps) + learning);
+  return { ...raw, top, gaps, total, refused, answered: Math.max(0, total - refused), excluded: probes.length, learning };
+}
+function insightsText(data, gap) {
+  const n = data.total;
+  const lead = `You've asked ${n} question${n === 1 ? '' : 's'}.`;
+  if (gap) return `${lead} Your bot couldn't answer "${gap.q}" Add a file that covers it and it answers next time.`.replace(/([^?.!])" Add/, '$1." Add');
+  return `${lead} Every one came from your files. After launch, this card is what your visitors ask.`;
+}
+/** Called after each final answer (debounced). First time at >= 3 real asks: posts the card. Later: refreshes it. */
+function queueInsights(ms = 2200) {
+  clearTimeout(insightsTimer);
+  insightsTimer = setTimeout(maybeInsights, ms);
 }
 async function maybeInsights() {
-  if (askedCount < 3 || insightsShown >= 1) return;
+  insightsTimer = 0;
+  if (askedCount < 3) return;
+  // never ahead of a Builder line still being written (a gap / close-miss follow-up or a server turn)
+  if (followupsPending || turnBusy || turnQueue.length) { queueInsights(700); return; }
+  let server = null;
+  try { server = await api.insights(); } catch { server = null; }
+  const data = cleanInsights(mergeInsights(server, localInsights()));
+  const gap = data.gaps[0] || null;
+  const live = insightsRec && insightsRec.el.isConnected ? cardInstances.get('insights') : null;
+  if (live && live.inst?.update && insightsShown) {
+    live.data = data;
+    live.inst.update(data);
+    const text = insightsText(data, gap);
+    if (text !== insightsRec.text) applyWhenSafe(insightsRec, () => { insightsRec.text = text; insightsRec.textEl.innerHTML = md(text); insightsRec.srEl.textContent = plain(text); saveLog(); });
+    announce(`Question insights updated: ${data.total} asked, ${data.refused} refused.`);
+    return;
+  }
+  if (insightsShown) return;   // the card was cleared (new bot): it comes back after 3 new asks
   insightsShown++;
-  let data = null;
-  try { data = await api.insights(); } catch { data = null; }
-  if (!data || !Array.isArray(data.top) || !data.top.length) data = localInsights();
-  // a gap is a question nothing in the files answers: skip the probes, and questions that were answered at another
-  // time (e.g. refused only while a file was switched off)
-  const normQ = (q) => String(q || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-  const answeredQs = new Set(getState().thread.filter((a) => a && a.final && a.status === 'grounded').map((a) => normQ(a.question)));
-  const gap = (data.gaps || []).find((g) => g.q && !/weather|capital of australia|joke|world cup|home address/i.test(g.q) && !answeredQs.has(normQ(g.q))) || null;
-  const text = gap
-    ? `You've asked ${data.total} questions. Your bot couldn't answer "${gap.q}". Add a file that covers it and it will next time.`
-    : `You've asked ${data.total} questions. Here's what your question log shows; after launch this is what your visitors ask.`;
-  localSay(text, { card: { type: 'insights', data }, chips: [
-    gap ? { id: 'add_gap', label: 'Add a file that covers it', kind: 'primary', action: { type: 'request_upload' }, local: true } : { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true },
+  if (gap) noteGap(gap.q, null, 'insights');
+  insightsRec = await localSay(insightsText(data, gap), { card: { type: 'insights', data }, chips: [
+    gap ? { id: 'add_gap', label: 'Add a file', kind: 'primary', action: { type: 'request_upload' }, local: true } : { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true },
     { id: 'launch', label: `Launch · ${priceText()}`, action: { type: 'show_launch' }, local: true },
   ] });
+  if (gap) noteGap(gap.q, insightsRec, 'insights');
 }
 
 // ------------------------------------------------------------------ proactive Builder events (deduped)
@@ -1933,7 +2647,7 @@ function queueReady(file) {
 }
 function scheduleLearning(ms = 250) { clearTimeout(learnTimer); learnTimer = setTimeout(renderLearning, ms); }
 function isLatestAssistant(rec) { return [...messages].reverse().find((m) => m.role === 'assistant') === rec; }
-const atomsTxt = (n) => `${Number(n || 0).toLocaleString()} atom${n === 1 ? '' : 's'}`;
+const atomsTxt = (n) => `${motion.fmtNum(Number(n || 0))} atom${n === 1 ? '' : 's'}`;
 function learningCopy() {
   const s = getState(); const m = s.milestones;
   const all = s.fileOrder.map((id) => s.files[id]).filter((f) => f && f.phase !== 'rejected');
@@ -1970,24 +2684,44 @@ function firstStarterChip() {
   if (q && typeof q !== 'string') q = q.q;
   if (!q) for (const list of summaryStarters.values()) { if (list[0]) { q = list[0]; break; } }
   if (!q && s.fileOrder.some((id) => s.files[id]?.sample)) q = 'How long is the frame warranty?';
-  if (!q) return [];
+  if (!q || askedSet().has(normQ(q))) return [];
   return [{ id: 'ask_starter', label: `Ask: "${q.length > 40 ? q.slice(0, 39) + '…' : q}"`, kind: 'primary', action: { type: 'ask_samplebot', question: q }, local: true }];
 }
+let learnQueued = null;   // summaries that arrived while the new Learning message waits its turn in the Builder queue
 async function renderLearning(summaryData = null) {
-  const { text, done, ready } = learningCopy();
+  if ((!learn || learn.complete) && narrationQuiet()) return;   // no new progress turn during Activating / Live
   if (!learn || learn.complete) {
-    if (!ready.length && !summaryData) return;          // nothing to say yet
+    if (!learningCopy().ready.length && !summaryData) return;          // nothing to say yet
+    if (learnQueued) { if (summaryData) learnQueued.push(summaryData); return; }
+    learnQueued = summaryData ? [summaryData] : [];
+    // queued like every Builder line, so it lands in event order (never after a later answer's turn)
+    sendTurn({ local: async () => { const q = learnQueued || []; learnQueued = null; await createLearning(q); }, at: Date.now() });
+    return;
+  }
+  return updateLearning(summaryData);
+}
+async function createLearning(summaries) {
+  if (learn && !learn.complete) { for (const d of summaries) mergeLearning(d); return updateLearning(null); }
+  const { text, done, ready } = learningCopy();
+  if (!ready.length && !summaries.length) return;
+  const summaryData = summaries[0] || null;
+  {
     const rec = createAssistant({ typing: !motion.reduced() });
     const L = learn = { rec, holder: null, inst: null, files: new Map(), complete: false, text: '', typing: true, dirty: false };
     if (getState().milestones.firstReady) rec.el.dataset.anchor = 'learn';
     L.text = text;
-    if (summaryData) mergeLearning(summaryData);
+    if (summaryData) for (const d of summaries) mergeLearning(d);
     await setAssistantText(rec, text, { animate: true });
     L.typing = false;
     setChips(rec, learningChips(done));
     afterAssistant(rec, { event: { type: 'file_ready' } });
-    if (L.dirty && learn === L) { L.dirty = false; return renderLearning(); }
-  } else {
+    if (L.dirty && learn === L) { L.dirty = false; return updateLearning(null); }
+    if (done) { L.complete = true; announce(plain(text)); }
+  }
+}
+async function updateLearning(summaryData) {
+  const { text, done } = learningCopy();
+  {
     const rec = learn.rec;
     if (summaryData) mergeLearning(summaryData);
     if (learn.typing) { learn.dirty = true; return; }
@@ -2016,6 +2750,7 @@ function mergeLearning(data) {
       L.rec.cards = L.rec.cards.filter((c) => c.type !== 'file-summary');
       L.holder = addCard(L.rec, 'file-summary', data);
       L.inst = cardInstances.get('file-summary')?.inst || null;
+      queueAskedMarks();
     });
     if (L.holder === true) L.rec.cards.push({ type: 'file-summary', data: cardData });
   } else if (learn.holder === true) {
@@ -2025,7 +2760,7 @@ function mergeLearning(data) {
     const entry = learn.rec.cards.find((c) => c.type === 'file-summary');
     if (entry) entry.data = cardData;
     const L = learn;
-    applyWhenSafe(L.rec, () => { if (L.inst?.update) L.inst.update(cardData); else mountCard(L.holder, 'file-summary', cardData); });
+    applyWhenSafe(L.rec, () => { if (L.inst?.update) L.inst.update(cardData); else mountCard(L.holder, 'file-summary', cardData); queueAskedMarks(); });
     saveLog();
   }
 }
@@ -2105,8 +2840,14 @@ on('setup:event', (d) => {
   if (d.type === 'file_ready') { for (const f of d.data?.files || []) queueReady(f); return; }
   if (d.type === 'first_answer') firstAnswerSent = true;
   if (d.type === 'refusal') {
+    // "Exactly right… that refusal is the feature" is only true for the off-topic probe, a question the Builder asked,
+    // or a guard refusal. A real customer question that was refused is a gap (or a file still learning): B says that
+    // itself (answer:final), so the server's canonical-refusal turn is not sent for it.
+    const q = d.data?.question || '';
+    const a = [...getState().thread].reverse().find((x) => x && normQ(x.question) === normQ(q));
+    if (refusalKind(q, a, a?.final || {}) !== 'canonical') return;
+    if (closeMissQs.has(normQ(q))) return;   // B already said the close-miss turn for this question
     refusalSent = true;
-    if (closeMissQs.has(normQ(d.data?.question))) return;   // B already said the close-miss turn for this question
   }
   if (d.type === 'files_queued' && pendingRejects.length) { sayRejections(d.data || {}); return; }
   sendEvent(d.type, d.data || {});
@@ -2114,6 +2855,9 @@ on('setup:event', (d) => {
 
 on('setup:post', (d) => {
   if (!d) return;
+  if (d.card?.type === 'email-capture' && launchOnTable()) return;   // never lead capture after the paywall
+  if (d.card?.type === 'success') { successPosted = true; setActivating(false); }
+  if (d.card?.type === 'activating') setActivating(true);
   if (d.role === 'user') { addUserMessage(d.text || '', { tag: d.tag || null }); return; }
   if (d.card && d.card.type === 'file-summary' && !d.key && !d.text) {
     // one Learning message per batch: late summaries for the same batch update its card in place
@@ -2130,14 +2874,26 @@ on('setup:post', (d) => {
       return;
     }
   }
-  const rec = createAssistant();
+  const decision = d.card?.type === 'launch' ? (d.card.data?.variant === 'make-it-yours' ? 'make-it-yours' : 'launch') : null;
+  if (decision === 'make-it-yours') {
+    const open = pendingDecision('make-it-yours');
+    if (open) { surfaceDecision(open, { focus: true }); return; }
+  }
+  if (decision) for (const m of messages) if (m.decision) m.decision = null;
+  const rec = createAssistant({ decision });
   rec.key = d.key || null;
   rec.text = d.text || '';
   finishAssistant(rec);
   if (d.card && d.card.type) addCard(rec, d.card.type, d.card.data || {});
+  if (d.card?.type === 'activating') scrollLog(true);
   setChips(rec, d.chips || []);
   if (d.anchor) rec.el.dataset.anchor = d.anchor;
   afterAssistant(rec, d.card && (d.card.type === 'launch' || d.card.type === 'success' || d.card.type === 'scorecard') ? { event: { type: d.card.type === 'scorecard' ? 'proof_done' : 'launch' } } : null);
+  // the peek follows the latest milestone: Activating is replaced by Live the moment the SuccessCard posts
+  if (isMobile() && getState().ui.tab !== 'setup') {
+    if (d.card?.type === 'activating') showPeek(`Activating ${botName()}…`);
+    else if (d.card?.type === 'success') showPeek(`${botName()} is live. Your link and embed code are ready.`);
+  }
   if (d.scroll !== false && rec.cards.length) setTimeout(() => rec.el.scrollIntoView({ behavior: motion.reduced() ? 'auto' : 'smooth', block: 'nearest' }), 60);
 });
 // Resolves C's CONTRACT-GAPs: modules ask B to run a Builder action (with the Builder's narration), or to show a tab.
@@ -2165,7 +2921,7 @@ on('file:stage', (d) => {
   if (f.stalledFor >= 45000 && !stalled.has(f.localId)) {
     stalled.add(f.localId);
     const stage = { uploaded: 'uploading', extracted: 'chunking', chunked: 'atomizing', atomized: 'vectorizing', vectorizing: 'vectorizing' }[f.phase] || 'extracting';
-    localSay(`**${f.name}** is still ${stage === 'uploading' ? 'extracting' : stage}. Big PDFs and audio can take a few minutes. You can test with the files that are ready.`, { chips: [
+    if (!narrationQuiet()) localSay(`**${f.name}** is still ${stage === 'uploading' ? 'extracting' : stage}. Big PDFs and audio can take a few minutes. You can test with the files that are ready.`, { key: `stall:${f.name}`, chips: [
       { id: 'ask', label: 'Ask a question', run: focusBotComposer, local: true },
       { id: 'add_more', label: 'Add more files', action: { type: 'request_upload' }, local: true },
     ] });
@@ -2210,14 +2966,112 @@ function isCloseMiss(a, fin) {
 function sayCloseMiss(q, best, floor) {
   const qq = q.length > 60 ? q.slice(0, 59) + '…' : q;
   // above the floor but refused: the files mention the topic, yet no line answers it (never call that "under the floor")
+  const detail = best >= floor ? `Your files mention it (best match ${pct(best)}), but no line answers it directly.` : `Best match was ${pct(best)}, just under the ${pct(floor)} floor.`;
+  if (mergeGapDetail(q, detail)) return;
   const text = best >= floor
     ? `Your files mention this (best match ${pct(best)}), but no line answers "${qq}" directly, so it refused instead of stitching a guess. Add a file that says it outright, or ask it another way.`
-    : `Close miss: best match ${pct(best)}, just under the ${pct(floor)} floor. Add a file about "${qq}"? Your bot won't guess, so the fix is more content.`;
-  localSay(text, { chips: [
+    : `Close miss: best match ${pct(best)}, just under the ${pct(floor)} floor. Add a file about "${qq.replace(/[?？]+$/, '')}"? Your bot won't guess, so the fix is more content.`;
+  noteGap(q, null, 'closeMiss');
+  return localSay(text, { chips: gapChips(q) }).then((rec) => noteGap(q, rec, 'closeMiss'));
+}
+function gapChips(q) {
+  return [
     { id: 'add_file', label: 'Add a file', kind: 'primary', action: { type: 'request_upload' }, local: true },
     { id: 'rephrase', label: 'Rephrase it for me', local: true, run: () => rephraseIt(q, 'Rephrase it for me') },
     { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true },
+  ];
+}
+
+// ---- refusals of real questions: a gap, or a file that is still learning (never "Exactly right")
+/** 'canonical' (the probe, a Builder-asked question, a guard refusal) | 'learning' | 'gap' */
+function refusalKind(q, a, fin) {
+  if ((a && a.by === 'setup') || fin?.status === 'guard' || a?.final?.status === 'guard') return 'canonical';
+  if (!q || PROBE_RE.test(q) || isProbeSuggestion(q)) return 'canonical';
+  return learningFiles().length ? 'learning' : 'gap';
+}
+function isProbeSuggestion(q) {
+  const n = normQ(q);
+  return !!n && $$('#sb-suggest-slot button').some((b) => /off-topic/i.test(b.innerText || '') && normQ(b.innerText || '').includes(n));
+}
+const learningFiles = () => { const s = getState(); return s.fileOrder.map((id) => s.files[id]).filter((f) => f && !['ready', 'failed', 'rejected'].includes(f.phase)); };
+/** The still-learning file a question is most likely about: its words against the file's name, topics and starters. */
+function likelyFile(q, files) {
+  const want = new Set(words(q));
+  const stem = (w) => w.slice(0, 5);
+  let best = null, score = 0;
+  for (const f of files) {
+    const bag = [String(f.name || '').replace(/\.[a-z0-9]+$/i, '').replace(/[-_.]+/g, ' '), ...(f.topics || []), f.summary?.oneLine || '', ...(summaryStarters.get(f.localId) || [])].join(' ');
+    const w = new Set(words(bag).map(stem));
+    const hit = [...want].filter((x) => w.has(stem(x))).length;
+    if (hit > score) { score = hit; best = f; }
+  }
+  return best;
+}
+const gapNotes = new Map();   // normQ -> {kind:'insights'|'closeMiss'|'gap'|'learning', rec}
+const learningQs = new Set();  // refused only because their file was still learning: not a gap in the insights card
+function noteGap(q, rec, kind) { const k = normQ(q); const cur = gapNotes.get(k); gapNotes.set(k, { ...(cur || {}), kind: cur && cur.kind === 'insights' ? 'insights' : kind, rec: rec || cur?.rec || null }); }
+/** If the insights card already named this gap, its Builder line gains the detail instead of a second nudge. */
+function mergeGapDetail(q, detail) {
+  const g = gapNotes.get(normQ(q));
+  if (!g || g.kind !== 'insights' || !g.rec || !g.rec.el.isConnected) return false;
+  if (g.merged) return true;
+  g.merged = true;
+  const rec = g.rec;
+  applyWhenSafe(rec, () => {
+    rec.text = `${rec.text.replace(/\s+$/, '')} ${detail}`;
+    rec.textEl.innerHTML = md(rec.text); rec.srEl.textContent = plain(rec.text);
+    motion.animate(rec.textEl, [{ backgroundColor: 'var(--accent-soft)' }, { backgroundColor: 'transparent' }], { duration: 900, essential: false });
+    saveLog();
+  });
+  announce(detail);
+  return true;
+}
+const reaskWaits = [];   // {q, localId|null}
+function sayStillLearning(q) {
+  const files = learningFiles();
+  const f = likelyFile(q, files);
+  const qq = q.length > 60 ? q.slice(0, 59) + '…' : q;
+  const s = getState();
+  const ready = s.fileOrder.filter((id) => s.files[id]?.phase === 'ready').length;
+  const total = s.fileOrder.filter((id) => s.files[id] && s.files[id].phase !== 'rejected').length;
+  if (!files.length) return sayGap(q, null);
+  const text = f
+    ? `**${f.name}** is still learning, so ${botName()} refused instead of guessing from the ${ready} file${ready === 1 ? '' : 's'} it has. I'll offer to re-ask "${qq}" the moment it's ready.`
+    : `${ready} of ${total} files are ready and none of them answers "${qq}", so it refused instead of guessing. The answer may be in a file that's still learning; I'll offer to re-ask when they're done.`;
+  if (!reaskWaits.some((w) => normQ(w.q) === normQ(q))) reaskWaits.push({ q, localId: f ? f.localId : null });
+  noteGap(q, null, 'learning');
+  return localSay(text, { chips: [
+    { id: 'ask_ready', label: 'Ask about a ready file', kind: 'primary', local: true, run: focusBotComposer },
+    { id: 'what_atom', label: "What's an atom?", send: "What's an atom?" },
   ] });
+}
+function offerReask(file) {
+  const s = getState();
+  const allDone = !learningFiles().length;
+  for (let i = reaskWaits.length - 1; i >= 0; i--) {
+    const w = reaskWaits[i];
+    if (!(w.localId ? (w.localId === file?.localId || allDone) : allDone)) continue;
+    reaskWaits.splice(i, 1);
+    gapNotes.delete(normQ(w.q));   // a refusal after the file is ready is a real gap and gets its own line
+    const f = w.localId ? s.files[w.localId] : null;
+    const qq = w.q.length > 48 ? w.q.slice(0, 47) + '…' : w.q;
+    localSay(`${f ? `**${f.name}** is ready` : 'All your files are ready'}. Ask "${qq}" again?`, { chips: [
+      { id: 'reask_now', label: 'Re-ask now', kind: 'primary', action: { type: 'ask_samplebot', question: w.q, label: 'Re-asked' }, local: true },
+      { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true },
+    ] });
+  }
+}
+on('file:ready', (d) => { if (reaskWaits.length) setTimeout(() => offerReask(d?.file || getState().files[d?.localId]), 400); });
+function sayGap(q, fin) {
+  const qq = q.length > 60 ? q.slice(0, 59) + '…' : q;
+  let best = fin?.why?.best ?? null; let floor = fin?.why?.floor ?? getState().spec.floor ?? 0.7;
+  if (best != null && best > 1) best /= 100;
+  if (floor > 1) floor /= 100;
+  const detail = best != null ? `Best match was ${pct(best)}, under the ${pct(floor)} floor.` : 'Nothing in your files answers it.';
+  if (mergeGapDetail(q, detail)) return;
+  noteGap(q, null, 'gap');
+  return localSay(`Nothing in your files answers "${qq}"${best != null ? ` (best match ${pct(best)}, floor ${pct(floor)})` : ''}, so it refused instead of guessing. That's a gap: add a file that covers it and it answers next time.`, { chips: gapChips(q) })
+    .then((rec) => noteGap(q, rec, 'gap'));
 }
 const STOP = new Set('a an the of to in on for and or is are was be do does did can could i you your my we our it its this that what whats which who how when where why with about from at by me us any there their they them have has had will would should shall may might much many more most'.split(' '));
 const words = (q) => normQ(q).split(' ').filter((w) => w.length > 2 && !STOP.has(w));
@@ -2244,8 +3098,8 @@ function rephraseFor(q) {
 function rephraseIt(q, label = 'Rephrase it for me') {
   addUserMessage(label);
   const alt = rephraseFor(q || lastRefusedQ);
-  if (!alt) { localSay('Ask it with the words your files would use, e.g. a product or policy name. Or add a file that covers it.', { chips: [{ id: 'add_file', label: 'Add a file', kind: 'primary', action: { type: 'request_upload' }, local: true }] }); return; }
-  localSay(`Try it this way: "${alt}". Asking ${botName()} now.`, { chips: [
+  if (!alt) { localSay('Ask it with the words your files would use, e.g. a product or policy name. Or add a file that covers it.', { reply: true, chips: [{ id: 'add_file', label: 'Add a file', kind: 'primary', action: { type: 'request_upload' }, local: true }] }); return; }
+  localSay(`Try it this way: "${alt}". Asking ${botName()} now.`, { reply: true, chips: [
     { id: 'add_file', label: 'Add a file', action: { type: 'request_upload' }, local: true },
     { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true },
   ] });
@@ -2292,14 +3146,22 @@ on('answer:final', (d) => {
   const fin = d?.final || a?.final || {};
   // Close miss (SPEC 1.4 B6): an in-scope question the files nearly answer. Checked on EVERY refusal not asked by Setup
   // (C only reports the first refusal); it owns this turn, so the insights card waits for the next answer.
-  const closeMiss = isCloseMiss(a, fin);
-  if (closeMiss) {
-    const q = fin.question || a?.question || '';
-    closeMissQs.add(normQ(q));
-    lastRefusedQ = q;
-    setTimeout(() => sayCloseMiss(q, closeMiss.best, closeMiss.floor), 700);
-  } else if (fin.refused && a && a.by !== 'proof') lastRefusedQ = fin.question || a.question || lastRefusedQ;
-  if (!a || a.by !== 'proof') { askedCount++; if (!closeMiss) setTimeout(maybeInsights, 2500); }
+  const fq = fin.question || a?.question || '';
+  const kind = fin.refused && (!a || a.by !== 'proof') ? refusalKind(fq, a, fin) : null;
+  // one Builder line per refused question (asking it again is counted by the insights card, not re-nudged)
+  const firstTime = kind && kind !== 'canonical' && !gapNotes.has(normQ(fq));
+  const closeMiss = kind === 'gap' ? isCloseMiss(a, fin) : null;
+  if (kind && kind !== 'canonical') lastRefusedQ = fq;
+  if (firstTime) gapNotes.set(normQ(fq), { kind: 'pending', rec: null });   // claimed now; the line follows
+  if (kind === 'learning') learningQs.add(normQ(fq)); else if (kind === 'gap' || fin.status === 'grounded') learningQs.delete(normQ(fq));
+  if (firstTime && kind === 'learning') followup(() => sayStillLearning(fq), 500);
+  else if (firstTime && closeMiss) {
+    closeMissQs.add(normQ(fq));
+    followup(() => sayCloseMiss(fq, closeMiss.best, closeMiss.floor), 700);
+  } else if (firstTime && kind === 'gap') followup(() => sayGap(fq, fin), 700);
+  else if (fin.refused && a && a.by !== 'proof') lastRefusedQ = fq || lastRefusedQ;
+  // SPEC 11.1: the card appears after 3 real asks (setup probes don't count) and refreshes on every later answer
+  if (!a || a.by !== 'proof') { if (!isProbeAsk(a, fin)) askedCount++; queueInsights(); }
   // "Asked by Setup" (SPEC 1.4 B6): the server adds the off-topic probe to the next Builder turn after 2 grounded
   // answers with no refusal; B gives it that turn.
   if (fin.status === 'grounded' && (!a || (a.by !== 'proof' && a.by !== 'setup'))) {
@@ -2317,7 +3179,7 @@ on('answer:final', (d) => {
     const files = new Set((fin.citations || []).map((c) => c.file));
     sendEvent('first_answer', { k: (fin.proof?.quotedLines || []).length || (fin.citations || []).length, f: files.size, top: fin.citations?.[0]?.similarity ?? null });
   }, 1500);
-  if (fin.refused && !closeMiss && (!a || a.by !== 'proof')) setTimeout(() => {
+  if (fin.refused && kind === 'canonical') followup(() => {
     if (refusalSent || !getState().milestones.firstRefusal) return;
     refusalSent = true;
     sendEvent('refusal', { best: fin.why?.best ?? null, floor: fin.why?.floor ?? getState().spec.floor, question: fin.question || a?.question });
@@ -2328,26 +3190,156 @@ on('proof:progress', (d) => { const inst = cardInstances.get('scorecard'); if (i
 on('checkout:dismissed', () => sendEvent('checkout_dismissed', {}));
 on('trial:expired', () => { if (booted) onExpired(); });   // during boot, boot() shows the expired state itself
 on('sse:status', (d) => { netState = d?.status || 'live'; updateNetPill(); });
+// Shell refreshes after a milestone run on the next frame, coalesced (a milestone usually lands inside a burst of SSE
+// work; the header and spine repaint once, in a frame of their own).
+let shellRaf = 0;
+function refreshShellSoon() {
+  if (shellRaf) return;
+  const run = () => { shellRaf = 0; updatePrice(); updateSpine(); updateView(); updateVersionChip(); };
+  shellRaf = document.hidden ? setTimeout(run, 0) : requestAnimationFrame(run);
+}
 on('milestone', ({ name }) => {
-  updatePrice(); updateSpine(); updateView(); updateVersionChip();
+  refreshShellSoon();
   const step = { firstFile: 'sources', firstReady: 'learn', proofRun: 'prove', launched: 'launch' }[name];
   if (step) setTimeout(() => tagAnchor(step), 50);
   if (name === 'firstReady') bumpBadge('bot', 'count');
-  if (name === 'launched') { setState({ trial: { ...getState().trial, converted: true } }, 'launched'); updateBotStatus(); }
+  if (name === 'launched') { activatingUntil = 0; setState({ trial: { ...getState().trial, converted: true } }, 'launched'); updateBotStatus(); updatePrice(); afterConvert(); }
 });
 on('change:ui', ({ value, prev, reason }) => {
   if (value.view !== prev.view) {
     updateView();
-    if (value.view === 'proof' && reason !== 'view:toggle' && !proofToastShown) { proofToastShown = true; toast({ kind: 'info', text: "Proof view on · shows what your visitors don't see" }); }
+    // once per trial, on the first switch someone or something made in this session; never on a restore
+    if (value.view === 'proof' && (reason === 'view:auto' || reason === 'view:toggle') && !proofToastShown && !proofToastSeen()) {
+      proofToastShown = true;
+      try { localStorage.setItem(PROOF_TOAST_KEY, getState().trial.id || '1'); } catch { /* ignore */ }
+      setTimeout(() => toast({ kind: 'info', text: "Proof view on · shows what your visitors don't see", place: 'bottom' }), 0);
+    }
   }
+  if ((value.drawer && !prev.drawer) || (value.sheet && !prev.sheet)) for (const t of $$('.st-toast:not(.st-toast-error)', toastWrap || document)) t.dismiss?.();
+  if (value.drawer !== prev.drawer) setTimeout(syncBannerTitle, 0);
   slots.main.dataset.drawer = value.drawer ? 'open' : '';
   if (!value.drawer) delete slots.main.dataset.drawer;
   if (value.drawer) document.documentElement.dataset.drawer = 'open'; else delete document.documentElement.dataset.drawer;
   document.documentElement.dataset.sheet = value.sheet || '';
 });
-on('change:trial', ({ value, prev }) => { updateTrialPill(); if (value.converted !== prev.converted) { updateBotStatus(); updateSpine(); } });
-on('change:thread', () => { updateView(); updateVersionChip(); });
+on('change:trial', ({ value, prev }) => { updateTrialPill(); if (value.converted !== prev.converted) { if (value.converted) activatingUntil = 0; updateBotStatus(); updateSpine(); updatePrice(); } });
+on('change:fileOrder', () => updateTrialPill());
+on('change:thread', ({ value, prev }) => { updateView(); updateVersionChip(); updateThreadPrompt(); if (!!value?.length !== !!prev?.length) updateTrialPill(); if ((value?.length || 0) !== (prev?.length || 0)) queueAskedMarks(); });
+
+// ---- an "Ask: ..." affordance whose question was asked is done: the chip leaves its row, the card button reads Asked
+let askedRaf = 0;
+function queueAskedMarks() { if (!askedRaf) askedRaf = requestAnimationFrame(() => { askedRaf = 0; markAsked(); }); }
+function askedSet() { return new Set(getState().thread.map((a) => normQ(a?.question)).filter(Boolean)); }
+function markAsked() {
+  const asked = askedSet();
+  if (!asked.size || !logEl) return;
+  for (const m of messages) {
+    if (m.role !== 'assistant' || !m.chips || !m.chips.length) continue;
+    const keep = m.chips.filter((c) => !(c.action?.type === 'ask_samplebot' && c.kind === 'primary' && asked.has(normQ(c.action.question))));
+    if (keep.length === m.chips.length) continue;
+    for (const c of m.chips) {
+      if (keep.includes(c)) continue;
+      const b = $(`.st-chip[data-chip="${CSS.escape(c.id)}"]`, m.chipsEl);
+      if (b && !b.classList.contains('is-chosen')) b.hidden = true;
+    }
+    m.chips = keep;
+    const left = $$('.st-chip', m.chipsEl).filter((b) => !b.hidden);
+    if (!left.length) m.chipsEl.hidden = true;
+    else if (!left.some((b) => b.getAttribute('tabindex') === '0')) left[0].setAttribute('tabindex', '0');
+    saveLog();
+  }
+  // CONTRACT-GAP (D, ingest.js file-summary card): the card's "Ask: ..." button has no asked state; B marks it after
+  // each render (D re-renders on update, so B re-applies from mergeLearning and here).
+  for (const b of $$('.in-ask', logEl)) {
+    const q = (b.dataset.q || b.textContent || '').replace(/^\s*Ask:\s*/, '').replace(/^[\u201c"]|[\u201d"]$/g, '');
+    if (!asked.has(normQ(q)) || b.dataset.asked) continue;
+    b.dataset.asked = '1'; b.dataset.q = q; b.disabled = true; b.classList.add('is-asked');
+    b.innerHTML = `${icon('check', 13)}<span>Asked: \u201c${esc(q)}\u201d</span>`;
+  }
+}
 on('motion', () => updateThemeButtons());
+
+// ------------------------------------------------------------------ Live (after conversion, SPEC 1.4 B11)
+
+/** A live bot never offers "try the sample files" (C's empty state) and its intake matches the server: samples were
+ * deleted at conversion, so their rows go (D drops them on samples:remove). CONTRACT-GAP (C/D): these offers should
+ * check trial.converted themselves; B hides them meanwhile. */
+let liveMO = null;
+function hideSampleOffers() {
+  if (!isLive()) return;
+  for (const b of $$('.sb-link, .sb-chip, .sb-empty button', slots.bot)) {
+    if (!/sample files/i.test(b.textContent || '') || b.hidden) continue;
+    b.hidden = true;
+    // "Add a file or try the sample files." -> "Add a file." (no dangling "or")
+    const prev = b.previousSibling;
+    if (prev && prev.nodeType === 3 && /\s+or\s*$/i.test(prev.nodeValue)) prev.nodeValue = prev.nodeValue.replace(/\s+or\s*$/i, '');
+  }
+}
+function afterConvert() {
+  hideSampleOffers();
+  if (!liveMO && slots.bot) { let t = 0; liveMO = new MutationObserver(() => { if (!t) t = requestAnimationFrame(() => { t = 0; hideSampleOffers(); }); }); liveMO.observe(slots.bot, { childList: true, subtree: true }); }
+  setTimeout(async () => {
+    const s = getState();
+    if (!s.fileOrder.some((id) => s.files[id]?.sample)) return;
+    let r = null;
+    try { r = await api.listFiles(); } catch { return; }
+    if (r && Array.isArray(r.files) && !r.files.some((f) => f.sample || (f.tags || []).some((t) => String(t).startsWith('sample:')))) emit('samples:remove', {});
+  }, 1200);
+}
+
+let successPosted = false;
+let savedOwnFiles = false;   // milestones.ownFile as saved before this load (the server lists no files after convert)
+function siteBase() { return `${location.origin}${location.pathname.replace(/\/studio(?:\/.*)?$/, '/')}`.replace(/\/?$/, '/'); }
+function embedSnippet() {
+  const id = getState().trial.id || 'your-bot';
+  return `<script type="module" src="${siteBase()}lib/embed.js" data-instance="${id}" data-api="${api.BASE || location.origin}"></script>`;
+}
+/** The Builder's Live turn on a reload of a launched bot: the next actions, never the purpose-step chips. */
+function sayLive({ restored = false } = {}) {
+  successPosted = true;
+  const name = botName();
+  const s = getState();
+  const own = s.fileOrder.filter((id) => s.files[id] && !s.files[id].sample && s.files[id].phase !== 'rejected').length;
+  // CONTRACT-GAP (A): after convert, GET /trials/:id lists no files (they moved to the account bucket), so the map is
+  // empty on a reload of a live bot; the Builder says where they are instead of showing an empty bot as "new".
+  const samplesOnly = restored && !own && !savedOwnFiles;
+  const text = own
+    ? `${name} is live and answering from ${own} file${own === 1 ? '' : 's'}. Paste the embed snippet on your site, or connect a channel.`
+    : samplesOnly
+      ? `${name} is live. Sample files were removed at launch, so it has no files yet: add your docs and it starts answering from them.`
+      : `${name} is live. ${restored ? 'Its files now live in your KnowDrive account. ' : ''}Paste the embed snippet on your site, add more docs, or connect a channel.`;
+  const chips = liveChips(samplesOnly);
+  if (restored && store.hasCard('success')) {
+    // a return visit shows the SuccessCard again (hosted link + embed), not just a line of text
+    const n = own || (samplesOnly ? 0 : null);
+    const lastA = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (lastA && /\bis live\b/.test(lastA.text || '') && logEl.lastElementChild === lastA.el) {
+      // the restored log already ends on the "is live" line: its card and next actions come back in place
+      if (!lastA.cards.some((c) => c.type === 'success')) addCard(lastA, 'success', { convertedFiles: n, ownFiles: n, dashboardUrl: s.config?.dashboardUrl });
+      reviveChips(lastA.chipsEl); setChips(lastA, chips, { still: true });
+      lastA.el.dataset.anchor = `${lastA.el.dataset.anchor || ''} launch`.trim();
+      setTimeout(() => lastA.el.scrollIntoView({ behavior: 'auto', block: 'nearest' }), 60);
+      return;
+    }
+    emit('setup:post', { role: 'assistant', text, card: { type: 'success', data: { convertedFiles: n, ownFiles: n, dashboardUrl: s.config?.dashboardUrl } }, chips, anchor: 'launch', scroll: true });
+    return;
+  }
+  // the restored log already ends on the "is live" line: it gets the live next actions back instead of a repeat
+  const last = [...messages].reverse().find((m) => m.role === 'assistant');
+  if (restored && last && /\bis live\b/.test(last.text || '') && logEl.lastElementChild === last.el) {
+    reviveChips(last.chipsEl); setChips(last, chips, { still: true });
+    last.el.dataset.anchor = `${last.el.dataset.anchor || ''} launch`.trim();
+    return;
+  }
+  localSay(text, { reply: true, chips }).then((rec) => { if (rec) rec.el.dataset.anchor = `${rec.el.dataset.anchor || ''} launch`.trim(); });
+}
+function liveChips(addFirst = false) {
+  return [
+    { id: 'live_copy', label: 'Copy embed code', kind: addFirst ? 'default' : 'primary', local: true, run: () => { copyText(embedSnippet()); toast({ kind: 'info', text: 'Embed code copied' }); } },
+    { id: 'live_add', label: 'Add your files', kind: addFirst ? 'primary' : 'default', local: true, run: () => { if (isMobile()) setTab('bot'); emit('intake:open', {}); if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); } },
+    { id: 'channels', label: 'Channels & API', local: true, run: () => openGoLive('channels') },
+  ];
+}
 
 // ------------------------------------------------------------------ trial lifecycle
 
@@ -2361,15 +3353,16 @@ function onExpired() {
   renderIdentityAll();
   if (messages.length) { logEl.innerHTML = ''; messages.length = 0; }
   updateTrialPill();
-  localSay('', { card: { type: 'expired', data: {} }, chips: [{ id: 'new_bot', label: 'Start a new bot', kind: 'primary', run: startNewBot, local: true }] });
+  localSay('', { reply: true, card: { type: 'expired', data: {} }, chips: [{ id: 'new_bot', label: 'Start a new bot', kind: 'primary', run: startNewBot, local: true }] });
 }
 
 async function startNewBot() {
   try { sessionStorage.removeItem(logKey()); } catch { /* ignore */ }
   store.resetTrialState();
   try { localStorage.removeItem(logKey()); } catch { /* ignore */ }
-  expiredShown = false; samplesTurnSent = false; atomizedSent = false; firstAnswerSent = false; refusalSent = false; askedCount = 0; insightsShown = 0; emailOffered = false;
+  expiredShown = false; samplesTurnSent = false; atomizedSent = false; firstAnswerSent = false; refusalSent = false; askedCount = 0; insightsShown = 0; insightsRec = null; clearTimeout(insightsTimer); emailOffered = false;
   sentEvents.clear(); closeMissQs.clear(); summaryStarters.clear(); announcedReady.clear(); pendingRejects = []; learn = null; groundedCount = 0;
+  gapNotes.clear(); learningQs.clear(); reaskWaits.length = 0; successPosted = false; learnQueued = null; activatingUntil = 0;
   if (params.has('t') || params.has('launched')) history.replaceState(null, '', location.pathname);
   logEl.innerHTML = ''; messages.length = 0;
   renderIdentityAll();
@@ -2397,6 +3390,15 @@ async function createTrialWithRetry() {
       const r = await api.createTrial();
       setHint(null);
       versionsInit();
+      if (trialLimited) {
+        trialLimited = false;
+        // what the visitor described while limited is set up now, as promised
+        if (limitedIntent) { const m = limitedIntent; limitedIntent = null; localSay('Good news: your bot can start now. Setting it up from what you told me…', { chips: [] }); sendTurn({ message: m }); return r; }
+        localSay('Good news: your own bot can start now. Use the sample files for the 30-second demo, or add yours.', { chips: [
+          { id: 'use_samples', label: 'Use sample files · 30s demo', kind: 'primary', action: { type: 'attach_samples' }, local: true },
+          { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
+        ] });
+      }
       return r;
     } catch (err) {
       if (err.status === 503 && err.code === 'no_store') {
@@ -2406,22 +3408,56 @@ async function createTrialWithRetry() {
       const limited = err.status === 429;
       const wait = limited && err.retryAfter ? err.retryAfter : Math.min(30, 2 ** Math.min(attempt, 4) * 2);
       attempt++;
-      await countdown(wait, limited ? (left) => `Several new bots were started from this network in the last hour. Trying again in ${left >= 120 ? `${Math.ceil(left / 60)} min` : `${left}s`}…` : null);
+      if (limited && (err.detail?.replay || err.detail?.error?.replay || wait > 60)) { trialLimited = true; offerReplay(wait); }
+      await countdown(wait, limited ? (left) => `New bots are paused on this network for now. Retrying in ${left >= 120 ? `${Math.ceil(left / 60)} min` : `${left}s`}…` : null);
     }
   }
 }
 
+let retryNowFn = null;
 function countdown(sec, fmt = null) {
   return new Promise((resolve) => {
     let left = Math.max(1, Math.round(sec));
     const label = h('span', null);
-    const retry = h('button', { type: 'button', class: 'st-link-btn', onclick: () => { clearInterval(retryTimerId); resolve(); } }, 'Retry now');
+    retryNowFn = () => { clearInterval(retryTimerId); retryNowFn = null; label.textContent = 'Retrying…'; resolve(); };
+    const retry = h('button', { type: 'button', class: 'st-link-btn', onclick: () => retryNowFn && retryNowFn() }, 'Retry now');
     const paint = () => { label.textContent = fmt ? fmt(left) : `Couldn't reach the studio. Retrying in ${left}s…`; };
     paint();
     setHint(h('span', { class: 'st-hint-row' }, h('span', { html: icon('warn', 14) }), label, retry));
     clearInterval(retryTimerId);
     retryTimerId = setInterval(() => { left--; if (left <= 0) { clearInterval(retryTimerId); label.textContent = 'Retrying…'; resolve(); } else paint(); }, 1000);
   });
+}
+
+/** The rate-limit turn (once per page): what happened in one line, the replay as the way forward, and Retry now. */
+let replayOffered = false, limitedIntent = null;
+function limitedChips() {
+  return [
+    { id: 'watch_replay', label: 'Watch the 30 s replay', kind: 'primary', local: true, run: () => playReplay() },
+    { id: 'retry_now', label: 'Retry now', local: true, run: () => { if (retryNowFn) retryNowFn(); else toast({ kind: 'info', text: 'Already retrying…' }); } },
+  ];
+}
+function offerReplay(wait) {
+  if (replayOffered) return;
+  replayOffered = true;
+  // the landing hero offers what works right now
+  const go = $('#st-hero .st-hero-go');
+  if (go) { go.onclick = () => { hideHero(); playReplay(); }; go.innerHTML = ''; go.append(h('span', { class: 'st-hero-ico', html: icon('play', 16) }), h('span', null, 'Watch the 30 s replay')); }
+  const mins = wait >= 120 ? `about ${Math.ceil(wait / 60)} minutes` : `${Math.max(5, Math.round(wait))} seconds`;
+  localSay(`Lots of new bots were started from your network in the last hour, so yours can start in ${mins}. I'll keep trying on my own. Meanwhile, watch a 30-second replay of a real build: files becoming atoms, a cited answer and an honest refusal.`, { chips: limitedChips(), key: 'trial-limited' });
+}
+function playReplay() {
+  addUserMessage('Watch the 30 s replay');
+  localSay('Here is a real build of the Lumen Bikes sample, replayed: four files, read into atoms, then two questions.', { reply: true, card: { type: 'replay-demo', data: {} }, chips: limitedChips().filter((c) => c.id === 'retry_now') });
+}
+
+/** Scripted local Builder for a turn that arrives while no trial can start: it never hangs on "Queued". */
+function limitedReply(input) {
+  const t = String(input?.message || '').toLowerCase();
+  if (PRICE_RE.test(t)) return `Building and testing are free, no card. Going live is **${priceText()}**. Your bot can start as soon as the network limit resets; the replay shows the whole flow meanwhile.`;
+  if (/\b(bot|assistant|support|help ?desk|faq|shop|store|clinic|school|team)\b/.test(t)) { limitedIntent = String(input.message); return "Got it, I'll set that up the moment your bot can start (I'm retrying on my own). Meanwhile the replay shows exactly what happens to your files."; }
+  if (/what|how|why|\?/.test(t)) return `KnowBot answers only from the files you give it, quotes them with [n] citations, and refuses instead of guessing. The replay shows all three in 30 seconds.`;
+  return "Noted. Your bot can start as soon as the network limit resets (I'm retrying on my own). Want the 30-second replay meanwhile?";
 }
 
 function versionsInit() {
@@ -2541,7 +3577,7 @@ function ghostPreview() {
 
 function explainCanonical() {
   addUserMessage("What's a canonical bot?");
-  localSay(`It only answers from the files you give it. It quotes them word for word with [n] citations, and if the answer isn't there it says exactly: *"${NOT_IN_DATA}"* No guessing, ever.`, { chips: [
+  localSay(`It only answers from the files you give it. It quotes them word for word with [n] citations, and if the answer isn't there it says exactly: *"${NOT_IN_DATA}"* No guessing, ever.`, { reply: true, chips: [
     { id: 'use_samples', label: 'Show me with sample files', kind: 'primary', action: { type: 'attach_samples', set: 'lumen-bikes' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
   ] });
@@ -2550,17 +3586,26 @@ function explainCanonical() {
 // ------------------------------------------------------------------ modules (lazy, after first paint)
 
 function mountModules() {
-  const load = async (name, file) => {
-    try {
-      const m = await import(`./${file}?v=${V}`);
-      if (typeof m.mount !== 'function') throw new Error(`${file} has no mount()`);
-      mods[name] = m.mount(ctx) || {};
-    } catch (err) {
-      console.error(`[studio] ${file} failed to mount; the rest of the studio keeps working`, err);
-      mods[name] = null;
+  // perf (r3): the three modules download in parallel but mount one per frame (each mount builds a lot of DOM; two in
+  // one frame made a long animation frame on a throttled CPU)
+  const go = async () => {
+    const list = [['ingest', 'ingest.js'], ['samplebot', 'samplebot.js'], ['checkout', 'checkout.js']];
+    const ps = list.map(([, file]) => import(`./${file}?v=${V}`).catch((err) => err));
+    for (let i = 0; i < list.length; i++) {
+      const [name, file] = list[i];
+      const m = await ps[i];
+      try {
+        if (m instanceof Error) throw m;
+        if (typeof m.mount !== 'function') throw new Error(`${file} has no mount()`);
+        mods[name] = m.mount(ctx) || {};
+      } catch (err) {
+        console.error(`[studio] ${file} failed to mount; the rest of the studio keeps working`, err);
+        mods[name] = null;
+      }
+      if (i < list.length - 1) await nextPaint();
     }
+    resolveModules();
   };
-  const go = () => Promise.all([load('ingest', 'ingest.js'), load('samplebot', 'samplebot.js'), load('checkout', 'checkout.js')]).then(() => resolveModules());
   if ('requestIdleCallback' in window) requestIdleCallback(go, { timeout: 300 }); else setTimeout(go, 1);
 }
 
@@ -2577,6 +3622,8 @@ function onKey(e) {
     else composerEl.focus();
     return;
   }
+  // r4 (D9): after a keyboard ask, J jumps straight to the answer's first citation (announced when the answer lands)
+  if ((e.key === 'j' || e.key === 'J') && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && jumpArmed) { e.preventDefault(); jumpToAnswer(); return; }
   if (e.key === 'Escape') {
     if (menuEl) { closeMenu(true); return; }
     if (dialogStack.length) {                 // focus may have left the dialog (e.g. a re-rendered control): close the top one
@@ -2593,11 +3640,59 @@ document.addEventListener('focusin', (e) => {
   else if (slots.composer && slots.composer.contains(e.target)) lastComposer = 'bot';
 });
 
+/** "Skip to latest answer": focus the newest answer in the bot pane (or its composer when nothing was asked yet). */
+// Keyboard asks (Enter/Space on a starter or in the bot composer) arm a one-key jump to the answer once it is final.
+// CONTRACT-GAP (C, samplebot.js): the starter row sits before the thread's newest answer in tab order; ideally C places
+// it after the latest answer (or moves focus to the answer on a keyboard ask). B's J jump + announcement covers it.
+let kbAskAt = 0, jumpArmed = false, jumpT = 0;
+document.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (((e.key === 'Enter' && !e.shiftKey) || (e.key === ' ' && t?.tagName === 'BUTTON')) && t?.closest?.('#sb-suggest-slot, #sb-composer-slot')) kbAskAt = Date.now();
+}, true);
+document.addEventListener('pointerdown', () => { kbAskAt = 0; }, true);
+on('answer:final', () => {
+  if (!kbAskAt || Date.now() - kbAskAt > 60000) return;
+  kbAskAt = 0;
+  jumpArmed = true;
+  clearTimeout(jumpT); jumpT = setTimeout(() => { jumpArmed = false; }, 30000);
+  const skip = $('#st-skip-answer');
+  if (skip) skip.textContent = 'Answer ready: jump to it (J)';
+  toast({ kind: 'info', text: 'Answer ready. Press J to jump to its citation.', place: 'bottom', action: { label: 'Jump', run: jumpToAnswer } });
+});
+function jumpToAnswer() {
+  jumpArmed = false; clearTimeout(jumpT);
+  const skip = $('#st-skip-answer'); if (skip) skip.textContent = 'Skip to latest answer';
+  if (isMobile()) setTab('bot');
+  const answers = $$('#sb-thread-slot .sb-answer:not(.is-proof)');
+  const last = answers[answers.length - 1];
+  if (!last) { focusBotComposer(); return; }
+  const cite = $('.pf-cite, [aria-label^="Citation "]', last);
+  const target = cite || last;
+  if (!cite && !last.hasAttribute('tabindex')) last.setAttribute('tabindex', '-1');
+  last.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' });
+  target.focus({ preventScroll: true });
+}
+function skipToAnswer(e) {
+  if (jumpArmed) { e.preventDefault(); jumpToAnswer(); return; }
+  e.preventDefault();
+  if (isMobile()) setTab('bot');
+  const answers = $$('#sb-thread-slot .sb-answer:not(.is-proof)');
+  const last = answers[answers.length - 1];
+  if (!last) { focusBotComposer(); return; }
+  if (!last.hasAttribute('tabindex')) last.setAttribute('tabindex', '-1');
+  last.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' });
+  last.focus({ preventScroll: true });
+}
 function wireEnv() {
   document.addEventListener('keydown', onKey);
+  $('#st-skip-answer')?.addEventListener('click', skipToAnswer);
+  followOsTheme();
+  let phT = 0;
+  window.addEventListener('resize', () => { placeToasts(); clearTimeout(phT); phT = setTimeout(fitPlaceholder, 150); }, { passive: true });
+  document.fonts?.ready?.then(() => fitPlaceholder());
   window.addEventListener('online', updateNetPill);
   window.addEventListener('offline', updateNetPill);   // the header pill is the one offline signal (no duplicate toast)
-  mqMobile.addEventListener?.('change', () => { updatePrice(); updateSpine(); setTab(getState().ui.tab || 'setup', { initial: true }); });
+  mqMobile.addEventListener?.('change', () => { fitPlaceholder(); updatePrice(); updateSpine(); setTab(getState().ui.tab || 'setup', { initial: true }); });
   setInterval(updateTrialPill, 60000);
   applyKeyboardInset();
   // The SampleBot pane is a drop target on desktop; D renders the overlay, B only guards the page from navigating away.
@@ -2620,12 +3715,20 @@ async function boot() {
     if (!slots.thread.hasAttribute('aria-label')) slots.thread.setAttribute('aria-label', 'Answers from your bot');
   }
   wireEnv();
+  wireSuggestScroller();
+  watchThread();
   const cfgP = api.getConfig().then((cfg) => { if (cfg) { setState({ config: { ...DEFAULT_CONFIG, ...cfg, price: { ...DEFAULT_CONFIG.price, ...(cfg.price || {}) } } }, 'config'); updatePrice(); } })
     .catch((err) => console.warn('[studio] config unavailable, using defaults', err));
   // 7 (early). B0 renders with no delay on first paint; a returning visitor sees their restored log instead.
   let restoredLog = false;
-  if (hadTrial && !params.get('t')) restoredLog = restoreLog();
-  if (!hadTrial && !params.get('t')) renderB0();
+  // returning from checkout (or a reload of a live bot): the old Make it yours / Launch chips are history
+  const launchedReturn = params.get('launched') === '1' || !!getState().trial.converted;
+  const sameTrial = !params.get('t') || params.get('t') === getState().trial.id;   // a return link to this device's bot
+  if (hadTrial && sameTrial) restoredLog = restoreLog({ retireChips: launchedReturn });
+  if (restoredLog) scrollLog(true);
+  if (launchedReturn && params.get('launched') === '1' && isMobile()) setTimeout(() => showPeek(`Activating ${botName()}…`), 600);
+  savedOwnFiles = !!getState().milestones.ownFile;
+  if (!hadTrial && !params.get('t')) { renderB0(); renderHero(); }
   // 5. owner modules mount after first paint
   mountModules();
   // 4. trial
@@ -2648,7 +3751,17 @@ async function boot() {
     const files = t.files || [];
     const atoms = files.reduce((a, f) => a + (f.atoms || 0), 0);
     // nothing to welcome back to (no files, no history): this is a first visit in all but name
-    if (!files.length && !restoredLog && getState().spec.name === 'SampleBot') { if (!messages.length) renderB0(); return; }
+    if (t.converted || isLive()) {
+      afterConvert();
+      // E posts its own success turn when it handles the return (?launched=1, or a restore it hasn't marked yet);
+      // otherwise (a plain reload of a live bot) B re-posts the Live turn instead of a "Welcome back" with setup chips.
+      setTimeout(() => { if (!successPosted) sayLive({ restored: true }); }, 400);
+      return;
+    }
+    if (!files.length && !restoredLog && getState().spec.name === 'SampleBot') { if (!messages.length) renderB0(); renderHero(); return; }
+    // back from checkout, not converted yet: E's Activating card owns this turn (a "welcome back" turn would re-offer
+    // Make it yours / Launch under it)
+    if (params.get('launched') === '1') { scrollLog(true); return; }
     sendEvent('returned', { files: files.length, atoms, launched: params.get('launched') === '1', converted: !!t.converted });
   }
 }

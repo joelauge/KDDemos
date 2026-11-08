@@ -23,9 +23,30 @@
 // CONTRACT-GAP (B, toasts): the "Proof view on" toast is positioned by B and can cover the docked ProofDrawer footer
 //   ([Expand source]) on desktop and the sheet bottom on mobile. While ui.drawer is set, B should place toasts in the
 //   Builder column (desktop) or above the sheet (mobile), and auto-dismiss after 3 s. C renders no toasts itself.
+//   r4: the critic also saw that toast land over the first CitePopover. C now holds the hovered answer's strip until
+//   the receipt closes; B should additionally place this one toast at the top of the thread (or delay it ~600 ms
+//   until no .pf-pop is open: `document.querySelector('.pf-pop:not([hidden])')`).
 // CONTRACT-GAP (D/B, a11y): the axe heading-order h3 on mobile after the first answer is not in this module (C renders
 //   no h3; its only heading is the ProofDrawer h2). Candidates: D's visually hidden map heading
 //   "Top matches for the last question" (ingest.js) and B's insights h3 (app.js), which follow no visible h2 on mobile.
+//   Fixer r2 re-checked: the answer card still renders no heading at all; the h3 is ingest.js:375 (D), which sits in
+//   #in-map-slot after B's hidden-on-mobile "Builder" h2. D should make it an h2 (or a non-heading sr-only label).
+// CONTRACT-GAP (B, mobile layout): studio.css gives #sb-thread-slot `min-height: min(55%, calc(100% - 250px))` once an
+//   answer exists; with an expanded map band that pushes the composer under the tab bar. C now fits the composer into
+//   one 44 px row on phones (scope chip + menu inside the input row), but B should cap that min-height by the real
+//   remaining space (or let the map collapse first).
+// CONTRACT-GAP (A, fakes): the fake knowDrive can return near-identical distances for off-topic candidates. C shows one
+//   bar per atom (file name + atom locator on ties, coloured by file) from the same sorted array as the "Closest atoms"
+//   list; A's fake should still vary distances per atom so the chart shows a real spread. why.candidates carry no
+//   seq/locator, so C recovers them from the retrieval hits by file + excerpt.
+// CONTRACT-GAP (B/D, CLS r4): the first-ready layout shift (#sb-thread-slot y 695->467, h 54->283) is the intake panel
+//   (D, ingest.js) collapsing above the thread plus B's grid rules (studio.css [data-asked]) and B's ::before prompt
+//   painted inside the slot. C owns only the slot's contents (empty at that moment). Fix belongs to D (collapse the
+//   intake with a transform/clip-path FLIP, not a height change) and B (reserve the thread slot's height from first
+//   paint, or paint the "Ask your first question" prompt only after the collapse settles).
+// CONTRACT-GAP (B/D, r4): with the ProofDrawer docked, the Sources header badges (D's intake chip row / B's header)
+//   wrap into a 2-row stack; they should be flex-nowrap with ellipsis below 640 px of pane width. C's own drawer
+//   header metadata is now one nowrap line with an ellipsizing locator.
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const STEP_ORDER = ['embed', 'search', 'rank', 'select', 'quote'];
@@ -106,7 +127,9 @@ export function mount(ctx) {
   /** Points below the floor (null when above or unknown). */
   const belowBy = (x, floorSim) => { const r = typeof x === 'number' ? x * 100 : rawMatch(x); return r == null || floorSim == null ? null : r < floorSim * 100 ? floorSim * 100 - r : null; };
   const floorOfA = (A) => A?.retrieval?.floor?.min ?? A?.final?.why?.floor ?? A?.final?.proof?.floor ?? (getState().spec || {}).floor ?? 0.7;
-  const fmtMs = (ms) => (ms == null ? '' : ms >= 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.max(0, Math.round(ms)).toLocaleString()} ms`);
+  const fmtMs = (ms) => (ms == null ? '' : ms >= 10000 ? `${(ms / 1000).toFixed(1)} s` : ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.max(0, Math.round(ms))} ms`);
+  /** What the person actually waited (question sent -> final), falling back to the server total for old payloads. */
+  const waitMs = (A) => A.e2eMs ?? A.final?.latencyMs?.total ?? null;
   const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
   const clip = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
   let uidN = 0;
@@ -126,21 +149,93 @@ export function mount(ctx) {
     return `${base.slice(0, head)}…${base.slice(base.length - tail)}${ext}`;
   }
   function hash(s) { let x = 0; for (const c of String(s || '')) x = (x * 31 + c.charCodeAt(0)) | 0; return Math.abs(x); }
+  /** Excerpt as prose. Markdown tables (multi-line, or flattened onto one line as the server's one-line excerpts are)
+   *  become rows read against their header: "Lumen E-City · Type: e-bike · Price (USD): $3,199". Separator rules
+   *  (|---|---|), stray pipes, heading and emphasis markers never reach the screen. Display only (quotes and offsets
+   *  are matched against the raw atom text in the drawer).
+   *  CONTRACT-GAP (A): the retrieval hit has no pre-cleaned display text field; C derives it here from `excerpt`. */
+  const SEP_CELL = /^:?-{2,}:?$/;
+  function tableProse(seg) {
+    // rows are separated by an empty cell ("| a | b | | c | d |" -> "a b" / "c d"), or by the newlines joined as "||"
+    const parts = String(seg).split('|').map((c) => c.trim());
+    const rows = [];
+    let cur = [];
+    for (let i = 0; i < parts.length; i++) {
+      const c = parts[i];
+      if (c === '' && i > 0 && i < parts.length - 1) { if (cur.length) rows.push(cur); cur = []; continue; }
+      if (c !== '') cur.push(c);
+    }
+    if (cur.length) rows.push(cur);
+    let header = null;
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.every((c) => SEP_CELL.test(c))) continue;
+      const next = rows[i + 1];
+      if (next && next.length && next.every((c) => SEP_CELL.test(c))) { header = r; continue; }
+      const cells = r.filter((c) => !SEP_CELL.test(c));
+      if (!cells.length) continue;
+      if (header && cells.length > 1 && cells.length <= header.length) {
+        out.push([cells[0], ...cells.slice(1).map((c, k) => `${header[k + 1]}: ${c}`)].join(' · '));
+      } else out.push(cells.join(' · '));
+    }
+    return out.join('; ');
+  }
+  function cleanExcerpt(s) {
+    const lines = String(s || '').split('\n');
+    const pipes = (l) => (l.match(/\|/g) || []).length;
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (pipes(l) >= 2) {
+        // gather the whole table block (consecutive table-ish lines), keeping any prose before the first pipe
+        const block = [];
+        let j = i;
+        while (j < lines.length && pipes(lines[j]) >= 2) { block.push(lines[j]); j++; }
+        i = j - 1;
+        const first = block[0];
+        const k = first.indexOf('|');
+        const lead = first.slice(0, k).trim();
+        block[0] = first.slice(k);
+        const prose = tableProse(block.map((b) => b.trim()).join(' || '));
+        const leadClean = lead.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/\*\*([^*]+)\*\*/g, '$1');
+        const line = [leadClean, prose].filter(Boolean).join(leadClean && /[:.]$/.test(leadClean) ? ' ' : ' — ');
+        if (line) out.push(line);
+        continue;
+      }
+      out.push(l.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1'));
+    }
+    return out.join('\n').replace(/\s-{3,}\s/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{2,}/g, '\n').replace(/[ \t]{2,}/g, ' ').trim();
+  }
 
   /** Server file id -> {name, hue, kind, sample}. Falls back to a stable hue for files D has not listed yet. */
   function fileMeta(fileId, fallbackName = '') {
     const s = getState();
-    let i = 0;
     for (const id of s.fileOrder || []) {
       const f = s.files[id];
       if (f && ((fileId && f.id === fileId) || ((!fileId || !f.id) && fallbackName && f.name === fallbackName))) {
-        return { name: f.name || fallbackName, hue: Number.isFinite(f.hue) ? f.hue : i % 8, kind: f.kind || kindOf(f.name), localId: id, file: f };
+        return { name: f.name || fallbackName, hue: Number.isFinite(f.hue) ? f.hue : hash(f.id || f.name || fallbackName) % 8, kind: f.kind || kindOf(f.name), localId: id, file: f };
       }
-      i++;
     }
     return { name: fallbackName || 'file', hue: hash(fileId || fallbackName) % 8, kind: kindOf(fallbackName), localId: null, file: null };
   }
   const hueVar = (hue) => `var(--f${(Number(hue) || 0) % 8})`;
+  /** r4: file hue is a property of the FILE (the store's files[*].hue, the same field the Knowledge Map paints with),
+   *  never of arrival order. Every hued node carries data-hf (server file id) / data-hn (name); when the file list
+   *  changes (e.g. after a reload the restored thread renders before the files arrive) they are repainted from it,
+   *  so a source card and its map dots can never disagree. */
+  let hueSig = '';
+  function repaintHues() {
+    const s = getState();
+    const sig = (s.fileOrder || []).map((id) => `${s.files[id]?.id || id}:${s.files[id]?.hue}`).join(',');
+    if (sig === hueSig) return;
+    hueSig = sig;
+    const roots = [threadEl, dom.drawer].filter(Boolean);
+    for (const r of roots) for (const el of r.querySelectorAll('[data-hf], [data-hn]')) {
+      const v = hueVar(fileMeta(el.dataset.hf || null, el.dataset.hn || '').hue);
+      if (el.style.getPropertyValue('--hue') !== v) el.style.setProperty('--hue', v);
+    }
+  }
 
   /** Short chip title: "Warranty & Returns" from lumen-warranty-returns.md + "Lumen Bikes Warranty and Returns Policy". */
   function chipTitle(file, title) {
@@ -188,7 +283,12 @@ export function mount(ctx) {
   dom.thread.append(threadEl);
   let stick = true;
   let selfScroll = false;
+  // r4: once the thread is scrolled, its top edge fades (proof.css) so a card passing under the Sources band reads as
+  // "scrolled", never as clipped
+  let topFade = false;
   dom.thread.addEventListener('scroll', () => {
+    const f = dom.thread.scrollTop > 4;
+    if (f !== topFade) { topFade = f; dom.thread.dataset.scrolled = f ? '1' : '0'; }
     if (selfScroll) { selfScroll = false; if (linked) scheduleThreadDraw(); return; }
     const t = dom.thread;
     stick = t.scrollHeight - t.scrollTop - t.clientHeight < 64;
@@ -197,6 +297,11 @@ export function mount(ctx) {
   // Scroll anchoring is coalesced to one write per frame, however many lines/answers asked for it in that frame
   // (one layout read, one scrollTop write: no per-token reflow).
   let endRaf = 0;
+  // r3: the newest question never scrolls away under the map / Sources band above the thread. Following the stream
+  // stops once the question bubble reaches the top of the pane (12 px under it): a long answer then reads top-down
+  // from its question, like a chat, instead of showing an answer without its question.
+  let liveQ = null;
+  const Q_GAP = 12;
   function scrollToEnd(force = false) {
     if (!force && !stick) return;
     if (force) stick = true;
@@ -205,8 +310,13 @@ export function mount(ctx) {
       endRaf = 0;
       if (!stick) return;
       const t = dom.thread;
-      const to = t.scrollHeight - t.clientHeight;
-      if (Math.abs(t.scrollTop - to) > 1) { selfScroll = true; t.scrollTop = to; }
+      let to = t.scrollHeight - t.clientHeight;
+      if (liveQ && liveQ.isConnected) {
+        const qTop = liveQ.getBoundingClientRect().top - t.getBoundingClientRect().top + t.scrollTop;
+        to = Math.min(to, Math.max(0, Math.floor(qTop - Q_GAP)));
+      }
+      // only ever forward: a reader who scrolled past the cap is never yanked back up to the question
+      if (to - t.scrollTop > 1) { selfScroll = true; t.scrollTop = to; }
     });
   }
 
@@ -229,10 +339,25 @@ export function mount(ctx) {
           h('span', { class: 'sb-ghost-av' }),
           h('div', { class: 'sb-ghost-body' },
             h('div', { class: 'sb-ghost-src' }, h('i'), line('warranty.pdf · match 86')),
-            h('p', null, line('Frames carry a lifetime warranty for the original owner.'), h('b', { class: 'sb-ghost-chip' }, '1')),
+            h('p', null, h('span', { class: 'sb-ghost-mark' }, line('Frames carry a lifetime warranty for the original owner.')),
+              h('b', { class: 'sb-ghost-chip' }, h('span', { class: 'sb-ghost-chip-n' }, '1'), h('span', { class: 'sb-ghost-chip-t' }, '· Warranty'))),
             h('div', { class: 'sb-ghost-pill' }, line('Grounded · 1 quote · 100% verified'))))));
     threadEl.prepend(ghostEl);
+    requestAnimationFrame(fitGhost);
   }
+  /** The example never clips: when the pane is short it sheds its least important parts (pill, then the question
+   *  bubble, then the source chip), so what remains is always whole. */
+  function fitGhost() {
+    const g = ghostEl;
+    if (!g || !g.isConnected) return;
+    const steps = ['is-snug', 'is-tight', 'is-tiny'];
+    g.classList.remove(...steps);
+    const avail = dom.thread.clientHeight - 18;   // the thread's padding while the example shows (proof.css)
+    if (avail <= 0) return;
+    for (const c of steps) { if (g.offsetHeight <= avail) break; g.classList.add(c); }
+  }
+  let ghostRO = null;
+  if (typeof ResizeObserver === 'function') { ghostRO = new ResizeObserver(() => { if (ghostEl) requestAnimationFrame(fitGhost); }); ghostRO.observe(dom.thread); }
   function dropGhost() {
     const g = ghostEl; ghostEl = null;
     if (!g) return;
@@ -258,11 +383,15 @@ export function mount(ctx) {
   let restoredN = 0;                  // answers rebuilt from the last visit (THREAD_KEY), shown above new ones
   // Streaming events (status, delta…) commit to the store at most once per frame: every commit fans out to other
   // owners' listeners, and doing that per token caused long frames under CPU throttling.
+  // r3: not in a frame callback at all. Streaming snapshots go out when the main thread is idle (at most ~160 ms late),
+  // so other owners' store listeners never share a frame with the sentence reveal. Final and error commit at once.
   const commitQ = new Map();
   let commitRaf = 0;
+  const idle = (fn, timeout = 160) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout }) : setTimeout(fn, 48));
+  function flushCommits() { commitRaf = 0; const q = [...commitQ]; commitQ.clear(); for (const [a, r] of q) commit(a, r); }
   function commitSoon(A, reason) {
     commitQ.set(A, reason);
-    if (!commitRaf) commitRaf = requestAnimationFrame(() => { commitRaf = 0; const q = [...commitQ]; commitQ.clear(); for (const [a, r] of q) commit(a, r); });
+    if (!commitRaf) commitRaf = idle(flushCommits) || 1;
   }
   function commit(A, reason) {
     commitQ.delete(A);
@@ -298,12 +427,22 @@ export function mount(ctx) {
       // any new question retires the "All files ready · Ask again" offer (it is a one-time nudge, not a fixture)
       partialOffered = true; lastPartialQ = null; renderBanner();
     }
-    if (by !== 'proof') { dropGhost(); clearReask(); }
+    if (by !== 'proof') { dropGhost(); clearReask(); asked.add(norm(q)); }
     buildAnswer(A);
-    commit(A, 'answer:start');
-    emit('answer:start', { answerId: A.id, question: q, by });
-    if (by !== 'proof') claimSignature(A);
+    if (by === 'proof') {
+      commit(A, 'answer:start');
+      emit('answer:start', { answerId: A.id, question: q, by });
+      run(A);
+      return A;
+    }
+    // r3 (long frames on click): the click task only builds this answer's DOM and sends the request. The store commit
+    // and 'answer:start' (which fan out to every owner's listeners: map collapse, insights…) run in their own task
+    // after the next paint, and the suggestion row refreshes when idle. Any stream event flushes the start first, so
+    // listeners always see answer:start before anything else for this answer.
+    A.startPending = () => { A.startPending = null; commit(A, 'answer:start'); emit('answer:start', { answerId: A.id, question: q, by }); };
+    claimSignature(A);
     run(A);
+    requestAnimationFrame(() => setTimeout(() => { A.startPending && A.startPending(); idle(() => renderSuggestions(), 400); }, 0));
     return A;
   }
 
@@ -345,8 +484,12 @@ export function mount(ctx) {
     status.append(ticker);
     const srcRow = h('div', { class: 'sb-srcrow', role: 'group', 'aria-label': 'Sources' });
     for (let i = 0; i < 3; i++) srcRow.append(h('span', { class: 'sb-src is-skel', 'aria-hidden': 'true' }, h('i')));
-    const strip = h('div', { class: 'pf-only pf-strip', role: 'group', 'aria-label': 'Evidence' });
+    const strip = h('div', { class: 'pf-strip', role: 'group', 'aria-label': 'Evidence' });
     for (let i = 0; i < 3; i++) strip.append(h('div', { class: 'pf-card is-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')));
+    // EvidenceStrip frame: edge fades (mask) on the side with more to see, and scroll buttons for pointer users
+    const stripPrev = h('button', { type: 'button', class: 'pf-strip-nav is-prev', 'aria-label': 'Earlier evidence', tabindex: '-1', hidden: true, onclick: () => scrollStrip(A, -1) }, ico('chevronRight', 14));
+    const stripNext = h('button', { type: 'button', class: 'pf-strip-nav is-next', 'aria-label': 'More evidence', tabindex: '-1', hidden: true, onclick: () => scrollStrip(A, 1) }, ico('chevronRight', 14));
+    const stripWrap = h('div', { class: 'pf-only pf-stripwrap' }, strip, stripPrev, stripNext);
     const body = h('div', { class: 'sb-body' });
     const caret = h('span', { class: 'sb-caret', 'aria-hidden': 'true' });
     body.append(caret);
@@ -359,14 +502,16 @@ export function mount(ctx) {
     svg.setAttribute('class', 'pf-threads'); svg.setAttribute('aria-hidden', 'true');
     const gid = uid('g');
     svg.innerHTML = `<defs><linearGradient id="${gid}" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:var(--accent-2)"/><stop offset="1" style="stop-color:var(--accent)"/></linearGradient></defs><path fill="none" stroke="url(#${gid})" stroke-width="1.75" stroke-linecap="round"/><circle r="3" style="fill:var(--accent)"/>`;
-    const main = h('div', { class: 'sb-a-main' }, status, srcRow, strip, body, extras, popHost, foot);
+    const main = h('div', { class: 'sb-a-main' }, status, srcRow, stripWrap, body, extras, popHost, foot);
     const a = h('div', { class: 'sb-a' }, avatarEl(), main);
     const root = h('article', { class: `sb-answer${A.by === 'proof' ? ' is-proof' : ''}`, id: A.id, 'aria-busy': 'true', dataset: { status: 'pending', by: A.by } }, q, a, svg);
-    A.el = { root, q, status, ticker, srcRow, strip, body, caret, extras, popHost, pop, foot, svg, main };
+    A.el = { root, q, status, ticker, srcRow, strip, stripWrap, stripPrev, stripNext, body, caret, extras, popHost, pop, foot, svg, main };
     wirePop(A, pop);
+    wireStrip(A);
     const host = A.group ? A.group.body : threadEl;
     host.append(root);
     if (!A.fast) anim(root, [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'out' });
+    if (!A.group && !A.restored) { liveQ = q; if (threadEl.style.paddingBottom) threadEl.style.paddingBottom = ''; }
     if (!A.group) scrollToEnd(true);
     pruneOld();
   }
@@ -446,7 +591,8 @@ export function mount(ctx) {
       const files = new Set((f.citations || []).map((c) => c.fileId || c.file)).size;
       const v = f.proof?.verified || {};
       const vp = v.claims ? Math.round((100 * (v.verified || 0)) / v.claims) : 100;
-      text = h('span', null, h('b', null, 'Grounded'), ` · ${plural(q, 'quote')} from ${plural(files, 'file')} · ${vp}% verified · `, h('span', { class: 'sb-num' }, fmtMs(f.latencyMs?.total)));
+      // the pill shows end-to-end time (what the visitor waited); the server's own retrieval time lives in the trace
+      text = h('span', null, h('b', null, 'Grounded'), ` · ${plural(q, 'quote')} from ${plural(files, 'file')} · ${vp}% verified · `, h('span', { class: 'sb-num' }, fmtMs(waitMs(A))));
       cls += ' is-grounded';
     } else if (f.status === 'guard') {
       cls += ' is-refused'; ic = 'shield';
@@ -455,7 +601,8 @@ export function mount(ctx) {
       cls += ' is-refused'; ic = 'shield';
       text = h('span', null, h('b', null, 'Not in your data'), ' · canonical refusal');
     }
-    return h('div', { class: cls }, ico(ic, 14), text);
+    const server = f.latencyMs?.total;
+    return h('div', { class: cls, title: server != null && A.e2eMs != null ? `${fmtMs(A.e2eMs)} end to end · ${fmtMs(server)} on the server` : null }, ico(ic, 14), text);
   }
 
   /** The ticker collapses into the pill with a width morph (clip-path, so only compositor properties move). */
@@ -464,13 +611,11 @@ export function mount(ctx) {
     const pill = buildPill(A);
     A.stopClock && A.stopClock();
     if (!old || !old.isConnected) { A.el.status.innerHTML = ''; A.el.status.append(pill); A.el.pill = pill; return; }
-    const w0 = old.getBoundingClientRect().width;
     old.replaceWith(pill);
     A.el.pill = pill; A.el.ticker = null;
     if (A.fast || reduced()) return;
-    const w1 = pill.getBoundingClientRect().width;
-    if (w1 > w0 + 1) anim(pill, [{ clipPath: `inset(0 ${Math.round(w1 - w0)}px 0 0 round 999px)` }, { clipPath: 'inset(0 0 0 0 round 999px)' }], aOpts(A, { duration: 220, easing: 'out' }));
-    else anim(pill, [{ opacity: 0.5 }, { opacity: 1 }], aOpts(A, { duration: 220 }));
+    // r3: no layout reads (they forced a reflow in the final's frame): the pill unrolls from its leading icon
+    anim(pill, [{ clipPath: 'inset(0 62% 0 0 round 999px)', opacity: 0.6 }, { clipPath: 'inset(0 0 0 0 round 999px)', opacity: 1 }], aOpts(A, { duration: 260, easing: 'out' }));
   }
 
   // ---------------------------------------------------------------- the stream
@@ -492,6 +637,7 @@ export function mount(ctx) {
 
   function onEvent(A, type, data) {
     if (destroyed) return;
+    if (A.startPending) A.startPending();
     switch (type) {
       case 'status':
         if (!data || !data.step) return;
@@ -543,7 +689,7 @@ export function mount(ctx) {
     const meta = fileMeta(hit.fileId, hit.file);
     const m = fmtMatch(hit, floorOfA(A));
     const b = h('button', { type: 'button', class: `sb-src${dim ? ' is-dim' : ''}`, style: { '--hue': hueVar(meta.hue) },
-      title: hit.file || meta.name, dataset: { atom: hit.atomId || '', file: hit.fileId || '' },
+      title: hit.file || meta.name, dataset: { atom: hit.atomId || '', file: hit.fileId || '', hf: hit.fileId || '', hn: hit.file || meta.name || '' },
       onclick: (e) => openDrawer({ fileId: hit.fileId, atomId: hit.atomId, seq: hit.seq, answerId: A.id, n }, e.currentTarget),
       onmouseenter: (e) => emit('map:highlight', { fileId: hit.fileId, atomId: hit.atomId, seq: hit.seq, rect: e.currentTarget.getBoundingClientRect() }),
       onmouseleave: () => emit('map:highlight', null) },
@@ -560,11 +706,14 @@ export function mount(ctx) {
     const m = fmtMatch(hit, fl);
     const raw = rawMatch(hit);
     const gap = below ? belowBy(hit, fl) : null;
-    const snip = h('span', { class: 'pf-card-snip' }, hit.excerpt || '');
+    const excerpt = cleanExcerpt(hit.excerpt || '');
+    const snip = h('span', { class: 'pf-card-snip' }, excerpt);
+    const fname = hit.file || meta.name;
     // The leading badge is the citation [n] (set on final), never the rank: a reader maps [n] in the answer to the
-    // card with the same [n]. Rank is secondary, in small mono on the right.
-    const card = h('button', { type: 'button', class: `pf-card${below ? ' is-below' : ''}`, style: { '--hue': hueVar(meta.hue) },
-      dataset: { atom: hit.atomId || '', file: hit.fileId || '', rank: String(hit.rank || '') },
+    // card with the same [n]. Rank is secondary, in small mono on the locator line. The raw atom id lives in the
+    // drawer only (behind its copy button): on a card it is noise.
+    const card = h('button', { type: 'button', class: `pf-card${below ? ' is-below' : ''}`, style: { '--hue': hueVar(meta.hue) }, title: fname,
+      dataset: { atom: hit.atomId || '', file: hit.fileId || '', rank: String(hit.rank || ''), hf: hit.fileId || '', hn: fname || '' },
       onclick: (e) => openDrawer({ fileId: hit.fileId, atomId: hit.atomId, seq: hit.seq, answerId: A.id }, e.currentTarget),
       onmouseenter: (e) => emit('map:highlight', { fileId: hit.fileId, atomId: hit.atomId, seq: hit.seq, rect: e.currentTarget.getBoundingClientRect() }),
       onmouseleave: () => emit('map:highlight', null) },
@@ -572,18 +721,19 @@ export function mount(ctx) {
     h('span', { class: 'pf-card-top' },
       h('span', { class: 'pf-cited sb-num', hidden: true }),
       h('span', { class: 'pf-card-ico' }, fico(meta.kind, 14)),
-      h('span', { class: 'pf-card-name', title: hit.file || meta.name }, mid(hit.file || meta.name, 22)),
-      hit.rank ? h('span', { class: 'pf-rank sb-num' }, `rank ${hit.rank}`) : null),
-    h('span', { class: 'pf-card-loc sb-num' }, [hit.locator, hit.atomId ? `atom ${shortId(hit.atomId)}` : null].filter(Boolean).join(' · ')),
+      h('span', { class: 'pf-card-name', title: fname }, fname)),
+    h('span', { class: 'pf-card-loc sb-num' }, [hit.locator || (hit.seq != null ? `atom #${hit.seq + 1}` : null), hit.rank ? `retrieval #${hit.rank}` : null].filter(Boolean).join(' · ')),
     snip,
     h('span', { class: 'pf-card-foot' },
-      below ? h('span', { class: 'pf-below-l' }, gap != null && gap < 3 ? `just below floor ${pct(fl)} · not used` : 'below floor · not used') : null,
+      below ? h('span', { class: 'pf-below-l' }, gap != null && gap < 3 ? `just below floor ${pct(fl)} · not used` : 'below floor · not used')
+        : h('span', { class: 'pf-unused-l', hidden: true }, 'searched · not used'),
       m == null
         ? h('span', { class: 'pf-kw' }, 'keyword match')
         : h('span', { class: 'pf-meter', 'aria-hidden': 'true' }, h('i', { style: { transform: `scaleX(${Math.max(0, Math.min(1, (raw ?? 0) / 100))})` } })),
       m == null ? null : h('span', { class: 'pf-match sb-num' }, `match ${m}`)));
     card._snip = snip;
     card._hit = hit;
+    card._excerpt = excerpt;
     return card;
   }
 
@@ -628,11 +778,14 @@ export function mount(ctx) {
     const skels = [...container.querySelectorAll('.is-skel')];
     const token = {};
     container._swap = token;
+    container._nodes = nodes;   // the final may reorder these (cited first) before they land
     const place = () => {
       if (container._swap !== token) return;   // superseded (e.g. the final arrived during the skeleton fade)
       container._swap = null;
+      container._nodes = null;
       container.innerHTML = '';
       container.append(...nodes);
+      if (container === A.el.strip && A.stripEdges) A.stripEdges();   // emptied + refilled: the offset clamps to 0 on its own
       if (!(A.fast || reduced())) {
         nodes.forEach((n, i) => { if (n.nodeType === 1) anim(n, [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], aOpts(A, { duration: 260, delay: i * step, easing: 'out' })); });
       }
@@ -641,6 +794,39 @@ export function mount(ctx) {
     if (skels.length && !(A.fast || reduced())) {
       Promise.all(skels.map((s) => anim(s, [{ opacity: 1 }, { opacity: 0 }], aOpts(A, { duration: 120, fill: 'forwards' })).finished)).then(place);
     } else place();
+  }
+
+  /** Strip edge state: fades and nav buttons only on a side that has more to scroll to (one read + one write per frame). */
+  function wireStrip(A) {
+    const strip = A.el.strip;
+    let raf = 0;
+    const upd = () => {
+      raf = 0;
+      const max = strip.scrollWidth - strip.clientWidth;
+      const l = max > 2 && strip.scrollLeft > 2, r = max > 2 && strip.scrollLeft < max - 2;
+      A.el.stripWrap.dataset.fadeL = String(l);
+      A.el.stripWrap.dataset.fadeR = String(r);
+      A.el.stripPrev.hidden = !l;
+      A.el.stripNext.hidden = !r;
+    };
+    A.stripEdges = () => { if (!raf) raf = requestAnimationFrame(upd); };
+    strip.addEventListener('scroll', A.stripEdges, { passive: true });
+    if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(A.stripEdges); ro.observe(strip); A.stripRO = ro; }
+  }
+  function scrollStrip(A, dir) {
+    const strip = A.el.strip;
+    const card = strip.querySelector('.pf-card');
+    const step = Math.max(160, (card ? card.getBoundingClientRect().width + 8 : 236) * Math.max(1, Math.floor(strip.clientWidth / 240)));
+    strip.scrollBy({ left: dir * step, behavior: scrollBehavior() });
+  }
+  /** Brings a card fully into the strip's view (no page scroll: only the strip moves). */
+  function revealCard(A, card, behavior = 'auto') {
+    const strip = A.el.strip;
+    if (!card || !strip) return;
+    const sr = strip.getBoundingClientRect(), cr = card.getBoundingClientRect();
+    const edge = isMobile() ? 16 : 40;   // past the edge fade (proof.css --fl / scroll-padding-inline)
+    if (cr.left < sr.left + edge) strip.scrollTo({ left: Math.max(0, strip.scrollLeft + (cr.left - sr.left) - edge), behavior });
+    else if (cr.right > sr.right - 4) strip.scrollTo({ left: strip.scrollLeft + (cr.right - sr.right) + edge, behavior });
   }
 
   // ---------------------------------------------------------------- deltas (rAF-batched sentence reveal)
@@ -671,7 +857,9 @@ export function mount(ctx) {
       body.insertBefore(p, A.el.caret.isConnected ? A.el.caret : null);
       touched.add(A);
       if (A.fast || reduced()) continue;
-      anim(sent, [{ opacity: 0, filter: 'blur(4px)' }, { opacity: 1, filter: 'blur(0px)' }], aOpts(A, { duration: 180, easing: 'out', essential: false }));
+      // compositor-only (opacity + transform): a blur filter repaints the line every frame under CPU throttling
+      anim(sent, [{ opacity: 0 }, { opacity: 1 }], aOpts(A, { duration: 180, easing: 'out', essential: false }));
+      anim(p, [{ transform: 'translateY(4px)' }, { transform: 'none' }], aOpts(A, { duration: 220, easing: 'out', essential: false }));
       chips.forEach((c, i) => anim(c, [{ opacity: 0, transform: 'scale(.6)' }, { opacity: 1, transform: 'scale(1.08)', offset: 0.7 }, { opacity: 1, transform: 'scale(1)' }],
         aOpts(A, { duration: 220, delay: 120 + i * 40, easing: 'spring' })));
     }
@@ -712,7 +900,7 @@ export function mount(ctx) {
     return {
       n, cit, text: qText || '', offset: q?.offset ?? ql?.offset ?? null, derived: !!q?.derived, atomId, fileId: cit.fileId, file: cit.file,
       seq: hit?.seq ?? (atomId === cit.atomId ? cit.seq : null), locator: hit?.locator || cit.locator, match: fmtMatch(hit || cit, floorOfA(A)), title: cit.title,
-      hit,
+      hit, label: A.citeLabel ? A.citeLabel(n, atomId) : String(n),
     };
   }
 
@@ -720,6 +908,7 @@ export function mount(ctx) {
   let closeTimer = 0;
   let openChip = null;
   let linked = null;               // {A, chip, card}
+  let pendingReveal = null;        // the answer whose first receipt will turn Proof view on when it closes
   let proofAutoDone = (() => { try { return localStorage.getItem(PROOF_AUTO_KEY) === '1'; } catch { return false; } })();
 
   function intentOpen(A, chip) {
@@ -743,11 +932,18 @@ export function mount(ctx) {
     const c = citeData(A, chip);
     if (!c) return;
     if (openChip && openChip !== chip) { const prevA = answers.get(openChip.closest('.sb-answer')?.id); if (prevA) closePop(prevA); }
-    // B5: the first chip interaction turns Proof view on for this session (B shows the toast; the choice is remembered)
+    // B5: the first chip interaction turns Proof view on for this session (B shows the toast; the choice is remembered).
+    // r4: the view switches now, but THIS answer keeps its Bot-view layout (is-proof-held) until the receipt closes.
+    // Unfolding its EvidenceStrip under an open popover stacked layers on one spot and pushed the answer's header
+    // under the pane's top edge; now the receipt reads alone, and on close the strip unfolds with the answer's header
+    // anchored below the top edge (releaseProofHold). Answers above get their strips at once; the chip is held at its
+    // viewport position meanwhile, so it never slides out from under the pointer.
     if (!proofAutoDone && getState().ui.view !== 'proof') {
       proofAutoDone = true;
       try { localStorage.setItem(PROOF_AUTO_KEY, '1'); } catch { /* ignore */ }
-      emit('view:set', { view: 'proof' });
+      pendingReveal = A;
+      A.el.root.classList.add('is-proof-held');
+      revealProofHolding(chip);
     }
     openChip = chip;
     chip.setAttribute('aria-expanded', 'true');
@@ -758,6 +954,8 @@ export function mount(ctx) {
     A.popOpen = true;
     fillPop(A, pop, c, chip);
     placePop(A, pop, chip);
+    // the first chip interaction may have just switched to Proof view (the strip appears above): place again once laid out
+    requestAnimationFrame(() => { if (openChip === chip) placePop(A, pop, chip, { reveal: true }); });
     if (!wasOpen && !reduced()) anim(pop, [{ opacity: 0, transform: 'translateY(4px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out' });
     const mk = pop.querySelector('mark');
     if (mk) motion.sweep(mk);
@@ -767,7 +965,7 @@ export function mount(ctx) {
     loadAtom(c.fileId, c.seq).then((atom) => {
       if (openChip !== chip || !atom) return;
       fillPop(A, pop, c, chip, atom.text);
-      placePop(A, pop, chip);
+      placePop(A, pop, chip, { reveal: true });
     });
   }
 
@@ -778,16 +976,64 @@ export function mount(ctx) {
     pop.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); const ch = openChip; closePop(A); ch && ch.focus(); } });
   }
 
+  /** Holds `anchor` at viewport y (default: where it is now) across a layout change made by `change()`, scrolling the
+   *  thread to compensate and growing a bottom spacer when the pane cannot scroll that far. */
+  function holdAt(anchor, change, y0 = anchor && anchor.isConnected ? anchor.getBoundingClientRect().top : null) {
+    const t = dom.thread;
+    const hold = () => {
+      if (y0 == null || !anchor.isConnected) return;
+      const dy = anchor.getBoundingClientRect().top - y0;
+      if (Math.abs(dy) <= 0.5) return;
+      const room = t.scrollHeight - t.clientHeight - t.scrollTop;
+      if (dy > room) {
+        // too little below to scroll: a bottom spacer (removed when the next answer starts) makes the room
+        const base = threadEl.style.paddingBottom ? parseFloat(threadEl.style.paddingBottom) : parseFloat(getComputedStyle(threadEl).paddingBottom) || 0;
+        threadEl.style.paddingBottom = `${Math.ceil(base + dy - room + 1)}px`;
+      }
+      stick = false; selfScroll = true; t.scrollTop += dy;
+    };
+    change();
+    hold();
+    requestAnimationFrame(hold);   // in case the change lands a frame later
+  }
+  /** First chip interaction: Proof view on, the hovered chip held under the pointer. */
+  function revealProofHolding(chip) { holdAt(chip, () => emit('view:set', { view: 'proof' })); }
+  /** The receipt closed: the held answer unfolds its proof layers. Its header (status pill) stays where it was, but
+   *  never above the pane's top edge + 14 px (the thread's scroll-padding), so neither the header nor the evidence
+   *  cards land clipped under the Sources band above the thread. */
+  function releaseProofHold(A) {
+    const t = dom.thread;
+    const root = A.el.root;
+    if (!root.classList.contains('is-proof-held')) return;
+    const anchor = A.el.main;
+    const y0 = Math.max(t.getBoundingClientRect().top + 14, anchor.getBoundingClientRect().top);
+    holdAt(anchor, () => root.classList.remove('is-proof-held'), y0);
+    if (reduced() || (dom.bot?.dataset.view || getState().ui.view) !== 'proof') return;
+    let i = 0;
+    for (const el of root.querySelectorAll('.pf-only')) anim(el, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 300, delay: Math.min(i++, 6) * 60, easing: 'out' });
+    A.el.strip.querySelectorAll('.pf-meter i').forEach((bar, k) => { const to = bar.style.transform; anim(bar, [{ transform: 'scaleX(0)' }, { transform: to }], { duration: 380, delay: 140 + k * 50, easing: 'out', essential: false }); });
+  }
   function closePop(A) {
     clearTimeout(popTimer);
     const pop = A.el.pop;
     if (openChip) { openChip.setAttribute('aria-expanded', 'false'); openChip.classList.remove('is-open'); }
     openChip = null;
     unlinkThread();
-    if (!pop || pop.hidden || !A.popOpen) return;
+    if (!pop || pop.hidden || !A.popOpen) { flushReveal(); return; }
     A.popOpen = false;
-    const hide = () => { if (!A.popOpen) { pop.hidden = true; pop.innerHTML = ''; } };
+    const hide = () => { if (!A.popOpen) { pop.hidden = true; pop.innerHTML = ''; A.el.root.style.paddingBottom = ''; } flushReveal(); };
     if (reduced()) hide(); else anim(pop, [{ opacity: 1 }, { opacity: 0 }], { duration: 120 }).finished.then(hide);
+  }
+  /** Runs the deferred Proof reveal once no receipt is open (moving to the next chip keeps it pending). */
+  function flushReveal() {
+    if (!pendingReveal) return;
+    requestAnimationFrame(() => {
+      const A = pendingReveal;
+      if (!A || openChip) return;
+      pendingReveal = null;
+      if (!A.el.root.isConnected) return;
+      releaseProofHold(A);
+    });
   }
 
   /** ±1 line of context around the quote: the sentence/line before, the quote marked, the one after. */
@@ -806,11 +1052,13 @@ export function mount(ctx) {
 
   function fillPop(A, pop, c, chip, atomText) {
     const parts = contextParts(atomText || c.hit?.excerpt || c.cit?.excerpt || c.text, c.text);
+    // a context line that is a markdown table row reads as prose ("Model · Type · Price"), never raw pipes
+    parts.before = cleanExcerpt(parts.before); parts.after = cleanExcerpt(parts.after);
     const metaBits = [`Quoted verbatim from ${c.file}`, c.locator, c.match == null ? 'keyword match' : `match ${c.match}`].filter(Boolean);
-    pop.setAttribute('aria-label', `Citation ${c.n} receipt`);
+    pop.setAttribute('aria-label', `Citation ${c.label || c.n} receipt`);
     pop.innerHTML = '';
     pop.append(
-      h('div', { class: 'pf-pop-head' }, h('span', { class: 'pf-pop-n sb-num' }, String(c.n)), h('span', { class: 'pf-pop-title' }, c.title || chipTitle(c.file, c.title)),
+      h('div', { class: 'pf-pop-head' }, h('span', { class: 'pf-pop-n sb-num' }, c.label || String(c.n)), h('span', { class: 'pf-pop-title' }, c.title || chipTitle(c.file, c.title)),
         c.derived ? h('span', { class: 'pf-badge is-derived' }, 'from a table row') : h('span', { class: 'pf-badge' }, ico('check', 11), 'Verbatim')),
       h('p', { class: 'pf-pop-ctx' },
         parts.before ? h('span', { class: 'pf-ctx-dim' }, `${parts.before} `) : null,
@@ -823,10 +1071,15 @@ export function mount(ctx) {
     if (mk) mk.style.backgroundSize = '100% 100%';
   }
 
-  function placePop(A, pop, chip) {
-    if (isMobile()) { pop.classList.add('is-inline'); pop.style.left = ''; pop.style.top = ''; return; }
+  /** The receipt opens BELOW its sentence. In Proof view it never flips up: the EvidenceStrip sits above the body, and
+   *  the card it links to must stay visible (it lifts and gets the thread instead of being covered). When the answer
+   *  ends too soon, the answer grows a little room for it; when the pane ends too soon, the thread scrolls just enough
+   *  (the popover's hover bridge keeps it open while the chip slides up under the pointer). */
+  function placePop(A, pop, chip, { reveal = false } = {}) {
+    if (isMobile()) { pop.classList.add('is-inline'); pop.style.left = ''; pop.style.top = ''; A.el.root.style.paddingBottom = ''; return; }
     pop.classList.remove('is-inline');
-    const host = A.el.root.getBoundingClientRect();
+    const root = A.el.root;
+    const host = root.getBoundingClientRect();
     const r = chip.getBoundingClientRect();
     const w = Math.min(380, host.width - 24);
     pop.style.width = `${w}px`;
@@ -834,24 +1087,36 @@ export function mount(ctx) {
     left = Math.max(8, Math.min(left, host.width - w - 8));
     const ph = pop.offsetHeight || 140;
     const pane = dom.thread.getBoundingClientRect();
-    const below = r.bottom + ph + 12 < pane.bottom || r.top - ph - 12 < pane.top;
+    const proof = (dom.bot?.dataset.view === 'proof' || getState().ui.view === 'proof') && !root.classList.contains('is-proof-held');
+    const below = proof || r.bottom + ph + 12 < pane.bottom || r.top - ph - 12 < pane.top;
     pop.style.left = `${left}px`;
     pop.style.top = below ? `${r.bottom - host.top + 8}px` : `${r.top - host.top - ph - 8}px`;
     pop.dataset.side = below ? 'below' : 'above';
+    if (!below) { root.style.paddingBottom = ''; return; }
+    // the answer clips its paint (contain: paint): give the popover room inside it
+    const curPad = parseFloat(root.style.paddingBottom) || 0;
+    const need = r.bottom + 8 + ph + 10 - (host.bottom - curPad);
+    root.style.paddingBottom = need > 0 ? `${Math.ceil(need)}px` : '';
+    if (reveal) {
+      let over = r.bottom + 8 + ph + 12 - pane.bottom;
+      // r4: in Proof view the evidence card this receipt links to sits above the sentence: scrolling for the popover
+      // never pushes the strip's top edge under the pane's top edge (the popover may then sit partly below the fold)
+      if (proof && A.el.stripWrap.isConnected) over = Math.min(over, A.el.stripWrap.getBoundingClientRect().top - pane.top - 14);
+      if (over > 0) { stick = false; dom.thread.scrollBy({ top: Math.ceil(over), behavior: scrollBehavior() }); }
+    }
   }
 
   // Thread: an SVG path from chip to card (pathLength=1 draw, 220 ms), the card lifts, the map gets the same atom.
   let threadRaf = 0;
   function linkThread(A, chip, c) {
     unlinkThread(true);
-    const proof = (dom.bot?.dataset.view || getState().ui.view) === 'proof';
+    const proof = (dom.bot?.dataset.view || getState().ui.view) === 'proof' && !A.el.root.classList.contains('is-proof-held');
     const card = proof ? (A.el.cards || []).find((x) => x.dataset.atom === c.atomId) || (A.el.cards || []).find((x) => x.dataset.file === c.fileId) : null;
     linked = { A, chip, card, c };
     if (card) {
       card.classList.add('is-linked');
       const strip = A.el.strip;
-      const sr = strip.getBoundingClientRect(), cr = card.getBoundingClientRect();
-      if (cr.left < sr.left || cr.right > sr.right) strip.scrollTo({ left: strip.scrollLeft + (cr.left - sr.left) - 12, behavior: 'auto' });
+      revealCard(A, card, 'auto');
       drawThread(true);
       strip.addEventListener('scroll', scheduleThreadDraw, { passive: true });
     }
@@ -912,7 +1177,9 @@ export function mount(ctx) {
 
   function onFinal(A, f, { restore = false } = {}) {
     if (!f || A.final) return;
+    if (A.startPending) A.startPending();
     A.final = f;
+    if (A.e2eMs == null && !restore) A.e2eMs = Math.round(performance.now() - A.t0);
     A.status = f.status || (f.refused ? 'refused' : 'grounded');
     A.text = f.text || A.text;
     A.el.root.dataset.status = A.status;
@@ -938,7 +1205,7 @@ export function mount(ctx) {
     if (!tid) return;
     let items = [...answers.values()].filter((x) => x.by !== 'proof' && x.final && !x.error).slice(-THREAD_KEEP).map((x) => ({
       question: x.question, by: x.by, label: x.label, version: x.version, startedAt: x.startedAt, steps: x.steps,
-      retrieval: x.retrieval, lines: x.lines ? { count: x.lines.count } : null, selected: x.selected, final: x.final }));
+      retrieval: x.retrieval, lines: x.lines ? { count: x.lines.count } : null, selected: x.selected, final: x.final, e2eMs: x.e2eMs ?? null }));
     try {
       let json = JSON.stringify({ trialId: tid, items });
       while (json.length > 350000 && items.length > 1) { items = items.slice(1); json = JSON.stringify({ trialId: tid, items }); }
@@ -959,7 +1226,7 @@ export function mount(ctx) {
         id: uid('ans'), question: String(it.question).slice(0, 500), by: it.by || 'user', label: it.label || null, status: 'pending', steps: Array.isArray(it.steps) ? it.steps : [],
         retrieval: null, lines: it.lines || null, selected: it.selected || null, text: '', final: null, version: it.version || 1,
         startedAt: it.startedAt || Date.now(), t0: performance.now(), fast: true, partial: false, el: {}, lineEls: [], tweens: [], group: null, attempts: 0,
-        persona: 'customer', restored: true, settled: true,
+        persona: 'customer', restored: true, settled: true, e2eMs: Number.isFinite(it.e2eMs) ? it.e2eMs : null,
       };
       A.promise = Promise.resolve(it.final); A.resolve = () => {};
       answers.set(A.id, A);
@@ -995,45 +1262,98 @@ export function mount(ctx) {
     }
     // titled chips: [1 · Warranty & Returns]
     const byN = new Map((f.citations || []).map((c) => [c.n, c]));
-    body.querySelectorAll('.pf-cite').forEach((chip) => {
+    // r4: one label per quoted PASSAGE. When one file [n] is quoted from two different atoms, its chips read 1a / 1b
+    // (and so do the evidence cards and receipts), so every chip maps to exactly one card.
+    const atomsOfN = new Map();
+    const allChips = [...body.querySelectorAll('.pf-cite')];
+    for (const chip of allChips) {
+      const d = citeData(A, chip);
+      if (!d || !d.atomId) continue;
+      const arr = atomsOfN.get(d.n) || [];
+      if (!arr.includes(d.atomId)) arr.push(d.atomId);
+      atomsOfN.set(d.n, arr);
+    }
+    A.citeLabel = (n, atomId) => {
+      const arr = atomsOfN.get(Number(n)) || [];
+      const i = atomId ? arr.indexOf(atomId) : -1;
+      return arr.length > 1 && i >= 0 ? `${n}${String.fromCharCode(97 + (i % 26))}` : String(n);
+    };
+    A.citeOrder = (n, atomId) => Number(n) + Math.max(0, (atomsOfN.get(Number(n)) || []).indexOf(atomId)) / 100;
+    allChips.forEach((chip) => {
       const c = byN.get(Number(chip.dataset.n));
       if (!c) return;
       const d = citeData(A, chip);
       const title = chipTitle(c.file, c.title);
       const t = chip.querySelector('.pf-cite-t');
       t.textContent = title;
+      const lab = A.citeLabel(c.n, d?.atomId);
+      chip.dataset.label = lab;
+      const nEl = chip.querySelector('.pf-cite-n');
+      if (nEl && nEl.textContent !== lab) nEl.textContent = lab;
       const loc = d?.seq != null ? `atom ${d.seq + 1}` : (d?.locator || c.locator || '');
-      chip.setAttribute('aria-label', `Citation ${c.n}: ${title}${loc ? `, ${loc}` : ''}`);
+      chip.setAttribute('aria-label', `Citation ${lab}: ${title}${loc ? `, ${loc}` : ''}`);
       if (!(A.fast || reduced())) anim(t, [{ opacity: 0, clipPath: 'inset(0 100% 0 0)' }, { opacity: 1, clipPath: 'inset(0 0 0 0)' }], aOpts(A, { duration: 220, easing: 'out' }));
     });
     // Bot view source row: cited files first in [n] order (so source order == citation order), then the others.
     const hits = A.retrieval?.hits || [];
-    const kept = hits.filter((x) => x.kept);
     const ordered = [];
     for (const c of f.citations || []) {
       const hit = hits.find((x) => x.atomId === c.atomId) || hits.find((x) => x.fileId === c.fileId) || { fileId: c.fileId, file: c.file, atomId: c.atomId, seq: c.seq, similarity: c.similarity, match: c.match, locator: c.locator };
       ordered.push(srcChip(A, hit, { n: c.n }));
     }
-    const citedFiles = new Set((f.citations || []).map((c) => c.fileId));
-    const others = hitsByFile(kept).filter((x) => !citedFiles.has(x.fileId));
-    for (const x of others.slice(0, Math.max(0, 3 - ordered.length))) ordered.push(srcChip(A, x, { dim: true }));
+    // Visitors see only what the answer cites, so the chip count always equals "Sources (n)" in the footer. Kept but
+    // unquoted passages stay in the Proof view strip, labelled "searched · not used".
     A.el.srcRow._swap = null;
     A.el.srcRow.innerHTML = ''; A.el.srcRow.append(...ordered);
     // Evidence strip: mark the quoted spans and badge the cited cards with their [n]
     const quoted = f.proof?.quotedLines || [];
     const citeN = new Map();
-    for (const card of A.el.cards || []) {
+    const nsOf = (card) => {
       const qs = quoted.filter((q) => q.atomId === card.dataset.atom);
-      const ns = [...new Set(qs.length ? qs.map((q) => q.n) : (f.citations || []).filter((c) => c.atomId && c.atomId === card.dataset.atom).map((c) => c.n))].sort((a, b) => a - b);
+      return { qs, ns: [...new Set(qs.length ? qs.map((q) => q.n) : (f.citations || []).filter((c) => c.atomId && c.atomId === card.dataset.atom).map((c) => c.n))].sort((a, b) => a - b) };
+    };
+    // what the cited cards look like, so an unused card can say WHY it was not used (same file as [n], or a higher
+    // match whose lines did not answer the question): a top-ranked "not used" never goes unexplained
+    const fileCite = new Map();
+    let lowCited = Infinity;
+    for (const card of A.el.cards || []) {
+      const { ns } = nsOf(card);
       if (!ns.length) continue;
-      citeN.set(card, ns[0]);
+      if (!fileCite.has(card.dataset.file)) fileCite.set(card.dataset.file, ns[0]);
+      const r = rawMatch(card._hit || {}); if (r != null) lowCited = Math.min(lowCited, r);
+    }
+    for (const card of A.el.cards || []) {
+      const { qs, ns } = nsOf(card);
+      if (!ns.length) {
+        // kept above the floor, but no line of it was quoted: dimmed and said plainly, with the reason
+        card.classList.add('is-unused');
+        const l = card.querySelector('.pf-unused-l');
+        if (l) {
+          const sameN = fileCite.get(card.dataset.file);
+          const r = rawMatch(card._hit || {});
+          const higher = r != null && Number.isFinite(lowCited) && r > lowCited;
+          l.textContent = sameN != null ? `context only · [${A.citeLabel ? A.citeLabel(sameN, null) : sameN}] quotes this file`
+            : higher ? 'not used · closer wording, but no line here answers the question' : 'not used · no line here answers the question';
+          l.title = sameN != null
+            ? `Another passage of this file is quoted as [${sameN}]; this one adds nothing the answer needs.`
+            : 'Above the floor, but the model found no line in this passage that answers the question, so nothing from it is quoted. Match ranks passages; it does not decide what is quoted.';
+          l.hidden = false;
+          // r4: the reason reads first, right under the file name (a higher-ranked card that was not quoted is
+          // explained before anyone wonders why the "better match" was ignored)
+          if (card._snip && l.parentElement !== card) card.insertBefore(l, card._snip);
+        }
+        continue;
+      }
+      citeN.set(card, A.citeOrder(ns[0], card.dataset.atom));
       const badge = card.querySelector('.pf-cited');
       badge.hidden = false;
-      badge.textContent = `[${ns.join('][')}]`;
+      badge.textContent = `[${ns.map((n) => A.citeLabel(n, card.dataset.atom)).join('][')}]`;
       card.classList.add('is-cited');
-      if (qs.length) markSnippet(card._snip, card._hit?.excerpt || '', qs.map((q) => q.text), A);
+      if (qs.length) markSnippet(card._snip, card._excerpt ?? card._hit?.excerpt ?? '', qs.map((q) => q.text), A);
     }
     orderCardsByCitation(A, citeN);
+    // the strip always opens on [1] (cited cards lead): never a re-ask that starts scrolled past it
+    requestAnimationFrame(() => { if (A.el.strip.scrollLeft) A.el.strip.scrollLeft = 0; A.stripEdges && A.stripEdges(); });
     morphPill(A);
     renderLedger(A);
     renderTrace(A);
@@ -1043,15 +1363,26 @@ export function mount(ctx) {
   /** Source order == citation order: cited cards move to the front in [n] order, then the other kept cards by rank.
    *  FLIP with transforms only (one measurement before, one after), so nothing reflows per frame. */
   function orderCardsByCitation(A, citeN) {
-    const cards = (A.el.cards || []).filter((c) => c.isConnected);
-    if (cards.length < 2) return;
-    const want = cards.slice().sort((a, b) => {
+    const all = A.el.cards || [];
+    const want = all.slice().sort((a, b) => {
       const na = citeN.get(a) ?? Infinity, nb = citeN.get(b) ?? Infinity;
       if (na !== nb) return na - nb;
       return (Number(a.dataset.rank) || 99) - (Number(b.dataset.rank) || 99);
     });
+    // Fast answers: the final can land while the skeletons are still fading out, before the cards are in the DOM.
+    // Reorder the pending node list itself (kept cards are its leading entries), so they land cited-first.
+    const pending = A.el.strip._swap && A.el.strip._nodes;
+    if (pending) {
+      for (let i = 0; i < want.length; i++) if (pending[i] && pending[i]._hit) pending[i] = want[i];
+      A.el.cards = want;
+      return;
+    }
+    const cards = all.filter((c) => c.isConnected);
+    if (cards.length < 2) { A.el.cards = want; return; }
     if (want.every((c, i) => c === cards[i])) return;
-    const animate = !(A.fast || reduced());
+    // the FLIP measures layout, so it only runs where it can be seen (Proof view): in Bot view the strip is hidden and
+    // the reorder is a plain DOM move, with no forced reflow in the frame the answer lands in
+    const animate = !(A.fast || reduced()) && (dom.bot?.dataset.view || getState().ui.view) === 'proof';
     const before = animate ? new Map(cards.map((c) => [c, c.getBoundingClientRect().left])) : null;
     const anchor = cards[0];
     const ph = document.createComment('cards');
@@ -1060,6 +1391,7 @@ export function mount(ctx) {
     ph.remove();
     A.el.cards = want;
     if (!animate) return;
+    if (A.el.strip.scrollLeft) A.el.strip.scrollLeft = 0;   // before the "last" measurement, so the FLIP stays true
     for (const c of want) {
       const dx = before.get(c) - c.getBoundingClientRect().left;
       if (Math.abs(dx) > 1) anim(c, [{ transform: `translateX(${dx}px)` }, { transform: 'none' }], aOpts(A, { duration: 320, easing: 'out', essential: false }));
@@ -1121,7 +1453,7 @@ export function mount(ctx) {
       const l = t.querySelector('.sb-tick-l.is-on');
       if (l) l.textContent = isGuard ? 'Guard caught it before search' : `Nothing above floor ${pct(f.why?.floor ?? A.retrieval?.floor?.min ?? 0.7)}`;
       const ms = t.querySelector('.sb-tick-ms');
-      if (ms) ms.textContent = fmtMs(f.latencyMs?.total);
+      if (ms) ms.textContent = fmtMs(waitMs(A));
     }
     const exact = String(f.text || (isGuard ? '' : NOT_IN_DATA));
     const done = () => {
@@ -1129,7 +1461,10 @@ export function mount(ctx) {
       morphPill(A);
       renderTrace(A);
       renderFoot(A);
+      if (!isGuard && !A.restored) learnNote(A);
     };
+    // the strip always opens on its first candidate (never a few px in, under the left fade)
+    requestAnimationFrame(() => { if (A.el.strip.scrollLeft) A.el.strip.scrollLeft = 0; A.stripEdges && A.stripEdges(); });
     if (A.fast || reduced()) { greyCandidates(A, true); done(); return; }
     // choreography: candidates sink and grey (30 ms stagger), the shield draws (400 ms), the sentence types (12 ms/char)
     greyCandidates(A, false);
@@ -1140,6 +1475,27 @@ export function mount(ctx) {
       A.tweens.push(t);
       t.finished.then(done);
     }, 260);
+  }
+
+  /** Under a refusal asked while files are still learning: a separate muted line (never part of the refusal sentence)
+   *  saying the answer may change, with a Re-ask. It updates live as files finish. */
+  function learnNote(A) {
+    const busy = readiness().busy.length;
+    if (!busy || A.el.learn) return;
+    const txt = h('span', { class: 'pf-learn-t' });
+    const btn = h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: () => startAsk(A.question, { by: 'chip', label: 'Asked again' }) }, ico('refresh', 13), 'Re-ask');
+    const el = h('p', { class: 'pf-learn', role: 'note' }, h('span', { class: 'pf-spin', 'aria-hidden': 'true' }), txt, btn);
+    A.el.learn = { el, txt };
+    A.el.refusal.append(el);
+    updateLearnNote(A);
+    if (!(A.fast || reduced())) anim(el, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out' });
+  }
+  function updateLearnNote(A) {
+    const L = A.el.learn;
+    if (!L) return;
+    const busy = readiness().busy.length;
+    L.el.dataset.state = busy ? 'learning' : 'ready';
+    L.txt.textContent = busy ? `${plural(busy, 'file')} still learning, so this may change.` : 'All files are ready now. Re-ask to check again.';
   }
 
   function greyCandidates(A, instant) {
@@ -1165,7 +1521,7 @@ export function mount(ctx) {
     }
   }
 
-  /** FloorChart: the 5 best candidates against a dashed floor line. Scale 0–100, honest. */
+  /** FloorChart: the 5 best distinct candidates against a dashed floor line, on a labelled local scale. */
   function floorChart(A) {
     const f = A.final;
     if (f.status === 'guard' || !f.why) {
@@ -1176,23 +1532,68 @@ export function mount(ctx) {
     const why = f.why;
     const flSim = why.floor ?? f.proof?.floor ?? 0.7;
     const floor = pct(flSim);
-    const best = why.best == null ? '–' : fmtMatch(Number(why.best), flSim);
-    const cands = (why.candidates || []).slice(0, 5);
-    const mOf = (c) => fmtMatch(c, flSim);
-    const rows = h('div', { class: 'pf-fc-rows', style: { '--floor': `${floor}%` } },
-      h('div', { class: 'pf-fc-row pf-fc-axis', 'aria-hidden': 'true' }, h('span'), h('span', { class: 'pf-fc-track' }, h('span', { class: 'pf-fc-flabel sb-num' }, `floor ${floor}`)), h('span')),
-      cands.map((c) => {
-        const meta = fileMeta(null, c.file);
-        const raw = rawMatch(c) ?? 0;
-        return h('div', { class: 'pf-fc-row' },
-          h('span', { class: 'pf-fc-name', title: c.file }, mid(c.file, 22)),
-          h('span', { class: 'pf-fc-track' }, h('i', { class: 'pf-fc-bar', style: { '--hue': hueVar(meta.hue), transform: `scaleX(${Math.max(0.01, raw / 100)})` } })),
-          h('span', { class: 'pf-fc-n sb-num' }, mOf(c) ?? '–'));
-      }));
-    const table = h('table', { class: 'st-sr' }, h('caption', null, 'Closest candidates and their match scores'),
-      h('tr', null, h('th', null, 'File'), h('th', null, 'Match')), cands.map((c) => h('tr', null, h('td', null, c.file), h('td', null, mOf(c) ?? ''))));
+    let best = why.best == null ? '–' : fmtMatch(Number(why.best), flSim);
+    // One sorted candidate array feeds the bars, the screen-reader table and the "Closest atoms" list, so they can
+    // never disagree. Each bar is one atom, labelled with its file (coloured by that file, as on the map) and, when
+    // the file or the shown match repeats, its atom locator: a tie reads as two distinct passages, not a duplicate.
+    const hits = A.retrieval?.hits || [];
+    const head = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    // r4: one bar per DISTINCT atom (the same passage can come back twice: once per retrieval mode), best first
+    const seenAtoms = new Set();
+    const cands = (why.candidates || []).map((c, i) => ({ c, i })).sort((a, b) => ((rawMatch(b.c) ?? -1) - (rawMatch(a.c) ?? -1)) || (a.i - b.i)).map(({ c }) => {
+      const hit = hits.find((x) => x.file === c.file && head(x.excerpt) && head(x.excerpt) === head(c.excerpt)) || null;
+      const seq = c.seq ?? hit?.seq;
+      const meta = fileMeta(c.fileId || hit?.fileId || null, c.file);
+      return { c, m: fmtMatch(c, flSim), raw: rawMatch(c) ?? 0, hue: meta.hue, fid: c.fileId || hit?.fileId || '', kind: meta.kind, seq,
+        loc: c.locator || hit?.locator || (seq != null ? `atom #${seq + 1}` : null) };
+    }).filter((r) => {
+      const k = `${r.fid || r.c.file}|${r.seq != null ? `#${r.seq}` : head(r.c.excerpt)}`;
+      if (seenAtoms.has(k)) return false;
+      seenAtoms.add(k); return true;
+    }).slice(0, 5);
+    // ties read with more precision ("60.4" vs "60.2"): when any two candidates show the same number, the whole column
+    // switches to one decimal (two if one is not enough), so the column stays aligned. Never rounded across the floor.
+    const flPts = flSim * 100;
+    const atDp = (r, dp) => { const k = 10 ** dp; return (r < flPts ? Math.floor(r * k) / k : Math.ceil(r * k) / k).toFixed(dp); };
+    const tied = (list) => new Set(list).size < list.length;
+    const shown = cands.filter((r) => r.m != null);
+    if (tied(shown.map((r) => r.m))) {
+      const dp = tied(shown.map((r) => atDp(r.raw, 1))) ? 2 : 1;
+      for (const r of shown) r.m = atDp(r.raw, dp);
+    }
+    // r4: a local, labelled domain (3 points under the weakest candidate to 8 over the floor or the best), so a
+    // 1-point spread is visible instead of five identical bars. The axis prints both ends: the zoom is never hidden.
+    const raws = cands.map((r) => r.raw).filter(Number.isFinite);
+    const lo = Math.max(0, Math.floor(Math.min(flPts, ...raws) - 3));
+    const hi = Math.min(100, Math.max(lo + 10, Math.ceil(Math.max(flPts, ...raws) + 8)));
+    const pos = (v) => Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+    const fileN = new Map(), mN = new Map();
+    for (const r of cands) { fileN.set(r.c.file, (fileN.get(r.c.file) || 0) + 1); mN.set(r.m, (mN.get(r.m) || 0) + 1); }
+    const seenF = new Map();
+    for (const r of cands) {
+      const k = (seenF.get(r.c.file) || 0) + 1; seenF.set(r.c.file, k);
+      if (!r.loc && fileN.get(r.c.file) > 1) r.loc = `passage ${k}`;
+      r.showLoc = !!r.loc && (fileN.get(r.c.file) > 1 || mN.get(r.m) > 1);
+    }
+    // the caption's "Best match" reads at the chart's precision (never "62" over a bar labelled "61.5")
+    if (cands.length && cands[0].m != null && why.best != null && Math.abs(cands[0].raw - Number(why.best) * 100) < 0.051) best = cands[0].m;
+    const label = (r, cls) => h('span', { class: cls, title: [r.c.file, r.loc].filter(Boolean).join(' · ') },
+      h('i', { class: 'pf-fc-dot', style: { '--hue': hueVar(r.hue) }, dataset: { hf: r.fid, hn: r.c.file || '' }, 'aria-hidden': 'true' }),
+      h('span', { class: 'pf-fc-file' }, r.c.file || 'file'),
+      r.showLoc ? h('span', { class: 'pf-fc-loc sb-num' }, String(r.loc).replace(/\s+of\s+\d+$/, '')) : null);
+    const rows = h('div', { class: 'pf-fc-rows', style: { '--floor': `${(pos(flPts) * 100).toFixed(2)}%` } },
+      h('div', { class: 'pf-fc-row pf-fc-axis', 'aria-hidden': 'true' }, h('span', { class: 'pf-fc-axl' }, 'match (vector similarity)'),
+        h('span', { class: 'pf-fc-track' }, h('span', { class: 'pf-fc-tick is-lo sb-num' }, String(lo)), h('span', { class: 'pf-fc-flabel sb-num' }, `floor ${floor}`), h('span', { class: 'pf-fc-tick is-hi sb-num' }, String(hi))), h('span')),
+      cands.map((r) => h('div', { class: 'pf-fc-row' },
+        label(r, 'pf-fc-name'),
+        h('span', { class: 'pf-fc-track' }, h('i', { class: 'pf-fc-bar', dataset: { hf: r.fid, hn: r.c.file || '' }, style: { '--hue': hueVar(r.hue), transform: `scaleX(${Math.max(0.02, pos(r.raw))})` } })),
+        h('span', { class: 'pf-fc-n sb-num' }, r.m ?? '–'))));
+    const table = h('table', { class: 'st-sr' }, h('caption', null, `Closest candidates and their match (vector similarity, 0 to 100; chart zoomed to ${lo} to ${hi}) against the floor`),
+      h('tr', null, h('th', null, 'File'), h('th', null, 'Atom'), h('th', null, 'Match')), cands.map((r) => h('tr', null, h('td', null, r.c.file), h('td', null, r.loc || ''), h('td', null, r.m ?? ''))));
     const closest = h('div', { class: 'pf-closest' }, h('p', { class: 'pf-closest-h' }, 'Closest atoms (not used)'),
-      h('ul', null, cands.slice(0, 3).map((c) => h('li', null, h('span', { class: 'pf-closest-f sb-num' }, `${mid(c.file, 22)} · match ${mOf(c) ?? '–'}`), h('span', { class: 'pf-closest-x' }, clip(c.excerpt, 150))))));
+      h('ul', null, cands.slice(0, 3).map((r) => h('li', null,
+        h('span', { class: 'pf-closest-f' }, label(r, 'pf-closest-name'), h('span', { class: 'pf-closest-m sb-num' }, r.m == null ? 'keyword match' : `match ${r.m}`)),
+        h('span', { class: 'pf-closest-x' }, clip(cleanExcerpt(r.c.excerpt), 150))))));
     const reason = why.reason ? ` The closest lines didn't answer the question.` : '';
     const gap = why.best == null ? null : belowBy(Number(why.best), flSim);
     const close = gap != null && gap <= 6;
@@ -1219,8 +1620,13 @@ export function mount(ctx) {
       ico('shieldCheck', 14),
       h('span', null, 'Verified claims ', h('b', { class: 'sb-num' }, `${v.verified}/${v.claims}`), ' · ', h('b', { class: 'sb-num' }, `${vp}%`), ' · Unsupported claims ', h('b', { class: `sb-num${f.proof.unsupported ? ' is-bad' : ' is-good'}` }, String(f.proof.unsupported || 0))),
       h('span', { class: 'pf-sum-chev' }, ico('chevronDown', 14)));
-    const byN = new Map((f.citations || []).map((c) => [c.n, c]));
-    const panel = h('div', { class: 'pf-ledger-panel', id, hidden: true },
+    // panel shell now (aria-controls resolves), table on first open: nothing heavy in the frame the answer lands in
+    const panel = h('div', { class: 'pf-ledger-panel', id, hidden: true });
+    const fill = () => {
+      if (panel._filled) return;
+      panel._filled = true;
+      const byN = new Map((f.citations || []).map((c) => [c.n, c]));
+      panel.append(
       h('div', { class: 'pf-tablewrap', tabindex: '0', role: 'region', 'aria-label': 'Claim ledger table' }, h('table', { class: 'pf-table' },
         h('caption', { class: 'st-sr' }, 'Claim ledger: every sentence and the exact quote it was copied from'),
         h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Claim'), h('th', { scope: 'col' }, 'Exact quote'), h('th', { scope: 'col' }, 'File · locator'), h('th', { scope: 'col' }, 'Match'), h('th', { scope: 'col' }, h('span', { class: 'st-sr' }, 'Check')))),
@@ -1230,14 +1636,15 @@ export function mount(ctx) {
           const hit = (A.retrieval?.hits || []).find((x) => x.atomId === (ql?.atomId || cit?.atomId));
           const m = fmtMatch(hit || cit, floorOfA(A));
           return h('tr', null,
-            h('td', null, c.n ? h('span', { class: 'pf-tn sb-num' }, `[${c.n}]`) : null, ' ', c.sentence),
+            h('td', null, c.n ? h('span', { class: 'pf-tn sb-num' }, `[${A.citeLabel ? A.citeLabel(c.n, ql?.atomId || cit?.atomId) : c.n}]`) : null, ' ', c.sentence),
             h('td', { class: 'pf-tq' }, c.quote ? h('q', null, c.quote) : h('span', { class: 'pf-dim' }, '—')),
             h('td', { class: 'sb-num pf-tf' }, [c.file, hit?.locator || c.locator].filter(Boolean).join(' · ')),
             h('td', { class: 'sb-num' }, m == null ? 'keyword' : m),
             h('td', null, c.verified ? h('span', { class: 'pf-badge' }, ico('check', 11), 'Verbatim') : h('span', { class: 'pf-badge is-warn' }, 'Unverified')));
         })))),
       h('p', { class: 'pf-foot-note' }, 'In select mode every sentence is copied from your files; the model only chooses which lines.'));
-    btn.addEventListener('click', () => disclose(btn, panel));
+    };
+    btn.addEventListener('click', () => { fill(); disclose(btn, panel); });
     const box = h('div', { class: 'pf-only pf-ledger' }, btn, panel);
     A.el.extras.append(box);
     if (!(A.fast || reduced())) anim(box, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], aOpts(A, { duration: 260, delay: 80, easing: 'out' }));
@@ -1290,27 +1697,40 @@ export function mount(ctx) {
     }
     const id = `${A.id}-trace`;
     const btn = h('button', { type: 'button', class: 'pf-sum', 'aria-expanded': 'false', 'aria-controls': id },
-      ico('chart', 14), h('span', null, 'How this answer was built · ', h('b', { class: 'sb-num' }, fmtMs(total))), h('span', { class: 'pf-sum-chev' }, ico('chevronDown', 14)));
+      ico('chart', 14), h('span', null, 'How this answer was built · ', h('b', { class: 'sb-num' }, fmtMs(waitMs(A) ?? total)),
+        A.e2eMs != null && lat.total != null ? h('span', { class: 'pf-sum-sub sb-num' }, ` · server ${fmtMs(lat.total)}`) : null), h('span', { class: 'pf-sum-chev' }, ico('chevronDown', 14)));
     const tableId = `${A.id}-kept`;
-    const list = h('ol', { class: 'pf-wf' }, rows.map((row) => {
-      const left = Math.min(100, (100 * row.start) / total);
-      const width = row.dur > 0 ? Math.max(0.8, Math.min(100 - left, (100 * row.dur) / total)) : 0;
-      const label = row.button
-        ? h('button', { type: 'button', class: 'pf-wf-link', 'aria-expanded': 'false', 'aria-controls': tableId, onclick: (e) => { const b = e.currentTarget; disclose(b, keptTable); } }, row.label, ico('chevronRight', 12))
-        : h('span', null, row.label);
-      return h('li', { class: `pf-wf-row${row.tone ? ` is-${row.tone}` : ''}` },
-        h('span', { class: 'pf-wf-l' }, label),
-        h('span', { class: 'pf-wf-track', 'aria-hidden': 'true' }, width ? h('i', { class: 'pf-wf-bar', style: { left: `${left}%`, width: `${width}%` } }) : h('i', { class: 'pf-wf-tick', style: { left: `${left}%` } })),
-        h('span', { class: 'pf-wf-ms sb-num' }, row.ms));
-    }));
-    const keptTable = rankedTable(A, tableId);
-    const panel = h('div', { class: 'pf-trace-panel', id, hidden: true }, list, keptTable);
-    btn.addEventListener('click', () => disclose(btn, panel, () => {
+    // The panel shell exists (hidden) so aria-controls resolves; its rows and the ranked table are built on first open,
+    // not in the frame the answer lands in.
+    const panel = h('div', { class: 'pf-trace-panel', id, hidden: true });
+    const fill = () => {
+      if (panel._filled) return;
+      panel._filled = true;
+      const keptTable = rankedTable(A, tableId);
+      const list = h('ol', { class: 'pf-wf' }, rows.map((row) => {
+        const left = Math.min(100, (100 * row.start) / total);
+        const width = row.dur > 0 ? Math.max(0.8, Math.min(100 - left, (100 * row.dur) / total)) : 0;
+        const label = row.button
+          ? h('button', { type: 'button', class: 'pf-wf-link', 'aria-expanded': 'false', 'aria-controls': tableId, onclick: (e) => { const b = e.currentTarget; disclose(b, keptTable); } }, row.label, ico('chevronRight', 12))
+          : h('span', null, row.label);
+        return h('li', { class: `pf-wf-row${row.tone ? ` is-${row.tone}` : ''}` },
+          h('span', { class: 'pf-wf-l' }, label),
+          h('span', { class: 'pf-wf-track', 'aria-hidden': 'true' }, width ? h('i', { class: 'pf-wf-bar', style: { left: `${left}%`, width: `${width}%` } }) : h('i', { class: 'pf-wf-tick', style: { left: `${left}%` } })),
+          h('span', { class: 'pf-wf-ms sb-num' }, row.ms));
+      }));
+      const wait = A.e2eMs;
+      const note = wait != null && lat.total != null && wait > lat.total
+        ? h('p', { class: 'pf-foot-note' }, `You waited ${fmtMs(wait)} end to end. The server's search, floor check and ${f.refused ? 'refusal' : 'line choice'} took ${fmtMs(lat.total)} (the bars above); the rest is network and streaming.`)
+        : null;
+      panel.append(...[list, note, keptTable].filter(Boolean));
+      A.el.trace.keptTable = keptTable;
+    };
+    btn.addEventListener('click', () => { fill(); disclose(btn, panel, () => {
       if (reduced()) return;
       panel.querySelectorAll('.pf-wf-bar, .pf-wf-tick').forEach((b, i) => anim(b, [{ transform: 'scaleX(0)', transformOrigin: 'left' }, { transform: 'scaleX(1)', transformOrigin: 'left' }], { duration: 120, delay: i * 120, easing: 'out', fill: 'backwards', essential: false }));
-    }));
+    }); });
     const box = h('div', { class: 'pf-only pf-trace' }, btn, panel);
-    A.el.trace = { btn, panel, keptTable, box };
+    A.el.trace = { btn, panel, keptTable: null, box, fill };
     A.el.extras.append(box);
     if (!(A.fast || reduced())) anim(box, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], aOpts(A, { duration: 260, delay: 140, easing: 'out' }));
   }
@@ -1345,8 +1765,9 @@ export function mount(ctx) {
   function openTrace(A, withTable) {
     const tr = A.el.trace;
     if (!tr) return;
+    tr.fill && tr.fill();
     if (tr.btn.getAttribute('aria-expanded') !== 'true') tr.btn.click();
-    if (withTable && tr.keptTable.hidden) { const b = tr.panel.querySelector('.pf-wf-link'); if (b) b.click(); }
+    if (withTable && tr.keptTable && tr.keptTable.hidden) { const b = tr.panel.querySelector('.pf-wf-link'); if (b) b.click(); }
     setTimeout(() => tr.box.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() }), 30);
   }
 
@@ -1385,6 +1806,7 @@ export function mount(ctx) {
   }
 
   function onError(A, err) {
+    if (A.startPending) A.startPending();
     A.error = err || {};
     A.stopClock && A.stopClock();
     A.status = 'error';
@@ -1397,6 +1819,7 @@ export function mount(ctx) {
     const expired = err && (err.code === 'expired' || err.status === 401);
     const box = h('div', { class: 'sb-err', role: 'alert' });
     const retry = () => {
+      A.retry = null;
       box.remove();
       A.error = null; A.status = 'pending'; A.final = null; A.steps = []; A.retrieval = null; A.text = ''; A.lineEls = [];
       A.t0 = performance.now(); A.el.root.dataset.status = 'pending'; A.el.root.setAttribute('aria-busy', 'true');
@@ -1418,8 +1841,10 @@ export function mount(ctx) {
       if (A.attempts < 4) return;   // the answer (and a Proof Run row waiting on it) resolves when the retry lands
       clearInterval(timer);
     } else {
-      box.append(ico('warn', 15), h('span', null, 'Couldn’t reach your bot. Your question wasn’t lost.'),
+      const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+      box.append(ico('warn', 15), h('span', null, offline ? 'You’re offline. Your question wasn’t lost: it’s asked again when you reconnect.' : 'Couldn’t reach your bot. Your question wasn’t lost.'),
         h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: retry }, ico('refresh', 13), 'Try again'));
+      A.retry = retry;   // the 'online' event re-runs it when this is still the latest thing in the thread
     }
     A.el.status.innerHTML = '';
     A.el.srcRow.innerHTML = '';
@@ -1428,6 +1853,25 @@ export function mount(ctx) {
     if (!limited) say(expired ? 'This trial expired.' : 'Couldn’t reach your bot. Your question wasn’t lost.', 'assert');
     A.resolve(null);
   }
+
+  /** Back online: the last failed ask re-runs by itself when it is still the latest item in the thread. */
+  function onOnline() {
+    if (destroyed) return;
+    const items = [...threadEl.children].filter((x) => x.classList.contains('sb-answer') || x.classList.contains('sb-prun'));
+    const lastEl = items[items.length - 1];
+    const A = lastEl ? answers.get(lastEl.id) : null;
+    if (!A || A.status !== 'error' || typeof A.retry !== 'function') return;
+    A.retry();
+    const note = h('p', { class: 'sb-online', role: 'status' }, ico('refresh', 12), h('span', null, 'Back online, asked again'));
+    A.el.main.prepend(note);
+    say('Back online. Asked your question again.');
+    if (!reduced()) anim(note, [{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out' });
+    A.promise.then(() => setTimeout(() => {
+      if (!note.isConnected) return;
+      if (reduced()) note.remove(); else anim(note, [{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }).finished.then(() => note.remove(), () => note.remove());
+    }, 3500));
+  }
+  window.addEventListener('online', onOnline);
 
   // ---------------------------------------------------------------- compare (B7)
 
@@ -1649,11 +2093,17 @@ export function mount(ctx) {
     const m = data.match;
     const ring = h('span', { class: 'pf-ring', style: { '--p': `${m ?? 0}%` }, 'aria-hidden': 'true' }, h('span', { class: 'sb-num' }, m == null ? 'kw' : String(m)));
     const atomLabel = data.atomId || (data.seq != null ? `#${data.seq}` : '');
-    const copyBtn = h('button', { type: 'button', class: 'pf-copy', 'aria-label': 'Copy atom id', onclick: (e) => copyText(atomLabel, e.currentTarget) }, ico('copy', 13));
+    // The raw id is for developers (API lookups): a quiet "Copy atom id" control, the id itself only in its tooltip,
+    // so the 0-based id never sits next to the 1-based "atom #n of N" locator.
+    const copyBtn = h('button', { type: 'button', class: 'pf-copy pf-copyid', title: `${atomLabel} (API atom id)`, onclick: (e) => copyText(atomLabel, e.currentTarget) }, ico('copy', 12), h('span', null, 'Copy atom id'));
     const titleBits = h('div', { class: 'pf-dtitle' },
-      h('h2', { id: drawer.titleId, tabindex: '-1' }, h('span', { class: 'pf-dico', style: { '--hue': hueVar(data.hue) } }, fico(data.kind, 16)), h('span', { class: 'pf-dname' }, mid(data.file, isMobile() ? 26 : 34))),
-      h('p', { class: 'pf-dsub sb-num' }, [data.locator, m == null ? 'keyword match' : `match ${m}`, `floor ${pct(data.floor)}`].filter(Boolean).join(' · ')),
-      atomLabel ? h('p', { class: 'pf-did sb-num' }, h('span', null, `atom ${atomLabel}`), copyBtn) : null);
+      h('h2', { id: drawer.titleId, tabindex: '-1' }, h('span', { class: 'pf-dico', style: { '--hue': hueVar(data.hue) }, dataset: { hf: data.fileId || '', hn: data.file || '' } }, fico(data.kind, 16)), h('span', { class: 'pf-dname' }, mid(data.file, isMobile() ? 26 : 34))),
+      // r4: one line, never wrapping inside a value ("floor" / "70"): each value is a nowrap unit, the locator ellipsizes
+      h('p', { class: 'pf-dsub sb-num', title: [data.locator, m == null ? 'keyword match' : `match ${m}`, `floor ${pct(data.floor)}`].filter(Boolean).join(' · ') },
+        data.locator ? h('span', { class: 'pf-dsub-loc' }, data.locator) : null,
+        h('span', { class: 'pf-dsub-v' }, m == null ? 'keyword match' : `match ${m}`),
+        h('span', { class: 'pf-dsub-v' }, `floor ${pct(data.floor)}`)),
+      atomLabel ? h('p', { class: 'pf-did' }, copyBtn) : null);
     const close = h('button', { type: 'button', class: 'pf-close', 'aria-label': 'Close receipt', onclick: () => closeDrawer() }, ico('close', 18));
     const head = h('header', { class: 'pf-dhead' }, ring, titleBits, close);
     const body = h('div', { class: 'pf-dbody', tabindex: '0', role: 'region', 'aria-label': 'Passage' }, drawerSkeleton());
@@ -1672,7 +2122,7 @@ export function mount(ctx) {
     try { r = data.seq != null ? await loadAround(data.fileId, data.seq, 1) : null; } catch (e) { err = e; }
     if (!drawer || drawer.data !== data) return;
     body.innerHTML = '';
-    if (q) body.append(h('p', { class: 'pf-dquote' }, h('span', { class: 'pf-pop-n sb-num' }, String(q.n)), h('span', null, 'Quoted verbatim in your bot’s answer'), q.derived ? h('span', { class: 'pf-badge is-derived' }, 'from a table row') : h('span', { class: 'pf-badge' }, ico('check', 11), 'Verbatim')));
+    if (q) body.append(h('p', { class: 'pf-dquote' }, h('span', { class: 'pf-pop-n sb-num' }, q.label || (data.A?.citeLabel ? data.A.citeLabel(q.n, q.atomId) : String(q.n))), h('span', null, 'Quoted verbatim in your bot’s answer'), q.derived ? h('span', { class: 'pf-badge is-derived' }, 'from a table row') : h('span', { class: 'pf-badge' }, ico('check', 11), 'Verbatim')));
     const items = r?.items || [];
     let span = null;
     if (!items.length) {
@@ -2090,54 +2540,123 @@ export function mount(ctx) {
     const ready = r.ready.length > 0;
     // 3 starters whenever possible: the server's starters, padded with the questions it validated per Ready file
     // (file summaries) and its Proof Run questions (also validated against Ready files). Never a skeleton chip.
-    const starters = [];
+    const cand = [];
     const seen = new Set();
     for (const q of [...sugg.starters, ...summaryStarters(), ...(sugg.proof || [])]) {
       const k = norm(q);
-      if (!q || !k || seen.has(k)) continue;
-      seen.add(k); starters.push(q);
-      if (starters.length === 3) break;
+      if (!q || !k || seen.has(k) || asked.has(k)) continue;
+      seen.add(k); cand.push(q);
     }
+    // r4: the row is STABLE. A chip already on screen keeps its place while it stays valid; new starters only ever
+    // join at the end (a question already asked leaves, and the next validated one is appended). While the row is
+    // under the pointer or keyboard focus (or was pointed at in the last 1.5 s) nothing moves at all: an asked chip
+    // just turns into its "asked" state, and the row settles once attention leaves it.
+    const candK = new Set(cand.map(norm));
+    if (r.total && ready && suggFrozen() && el.querySelector('.sb-sugg')) { freezeAsked(el); deferSugg(); return; }
+    const starters = shownStarters.filter((q) => candK.has(norm(q)));
+    for (const q of cand) { if (starters.length >= 3) break; if (!starters.some((x) => norm(x) === norm(q))) starters.push(q); }
+    starters.length = Math.min(starters.length, 3);
+    shownStarters = starters.slice();
     const probes = sugg.probes.length ? sugg.probes : ["What's the weather in Paris today?"];
     const probe = probes[probeIdx % probes.length];
-    const sig = JSON.stringify([ready, starters, sugg.probes, !!r.total, !!sugg.at]);
+    const sig = JSON.stringify([ready, starters, sugg.probes, !!r.total, !!sugg.at, samplesOffered()]);
     if (sig === suggSig) return;
     const first = !suggSig || !el.childElementCount;
     suggSig = sig;
+    const hadFocus = el.contains(document.activeElement) ? [...el.querySelectorAll('button')].indexOf(document.activeElement) : -1;
+    const prevQs = new Set([...el.querySelectorAll('.sb-chip:not(.sb-chip-probe)')].map((b) => b.textContent));
+    // FLIP: where each surviving chip was, so a chip that slides left (one before it was asked) glides instead of jumping
+    const prevX = new Map([...el.querySelectorAll('.sb-chip')].map((b) => [b.classList.contains('sb-chip-probe') ? '\u0000probe' : b.textContent, b.getBoundingClientRect().left]));
+    const fresh = new Set(prevQs.size ? starters.filter((q) => !prevQs.has(q)) : []);
     el.innerHTML = '';
     if (!r.total) {
       // No files yet (states catalogue): one sentence plus the two ways forward
-      el.append(h('div', { class: 'sb-empty' },
-        h('p', null, 'Add a file and I’ll start learning. Your bot answers only from what you add.'),
-        h('div', { class: 'sb-empty-acts' },
-          h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: () => builderAction({ type: 'request_upload' }) }, ico('upload', 13), 'Add files'),
-          h('button', { type: 'button', class: 'sb-btn sb-btn-sm sb-btn-outline', onclick: () => builderAction({ type: 'attach_samples', set: 'lumen-bikes' }) }, ico('bolt', 13), 'Use sample files'))));
+      // One slim line with text links: the Builder's "Use sample files" chip stays the only primary on screen, and
+      // the example answer above keeps its full height.
+      // r4: a live (converted / launched) bot has no sample files to offer: the plain sentence, never "Add a file or ."
+      const addLink = h('button', { type: 'button', class: 'sb-link', onclick: () => builderAction({ type: 'request_upload' }) }, 'Add a file');
+      el.append(samplesOffered()
+        ? h('p', { class: 'sb-empty' },
+          h('span', null, 'Your bot answers only from what you add. '), addLink, h('span', null, ' or '),
+          h('button', { type: 'button', class: 'sb-link', onclick: () => builderAction({ type: 'attach_samples', set: 'lumen-bikes' }) }, 'try the sample files'),
+          h('span', null, '.'))
+        : h('p', { class: 'sb-empty' }, h('span', null, 'Your bot answers only from what you add. '), addLink, h('span', null, ' and it starts answering.')));
+      requestAnimationFrame(fitGhost);
       return;
     }
     if (!ready) return;
     const bar = h('div', { class: 'sb-sugg', role: 'toolbar', 'aria-label': 'Suggested questions', 'aria-orientation': 'horizontal' });
     const buttons = [];
     for (const q of starters) {
-      buttons.push(h('button', { type: 'button', class: `sb-chip${asked.has(norm(q)) ? ' is-asked' : ''}`, onclick: (e) => { asked.add(norm(q)); e.currentTarget.classList.add('is-asked'); startAsk(q, { by: 'chip' }); if (e.detail) homeRow(e.currentTarget.parentElement); } }, h('span', null, q)));
+      buttons.push(h('button', { type: 'button', class: 'sb-chip', onclick: (e) => { if (e.currentTarget.getAttribute('aria-disabled') === 'true') return; const bar0 = e.currentTarget.parentElement; const ptr = e.detail; const sl = ptr ? bar0.scrollLeft : 0; startAsk(q, { by: 'chip' }); if (ptr) homeRow(bar0, sl); } }, h('span', null, q)));
     }
     buttons.push(h('button', { type: 'button', class: 'sb-chip sb-chip-probe', title: 'Asks something your files don’t cover, to show the refusal',
       onclick: (e) => {
         const q = probes[probeIdx % probes.length];
         probeIdx++;
+        const bar0 = e.currentTarget.parentElement;
+        const sl = e.detail ? bar0.scrollLeft : 0;
         startAsk(q, { by: 'chip' });
-        if (e.detail) homeRow(e.currentTarget.parentElement);
+        if (e.detail) homeRow(bar0, sl);
         const l = e.currentTarget.querySelector('.sb-probe-q');
         if (l) l.textContent = `Off-topic test: ${probes[probeIdx % probes.length]}`;
       } },
     ico('shield', 14), h('span', { class: 'sb-probe-q' }, `Off-topic test: ${probe}`)));
     bar.append(...buttons);
     rovingToolbar(bar);
-    el.append(bar);
-    bar.scrollLeft = 0;
+    el.append(bar);   // a fresh row starts at scrollLeft 0: no write (it would force a reflow)
     wireEdgeFade(bar);
+    wireSuggFreeze(bar);
+    if (hadFocus >= 0) { const t = buttons[Math.min(hadFocus, buttons.length - 1)]; if (t) { buttons.forEach((b) => b.setAttribute('tabindex', b === t ? '0' : '-1')); t.focus({ preventScroll: true }); } }
     if (first && !reduced()) buttons.forEach((b, i) => anim(b, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 220, delay: i * 40, easing: 'out' }));
+    else if (!first && !reduced()) {
+      buttons.forEach((b) => {
+        if (fresh.has(b.textContent)) { anim(b, [{ opacity: 0, transform: 'translateX(12px) scale(.92)' }, { opacity: 1, transform: 'none' }], { duration: 260, delay: 80, easing: 'spring' }); return; }
+        const x0 = prevX.get(b.classList.contains('sb-chip-probe') ? '\u0000probe' : b.textContent);
+        if (x0 == null) return;
+        const dx = x0 - b.getBoundingClientRect().left;
+        if (Math.abs(dx) > 1) anim(b, [{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: 280, easing: 'out' });
+      });
+    }
   }
 
+  let shownStarters = [];
+  let suggHover = false, suggFreezeUntil = 0, suggDeferT = 0;
+  function suggFrozen() {
+    const el = dom.suggest;
+    // keyboard focus freezes the row (roving arrows must not land on a moved chip); the focus a pointer click leaves
+    // behind does not, or the asked chip would never leave
+    const ae = document.activeElement;
+    const kbFocus = !!el && el.contains(ae) && (() => { try { return ae.matches(':focus-visible'); } catch { return true; } })();
+    return !!el && (suggHover || kbFocus || Date.now() < suggFreezeUntil);
+  }
+  /** Frozen row: an asked chip only changes state (check, aria-disabled; it stays focusable and in place). */
+  function freezeAsked(el) {
+    for (const b of el.querySelectorAll('.sb-chip:not(.sb-chip-probe)')) {
+      if (!asked.has(norm(b.textContent)) || b.getAttribute('aria-disabled') === 'true') continue;
+      b.setAttribute('aria-disabled', 'true');
+      b.classList.add('is-asked');
+      b.prepend(ico('check', 13));
+    }
+  }
+  function deferSugg() {
+    clearTimeout(suggDeferT);
+    const wait = Math.max(120, suggFreezeUntil - Date.now() + 30);
+    suggDeferT = setTimeout(() => { suggDeferT = 0; if (!destroyed) renderSuggestions(); }, wait);
+  }
+  function wireSuggFreeze(bar) {
+    const bump = () => { suggFreezeUntil = Date.now() + 1500; };
+    bar.addEventListener('pointerenter', () => { suggHover = true; bump(); });
+    bar.addEventListener('pointermove', bump, { passive: true });
+    bar.addEventListener('pointerleave', () => { suggHover = false; bump(); deferSugg(); });
+    bar.addEventListener('focusout', (e) => { if (!bar.contains(e.relatedTarget)) deferSugg(); });
+  }
+
+  /** Sample files are on offer only before conversion / launch (they are deleted when the bot goes live). */
+  function samplesOffered() {
+    const s = getState();
+    return !(s.trial?.converted || s.milestones?.launched);
+  }
   const summaryQs = new Map();   // localId -> starters the server validated for that file (file:summary)
   function summaryStarters() {
     const s = getState();
@@ -2151,7 +2670,12 @@ export function mount(ctx) {
     return out;
   }
   /** After a pointer click the row returns to its start, so the next starters are in view (never "e frame warranty?"). */
-  function homeRow(bar) { if (bar && bar.scrollLeft > 0) bar.scrollTo({ left: 0, behavior: scrollBehavior() }); }
+  /** r3: the row's scroll offset is read BEFORE the answer DOM is built (clean layout, no forced reflow in the click)
+   *  and the scroll back is written in the next frame. */
+  function homeRow(bar, wasLeft) {
+    if (!bar || !(wasLeft > 0)) return;
+    requestAnimationFrame(() => { if (bar.isConnected) bar.scrollTo({ left: 0, behavior: scrollBehavior() }); });
+  }
   /** Edge fades only on the side that has more to scroll to (mask-image; the chips themselves never move). */
   let edgeRO = null;
   function wireEdgeFade(bar) {
@@ -2203,15 +2727,25 @@ export function mount(ctx) {
   const hintId = 'sb-hint';
   const ta = h('textarea', { id: inputId, class: 'sb-input', rows: '1', 'aria-describedby': hintId, autocomplete: 'off', spellcheck: 'true', enterkeyhint: 'send' });
   const send = h('button', { type: 'submit', class: 'sb-send', 'aria-label': 'Ask' }, ico('arrowUp', 18));
-  const scopeBtn = h('button', { type: 'button', class: 'sb-scope', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, ico('search', 13), h('span', { class: 'sb-scope-l' }, 'Searching: 0 files'), ico('chevronDown', 12));
+  const scopeBtn = h('button', { type: 'button', class: 'sb-scope', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, ico('search', 13), h('span', { class: 'sb-scope-l' }, 'Searching: 0 files'), h('span', { class: 'sb-scope-s sb-num', 'aria-hidden': 'true' }, '0'), ico('chevronDown', 12));
   const personaPill = h('span', { class: 'sb-persona', hidden: true });
   const hint = h('span', { class: 'sb-hint', id: hintId });
   const moreBtn = h('button', { type: 'button', class: 'sb-more', 'aria-label': 'More options', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, ico('more', 16));
-  const form = h('form', { class: 'sb-composer', novalidate: true },
-    h('div', { class: 'sb-comp-box' }, h('label', { class: 'st-sr', for: inputId }, 'Ask your bot'), ta, send),
-    h('div', { class: 'sb-comp-meta' }, scopeBtn, personaPill, hint, moreBtn));
+  const compBox = h('div', { class: 'sb-comp-box' }, h('label', { class: 'st-sr', for: inputId }, 'Ask your bot'), ta, send);
+  const compMeta = h('div', { class: 'sb-comp-meta' }, scopeBtn, personaPill, hint, moreBtn);
+  const form = h('form', { class: 'sb-composer', novalidate: true }, compBox, compMeta);
   dom.composer.innerHTML = '';
   dom.composer.append(form);
+  /** Phones: the scope chip and the ⋯ menu move into the composer row (one 44 px row instead of two), so nothing
+   *  sits under the bottom tab bar. Desktop keeps the meta row under the input. */
+  function placeComposerBits() {
+    const m = isMobile();
+    form.dataset.compact = String(m);
+    if (m && scopeBtn.parentElement !== compBox) { compBox.insertBefore(scopeBtn, ta); compBox.insertBefore(moreBtn, send); }
+    else if (!m && scopeBtn.parentElement !== compMeta) { compMeta.prepend(scopeBtn); compMeta.append(moreBtn); }
+    compMeta.hidden = m && personaPill.hidden;
+  }
+  placeComposerBits();
 
   function setComposer(text) {
     ta.value = text;
@@ -2250,18 +2784,23 @@ export function mount(ctx) {
     const spec = getState().spec || {};
     const name = spec.name || 'your bot';
     const m = isMobile();
-    ta.placeholder = r.ready.length ? (m ? `Ask ${name}…` : `Ask ${name} anything about your files`) : r.total ? (m ? 'Answers once a file is ready…' : 'Your bot can answer once a file is ready…') : (m ? 'Add a file first…' : 'Add a file and your bot can answer from it…');
+    ta.placeholder = r.ready.length ? (m ? `Ask ${name}…` : `Ask ${name} anything about your files`) : r.total ? (m ? 'Ready soon…' : 'Your bot can answer once a file is ready…') : (m ? 'Add a file first…' : 'Add a file and your bot can answer from it…');
     ta.setAttribute('aria-label', `Ask ${name}`);
     form.dataset.ready = r.ready.length ? 'true' : 'false';
     const on = enabledReady().length;
     const all = r.list.filter((f) => f.phase !== 'failed').length;
-    scopeBtn.querySelector('.sb-scope-l').textContent = all && on !== r.ready.length ? `Searching: ${on} of ${plural(all, 'file')}` : `Searching: ${plural(on, 'file')}`;
+    const scopeText = all && on !== r.ready.length ? `Searching: ${on} of ${plural(all, 'file')}` : `Searching: ${plural(on, 'file')}`;
+    scopeBtn.querySelector('.sb-scope-l').textContent = scopeText;
+    scopeBtn.querySelector('.sb-scope-s').textContent = String(on);
+    scopeBtn.setAttribute('aria-label', scopeText);
+    scopeBtn.title = scopeText;
     scopeBtn.hidden = !r.total;
     if (!r.ready.length) { if (hint.dataset.kind !== 'wait') showHint(r.total ? 'Answers start when the first file is ready.' : '', ''); }
     else showHint('', '');
     const p = PERSONAS.find((x) => x.id === persona);
     personaPill.hidden = !getState().milestones.firstRefusal || persona === 'customer';
     personaPill.textContent = `Testing as ${p ? p.label : 'Customer'}`;
+    placeComposerBits();
   }
 
   // ---- menus (scope + ⋯), role=menu with arrow keys; Esc and outside click close them
@@ -2371,7 +2910,9 @@ export function mount(ctx) {
     rafPending = requestAnimationFrame(() => {
       rafPending = 0;
       if (ghostEl && !ghostAllowed()) dropGhost();   // the first file row retires the example completely
+      repaintHues();
       renderBanner(); renderComposerMeta(); renderSuggestions();
+      for (const A of answers.values()) if (A.el.learn) updateLearnNote(A);
       if (!sugg.at && readiness().ready.length && getState().trial?.id) refreshSuggestions(300);
     });
   }
@@ -2397,7 +2938,11 @@ export function mount(ctx) {
   });
   sub('spec:changed', (d) => { if (d && Number.isFinite(d.version) && d.prev && d.version > (d.prev.version || 0)) offerReask(d.version); });
   sub('milestone', ({ name }) => { if (name === 'firstRefusal') renderComposerMeta(); });
-  sub('change:trial', ({ value, prev }) => { if (value?.id !== prev?.id && !value?.id) resetAll(); });
+  sub('change:trial', ({ value, prev }) => {
+    if (value?.id !== prev?.id && !value?.id) { resetAll(); return; }
+    if (!!value?.converted !== !!prev?.converted) renderSuggestions();
+  });
+  sub('change:milestones', ({ value, prev }) => { if (!!value?.launched !== !!prev?.launched) renderSuggestions(); });
 
   function resetAll() {
     for (const A of answers.values()) { try { A.ctrl && A.ctrl.abort(); } catch { /* ignore */ } A.stopClock && A.stopClock(); }
@@ -2425,6 +2970,9 @@ export function mount(ctx) {
     if (drawer) closeDrawer({ refocus: false });
     closeMenu();
     mqDock.removeEventListener?.('change', onMode); mqMob.removeEventListener?.('change', onMode);
+    window.removeEventListener('online', onOnline);
+    if (ghostRO) ghostRO.disconnect();
+    for (const A of answers.values()) if (A.stripRO) A.stripRO.disconnect();
     dom.thread.innerHTML = ''; dom.suggest.innerHTML = ''; dom.composer.innerHTML = ''; if (dom.banner) dom.banner.innerHTML = '';
   }
 

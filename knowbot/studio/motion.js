@@ -2,7 +2,7 @@
 // Web Animations API only, no animation library. One signature animation at a time via `director`.
 // Everything degrades under reduced motion: information stays, movement goes.
 
-import { getState, setState, emit, on } from './store.js';
+import { getState, setState, emit, on, batch } from './store.js';
 
 export const DUR = { 1: 120, 2: 220, 3: 380, 4: 700 };
 export const EASE = {
@@ -72,7 +72,7 @@ function animatedProps(keyframes) {
 
 /**
  * WAAPI wrapper. opts: {duration, delay, easing ('out'|'inOut'|'spring'|css), fill, essential, signal, iterations}.
- * Under reduced(): opacity-only 150 ms, or instant when opts.essential === false (or nothing to fade).
+ * Under reduced(): instant (no Animation unless fill holds an end state); opts.reducedFade asks for a 150 ms opacity-only fade.
  * Always returns {finished:Promise (never rejects), cancel(), finish(), animation}.
  * If opts.signal aborts (a director fast-forward), the animation jumps to its end.
  */
@@ -81,11 +81,18 @@ export function animate(el, keyframes, opts = {}) {
   const o = typeof opts === 'number' ? { duration: opts } : { ...opts };
   const signal = o.signal; delete o.signal;
   const essential = o.essential !== false; delete o.essential;
+  const reducedFade = o.reducedFade === true; delete o.reducedFade;
   let frames = keyframes;
   if (reduced()) {
-    const fade = essential ? opacityOnly(keyframes) : null;
+    // r4 (D9): under reduced motion nothing animates by default, entrances included: the end state is applied at once.
+    // A caller that needs a cue (opts.reducedFade) gets a 150 ms opacity-only fade, never a transform.
+    const fade = essential && reducedFade ? opacityOnly(keyframes) : null;
     if (fade && (o.iterations == null || o.iterations === 1)) { frames = fade; o.duration = 150; o.delay = 0; o.easing = 'linear'; }
-    else { o.duration = 0; o.delay = 0; o.iterations = 1; }
+    else {
+      const fill = o.fill || 'auto';
+      if (fill !== 'forwards' && fill !== 'both') return done();   // nothing to hold: no Animation object at all
+      o.duration = 0; o.delay = 0; o.iterations = 1;
+    }
   }
   o.easing = easing(o.easing || 'out');
   if (o.duration == null) o.duration = DUR[2];
@@ -147,14 +154,30 @@ export function flip(els, mutate, opts = {}) {
 // ------------------------------------------------------------------ shared rAF loop
 
 const loopFns = new Set();
-let rafId = 0, lastT = 0;
+let rafId = 0, lastT = 0, cursor = 0;
+const FRAME_BUDGET = 7;   // ms of loop work per frame; the rest continues next frame (no long animation frames)
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 function frame(t) {
   rafId = 0;
   const dt = lastT ? Math.min(100, t - lastT) : 16.7;
   lastT = t;
-  for (const fn of [...loopFns]) {
-    try { if (fn(t, dt) === false) loopFns.delete(fn); } catch (err) { console.error('[studio] loop fn failed', err); loopFns.delete(fn); }
-  }
+  // Round-robin under a per-frame budget: when the loop work of one frame runs long (many tickers + a map tween on a
+  // throttled CPU), the remaining callbacks run first on the next frame. Callbacks read `t`, so a skipped frame only
+  // means a coarser step, never a wrong value.
+  const fns = [...loopFns];
+  const n = fns.length;
+  const t0 = nowMs();
+  let cut = false;
+  // Store writes made by loop callbacks (tweened counters, map state) notify subscribers once per frame.
+  batch(() => {
+    for (let i = 0; i < n; i++) {
+      const fn = fns[(cursor + i) % n];
+      if (!loopFns.has(fn)) continue;
+      try { if (fn(t, dt) === false) loopFns.delete(fn); } catch (err) { console.error('[studio] loop fn failed', err); loopFns.delete(fn); }
+      if (i < n - 1 && nowMs() - t0 > FRAME_BUDGET) { cursor = (cursor + i + 1) % n; cut = true; return; }
+    }
+  });
+  if (!cut) cursor = 0;
   schedule();
 }
 function schedule() {
@@ -223,16 +246,26 @@ export function tween(from, to, ms, onUpdate, ease = 'out') {
   };
 }
 
+// perf r4: Number#toLocaleString builds a new NumberFormat on every call (a count-up called it every frame); one cached
+// formatter does the same job. Additive export: fmtNum(n).
+let nf = null;
+export function fmtNum(n) {
+  if (nf === null) { try { nf = new Intl.NumberFormat(); } catch { nf = false; } }
+  return nf ? nf.format(n) : String(n);
+}
+
 const tickers = new WeakMap();
 /** Tabular number tween from el.dataset.value to `to`. Jumps under reduced(). */
-export function ticker(el, to, { ms = 600, format = (n) => n.toLocaleString() } = {}) {
+export function ticker(el, to, { ms = 600, format = fmtNum } = {}) {
   if (!el) return { cancel() {}, finish() {}, finished: Promise.resolve() };
   const prev = tickers.get(el); if (prev) prev.cancel();
   const target = Number(to) || 0;
   const from = Number(el.dataset.value);
   const start = Number.isFinite(from) ? from : 0;
   el.dataset.value = String(target);
-  const t = tween(start, target, ms, (v) => { el.textContent = format(Math.round(v)); });
+  // writes only when the shown text changes (a count-up repaints a few times, not every frame)
+  // Off-DOM targets jump straight to the value (no per-frame work for something nobody can see).
+  const t = tween(start, target, el.isConnected ? ms : 0, (v) => { const s = format(Math.round(v)); if (el.textContent !== s) el.textContent = s; });
   tickers.set(el, t);
   t.finished.then(() => { if (tickers.get(el) === t) tickers.delete(el); });
   return t;
@@ -281,10 +314,10 @@ export function typeText(el, text, { cps = 1000 / 14, maxMs = 600 } = {}) {
  * under reduced motion a 150 ms opacity cross-fade. The owner sets/clears view-transition-name itself.
  */
 export function viewTransition(update, { name, el, target } = {}) {
-  const run = async () => { try { await update(); } catch (err) { console.error('[studio] view transition update failed', err); } };
+  const run = async () => { try { await batch(() => update()); } catch (err) { console.error('[studio] view transition update failed', err); } };
   const resolveTarget = () => (typeof target === 'function' ? target() : target) || el;
   if (reduced()) {
-    return run().then(() => { const t = resolveTarget(); if (t) return animate(t, [{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'linear' }).finished; });
+    return run().then(() => { const t = resolveTarget(); if (t) return animate(t, [{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'linear', reducedFade: true }).finished; });
   }
   if (typeof document.startViewTransition === 'function' && !document.documentElement.dataset.vtBusy) {
     try {

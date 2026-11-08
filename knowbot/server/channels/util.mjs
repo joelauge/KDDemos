@@ -88,14 +88,33 @@ export function answerLines(answer) {
   return String(answer || '').split('\n').map((l) => l.replace(/^\s*[-*•]\s+/, '').trim()).filter(Boolean);
 }
 const stripMarks = (s) => String(s || '').replace(/\s*\[\d{1,3}\]/g, '').replace(/\s+([.,;:!?])/g, '$1').trim();
-/** "lumen-warranty-returns.md" → "Lumen warranty returns". */
-export function humanTitle(c = {}) {
-  const t = String(c.title || '').trim();
-  const file = String(c.file || c.filename || '').split('/').pop();
-  const fromFile = file.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const s = t && t !== file ? t : fromFile || 'your files';
-  return s.charAt(0).toUpperCase() + s.slice(1);
+const SMALL_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'but', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'vs', 'via', 'per']);
+const ACRONYMS = new Set(['faq', 'faqs', 'api', 'sms', 'usa', 'uk', 'eu', 'pdf', 'hr', 'qa', 'sla', 'tos', 'gdpr', 'hipaa', 'ceo', 'cto', 'b2b', 'b2c', 'ai', 'kb', 'url', 'diy', 'rma', 'vat', 'gst', 'hvac']);
+/** "lumen store faq" → "Lumen Store FAQ" (small words stay lower case except the first; common acronyms upper case). */
+export function titleCase(s) {
+  return String(s || '').split(/(\s+)/).map((w, i) => {
+    if (!w.trim()) return w;
+    const lw = w.toLowerCase();
+    if (ACRONYMS.has(lw.replace(/[^a-z0-9]/g, ''))) return w.toUpperCase();
+    if (i > 0 && SMALL_WORDS.has(lw)) return lw;
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }).join('');
 }
+/**
+ * A document's display title: its own heading when it has one with real casing ("Lumen Store FAQ"), else the title-cased
+ * file name ("lumen-warranty-returns.md" → "Lumen Warranty Returns"). Never the lower-cased slug.
+ */
+export function docTitle(title, file) {
+  const t = String(title || '').trim();
+  const name = String(file || '').split('/').pop();
+  const stem = name.replace(/\.[a-z0-9]{1,5}$/i, '');
+  const fromFile = stem.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const own = t && t !== name && t !== stem ? t : '';
+  if (own && /[A-Z]/.test(own)) return own;
+  return titleCase(own || fromFile) || 'Your files';
+}
+/** A citation's display title (see docTitle). */
+export function humanTitle(c = {}) { return docTitle(c.title, c.file || c.filename); }
 /** Cut at a word boundary to `max` characters (with an ellipsis). */
 export function clipWords(s, max) {
   s = String(s || '');
@@ -105,12 +124,53 @@ export function clipWords(s, max) {
   return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,;:.-]+$/, '')}…`;
 }
 
-/** SMS: ≤ 320 characters, [n] markers kept, proof link appended. A refusal is the canonical sentence, unchanged. */
+/** The answer as whole sentences, each ending "… text [n]." (the line's [n] markers before the stop). */
+export function answerSentences(answer) {
+  const out = [];
+  for (const line of answerLines(answer)) {
+    const marks = [...new Set([...line.matchAll(/\[(\d{1,3})\]/g)].map((m) => m[1]))];
+    const tag = marks.length ? ` ${marks.map((n) => `[${n}]`).join('')}` : '';
+    const body = stripMarks(line).replace(/\s*\|\s*/g, ', ').replace(/\s+/g, ' ').trim();
+    if (!body) continue;
+    for (let sn of body.split(/(?<=[.!?])\s+(?=["“(]?[A-Z0-9])/)) {
+      sn = sn.trim();
+      if (!sn) continue;
+      let stop = '.';
+      const m = /([.!?…]+|[:;,])$/.exec(sn);
+      if (m) { if (/[.!?…]/.test(m[1])) stop = m[1]; sn = sn.slice(0, -m[1].length).trimEnd(); }
+      if (sn) out.push({ text: sn.charAt(0).toUpperCase() + sn.slice(1), tag, stop });
+    }
+  }
+  return out;
+}
+
+/** Sentences joined for SMS: a run of sentences from the same source carries its marker once, at the end of the run. */
+export function smsJoin(list) {
+  return list.map((x, i) => {
+    const same = i + 1 < list.length && list[i + 1].tag && list[i + 1].tag === x.tag;
+    return `${x.text}${same ? '' : x.tag}${x.stop}`;
+  }).join(' ');
+}
+
+/**
+ * SMS: ≤ 320 characters. The answer's own sentences with their [n] markers, cut at a sentence boundary, then
+ * " Proof: <link>". Never citation excerpts, never a half sentence (unless the first sentence alone is too long).
+ * A refusal is the canonical sentence, unchanged.
+ */
 export function formatSms(r, proofUrl, max = 320) {
   if (r.refused) return NOT_IN_DATA;
   const suffix = proofUrl ? ` Proof: ${proofUrl}` : '';
-  const body = answerLines(r.answer).join(' ');
-  return clipWords(body, Math.max(60, max - suffix.length)) + suffix;
+  const budget = Math.max(60, max - suffix.length);
+  const sentences = answerSentences(r.answer);
+  let body = '';
+  const picked = [];
+  for (const x of sentences) {
+    const next = smsJoin([...picked, x]);
+    if (next.length > budget) break;
+    picked.push(x); body = next;
+  }
+  if (!body && sentences.length) { const x = sentences[0]; body = `${clipWords(x.text, Math.max(20, budget - x.tag.length))}${x.tag}`; }
+  return body + suffix;
 }
 
 /** WhatsApp: the answer with [n] markers, then numbered source footnotes and the proof link (≤ 4096). */
@@ -153,14 +213,45 @@ export function formatEmail(r, { proofUrl, botName = 'KnowBot', question = '' } 
   return { text, html };
 }
 
+// After "According to X, " only an ordinary sentence opener is lower-cased; a name ("Lumen frames …", "Lumen Care Plan …"),
+// an acronym or anything else keeps the casing the source wrote it in. Even a common opener keeps its capital when the
+// bot's own material treats it as a name: it appears capitalised mid-sentence in the answer, a quote or an excerpt
+// ("our Standard plan …"), or it is one of the bot's name / org tokens.
+const LEAD_LOWER = /^(?:you|your|yours|we|our|ours|they|their|there|it|its|this|that|these|those|the|a|an|all|any|each|every|most|some|no|if|when|after|before|during|within|only|orders?|items?|customers?|refunds?|returns?|shipping|standard|free)$/;
+const NAME_SKIP = new Set(['you', 'your', 'we', 'our', 'the', 'a', 'an', 'my', 'it', 'its']);
+/** Words written with a capital somewhere other than the start of a sentence (lower-cased keys), plus the given names. */
+export function properWords(texts = [], names = []) {
+  const out = new Set();
+  for (const n of names) for (const w of String(n || '').match(/[A-Za-z][A-Za-z']*/g) || []) if (/^[A-Z]/.test(w) && !NAME_SKIP.has(w.toLowerCase())) out.add(w.toLowerCase());
+  for (const t of texts) {
+    // a capitalised word preceded by a lower-case word or a comma (not a sentence start, not a list bullet or heading)
+    for (const m of String(t || '').matchAll(/(?:[a-z0-9,;)][ \t]+)([A-Z][a-z']+)\b/g)) out.add(m[1].toLowerCase());
+  }
+  return out;
+}
+/** Lower-cases the first letter of `s` only for an ordinary sentence opener that is not one of `proper`. */
+export function lowerLead(s, proper = new Set()) {
+  const w = /^[A-Za-z']+/.exec(s)?.[0] || '';
+  if (!w || w.slice(1) !== w.slice(1).toLowerCase()) return s;
+  const lw = w.toLowerCase();
+  if (!LEAD_LOWER.test(lw) || proper.has(lw)) return s;
+  // "The Lumen Care Plan …": an opener followed by a capitalised word starts a name; keep the capital
+  const next = /^[A-Za-z']+\s+([A-Za-z][A-Za-z']*)/.exec(s)?.[1] || '';
+  if (/^[A-Z]/.test(next) && !/^(?:I|I'm|I've|I'll|I'd)$/.test(next)) return s;
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
 /**
  * Voice: spoken attribution ("According to Lumen warranty returns, …"), no markers, at most two quoted lines,
- * ≤ ~450 characters. A refusal is the canonical sentence.
+ * ≤ ~450 characters. A refusal is the canonical sentence. `names`: the bot's name / org, whose words keep their capital.
  */
-export function formatSpoken(r, max = 450) {
+export function formatSpoken(r, max = 450, { names = [] } = {}) {
   if (r.refused) return NOT_IN_DATA;
   const quotes = (r.proof?.quoted || []).filter((q) => q.text);
   const byN = new Map((r.citations || []).map((c) => [c.n, c]));
+  // the source titles count as names too ("Lumen Bikes Warranty and Returns Policy" → "Lumen frames …" keeps its capital)
+  // (only real name words: an ordinary opener such as "Refunds" in a "Refunds" title still reads "And Refunds, refunds go …")
+  const titles = (r.citations || []).flatMap((c) => [humanTitle(c), c.title]).map((t) => String(t || '').split(/\s+/).filter((w) => !LEAD_LOWER.test(w.toLowerCase().replace(/[^a-z']/g, ''))).join(' '));
+  const proper = properWords([r.answer, ...quotes.map((q) => q.text), ...(r.citations || []).map((c) => c.excerpt)], [...names, ...titles]);
   const parts = [];
   let lastN = null;
   const items = quotes.length ? quotes.map((q) => ({ n: q.n, text: q.text })) : answerLines(r.answer).map((l) => ({ n: Number(/\[(\d{1,3})\]/.exec(l)?.[1]) || null, text: l }));
@@ -169,7 +260,7 @@ export function formatSpoken(r, max = 450) {
     if (!s) continue;
     if (!/[.!?]$/.test(s)) s += '.';
     const c = byN.get(it.n);
-    if (c && it.n !== lastN) parts.push(`${parts.length ? 'And' : 'According to'} ${humanTitle(c)}, ${s.charAt(0).toLowerCase() + s.slice(1)}`);
+    if (c && it.n !== lastN) parts.push(`${parts.length ? 'And' : 'According to'} ${humanTitle(c)}, ${lowerLead(s, proper)}`);
     else parts.push(s);
     lastN = it.n;
   }

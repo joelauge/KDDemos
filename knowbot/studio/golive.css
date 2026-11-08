@@ -49,8 +49,10 @@
 .gl-chcard { --gl-hue: var(--accent); position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; row-gap: 8px; align-items: center;
   width: 100%; padding: 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--text); text-align: left; cursor: pointer;
   box-shadow: var(--st-shadow-1); transition: transform var(--dur-1) var(--ease-out), border-color var(--dur-2), box-shadow var(--dur-2), background-color var(--dur-2); }
-.gl-chcard:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--gl-hue) 45%, var(--line-2)); box-shadow: var(--st-shadow-2); }
-.gl-chcard.is-on { border-color: var(--gl-hue); background: color-mix(in srgb, var(--gl-hue) 6%, var(--panel)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-hue) 18%, transparent), var(--st-shadow-2); }
+/* fixer r2 (D7): one hover/selected ring for every card (indigo accent), whatever the channel's icon hue */
+.gl-chcard { --gl-ring: var(--accent); }
+.gl-chcard:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--gl-ring) 45%, var(--line-2)); box-shadow: var(--st-shadow-2); }
+.gl-chcard.is-on { border-color: var(--gl-ring); background: color-mix(in srgb, var(--gl-ring) 6%, var(--panel)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-ring) 18%, transparent), var(--st-shadow-2); }
 .gl-chcard-ico { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; color: #fff; grid-row: span 2;
   background: radial-gradient(120% 120% at 20% 10%, color-mix(in srgb, var(--gl-hue) 65%, #fff), var(--gl-hue) 60%, color-mix(in srgb, var(--gl-hue) 80%, #000));
   box-shadow: 0 8px 18px -10px var(--gl-hue); }
@@ -348,3 +350,127 @@
 .gl-proof-ph { color: var(--dim); font-style: italic; }
 .gl-showkey span { display: inline-flex; }
 :root[data-motion="reduce"] .gl-mic.is-held { transform: none; }
+
+/* fixer r2 (D10): the language tabs scroll horizontally with snap; below 480 px Stream + Copy get their own row */
+.gl-code-tabs { scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; flex: 1 1 auto; }
+.gl-code-tab { scroll-snap-align: start; }
+.gl-code-tabs::-webkit-scrollbar { display: none; }
+@media (max-width: 479px) {
+  .gl-code-bar { flex-wrap: wrap; row-gap: 2px; padding-right: 4px; }
+  .gl-code-bar > .gl-code-tabs { flex-basis: 100%; mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); padding-right: 20px; }
+  .gl-code-bar > .gl-code-tools { flex-basis: 100%; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 2px; }
+}
+
+/* fixer r2 (D11): Run status line beside the button, and the response block lands in view */
+.gl-runrow { grid-template-columns: minmax(0, 1fr) auto; }
+.gl-runmeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 22px; font: 500 12px/1.3 var(--mono); color: var(--dim); }
+.gl-runmeta:empty { display: none; }
+.gl-runmeta .gl-status { height: 20px; }
+.gl-out { scroll-margin: 16px 0 24px; }
+.gl-ep-canon { margin: 6px 0 0; font-size: 12px; color: var(--dim); }
+.gl-ep-canon code { padding: 1px 6px; border-radius: 6px; background: var(--raise); color: var(--strong); font: 500 11.5px/1.4 var(--mono); }
+.gl-prev .gl-bub.is-example, .gl-prev .gl-wa.is-example { opacity: .92; }
+.gl-ex-tag { display: block; justify-self: center; margin: 2px auto 4px; padding: 1px 8px; border-radius: 999px; font: 500 10.5px/1.6 var(--mono); color: var(--dim); background: color-mix(in srgb, var(--panel) 80%, transparent); border: 1px solid var(--line); width: max-content; max-width: 100%; }
+.gl-runfoot { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; min-width: 0; }
+.gl-runfoot .gl-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.gl-runfoot .gl-seg-b { white-space: nowrap; }
+
+/* ------------------------------------------------------------------ fixer r3 */
+/* D7: URLs break only at the <wbr> after '/', '?' or '&' (never mid-id) */
+.gl-url-v, .gl-ep-path, .gl-ep-base { overflow-wrap: normal; word-break: normal; }
+/* D9: the scrollable channel preview is a focusable region with a visible ring */
+.gl-prev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gl-prev:focus:not(:focus-visible) { outline: none; }
+/* D7: the SMS proof link reads as a link chip, not raw text */
+.gl-proofchip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin-top: 4px; padding: 2px 8px 2px 6px; border-radius: 999px; vertical-align: middle;
+  font: 500 11.5px/1.5 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none;
+  color: var(--accent-2); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.gl-proofchip > span { display: inline-flex; flex: none; }
+a.gl-proofchip:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gl-proofchip.is-ph { color: var(--muted); background: var(--panel); border-style: dashed; border-color: var(--line-2); font-style: normal; }
+/* D7: the active tab is shown only by the ink underline; the focus ring is a full rounded pill inside the tab strip
+   (the strip scrolls horizontally, so an outside ring was clipped into a bracket) */
+.gl-tab { border-radius: 10px; }
+.gl-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+.gl-tab[aria-selected="true"] { background: none; box-shadow: none; }
+/* D7: the mic label sits 12 px below the mic's halo, never over it */
+.gl-mic-wrap { gap: 18px; margin-top: 22px; }
+.gl-vstage { height: 184px; }
+
+/* ------------------------------------------------------------------ fixer r4 (D10/D11) */
+/* channel status from the server: ready (green), receiving but one setting short (amber), not connected (neutral) */
+.gl-chcard-status { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gl-chcard-status.is-go { color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, transparent); background: var(--good-soft); }
+.gl-chcard-status.is-go::before { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
+.gl-chcard-status.is-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); background: var(--warn-soft); }
+.gl-chcard-status.is-warn::before { background: var(--warn); }
+.gl-chcard-status.is-off { font-family: var(--mono); font-size: 10.5px; }
+.gl-cd-title { outline: none; scroll-margin-top: 12px; }
+.gl-cd-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.gl-chdetail { scroll-margin-top: 8px; }
+.gl-cd-status { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 10px; align-items: start; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--panel); font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.gl-cd-status > div { display: grid; gap: 2px; min-width: 0; }
+.gl-cd-status b { font: 600 13px/1.35 var(--font); color: var(--strong); }
+.gl-cd-status code { padding: 0 4px; border-radius: 4px; background: var(--raise); color: var(--strong); font-size: 11.5px; overflow-wrap: anywhere; }
+.gl-cd-status-dot { width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; background: var(--dim); }
+.gl-cd-status.is-go { border-color: color-mix(in srgb, var(--good) 35%, var(--line)); background: color-mix(in srgb, var(--good) 6%, var(--panel)); }
+.gl-cd-status.is-go .gl-cd-status-dot { background: var(--good); box-shadow: 0 0 0 4px var(--good-soft); }
+.gl-cd-status.is-warn { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.gl-cd-status.is-warn .gl-cd-status-dot { background: var(--warn); }
+
+/* Send test webhook (Stripe-style test event) */
+.gl-tw { display: grid; gap: 8px; }
+.gl-tw-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gl-tw-btn span { display: inline-flex; }
+.gl-tw-btn.is-busy .gl-tw-ico { animation: gl-tw-spin .9s linear infinite; }
+@keyframes gl-tw-spin { to { transform: rotate(360deg); } }
+:root[data-motion="reduce"] .gl-tw-btn.is-busy .gl-tw-ico { animation: none; }
+.gl-tw-hint { font-size: 12px; color: var(--dim); line-height: 1.4; flex: 1 1 180px; }
+.gl-tw-out { display: grid; gap: 8px; min-width: 0; }
+.gl-tw-out:empty { display: none; }
+.gl-tw-out .gl-out-bar code { overflow-wrap: anywhere; min-width: 0; }
+.gl-tw-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; font-size: 12px; color: var(--muted); }
+.gl-tw-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); font: 500 11px/1.6 var(--mono); color: var(--muted); }
+.gl-tw-chip span { display: inline-flex; }
+.gl-tw-chip.is-ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, transparent); background: var(--good-soft); }
+.gl-tw-q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+.gl-tw-resp .gl-pre { max-height: 220px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Voice: the published request the demo made, under the captions */
+.gl-reqline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 0 100px; font-size: 11.5px; color: var(--dim); min-height: 22px; }
+.gl-reqline:empty { min-height: 0; margin: 0; }
+.gl-reqline code { font-size: 11.5px; color: var(--text); overflow-wrap: anywhere; min-width: 0; }
+.gl-reqline-ms { color: var(--dim); }
+.gl-reqline-note { font-size: 11.5px; color: var(--dim); }
+@media (max-width: 899px) { .gl-reqline { margin-left: 0; } }
+
+/* prefilled Try it: a short skeleton while the example exchange arrives */
+.gl-ex-loading { display: grid; gap: 6px; padding: 4px 6px; }
+.gl-ex-loading i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--raise) 0%, var(--panel-2) 50%, var(--raise) 100%) 0 0 / 200% 100%; animation: gl-shimmer 1.2s linear infinite; }
+.gl-ex-loading i:nth-of-type(1) { width: 62%; justify-self: end; } .gl-ex-loading i.is-short { width: 45%; }
+:root[data-motion="reduce"] .gl-ex-loading i { animation: none; }
+.gl-wex-hold { display: contents; }
+
+/* Developers: OpenAPI link, errors and rate limits */
+.gl-h3-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.gl-h3-row .gl-h3 { margin: 0; }
+.gl-speclink { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2);
+  font: 600 12.5px/1 var(--font); color: var(--accent-2); text-decoration: none; transition: background-color var(--dur-1), border-color var(--dur-1); }
+.gl-speclink span { display: inline-flex; }
+.gl-speclink:hover { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.gl-speclink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gl-errs { display: grid; gap: 10px; }
+.gl-ratelim { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.gl-ratelim > span:first-child { display: inline-flex; margin-top: 3px; color: var(--accent-2); flex: none; }
+.gl-ratelim b { color: var(--strong); }
+.gl-ratelim code { font-size: 12px; color: var(--strong); }
+.gl-ref-err .gl-ref-r { grid-template-columns: 56px minmax(140px, .9fr) minmax(0, 1.5fr) minmax(0, 1fr); align-items: center; }
+.gl-ref-err .gl-status { height: 20px; }
+@media (max-width: 899px) {
+  .gl-ref-err .gl-ref-r { grid-template-columns: 52px minmax(0, 1fr); }
+  .gl-ref-err .gl-ref-r > :nth-child(3), .gl-ref-err .gl-ref-r > :nth-child(4) { grid-column: 2; }
+  .gl-ref-err .gl-ref-r.is-head > :nth-child(3), .gl-ref-err .gl-ref-r.is-head > :nth-child(4) { display: none; }
+  .gl-tw-btn { min-height: 44px; }
+}

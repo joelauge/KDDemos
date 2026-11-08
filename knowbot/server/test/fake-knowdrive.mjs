@@ -45,11 +45,12 @@ const CONCEPTS = Object.freeze({
   hour: 'open', opening: 'open', close: 'open', closing: 'open',
   refund: 'return', exchange: 'return', send: 'ship', deliver: 'delivery', shipping: 'ship', shipp: 'ship',
   rental: 'rent', rented: 'rent', hire: 'rent', bicycle: 'bike', ebike: 'e-bike', membership: 'plan', subscription: 'plan', last: 'long', duration: 'long',
-  location: 'address', located: 'address',
+  location: 'address', located: 'address', far: 'range',
 });
 export function bag(text) {
   const m = new Map();
-  for (const raw0 of String(text || '').toLowerCase().replace(/[’']/g, "'").match(/[a-z0-9][a-z0-9'-]*/g) || []) {
+  // fixer r3: "paid time off" / "PTO" and "vacation" are one concept, the way an embedding places them
+  for (const raw0 of String(text || '').toLowerCase().replace(/[’']/g, "'").replace(/\b(?:paid\s+)?time\s+off\b|\bpto\b|\bvacations?\b|\bannual\s+leave\b/g, 'vacation').match(/[a-z0-9][a-z0-9'-]*/g) || []) {
     const raw = raw0.replace(/-+$/, '').replace(/'s$/, '');
     for (const part of raw.includes('-') && !/^(?:e-bike|tune-up|e-city)s?$/.test(raw) ? raw.split('-') : [raw]) {
       const w0 = part.replace(/'s$/, '').replace(/'/g, '');
@@ -81,6 +82,26 @@ export function idfOf(bags) {
   for (const b of bags) for (const t of b.keys()) df.set(t, (df.get(t) || 0) + 1);
   const n = bags.length;
   return (t) => Math.log((n + 1) / ((df.get(t) || 0) + 1)) + 1;
+}
+const trigramCache = new Map();
+function trigrams(text) {
+  const key = String(text || '');
+  let t = trigramCache.get(key);
+  if (t) return t;
+  t = new Set();
+  const s = ` ${key.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+  for (let i = 0; i + 3 <= s.length; i++) t.add(s.slice(i, i + 3));
+  if (trigramCache.size > 5000) trigramCache.clear();
+  trigramCache.set(key, t);
+  return t;
+}
+/** Cosine of the question's and the text's character-trigram sets (0..1): a soft, spelling-level overlap. */
+export function trigramOverlap(query, text) {
+  const q = trigrams(query), a = trigrams(text);
+  if (!q.size || !a.size) return 0;
+  let n = 0;
+  for (const g of q) if (a.has(g)) n++;
+  return n / Math.sqrt(q.size * a.size);
 }
 export function cosine(a, b) {
   let dot = 0, na = 0, nb = 0;
@@ -176,9 +197,13 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     const failNoText = f.text.includes('FAIL_NO_TEXT') || (!atoms.length && !/json/.test(mime));
     // knowDrive works through a queue: a file that arrives while others are extracting starts a little later
     const queued = [...files.values()].filter((x) => x !== f && x.store === store && x.phase === 'pending' && x.status === 'in_progress').length;
-    // queueStaggerMs (dev server only): extra real-time spacing per queued file, not divided by speed, so files that
-    // arrive together still finish one poll apart and the partial-readiness state is visible at FAKE_SPEED=4.
-    later(600 + Math.min(queued, 6) * 700 + Math.min(queued, 6) * Math.max(0, Number(queueStaggerMs) || 0) * speed, () => {
+    // fixer r4: two lanes, like the real pipeline's parallel workers. Files arriving together run in pairs (the second
+    // 400 ms behind the first), so two files atomize and vectorize at once; the next pair starts while the first pair
+    // vectorizes. queueStaggerMs (dev server only) adds real-time spacing per pair (not divided by speed), so the
+    // partial-readiness state stays visible at FAKE_SPEED=4.
+    const q = Math.min(queued, 6);
+    const pairGap = 1400 + Math.max(0, Number(queueStaggerMs) || 0) * speed;
+    later(600 + Math.floor(q / 2) * pairGap + (q % 2) * 400, () => {
       if (!files.has(id)) return;
       if (failNoText) { Object.assign(f, { status: 'error', phase: 'error', last_error: 'no text layer found' }); touch(); return; }
       f.phase = 'text_extracted'; touch();
@@ -232,11 +257,23 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     const idf = idfOf(pool.map((x) => x.a.bag));
     for (const { f, a } of pool) {
       const { sim, cos } = similarity(q, a.bag, idf);
-      // unrelated text still sits a little above the base, like a real embedding (deterministic, < 0.03)
-      const jitter = (parseInt(createHash('sha1').update(`${query}|${f.id}|${a.seq}`).digest('hex').slice(0, 6), 16) / 0xffffff) * 0.03;
-      scored.push({ f, a, sim: Math.min(0.95, sim + (cos > 0 ? 0 : jitter)), cos });
+      // fixer r2: unrelated text spreads out like a real embedding (0.41–0.62) instead of a flat 0.55–0.58 wall:
+      // character-trigram overlap with the question (shared word stems, spelling) plus a per-atom hash jitter.
+      // Atoms sharing a concept word keep their 0.55+ score; everything stays well under the 0.64 close-miss band.
+      const h = parseInt(createHash('sha1').update(`${query}|${f.id}|${a.seq}`).digest('hex').slice(0, 6), 16) / 0xffffff;
+      const offSim = 0.41 + Math.min(0.21, 0.3 * trigramOverlap(query, a.text) + 0.16 * h ** 4);
+      // fixer r4: weak matches (a shared everyday word: "today", "files") no longer pile up at 0.58–0.62 either. Below
+      // 0.63 the score gets a deterministic per-atom term (trigram overlap + hash), so refusal charts show a real spread.
+      // A shared-word match keeps the documented 0.55 floor; it spreads within 0.55–0.625 (under the 0.64 close-miss band).
+      let s = cos > 0 ? sim : offSim;
+      if (cos > 0 && s < 0.63) s = Math.max(0.55, Math.min(0.625, s - 0.08 + 0.05 * trigramOverlap(query, a.text) + 0.13 * h ** 4));
+      scored.push({ f, a, sim: Math.min(0.95, s), cos });
     }
     scored.sort((x, y) => y.sim - x.sim || x.f.id.localeCompare(y.f.id) || x.a.seq - y.a.seq);
+    // fixer r4: below the close-miss band a real embedding's top-k falls off steadily rather than sitting on one value;
+    // each further weak candidate drops a little more (order is kept, floors are kept), so refusal charts slope.
+    let weak = 0;
+    for (const x of scored) if (x.sim < 0.63) x.sim = Math.max(x.cos > 0 ? 0.55 : 0.41, x.sim - 0.006 * weak++);
     let list = scored;
     if (mode === 'fts') list = scored.filter((x) => x.cos > 0);
     // none_of tags other than tfile: (questions, kind:config, kind:trial-spec …) are applied like real knowDrive, so

@@ -1061,11 +1061,18 @@ export function mountBots(ctx) {
     const sec = h('section', { class: 'flow-sec', 'aria-labelledby': 'tq-h' },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
         h('h3', { id: 'tq-h', class: 'inst-sub', style: { marginRight: 'auto' } }, 'Top questions'), again),
-      h('p', { class: 'inst-help' }, 'Every question this bot is asked, on the web, through the API and on every channel, is logged without personal data and is never used as a source. Gaps are questions it could not answer: add a file that covers them.'),
+      h('p', { class: 'inst-help' }, 'Every question this bot is asked, on the web, through the API and on every channel, is logged without personal data and is never used as a source. Similar wordings are grouped. Gaps are questions it could not answer, each with a suggested fix and the closest file it has today.'),
       body);
+    // where a question was asked: a small glyph per channel (questions.mjs top[].channels / gaps[].channels, byChannel)
+    const CH = { studio: ['Studio', '◇'], web: ['Web chat', '◯'], api: ['API', '{ }'], sms: ['SMS', '✉︎'], voice: ['Phone', '☏'], whatsapp: ['WhatsApp', 'WA'], email: ['E-mail', '@'] };
+    const chLabel = (c) => (CH[c] ? CH[c][0] : String(c));
+    const chGlyphs = (list) => (Array.isArray(list) && list.length
+      ? h('span', { class: 'mono', role: 'img', 'aria-label': `asked via ${list.map(chLabel).join(', ')}`, style: { display: 'inline-flex', gap: '3px', marginLeft: '6px', verticalAlign: 'baseline' } },
+        list.slice(0, 5).map((c) => h('span', { title: chLabel(c), 'aria-hidden': 'true', style: { fontSize: '10px', lineHeight: '1', padding: '2px 4px', borderRadius: '4px', border: '1px solid var(--line-2)', color: 'var(--text-2, var(--text))' } }, CH[c] ? CH[c][1] : String(c).slice(0, 3))))
+      : null);
     const bar = (n, max, tone) => h('span', { 'aria-hidden': 'true', style: { display: 'block', height: '3px', borderRadius: '2px', marginTop: '4px', background: 'var(--line-2)', overflow: 'hidden' } },
       h('span', { style: { display: 'block', height: '100%', width: `${Math.max(6, Math.round((n / Math.max(1, max)) * 100))}%`, background: tone === 'gap' ? 'var(--warn)' : 'var(--accent-2)' } }));
-    const list = (title, rows, tone, empty) => {
+    const list = (title, rows, tone, empty, more = 0) => {
       // Bars only mean something once a question repeats; scale against at least 3 so one repeat is not a full bar.
       const most = rows.reduce((m, r) => Math.max(m, num(r.count) || 0), 0);
       const max = Math.max(3, most), showBars = most >= 2;
@@ -1073,28 +1080,64 @@ export function mountBots(ctx) {
         h('p', { class: 'inst-help', style: { margin: '0 0 6px', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: '600' } }, title),
         rows.length ? h('ol', { style: { listStyle: 'none', margin: '0', padding: '0', display: 'flex', flexDirection: 'column', gap: '6px' } }, rows.map((r) => {
           const n = num(r.count) || 0;
-          return h('li', { class: 'kp-row', style: { gap: '2px', padding: '8px 10px' } },
+          const off = tone === 'gap' && (r.offTopic || (r.suggestion && r.suggestion.kind === 'off_topic'));
+          const sim = num(r.similar) || (num(r.variants) > 1 ? num(r.variants) - 1 : 0);
+          return h('li', { class: 'kp-row', style: { gap: '2px', padding: '8px 10px', ...(off ? { opacity: '.85' } : {}) } },
             h('div', { style: { display: 'flex', gap: '8px', alignItems: 'baseline' } },
               h('span', { style: { flex: '1', minWidth: '0', overflowWrap: 'anywhere', color: 'var(--text)' } }, str(r.q, 300)),
               h('span', { class: 'mono inst-help', 'aria-label': `asked ${n} time${n === 1 ? '' : 's'}` }, `×${n}`)),
-            showBars ? bar(n, max, tone) : null,
-            h('span', { class: 'inst-help' }, r.lastAt && parseTs(r.lastAt) ? `last asked ${ago(parseTs(r.lastAt))}` : '', tone !== 'gap' && r.outcome === 'refused' ? ' · not in its files' : ''));
-        })) : h('p', { class: 'inst-help' }, empty));
+            showBars && !off ? bar(n, max, tone) : null,
+            h('span', { class: 'inst-help' }, r.lastAt && parseTs(r.lastAt) ? `last asked ${ago(parseTs(r.lastAt))}` : '', tone !== 'gap' && r.outcome === 'refused' ? ' · not in its files' : '',
+              sim > 0 ? h('span', { title: 'Other wordings of the same question, counted together', style: { marginLeft: '4px' } }, ` · +${sim} similar`) : null,
+              chGlyphs(r.channels)),
+            // questions.mjs gapSuggestion: {kind: add_file|expand_file|off_topic, inDomain, status, text, nearest?:{file,title,similarity}}
+            tone === 'gap' && r.suggestion && r.suggestion.text
+              ? h('span', { class: 'inst-help', style: { display: 'block', marginTop: '4px', paddingLeft: '8px', borderLeft: `2px solid ${off ? 'var(--good, var(--line-2))' : 'var(--warn)'}`, color: 'var(--text-2, var(--text))' } },
+                h('strong', { style: { fontWeight: '600' } }, off ? 'Working as intended. ' : r.suggestion.kind === 'expand_file' ? 'Fix: extend a file. ' : 'Fix: add a file. '),
+                str(r.suggestion.text, 400))
+              : null);
+        })) : h('p', { class: 'inst-help' }, empty),
+        // the list plus "+N more" always adds up to the count in the badge above it
+        more > 0 ? h('p', { class: 'inst-help', style: { margin: '6px 0 0' } }, `+${more} more`) : null);
+    };
+    // Studio setup, Proof Run and off-topic probe asks: not counted above, listed here so nothing is silently dropped.
+    const probesList = (j) => {
+      const rows = Array.isArray(j.probes) ? j.probes : [];
+      const n = num(j.testTraffic) || 0;
+      if (!n) return null;
+      const more = num(j.more && j.more.probes) || Math.max(0, n - rows.reduce((a, r) => a + (num(r.count) || 0), 0));
+      return h('details', { style: { marginTop: '10px' } },
+        h('summary', { class: 'inst-help', style: { cursor: 'pointer' } }, `${plural(n, 'test probe')} from setup, not counted above`),
+        h('ol', { style: { listStyle: 'none', margin: '6px 0 0', padding: '0', display: 'flex', flexDirection: 'column', gap: '4px' } },
+          rows.map((r) => h('li', { class: 'inst-help', style: { display: 'flex', gap: '8px', alignItems: 'baseline' } },
+            h('span', { class: 'badge', style: { fontSize: '11px' } }, r.origin === 'setup' ? 'setup' : r.origin === 'proof' ? 'proof run' : 'probe'),
+            h('span', { style: { flex: '1', minWidth: '0', overflowWrap: 'anywhere' } }, str(r.q, 300)),
+            h('span', { class: 'mono' }, `${r.outcome === 'refused' ? 'refused' : 'answered'} ×${num(r.count) || 1}`)))),
+        more > 0 ? h('p', { class: 'inst-help', style: { margin: '4px 0 0' } }, `+${more} more`) : null);
     };
     const paint = (j) => {
       body.setAttribute('aria-busy', 'false');
       const total = num(j.total) || 0;
-      if (!total) return rc(body, h('p', { class: 'inst-help' }, 'No questions yet. Ask this bot something and it shows up here within a few seconds.'));
+      if (!total && !num(j.testTraffic)) return rc(body, h('p', { class: 'inst-help' }, 'No questions yet. Ask this bot something and it shows up here within a few seconds.'));
       const top = Array.isArray(j.top) ? j.top : [], gaps = Array.isArray(j.gaps) ? j.gaps : [];
+      const sumOf = (rows) => rows.reduce((a, r) => a + (num(r.count) || 0), 0);
+      const refused = num(j.refused) || 0;
+      // CONTRACT: total/answered/refused are customer questions only (questions.mjs); "+N more" = total − Σ listed counts
+      const moreTop = j.more ? num(j.more.top) || 0 : Math.max(0, total - sumOf(top));
+      const moreGaps = j.more ? num(j.more.gaps) || 0 : Math.max(0, refused - sumOf(gaps));
       rc(body,
         h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
           h('span', { class: 'badge' }, plural(total, 'question')),
           h('span', { class: 'badge badge-good' }, `${num(j.answered) || 0} answered`),
-          h('span', { class: `badge ${num(j.refused) ? 'badge-warn' : ''}` }, `${num(j.refused) || 0} not in its files`),
-          num(j.testTraffic) ? h('span', { class: 'badge', title: 'Studio setup, Proof Run and off-topic probe questions are counted but left out of the lists below.' }, `${num(j.testTraffic)} test ${num(j.testTraffic) === 1 ? 'ask' : 'asks'} hidden`) : null),
-        h('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '8px' } },
-          list('Most asked', top, 'top', 'Nothing yet.'),
-          list('Gaps: could not answer', gaps, 'gap', 'No gaps: every question so far was answered from its files.')));
+          h('span', { class: `badge ${refused ? 'badge-warn' : ''}` }, `${refused} not in its files`),
+          // where questions come from (byChannel): only the channels that saw traffic
+          ...Object.entries(j.byChannel && typeof j.byChannel === 'object' ? j.byChannel : {}).filter(([, v]) => num(v) > 0).sort((a, b) => num(b[1]) - num(a[1]))
+            .map(([c, v]) => h('span', { class: 'badge', title: `${num(v)} asked via ${chLabel(c)}` }, `${chLabel(c)} ${num(v)}`))),
+        total ? h('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '8px' } },
+          list('Most asked', top, 'top', 'Nothing yet.', moreTop),
+          list('Gaps: could not answer', gaps, 'gap', 'No gaps: every question so far was answered from its files.', moreGaps))
+          : h('p', { class: 'inst-help', style: { marginTop: '8px' } }, 'No customer questions yet. Only test probes from setup so far.'),
+        probesList(j));
     };
     const load = async () => {
       again.disabled = true; body.setAttribute('aria-busy', 'true');

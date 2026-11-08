@@ -94,17 +94,27 @@ export function mount(ctx) {
     const atoms = files.reduce((a, f) => a + (Number(f.atoms) || 0), 0);
     const quotaMB = Math.round((s.trial.quota?.bytes || cfg().quota?.bytes || 104857600) / 1048576);
     const sc = s.proof?.score || null;
-    const tests = sc ? { passed: (sc.answered || 0) + (sc.refused || 0), total: (sc.total || 0) + (sc.probes || 0), unsupported: sc.unsupported || 0 } : null;
+    // fixer r2 (D8): the 3 + 1 mini check before launch is a "Quick check", never labelled as the 8 + 3 Proof Run.
+    const tests = sc ? { passed: (sc.answered || 0) + (sc.refused || 0), total: (sc.total || 0) + (sc.probes || 0), unsupported: sc.unsupported || 0, full: (sc.total || 0) >= 8 } : null;
     return { files: files.length, samples: files.filter((f) => f.sample).length, bytes: s.usage?.bytes || files.reduce((a, f) => a + (f.bytes || 0), 0), quotaMB, atoms, tests };
   }
   /** The last grounded answer: prefer the visitor's own questions over Proof Run rows. */
+  // fixer r3 (D8): the peak never shows a fragment. A candidate's first sentence must start with a capital (or a
+  // digit/quote), have at least 5 words and end the sentence (no "…" cut). Visitor answers beat Proof Run rows; within
+  // each group the best-matching answer wins (ties: the most recent).
   function lastQA() {
     const th = getState().thread || [];
-    const ok = (a) => a && a.status === 'grounded' && a.final && !a.final.refused && (a.final.citations || []).length;
-    const pick = [...th].reverse().find((a) => ok(a) && a.by !== 'proof') || [...th].reverse().find(ok);
+    const ok = (a) => a && a.status === 'grounded' && a.final && !a.final.refused && typeof a.final.text === 'string' && (a.final.citations || []).length;
+    const sentenceOf = (a) => stripMarkers(firstSentence(a.final.text));
+    const clean = (s) => !!s && !/^[a-z]/.test(s) && s.split(/\s+/).filter(Boolean).length >= 5 && /[.!?]["”’)]?$/.test(s) && !/…$/.test(s);
+    const score = (a) => Math.max(0, ...(a.final.citations || []).map((c) => Number(c.match) || (c.similarity != null ? Number(c.similarity) * 100 : 0) || 0), Number(a.final.topMatch) || 0);
+    const cands = th.map((a, i) => ({ a, i })).filter(({ a }) => ok(a) && a.question && clean(sentenceOf(a)));
+    const best = (list) => list.sort((x, y) => (score(y.a) - score(x.a)) || (y.i - x.i))[0]?.a || null;
+    const pick = best(cands.filter(({ a }) => a.by !== 'proof')) || best(cands.filter(({ a }) => a.by === 'proof'))
+      || [...th].reverse().find((a) => ok(a) && /[.!?]["”’)]?$/.test(sentenceOf(a)));
     if (!pick) return null;
     const c = pick.final.citations.find((x) => x.n === 1) || pick.final.citations[0];
-    return { answerId: pick.id, question: pick.question, answer: stripMarkers(firstSentence(pick.final.text)), cite: c };
+    return { answerId: pick.id, question: pick.question, answer: sentenceOf(pick), cite: c };
   }
   const anchors = () => {
     const a = cfg().anchors && (cfg().anchors.items || []).length ? cfg().anchors : DEFAULT_ANCHORS;
@@ -114,6 +124,9 @@ export function mount(ctx) {
   };
   const contactHref = () => { const c = cfg().contact || 'mailto:hello@knowdrive.ai'; return /^(mailto:|https?:)/i.test(c) ? c : `mailto:${c}`; };
   const isMobile = () => matchMedia('(max-width: 899px)').matches;
+  const testsName = (t) => (t && t.full ? 'Proof Run' : 'Quick check');
+  const FULL_PROOF_N = 11;   // 8 in-scope questions + 3 out-of-scope probes (SPEC 1.4 B8)
+  const runFullProof = (before) => { if (before) before(); emit('proof:run', { mini: false }); };
 
   // ---------------------------------------------------------------- shared bits
 
@@ -147,6 +160,30 @@ export function mount(ctx) {
   // ================================================================== LaunchCard (B9)
 
   const launchCards = new Set();   // live instances (all reflect the store)
+  let sheet = null;   // CheckoutSheet {layer, dialog, invoker, prevInert, redirecting, dismissed} (declared early: syncCtaFlag reads it)
+  let stage = null;   // LaunchStage {layer, panel, inst, opener, cleanup[]}
+  let focusNextCard = false;       // set by a user-initiated launch:open: the next summary takes focus (D9)
+  let autoStageNext = false;       // set by launch:open: at ≥ 1100 px the next summary also opens the wide receipt
+  let foldForSheet = false;        // closing the receipt panel because checkout opens: the Builder card stays folded
+
+  // ---- One solid CTA per viewport (fixer r2, D8). While a Launch card CTA is on screen, or the receipt/checkout is
+  // open, the header Launch pill is demoted to outline. CONTRACT-GAP (B): SPEC has no flag for this; E publishes
+  // ui.launchCardVisible (store) and :root[data-co-cta] (checkout.css restyles #st-price[data-level="solid"] from it).
+  // B can read the store flag instead and drop the CSS override.
+  const ctaSeen = new Set();
+  const ctaIO = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((ents) => { for (const e of ents) { if (e.isIntersecting) ctaSeen.add(e.target); else ctaSeen.delete(e.target); } syncCtaFlag(); }, { threshold: 0.5 })
+    : null;
+  function ctaWatch(el) { if (ctaIO) ctaIO.observe(el); else { ctaSeen.add(el); syncCtaFlag(); } }
+  function ctaUnwatch(el) { if (ctaIO) ctaIO.unobserve(el); ctaSeen.delete(el); syncCtaFlag(); }
+  function syncCtaFlag() {
+    for (const t of [...ctaSeen]) if (!t.isConnected) ctaSeen.delete(t);
+    const mode = sheet ? 'sheet' : stage ? 'receipt' : ctaSeen.size ? 'card' : null;
+    const root = document.documentElement;
+    if (mode) root.setAttribute('data-co-cta', mode); else root.removeAttribute('data-co-cta');
+    const ui = getState().ui || {};
+    if (!!ui.launchCardVisible !== !!mode) setState({ ui: { ...ui, launchCardVisible: !!mode } }, 'ui:launchCardVisible');
+  }
 
   /**
    * The Builder column is ~400 px wide (and a phone is 390), too narrow for the two-column receipt + plan (fixer r1, D8).
@@ -160,9 +197,11 @@ export function mount(ctx) {
     return renderLaunchSummary(el, data || {});
   }
 
-  function wideLaunch() {
-    if (!matchMedia('(min-width: 1100px)').matches) return false;
-    return !!botPaneRect();
+  function builderRect() {
+    const b = document.getElementById('st-setup');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return r.width >= 300 && r.height >= 320 ? r : null;
   }
   function botPaneRect() {
     const b = document.getElementById('st-bot');
@@ -183,7 +222,7 @@ export function mount(ctx) {
       h('dt', null, label),
       h('dd', null, statEls[key] = h('span', { class: 'co-num', dataset: { value: '0' } }, '0'), h('small', { class: 'co-unit' }, unit || '')));
     const statsEl = h('dl', { class: 'co-stats' },
-      stat('files', 'Files'), stat('mb', 'Storage', 'of 100 MB'), stat('atoms', 'Atoms'), stat('tests', 'Tests', ''));
+      stat('files', 'Files'), stat('mb', 'Storage', 'of 100 MB'), stat('atoms', 'Atoms'), stat('tests', 'Checks', ''));
     const testsLine = h('p', { class: 'co-rc-tests' });
     const qaEl = h('figure', { class: 'co-qa' });
     const embedEl = h('div', { class: 'co-embed-wrap' });
@@ -218,7 +257,7 @@ export function mount(ctx) {
       h('div', { class: 'co-plan-brand' }, h('img', { src: '../dashboard/logo.svg', alt: '', width: 20, height: 14 }), 'KnowDrive'),
       h('h3', { class: 'co-price', id: titleId }, h('span', { class: 'co-price-amt' }, `${pr.sym}${pr.amount}`), h('span', { class: 'co-price-per' }, `/${p.interval === 'year' ? 'year' : 'month'}`)),
       h('p', { class: 'co-tagline' }, 'One flat price to build and host your KnowBot. No per-answer fees.'),
-      cta,
+      where === 'chat' ? cta : null,   // inline: the card's own CTA is the only one; stage: the sticky bar is (fixer r4, D8)
       h('div', { class: 'co-sublinks' },
         h('button', { type: 'button', class: 'co-link', onclick: () => { announce('Keep testing. Your bot is saved.'); if (where === 'stage') closeStage({ focus: false }); focusBotComposer(); } }, 'Keep testing'),
         h('span', { class: 'co-sep', 'aria-hidden': 'true' }, '·'),
@@ -230,10 +269,10 @@ export function mount(ctx) {
       channelsStrip,
       h('p', { class: 'co-anchors' }, anchors()));
 
-    const card = h('article', { class: `co-launch${where === 'stage' ? ' is-stage' : ''}`, 'aria-label': `Launch ${botName()}` }, h('div', { class: 'co-launch-glow', 'aria-hidden': 'true' }), h('div', { class: 'co-launch-grid' }, receipt, plan));
+    const card = h('article', { class: `co-launch${where === 'stage' ? ' is-stage' : where === 'inline' ? ' is-inline' : ''}`, 'aria-label': where === 'inline' ? `${botName()}: full receipt and plan` : `Launch ${botName()}` }, h('div', { class: 'co-launch-glow', 'aria-hidden': 'true' }), h('div', { class: 'co-launch-grid' }, receipt, plan));
     el.append(card);
 
-    const inst = { el, card, receipt, cta, kind: where === 'stage' ? 'stage' : 'launch', paint, update: () => paint(false), destroy };
+    const inst = { el, card, receipt, cta, kind: where === 'stage' ? 'stage' : where === 'inline' ? 'inline' : 'launch', paint, update: () => paint(false), destroy };
     launchCards.add(inst);
 
     function paintQA() {
@@ -258,7 +297,7 @@ export function mount(ctx) {
       const org = getState().spec.org;
       subEl.textContent = `${org ? `for ${org} · ` : ''}${st.samples && st.samples === st.files ? 'sample files' : plural(st.files, 'file')} · saved ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
       $('.co-cta-label', cta).textContent = `Launch ${botName()} · ${price().text}`;
-      card.setAttribute('aria-label', `Launch ${botName()}`);
+      if (where !== 'inline') card.setAttribute('aria-label', `Launch ${botName()}`);
       const ms = fromZero && !motion.reduced() ? 700 : first ? 0 : 300;
       motion.ticker(statEls.files, st.files, { ms });
       motion.ticker(statEls.atoms, st.atoms, { ms });
@@ -275,14 +314,16 @@ export function mount(ctx) {
         tUnit.textContent = 'passed';
         const allPass = st.tests.passed === st.tests.total && !st.tests.unsupported;
         testsLine.className = `co-rc-tests${allPass ? ' is-pass' : ''}`;
-        testsLine.append(h('span', { html: icon(allPass ? 'shieldCheck' : 'shield', 14) }), `${st.tests.passed}/${st.tests.total} tests passed · ${plural(st.tests.unsupported, 'unsupported claim')}`);
+        $('dt', statsEl.querySelector('[data-k="tests"]')).textContent = st.tests.full ? 'Proof Run' : 'Quick check';
+        testsLine.append(h('span', { html: icon(allPass ? 'shieldCheck' : 'shield', 14) }), `${testsName(st.tests)} ${st.tests.passed}/${st.tests.total} passed · ${plural(st.tests.unsupported, 'unsupported claim')}`);
+        if (!st.tests.full) testsLine.append(h('button', { type: 'button', class: 'co-link', onclick: () => runFullProof(where === 'stage' ? () => closeStage({ focus: false }) : null) }, `Run the full Proof Run (${FULL_PROOF_N})`));
       } else {
         statEls.tests.textContent = '—';
         tUnit.textContent = 'not run';
         testsLine.className = 'co-rc-tests';
         testsLine.append(h('span', { html: icon('flask', 14) }), 'Not tested yet · ', h('button', { type: 'button', class: 'co-link', onclick: () => { if (where === 'stage') closeStage({ focus: false }); emit('proof:run', { mini: false }); } }, 'Run the Proof Run'));
       }
-      statsEl.setAttribute('aria-label', `${plural(st.files, 'file')}, ${mbOf(st.bytes)} MB of ${st.quotaMB} MB, ${plural(st.atoms, 'atom')}${st.tests ? `, ${st.tests.passed} of ${st.tests.total} tests passed` : ''}`);
+      statsEl.setAttribute('aria-label', `${plural(st.files, 'file')}, ${mbOf(st.bytes)} MB of ${st.quotaMB} MB, ${plural(st.atoms, 'atom')}${st.tests ? `, ${testsName(st.tests)} ${st.tests.passed} of ${st.tests.total} passed` : ''}`);
       $$('.co-ava', receipt).forEach((a) => { a.textContent = getState().spec.avatar?.initials || initialsOf(botName()); a.style.setProperty('--co-hue', hueVar()); });
       if (first || !qaEl.dataset.answer || qaEl.dataset.answer !== (lastQA()?.answerId || '')) { paintQA(); qaEl.dataset.answer = lastQA()?.answerId || ''; }
     }
@@ -307,52 +348,137 @@ export function mount(ctx) {
       playEmbed(embedEl, signal);
       await e.finished;
       await Promise.all(anims.map((a) => a.finished));
-    }, { region: card, maxMs: 6000 }).finally(() => { for (const r of rows) r.style.opacity = ''; embedEl.style.opacity = ''; });
+    }, { region: card, maxMs: 6000 }).finally(() => { for (const r of rows) r.style.opacity = ''; embedEl.style.opacity = ''; caretEmbed(embedEl); });
 
     function destroy() { launchCards.delete(inst); }
     return inst;
   }
 
-  // ---- LaunchSummary: the compact card in the Builder chat (desktop ≥ 1100 px)
+  // ---- LaunchSummary: the launch card in the Builder chat (every width).
+  // fixer r3 (D8): the card itself carries the whole pitch: Q and A with a working [1], the three inclusions that matter,
+  // a small embed thumbnail, the price, the CTA, "Questions? Talk to us" and the trust line. At ≥ 1100 px the wide
+  // two-column receipt (LaunchStage) also opens docked over the SampleBot pane; narrower, "Receipt & plan" expands the
+  // full receipt inline inside this card (no overlay that could cover the CTA).
   function renderLaunchSummary(el, data) {
     const pr = price();
-    const nameEl = h('b', { class: 'co-rc-name' }, botName());
-    const subEl = h('small', { class: 'co-rc-sub' });
+    const nameEl = h('span', { class: 'co-sum-name' }, botName());
+    const edit = h('button', { type: 'button', class: 'co-sum-edit', 'aria-label': `Rename ${botName()} or edit its settings`, title: 'Edit name and settings', html: icon('edit', 13) });
+    edit.addEventListener('click', () => {
+      // CONTRACT-GAP (B): no store event opens the spec drawer; the BotChip is the documented entry point, so it is clicked.
+      const chip = document.getElementById('st-botchip');
+      if (chip && chip.getClientRects().length) chip.click(); else { if (isMobile()) emit('tab:show', { tab: 'setup' }); document.getElementById('st-setup-composer')?.focus(); }
+    });
+    const subEl = h('small', { class: 'co-rc-sub co-sum-sub' });
     const pills = h('p', { class: 'co-sum-pills' });
-    const qaEl = h('p', { class: 'co-sum-qa', hidden: true });
+    const qaEl = h('figure', { class: 'co-sum-qa', hidden: true });
     const amt = h('span', { class: 'co-price-amt' }, `${pr.sym}${pr.amount}`);
     const per = h('span', { class: 'co-price-per' }, `/${pr.p.interval === 'year' ? 'year' : 'month'}`);
     const cta = h('button', { type: 'button', class: 'co-cta' },
       h('span', { class: 'co-cta-label' }, `Launch ${botName()} · ${pr.text}`), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
+    const moreId = `co-sum-more-${Math.random().toString(36).slice(2, 8)}`;
+    const more = h('div', { class: 'co-sum-more', id: moreId, hidden: true });
     const viewLabel = h('span', null, 'Receipt & plan');
-    const view = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small co-sum-view', 'aria-expanded': 'false', 'aria-controls': 'co-stage' },
+    const view = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small co-sum-view', 'aria-expanded': 'false', 'aria-controls': moreId },
       h('span', { class: 'co-sum-view-ico', html: icon('layers', 14) }), viewLabel);
-    const card = h('article', { class: 'co-launch co-sum', 'aria-label': `Launch ${botName()}: summary` },
+    const headId = `co-sum-h-${Math.random().toString(36).slice(2, 8)}`;
+    const heading = h('h3', { class: 'co-sum-h', id: headId }, nameEl, edit);
+    const fullLink = h('button', { type: 'button', class: 'co-link co-sum-full', hidden: true, onclick: () => runFullProof(() => closeStage({ focus: false })) }, `Run the full Proof Run (${FULL_PROOF_N})`);
+    const chBtn = h('button', { type: 'button', class: 'co-link co-sum-channels' }, 'See channels & API');
+    chBtn.addEventListener('click', () => openGoLive({ tab: 'channels', invoker: chBtn }));
+    const incl = h('ul', { class: 'co-sum-incl', 'aria-label': 'Included in the plan' },
+      h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, 'Hosted share link + embed widget for any site')),
+      h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, '6 channels (SMS, phone, WhatsApp, email, voice, web) + chat API · ', chBtn)),
+      h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, 'Question insights: see what customers ask and where the gaps are')));
+    const thumb = h('div', { class: 'co-thumb-hold' });
+    // fixer r4 (D8): while the receipt panel is open over the bot pane, this card folds to a one-line stub (name ·
+    // checks · price · "Receipt open"), with no CTA, no anchors and no repeated inclusions: one solid CTA, in the panel.
+    const stubText = h('span', { class: 'co-stub-text' });
+    const stubGo = h('span', { class: 'co-stub-go-t' }, 'Receipt open');
+    const stub = h('button', { type: 'button', class: 'co-stub', hidden: true },
+      h('span', { class: 'co-stub-dot', 'aria-hidden': 'true' }), stubText,
+      h('span', { class: 'co-stub-go' }, stubGo, h('span', { html: icon('arrowRight', 13) })));
+    stub.addEventListener('click', () => {
+      if (sheet) { try { sheet.email.focus(); } catch { /* ignore */ } return; }
+      if (stage) { try { stage.panel.focus({ preventScroll: true }); } catch { /* ignore */ } pulseCard(stage.panel); } else collapse(false);
+    });
+    // Programmatic focus lands on the card (tabindex=-1, no resting ring), never on the name: it is not an input.
+    const card = h('article', { class: 'co-launch co-sum', 'aria-labelledby': headId, tabindex: '-1' },
       h('div', { class: 'co-launch-glow', 'aria-hidden': 'true' }),
+      stub,
       h('div', { class: 'co-sum-body' },
-        h('div', { class: 'co-sum-head' }, avatar(36), h('div', { class: 'co-rc-idtext' }, nameEl, subEl),
-          h('span', { class: 'co-rc-badge' }, h('i', { class: 'co-dot is-ready', 'aria-hidden': 'true' }), 'Ready')),
-        pills,
+        h('div', { class: 'co-sum-head' }, avatar(40), h('div', { class: 'co-rc-idtext' }, heading, subEl),
+          h('span', { class: 'co-rc-badge' }, h('i', { class: 'co-dot is-ready', 'aria-hidden': 'true' }), 'Ready to launch')),
+        h('div', { class: 'co-sum-pillrow' }, pills, fullLink),
         qaEl,
+        h('div', { class: 'co-sum-gets' }, incl, thumb),
         h('div', { class: 'co-sum-price' }, h('p', { class: 'co-price' }, amt, per), h('small', null, 'Flat price · no per-answer fees · cancel anytime')),
         cta,
-        h('div', { class: 'co-sum-links' }, view,
-          h('button', { type: 'button', class: 'co-link', onclick: () => { closeStage({ focus: false }); announce('Keep testing. Your bot is saved.'); focusBotComposer(); } }, 'Keep testing')),
+        h('div', { class: 'co-sum-links' },
+          h('a', { class: 'co-link', href: contactHref() }, 'Questions? Talk to us'),
+          h('span', { class: 'co-sep', 'aria-hidden': 'true' }, '·'),
+          h('button', { type: 'button', class: 'co-link', onclick: () => { closeStage({ focus: false }); announce('Keep testing. Your bot is saved.'); focusBotComposer(); } }, 'Keep testing'),
+          view),
+        h('p', { class: 'co-trust' }, h('span', { html: icon('lock', 13) }), `Your files stay private to your bot. Saved for ${cfg().quota?.ttlDays || 7} days if you don't launch.`),
+        more,
         h('p', { class: 'co-anchors' }, anchors())));
     el.append(card);
     cta.addEventListener('click', () => {
       const from = stage && stage.inst && stage.inst.receipt.isConnected ? stage.inst.receipt : card;
       openSheet({ source: 'card', from, invoker: cta });
     });
-    view.addEventListener('click', () => { if (stage) closeStage({ focus: false }); else openStage({ from: card, opener: view, focus: true }); });
+    view.addEventListener('click', () => {
+      if (stage && stage.opener === view) { closeStage({ focus: false }); return; }
+      if (inst.inline) { toggleInline(false); return; }
+      if (canDock()) openStage({ from: card, opener: view, focus: true });
+      else toggleInline(true);
+    });
+    function toggleInline(open) {
+      if (open) {
+        more.innerHTML = '';
+        inst.inline = buildFullCard(more, { where: 'inline' });
+        more.hidden = false;
+        view.setAttribute('aria-controls', moreId); view.setAttribute('aria-expanded', 'true'); viewLabel.textContent = 'Hide receipt';
+        if (!motion.reduced()) motion.animate(more, [{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'out' });
+        announce(`Full receipt and plan for ${botName()} shown in the card.`, 'polite');
+      } else {
+        if (inst.inline) inst.inline.destroy();
+        inst.inline = null;
+        more.hidden = true; more.innerHTML = '';
+        view.setAttribute('aria-expanded', 'false'); viewLabel.textContent = 'Receipt & plan';
+      }
+    }
 
-    const inst = { el, card, receipt: card, cta, view, viewLabel, kind: 'summary', update: () => paint(), destroy() { launchCards.delete(inst); if (stage && stage.opener === view) closeStage({ focus: false }); } };
+    /** Fold to the stub (receipt panel open) or back. FLIP on the card height; instant with reduced motion. */
+    function collapse(on, mode = 'receipt') {
+      stubGo.textContent = mode === 'checkout' ? 'In checkout' : 'Receipt open';
+      paintStubLabel(mode);
+      if (!!inst.collapsed === !!on) return;
+      inst.collapsed = !!on;
+      const body = card.querySelector('.co-sum-body');
+      const h0 = card.getBoundingClientRect().height;
+      card.classList.toggle('is-collapsed', !!on);
+      stub.hidden = !on; body.hidden = !!on;
+      if (on) { const ae = document.activeElement; if (ae && body.contains(ae)) { try { stub.focus({ preventScroll: true }); } catch { /* ignore */ } } }
+      if (motion.reduced() || !card.isConnected) return;
+      const h1 = card.getBoundingClientRect().height;
+      if (!h0 || !h1 || Math.abs(h0 - h1) < 2) return;
+      motion.animate(card, [{ height: `${h0}px`, overflow: 'hidden' }, { height: `${h1}px`, overflow: 'hidden' }], { duration: motion.DUR[3], easing: 'inOut' });
+      motion.animate(on ? stub : body, [{ opacity: 0, transform: on ? 'translateY(-4px)' : 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], delay: on ? 80 : 120, easing: 'out', fill: 'backwards' });
+    }
+    function paintStubLabel(mode) {
+      const st = stats();
+      stub.setAttribute('aria-label', `${botName()}, ${st.tests && st.tests.total ? `${testsName(st.tests)} ${st.tests.passed} of ${st.tests.total} passed` : 'not tested yet'}, ${price().long}. ${mode === 'checkout' ? 'Checkout is open: go to the email field.' : 'Receipt and plan are open beside the Builder: go to them.'}`);
+    }
+    const inst = { el, card, receipt: card, cta, view, viewLabel, heading: card, chBtn, kind: 'summary', inline: null, collapsed: false, collapse, update: () => { paint(); if (inst.inline) inst.inline.update(); },
+      destroy() { launchCards.delete(inst); ctaUnwatch(cta); if (inst.inline) inst.inline.destroy(); if (stage && stage.opener === view) closeStage({ focus: false }); } };
     launchCards.add(inst);
+    ctaWatch(cta);
     function paint() {
       const st = stats();
       nameEl.textContent = botName();
+      edit.setAttribute('aria-label', `Rename ${botName()} or edit its settings`);
       const org = getState().spec.org;
-      subEl.textContent = `${org ? `for ${org} · ` : ''}${st.samples && st.samples === st.files ? 'sample files' : 'your files'}`;
+      subEl.textContent = `${org ? `for ${org} · ` : ''}${st.samples && st.samples === st.files ? 'built from sample files' : 'built from your files'}`;
       const qa = lastQA();
       if ((qa?.answerId || '') !== (qaEl.dataset.answer || '')) {
         qaEl.dataset.answer = qa?.answerId || '';
@@ -362,53 +488,75 @@ export function mount(ctx) {
           const c = qa.cite;
           const chip = h('button', { type: 'button', class: 'co-cite', 'aria-label': `Citation 1: ${c.title || c.file}${c.seq != null ? `, atom ${c.seq}` : ''}. Opens the quoted source.` }, '1');
           chip.addEventListener('click', () => emit('drawer:open', { fileId: c.fileId, atomId: c.atomId ?? null, seq: c.seq ?? null, answerId: qa.answerId, n: c.n || 1 }));
-          qaEl.append(h('span', { class: 'co-qa-k' }, 'A'), h('span', { class: 'co-sum-qa-t' }, h('span', { class: 'co-sr' }, `Asked “${qa.question}”, it answered: `), qa.answer, NBSP, chip));
+          qaEl.append(
+            h('figcaption', { class: 'co-qa-q' }, h('span', { class: 'co-qa-k' }, 'Q'), h('span', null, qa.question)),
+            h('blockquote', { class: 'co-qa-a' }, h('span', { class: 'co-qa-k' }, 'A'), h('span', { class: 'co-sum-qa-t' }, qa.answer, NBSP, chip)),
+            h('p', { class: 'co-qa-src' }, h('span', { class: 'co-qa-src-ico', html: icon('file', 12) }), h('span', null, [c.file || c.title || 'source', c.match != null ? `match ${c.match}` : null].filter(Boolean).join(' · '))));
         }
+        thumb.replaceChildren(embedThumb(qa));
       }
       $('.co-cta-label', cta).textContent = `Launch ${botName()} · ${price().text}`;
       pills.innerHTML = '';
       const pill = (txt, cls = '') => h('span', { class: `co-pill${cls}` }, txt);
       const allPass = st.tests && st.tests.total && st.tests.passed === st.tests.total && !st.tests.unsupported;
-      pills.append(pill(plural(st.files, 'file')), pill(plural(st.atoms, 'atom')),
-        st.tests && st.tests.total ? pill(`${st.tests.passed}/${st.tests.total} tests`, allPass ? ' is-pass' : '') : pill('not tested yet'));
-      pills.setAttribute('aria-label', `${plural(st.files, 'file')}, ${plural(st.atoms, 'atom')}${st.tests && st.tests.total ? `, ${st.tests.passed} of ${st.tests.total} tests passed` : ', not tested yet'}`);
-      $$('.co-ava', card).forEach((a) => { a.textContent = getState().spec.avatar?.initials || initialsOf(botName()); a.style.setProperty('--co-hue', hueVar()); });
+      pills.append(pill(plural(st.files, 'file')), pill(`${mbOf(st.bytes)} of ${st.quotaMB} MB`), pill(plural(st.atoms, 'atom')),
+        st.tests && st.tests.total ? pill(`${testsName(st.tests)} ${st.tests.passed}/${st.tests.total}`, allPass ? ' is-pass' : '') : pill('not tested yet'));
+      pills.setAttribute('aria-label', `${plural(st.files, 'file')}, ${mbOf(st.bytes)} MB of ${st.quotaMB} MB, ${plural(st.atoms, 'atom')}${st.tests && st.tests.total ? `, ${testsName(st.tests)}: ${st.tests.passed} of ${st.tests.total} passed` : ', not tested yet'}`);
+      fullLink.hidden = !(st.tests && st.tests.total && !st.tests.full);
+      stubText.textContent = [botName(), st.tests && st.tests.total ? `${st.tests.passed}/${st.tests.total}` : 'not tested yet', price().text].join(' · ');
+      paintStubLabel(stubGo.textContent === 'In checkout' ? 'checkout' : 'receipt');
+      $$('.co-sum-head .co-ava', card).forEach((a) => { a.textContent = getState().spec.avatar?.initials || initialsOf(botName()); a.style.setProperty('--co-hue', hueVar()); });
     }
     paint();
-    if (!motion.reduced()) motion.stagger([...card.querySelector('.co-sum-body').children], [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out', fill: 'backwards' }, 45);
-    // Promote the full card beside the chat once the summary has landed (not when the visitor is typing elsewhere).
-    if (!data.noStage) setTimeout(() => { if (card.isConnected && !stage && wideLaunch()) openStage({ from: card, opener: view, focus: 'auto' }); }, motion.reduced() ? 60 : 260);
+    if (!motion.reduced()) motion.stagger([...card.querySelector('.co-sum-body').children].filter((n) => !n.hidden), [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out', fill: 'backwards' }, 45);
+    if (focusNextCard) {
+      focusNextCard = false;
+      requestAnimationFrame(() => setTimeout(() => {
+        if (!card.isConnected) return;
+        try { card.focus({ preventScroll: true }); } catch { /* ignore */ }
+        announce(`${botName()} is ready to launch, ${price().long}. Launch card in the Builder: Launch button, Receipt and plan, Keep testing.`, 'polite');
+      }, motion.reduced() ? 0 : 120));
+    }
+    if (stage && !stage.closing) collapse(true);   // a newer card while the receipt panel is open: folded from the start
+    if (autoStageNext) {
+      autoStageNext = false;
+      setTimeout(() => { if (card.isConnected && !stage && !sheet && canDock()) openStage({ from: card, opener: view, focus: false }); }, motion.reduced() ? 0 : 420);
+    }
     return inst;
   }
 
-  // ---- LaunchStage: the full two-column card docked over the SampleBot pane (or floating, when there is no pane)
-  let stage = null;   // {layer, panel, inst, opener, cleanup[]}
+  /** A 120 px embed thumbnail for the summary: browser bar, page skeleton, the bot's panel in its hue, launcher. */
+  function embedThumb(qa = lastQA()) {
+    return h('figure', { class: 'co-thumb', style: { '--co-hue': hueVar() }, 'aria-label': `Preview: ${botName()} as a chat widget on your site` , role: 'img' },
+      h('div', { class: 'co-thumb-bar', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('span', null, 'yoursite.com')),
+      h('div', { class: 'co-thumb-page', 'aria-hidden': 'true' },
+        h('b'), h('i'), h('i', { class: 'is-short' }),
+        h('div', { class: 'co-thumb-panel' },
+          h('span', { class: 'co-thumb-head' }),
+          h('span', { class: 'co-thumb-q' }, qa ? qa.question : ''),
+          h('span', { class: 'co-thumb-a' }, qa ? qa.answer : getState().spec.greeting || ''),
+          h('span', { class: 'co-thumb-src' }, qa ? `[1] ${qa.cite.file || qa.cite.title || ''}` : '')),
+        h('span', { class: 'co-thumb-dot' })),
+      h('figcaption', { class: 'co-thumb-cap', 'aria-hidden': 'true' }, 'On your site'));
+  }
+
+  // ---- LaunchStage: the wide two-column receipt + plan (spec B9). fixer r3 (D8): at ≥ 1100 px it docks over the
+  // SampleBot pane (the Builder column, with the launch card and its CTA, stays fully usable beside it: nothing covers
+  // the card). It opens by itself with a fresh launch card and on "Receipt & plan"; "Back to the live bot" closes it.
+  // Narrower there is no stage: the full receipt expands inline inside the card.
+  const canDock = () => !isMobile() && innerWidth >= 1100 && !!botPaneRect();
 
   function placeStage() {
     if (!stage) return;
-    const r = !isMobile() && matchMedia('(min-width: 1100px)').matches ? botPaneRect() : null;
-    const L = stage.layer, P = stage.panel;
-    const float = !r;
-    L.classList.toggle('is-float', float);
-    if (r) { L.style.left = `${Math.round(r.left)}px`; L.style.top = `${Math.round(r.top)}px`; L.style.width = `${Math.round(r.width)}px`; L.style.height = `${Math.round(r.height)}px`; }
-    else { L.style.left = L.style.top = L.style.width = L.style.height = ''; }
-    if (float === stage.float) return;
-    stage.float = float;
-    // Docked beside the chat it is a region (the Builder stays usable); floating it covers the studio, so it is a dialog.
-    if (float) {
-      P.setAttribute('role', 'dialog'); P.setAttribute('aria-modal', 'true');
-      if (stage.prevInert == null) stage.prevInert = slots.app ? slots.app.inert : false;
-      if (slots.app) slots.app.inert = true;
-    } else {
-      P.setAttribute('role', 'region'); P.removeAttribute('aria-modal');
-      if (stage.prevInert != null && slots.app && !sheet) slots.app.inert = !!stage.prevInert;
-      stage.prevInert = null;
-    }
+    const r = canDock() ? botPaneRect() : null;
+    if (!r) { closeStage({ focus: false }); return; }
+    const L = stage.layer;
+    L.style.left = `${Math.round(r.left)}px`; L.style.top = `${Math.round(r.top)}px`; L.style.width = `${Math.round(r.width)}px`; L.style.height = `${Math.round(r.height)}px`;
   }
 
   function openStage({ from = null, opener = null, focus = true } = {}) {
     if (stage) { stage.panel.focus({ preventScroll: true }); return stage; }
-    const closeBtn = h('button', { type: 'button', class: 'co-x co-stage-x', 'aria-label': 'Close the launch card and keep testing', html: icon('x', 18) });
+    const closeBtn = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small co-stage-x', 'aria-label': 'Close the receipt and go back to the live bot' }, h('span', { html: icon('x', 14) }), 'Back to the live bot');
     const head = h('div', { class: 'co-stage-head' },
       h('p', { class: 'co-eyebrow' }, h('span', { html: icon('rocket', 13) }), `${botName()} is ready to launch`),
       closeBtn);
@@ -418,10 +566,21 @@ export function mount(ctx) {
     const foot = h('div', { class: 'co-stage-foot' }, h('p', { class: 'co-stage-foot-price' }, h('span', null, h('b', null, `${price().sym}${price().amount}`), `/${price().per}`), h('small', null, 'cancel anytime')), footCta);
     const panel = h('section', { class: 'co-stage', id: 'co-stage', role: 'region', 'aria-label': `Launch ${botName()}: receipt and plan`, tabindex: '-1' }, head, holder, foot);
     footCta.addEventListener('click', () => openSheet({ source: 'card', from: stage?.inst?.receipt || null, invoker: footCta }));
-    const layer = h('div', { class: 'co-stage-layer', dataset: { kind: 'launch-stage' } }, h('div', { class: 'co-stage-backdrop', 'aria-hidden': 'true' }), panel);
+    const layer = h('div', { class: 'co-stage-layer is-right', dataset: { kind: 'launch-stage' } }, h('div', { class: 'co-stage-backdrop', 'aria-hidden': 'true' }), panel);
     modal.append(layer);
-    stage = { layer, panel, opener, cleanup: [], float: null, prevInert: null };
+    stage = { layer, panel, opener, cleanup: [], float: false, prevInert: null };
     placeStage();
+    if (!stage) return null;
+    // The covered SampleBot is taken out of the tab order while the receipt sits over it (restored on close).
+    // CONTRACT-GAP (B): #st-bot is B's pane; only its inert flag is toggled, never its content.
+    const botPane = document.getElementById('st-bot');
+    if (botPane) {
+      const was = botPane.inert;
+      const hadFocus = botPane.contains(document.activeElement);
+      botPane.inert = true;
+      stage.cleanup.push(() => { botPane.inert = was; });
+      if (hadFocus) focus = true;
+    }
     stage.inst = buildFullCard(holder, { where: 'stage' });
     if (opener) { opener.setAttribute('aria-expanded', 'true'); const l = [...launchCards].find((c) => c.view === opener); if (l) l.viewLabel.textContent = 'Hide receipt'; }
 
@@ -431,10 +590,13 @@ export function mount(ctx) {
     stage.cleanup.push(() => window.removeEventListener('resize', onResize));
     const pane = document.getElementById('st-bot');
     if (pane && typeof ResizeObserver === 'function') { const ro = new ResizeObserver(() => placeStage()); ro.observe(pane); stage.cleanup.push(() => ro.disconnect()); }
+    // fixer r4 (D8): the Builder card folds to a one-line stub underneath (no CTA, no anchors): the panel's sticky bar is
+    // the only Launch button. It folds after the morph has measured the card (below).
+    stage.cleanup.push(() => { if (foldForSheet) return; for (const c of launchCards) if (c.kind === 'summary' && c.collapse) c.collapse(false); });
+    syncCtaFlag();
     const onKey = (e) => {
       if (sheet || !stage || stage.panel !== panel) return;
-      if (e.key === 'Escape' && (stage.float || panel.contains(document.activeElement))) { e.preventDefault(); e.stopPropagation(); closeStage({ focus: true }); }
-      else if (e.key === 'Tab' && stage.float) trap(e, panel);
+      if (e.key === 'Escape' && panel.contains(document.activeElement)) { e.preventDefault(); e.stopPropagation(); closeStage({ focus: true }); }
     };
     document.addEventListener('keydown', onKey, true);
     stage.cleanup.push(() => document.removeEventListener('keydown', onKey, true));
@@ -455,11 +617,12 @@ export function mount(ctx) {
       const bd = layer.querySelector('.co-stage-backdrop');
       motion.animate(bd, [{ opacity: 0 }, { opacity: 1 }], { duration: motion.DUR[3], easing: 'out' });
     }
+    for (const c of launchCards) if (c.kind === 'summary' && c.collapse && c.el.isConnected) c.collapse(true);
     // Focus: a visitor who clicked into this moves with it; one typing in a composer is left alone.
     const ae = document.activeElement;
     const typing = ae && (ae.tagName === 'TEXTAREA' || (ae.tagName === 'INPUT' && ae.type !== 'button'));
-    if (focus === true || stage.float || (focus === 'auto' && !typing)) requestAnimationFrame(() => panel.focus({ preventScroll: true }));
-    announce(`${botName()} is ready to launch. Receipt and plan shown beside the chat, ${price().long}.`, 'polite');
+    if (focus === true || (focus === 'auto' && !typing)) requestAnimationFrame(() => panel.focus({ preventScroll: true }));
+    announce(`Receipt and plan for ${botName()}, ${price().long}, shown over the bot pane. Back to the live bot closes it.`, 'polite');
     preloadGoLive();
     return stage;
   }
@@ -469,7 +632,7 @@ export function mount(ctx) {
     const s = stage; stage = null;
     for (const fn of s.cleanup.splice(0)) { try { fn(); } catch { /* ignore */ } }
     if (s.inst) launchCards.delete(s.inst);
-    if (s.float && slots.app && !sheet) slots.app.inert = !!s.prevInert;
+    syncCtaFlag();
     const opener = s.opener && s.opener.isConnected ? s.opener : null;
     if (opener) { opener.setAttribute('aria-expanded', 'false'); const l = [...launchCards].find((c) => c.view === opener); if (l) l.viewLabel.textContent = 'Receipt & plan'; }
     const hadFocus = s.layer.contains(document.activeElement);
@@ -501,18 +664,23 @@ export function mount(ctx) {
           h('div', { class: 'co-embed-msgs' },
             h('p', { class: 'co-em is-bot' }, greet),
             qa ? h('p', { class: 'co-em is-user' }, qa.question) : null,
-            qa ? h('p', { class: 'co-em is-bot' }, qa.answer, h('sup', { class: 'co-em-cite' }, '1')) : null,
+            qa ? h('p', { class: 'co-em is-bot is-ans' }, qa.answer, h('sup', { class: 'co-em-cite' }, '1')) : null,
             qa ? h('p', { class: 'co-em-src' }, `[1] ${qa.cite.file || qa.cite.title || ''}`) : null)),
         h('span', { class: 'co-embed-launcher' }, h('span', { html: icon('chat', 14) }))));
   }
+  // fixer r4 (D8): the preview is never an empty widget. Every message (greeting, question, the cited answer, its
+  // source) is on screen from the first frame; only the launcher pops in, and once the card's entrance has settled a
+  // typing caret blinks twice after the answer (CSS, none with reduced motion).
   function playEmbed(wrap, signal) {
     if (motion.reduced()) return;
-    const msgs = $$('.co-em, .co-em-src', wrap);
     const launcher = $('.co-embed-launcher', wrap);
-    const panel = $('.co-embed-panel', wrap);
     motion.animate(launcher, [{ transform: 'scale(.4)', opacity: 0 }, { transform: 'scale(1.12)', opacity: 1, offset: .6 }, { transform: 'none', opacity: 1 }], { duration: 420, easing: 'out', signal });
-    motion.animate(panel, [{ opacity: 0, transform: 'translateY(10px) scale(.94)', transformOrigin: '100% 100%' }, { opacity: 1, transform: 'none', transformOrigin: '100% 100%' }], { duration: motion.DUR[3], delay: 160, easing: 'spring', fill: 'backwards', signal });
-    msgs.forEach((m, i) => motion.animate(m, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], delay: 360 + i * 140, easing: 'out', fill: 'backwards', signal }));
+  }
+  function caretEmbed(wrap) {
+    if (motion.reduced() || !wrap || !wrap.isConnected) return;
+    const e = $('.co-embed', wrap);
+    if (!e) return;
+    e.classList.remove('is-caret'); void e.offsetWidth; e.classList.add('is-caret');
   }
 
   // ---- make it yours (B9)
@@ -541,10 +709,17 @@ export function mount(ctx) {
     const s = getState();
     if (s.trial.status === 'expired') return;
     if (s.trial.converted || s.milestones.launched) { postSuccess({ burst: false }); return; }
-    if (isMobile()) emit('tab:show', { tab: 'setup' });
+    // Integrator r5: only a deliberate pick (header pill, palette, a Launch chip, force) switches the mobile tab. A typed
+    // Builder turn ("how much to go live?") resolves after the reply; by then the person may have moved to the bot tab
+    // to ask questions, and yanking them back hid the starters (smoke 04/05 on mobile). The Builder tab badge tells them.
+    if (isMobile() && (d.source !== 'setup' || d.force)) emit('tab:show', { tab: 'setup' });
     const fromServerTurn = d.source === 'setup' && !!s.setup?.busy;   // the server reply already carries the Builder line
+    // A click (header pill, palette, a Launch chip) moves focus with it; a typed Builder turn leaves focus in the composer.
+    const ae = document.activeElement;
+    const userPick = d.source === 'header' || d.source === 'palette' || d.source === 'chip' || !!d.force || ae?.id === 'st-price'
+      || (!fromServerTurn && !!(ae && ae.closest && ae.closest('.st-chip')));
     // A card is already on screen: header/palette go straight to checkout; anything else re-points at the card.
-    const live = [...launchCards].filter((c) => c.el.isConnected && c.kind !== 'stage').pop();
+    const live = [...launchCards].filter((c) => c.el.isConnected && c.kind !== 'stage' && c.kind !== 'inline').pop();
     if (live) {
       live.update();
       const r = live.el.getBoundingClientRect();
@@ -552,10 +727,15 @@ export function mount(ctx) {
       const from = stage && stage.inst ? stage.inst.receipt : live.receipt;
       if (vis && (d.source === 'header' || d.source === 'palette' || d.source === 'chip')) { openSheet({ source: d.source, from, invoker: document.activeElement }); return; }
       const nearBottom = live.el.closest('[data-card]')?.nextElementSibling == null;
-      if (vis || nearBottom) {
-        live.el.scrollIntoView({ behavior: motion.reduced() ? 'auto' : 'smooth', block: 'start' });
-        if (live.kind === 'summary' && !stage && wideLaunch()) openStage({ from: live.card, opener: live.view, focus: 'auto' });
-        motion.animate(live.card, [{ boxShadow: '0 0 0 0 var(--accent-soft)' }, { boxShadow: '0 0 0 6px var(--accent-soft)' }, { boxShadow: '0 0 0 0 var(--accent-soft)' }], { duration: 700, essential: false });
+      if (vis || nearBottom || userPick) {
+        // fixer r2 (D8/D9): never an overlay over the bot; scroll to the card, pulse it, and move focus to its heading.
+        live.el.scrollIntoView({ behavior: motion.reduced() ? 'auto' : 'smooth', block: 'nearest' });
+        pulseCard(live.card);
+        if (userPick && !stage && live.view && canDock()) openStage({ from: live.card, opener: live.view, focus: false });
+        if (userPick && live.heading) {
+          setTimeout(() => { try { live.heading.focus({ preventScroll: true }); } catch { /* ignore */ } }, motion.reduced() ? 0 : 260);
+          announce(`${botName()} is ready to launch, ${price().long}. Launch card in the Builder.`, 'polite');
+        }
         return;
       }
     }
@@ -589,6 +769,8 @@ export function mount(ctx) {
         await done;
       }
       const showText = !fromServerTurn;
+      focusNextCard = userPick;
+      autoStageNext = true;
       emit('setup:post', { role: 'assistant',
         text: showText ? `${botName()} is built and saved. Launch it to get a hosted link and embed code in under a minute.` : '',
         card: { type: 'launch', data: { variant: 'launch' } },
@@ -602,30 +784,37 @@ export function mount(ctx) {
     } finally { launching = false; }
   }
   sub('launch:open', (d) => { onLaunchOpen(d || {}); });
+  /** Two accent rings out of the card (transform-free box-shadow; a single static ring in reduced motion). */
+  function pulseCard(card) {
+    if (!card) return;
+    if (motion.reduced()) { card.classList.add('is-ping'); clearTimeout(card._ping); card._ping = setTimeout(() => card.classList.remove('is-ping'), 1400); return; }
+    motion.animate(card, [
+      { boxShadow: '0 0 0 0 var(--accent-soft)' }, { boxShadow: '0 0 0 7px var(--accent-soft)', offset: .3 }, { boxShadow: '0 0 0 0 transparent', offset: .5 },
+      { boxShadow: '0 0 0 6px var(--accent-soft)', offset: .78 }, { boxShadow: '0 0 0 0 transparent' },
+    ], { duration: 1100, easing: 'out', essential: false });
+  }
 
   // ================================================================== CheckoutSheet (B10)
 
-  let sheet = null;   // {layer, dialog, invoker, prevInert, redirecting, dismissed}
 
+  // fixer r4 (D8): the sheet carries the compact receipt only (one line + the cited Q&A). The full receipt grid lives in
+  // one place (the receipt panel / the inline expansion), never repeated here.
   function sheetReceipt() {
     const st = stats();
     const pr = price();
     const qa = lastQA();
-    // Mobile one-liner: the name is already in the id row; wraps to two lines and the price never ellipsizes (fixer r1).
-    const one = [plural(st.files, 'file'), plural(st.atoms, 'atom'), st.tests ? `${st.tests.passed}/${st.tests.total} tests` : null].filter(Boolean).join(' · ');
-    return h('section', { class: 'co-sr-receipt', 'aria-label': 'Your KnowBot' },
-      h('div', { class: 'co-rc-id' }, avatar(44), h('div', { class: 'co-rc-idtext' }, h('b', { class: 'co-rc-name' }, botName()), h('small', { class: 'co-rc-sub' }, getState().spec.org ? `for ${getState().spec.org}` : 'Your KnowBot'))),
-      h('p', { class: 'co-oneline' }, h('span', null, one), h('span', { class: 'co-oneline-sep', 'aria-hidden': 'true' }, ' · '), h('b', { class: 'co-oneline-price' }, pr.text)),
-      h('dl', { class: 'co-sr-list' },
-        h('div', null, h('dt', null, 'Files'), h('dd', null, `${st.files}`)),
-        h('div', null, h('dt', null, 'Storage'), h('dd', null, `${mbOf(st.bytes)} of ${st.quotaMB} MB`)),
-        h('div', null, h('dt', null, 'Atoms'), h('dd', null, st.atoms.toLocaleString())),
-        h('div', null, h('dt', null, 'Proof Run'), h('dd', null, st.tests ? `${st.tests.passed}/${st.tests.total} passed · ${plural(st.tests.unsupported, 'unsupported claim')}` : 'not run'))),
-      qa ? sheetQA(qa) : null,
-      h('ul', { class: 'co-sr-carry' },
-        h('li', null, h('span', { html: icon('check', 13) }), 'Bot, files and tests carry over'),
-        h('li', null, h('span', { html: icon('check', 13) }), 'Hosted link + embed code right after'),
-        h('li', null, h('span', { html: icon('check', 13) }), 'Cancel anytime')));
+    const tests = st.tests && st.tests.total ? `${testsName(st.tests)} ${st.tests.passed}/${st.tests.total}` : 'not tested yet';
+    const one = [plural(st.files, 'file'), `${mbOf(st.bytes)} MB`, plural(st.atoms, 'atom'), tests].join(' · ');
+    const full = st.tests && st.tests.total && !st.tests.full
+      ? h('p', { class: 'co-sr-quick' }, h('span', { html: icon('flask', 13) }),
+        h('span', null, `Only the ${st.tests.total}-question quick check has run. `,
+          h('button', { type: 'button', class: 'co-link', onclick: () => { closeSheet('proof'); runFullProof(); } }, `Run the full Proof Run (${FULL_PROOF_N}) first`)))
+      : null;
+    return h('section', { class: 'co-sr-receipt', 'aria-label': `Your KnowBot: ${botName()}, ${one}, ${pr.text}` },
+      h('div', { class: 'co-sr-line' }, avatar(32),
+        h('p', { class: 'co-oneline' }, h('b', { class: 'co-oneline-name' }, botName()), h('span', null, one))),
+      full,
+      qa ? sheetQA(qa) : null);
   }
 
   /** The receipt's proof: Q, the cited one-line answer and a working [1] (the drawer sits behind the modal, so the
@@ -650,6 +839,12 @@ export function mount(ctx) {
   async function openSheet({ source = 'card', from = null, invoker = null } = {}) {
     if (sheet) { sheet.email?.focus(); return; }
     preloadGoLive();
+    // fixer r4 (D8, blocker): desktop checkout is a 440 px sheet on the right, over the SampleBot pane, with the bot thread
+    // unblurred beside it (a light, blur-free scrim). The receipt panel closes first, so the receipt exists once.
+    const side = !isMobile();
+    if (side && stage) { foldForSheet = true; try { closeStage({ focus: false }); } finally { foldForSheet = false; } from = null; }
+    // the Builder card stays folded to its one-line stub while checkout is open: the receipt exists once, in the sheet
+    if (side) for (const c of launchCards) if (c.kind === 'summary' && c.collapse && c.el.isConnected) c.collapse(true, 'checkout');
     const pr = price();
     const t = getState().trial;
     const receipt = sheetReceipt();
@@ -671,16 +866,22 @@ export function mount(ctx) {
       h('h2', { class: 'co-sheet-title', id: 'co-sheet-title' }, `Launch ${botName()}`),
       h('p', { class: 'co-sheet-desc', id: 'co-sheet-desc' }, h('b', null, `KnowDrive · ${pr.long}`), '. You finish on KnowDrive\'s secure checkout, then come straight back here.'),
       form,
+      h('p', { class: 'co-foot co-foot-incl' }, h('span', { html: icon('check', 13) }), `Includes hosting + embed, 6 channels + the chat API, ${stats().quotaMB} MB of storage, question insights.`),
       h('p', { class: 'co-foot' }, `Today: ${pr.today} · renews monthly · cancel anytime. Your bot, files and tests carry over. Nothing gets rebuilt.`),
       h('p', { class: 'co-foot co-foot-trust' }, h('span', { html: icon('lock', 12) }), `Saved for ${cfg().quota?.ttlDays || 7} days if you don't launch. `, h('a', { class: 'co-link', href: contactHref() }, 'Questions? Talk to us')),
       back);
     const dialog = h('div', { class: 'co-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'co-sheet-title', 'aria-describedby': 'co-sheet-desc' }, x, receipt, pay);
     const scrim = h('div', { class: 'co-scrim', 'aria-hidden': 'true' });
-    const layer = h('div', { class: 'co-layer', dataset: { kind: 'checkout' } }, scrim, dialog);
-    sheet = { layer, dialog, scrim, receipt, email: emailIn, invoker: invoker || document.activeElement, redirecting: false, prevInert: slots.app ? slots.app.inert : false, source };
+    // fixer r3 (D8): spec B10. Desktop: centered 880 px, receipt left (stats, the cited answer, every inclusion), form
+    // right, over a 60% scrim with a 2 px blur. Phones: full screen, the one-line receipt on top, no floating duplicate.
+    const peek = null;
+    const layer = h('div', { class: `co-layer${side ? ' is-side' : ''}`, dataset: { kind: 'checkout' } }, scrim, dialog);
+    const ae0 = document.activeElement;
+    sheet = { layer, dialog, scrim, peek, receipt, email: emailIn, invoker: invoker || (ae0 && ae0 !== document.body ? ae0 : null), redirecting: false, prevInert: slots.app ? slots.app.inert : false, source, side };
+    const dockFrom = () => (side ? 'translateX(56px)' : isMobile() ? 'translateY(48px)' : 'translateY(14px) scale(.98)');
 
     // Shared-element morph: LaunchCard receipt → sheet receipt (view-transition-name: launch-receipt).
-    const fromEl = from && from.isConnected ? from : null;
+    const fromEl = !side && from && from.isConnected ? from : null;
     const r = fromEl ? fromEl.getBoundingClientRect() : null;
     const fromVisible = r && r.bottom > 0 && r.top < innerHeight;
     const vtNative = typeof document.startViewTransition === 'function' && !motion.reduced() && fromVisible && !document.documentElement.dataset.vtBusy;
@@ -699,15 +900,20 @@ export function mount(ctx) {
         motion.animate(scrim, [{ opacity: 0 }, { opacity: 1 }], { duration: motion.DUR[3], easing: 'out' });
         motion.animate(pay, [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], delay: 80, easing: 'out', fill: 'backwards' });
       }
+      if (!motion.reduced()) motion.animate(dialog, [{ transform: dockFrom() }, { transform: 'none' }], { duration: motion.DUR[3] + 60, easing: 'spring', essential: false });
       // User-initiated: not queued behind the director (a running signature is fast-forwarded instead).
       if (motion.director.busy()) motion.director.skip();
       await Promise.race([motion.viewTransition(insert, { name: 'launch-receipt', el: fromEl, target: () => receipt }), sleep(1500)]);
       if (!layer.isConnected) insert();
     } else {
+      if (motion.director.busy()) motion.director.skip();
       insert();
       motion.animate(scrim, [{ opacity: 0 }, { opacity: 1 }], { duration: motion.DUR[3], easing: 'out' });
-      motion.animate(dialog, [{ opacity: 0, transform: 'translateY(16px) scale(.985)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring' });
+      motion.animate(dialog, [{ opacity: 0, transform: dockFrom() }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3] + (side ? 80 : 0), easing: 'spring' });
+      // the sheet's content settles in after the panel: receipt line, Q&A, then the form (one purposeful cascade)
+      if (side && !motion.reduced()) motion.stagger([...receipt.children, ...pay.children], [{ opacity: 0, transform: 'translateX(14px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], delay: 90, easing: 'out', fill: 'backwards' }, 32);
     }
+    syncCtaFlag();
     receipt.style.viewTransitionName = '';
     requestAnimationFrame(() => { emailIn.focus(); if (emailIn.value) emailIn.select(); });
     announce(`Checkout for ${botName()}, ${pr.long}. Email field.`, 'polite');
@@ -782,23 +988,32 @@ export function mount(ctx) {
     else if (!e.shiftKey && (document.activeElement === last || !root.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
   }
 
+  let lastDismissAt = 0;
   function closeSheet(reason = 'close') {
     if (!sheet) return;
     const s = sheet; sheet = null;
     if (s.offKey) s.offKey();
+    syncCtaFlag();
+    if (s.side && reason !== 'redirect') for (const c of launchCards) if (c.kind === 'summary' && c.collapse && c.el.isConnected) c.collapse(false);
     if (slots.app) slots.app.inert = !!s.prevInert;
     setState({ ui: { ...getState().ui, sheet: null } }, 'sheet:close');
     const out = [
       motion.animate(s.scrim, [{ opacity: 1 }, { opacity: 0 }], { duration: motion.DUR[2], fill: 'forwards' }),
-      motion.animate(s.dialog, [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(12px) scale(.985)' }], { duration: motion.DUR[2], easing: 'inOut', fill: 'forwards' }),
+      motion.animate(s.dialog, [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: s.side ? 'translateX(48px)' : isMobile() ? 'translateY(40px)' : 'translateY(10px) scale(.985)' }], { duration: motion.DUR[2], easing: 'inOut', fill: 'forwards' }),
+      s.peek ? motion.animate(s.peek, [{ opacity: 1 }, { opacity: 0 }], { duration: motion.DUR[1] || 120, fill: 'forwards' }) : null,
     ];
     Promise.all(out.map((a) => a && a.finished)).catch(() => {}).then(() => s.layer.remove());
     setTimeout(() => s.layer.remove(), 700);   // never leave a dead layer behind if an animation is starved
-    const inv = s.invoker && s.invoker.isConnected && !s.invoker.closest('[inert]') ? s.invoker : [...launchCards].filter((c) => c.el.isConnected).pop()?.cta;
-    if (inv) inv.focus({ preventScroll: false });
-    if (reason !== 'redirect') {
+    // Focus goes back to the invoker; if it is gone (a re-rendered chip, the palette) the newest launch card's CTA, then
+    // the header Launch button, then the Builder composer. Never <body>.
+    const usable = (n) => n && n !== document.body && n.isConnected && !n.closest('[inert]') && n.getClientRects().length > 0;
+    const inv = [s.invoker, [...launchCards].filter((c) => c.el.isConnected && c.kind === 'summary').pop()?.cta, document.getElementById('st-price'), document.getElementById('st-setup-composer')].find(usable);
+    if (inv) { try { inv.focus({ preventScroll: false }); } catch { /* ignore */ } }
+    if (reason !== 'redirect' && reason !== 'proof') {
       announce(`${botName()} is saved for ${cfg().quota?.ttlDays || 7} days.`, 'polite');
-      emit('checkout:dismissed', {});
+      // One Builder "no problem, it's saved" turn per visit, not one per close (repeat closes read as nagging).
+      if (Date.now() - lastDismissAt > 120000) emit('checkout:dismissed', {});
+      lastDismissAt = Date.now();
     }
   }
 
@@ -812,12 +1027,20 @@ export function mount(ctx) {
     const text = h('p', { class: 'co-act-text' });
     const meter = h('div', { class: 'co-act-meter', role: 'progressbar', 'aria-label': 'Checking with KnowDrive', 'aria-valuemin': '0', 'aria-valuemax': '20' }, h('i'));
     const skel = h('div', { class: 'co-act-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i', { class: 'is-short' }));
+    // fixer r2 (D8): the pending state lives in this one card (replaced in place), with its own next actions; no
+    // duplicate Builder turn repeating the same sentence.
+    const again = h('button', { type: 'button', class: 'co-btn co-btn-primary is-small' }, h('span', { html: icon('refresh', 14) }), 'Check again');
+    again.addEventListener('click', () => pollConversion());
+    const keep = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small' }, 'Keep testing');
+    keep.addEventListener('click', () => focusBotComposer());
+    const acts = h('div', { class: 'co-act-actions', hidden: true }, again, keep);
     const card = h('div', { class: 'co-act', role: 'status' },
-      h('div', { class: 'co-act-head' }, h('span', { class: 'co-act-ico', html: icon('rocket', 16) }), h('div', null, title, text)), meter, skel);
+      h('div', { class: 'co-act-head' }, h('span', { class: 'co-act-ico', html: icon('rocket', 16) }), h('div', null, title, text)), meter, skel, acts);
     el.append(card);
     function update(d = {}) {
       const st = d.state || 'checking';
       card.dataset.state = st;
+      acts.hidden = st !== 'pending';
       if (st === 'checking') { title.textContent = `Activating ${botName()}…`; text.textContent = `Checking with KnowDrive · ${Math.round((d.elapsed || 0) / 1000)}s`; meter.setAttribute('aria-valuenow', String(Math.round((d.elapsed || 0) / 1000))); meter.hidden = false; skel.hidden = false; }
       else if (st === 'pending') { title.textContent = 'Payment received? We\'re finishing setup.'; text.textContent = 'Check your email for your KnowDrive login. Your bot is saved either way.'; meter.hidden = true; skel.hidden = true; }
       else if (st === 'done') { title.textContent = 'Payment confirmed'; text.textContent = `${botName()} moved to your KnowDrive account.`; meter.hidden = true; skel.hidden = true; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
@@ -925,11 +1148,7 @@ export function mount(ctx) {
       }
       if (elapsed >= POLL_FOR_MS) {
         cardInst.activating?.update({ state: 'pending', elapsed });
-        emit('setup:post', { role: 'assistant', text: "Payment received? We're finishing setup. Check your email for your KnowDrive login.", chips: [
-          { id: 'co-check', label: 'Check again', kind: 'primary', local: true, run: () => pollConversion() },
-          { id: 'co-keep2', label: 'Keep testing', local: true, run: focusBotComposer },
-        ] });
-        return;
+        return;   // the card (role=status) announces its own pending state
       }
       cardInst.activating?.update({ state: 'checking', elapsed });
       await sleep(POLL_MS);
@@ -997,7 +1216,12 @@ export function mount(ctx) {
     return goLiveMod;
   }
   async function openGoLive({ tab = 'channels', channel = null, invoker = null } = {}) {
-    const inv = invoker || document.activeElement;
+    // fixer r3 (D9): record the real invoker. Without one (palette, a chip that re-renders) only a focused control in the
+    // Builder, header or a launch card counts; anything else (a SampleBot chip, a mobile tab) lets golive.js fall back
+    // to the launch card's channels control, the BotChip or the Builder composer.
+    const ae = document.activeElement;
+    const related = ae && ae !== document.body && ae.closest && ae.closest('#st-setup, #st-header, .co-launch, #co-modal-slot');
+    const inv = invoker || (related ? ae : false);
     const m = await preloadGoLive();
     if (!m) { emit('toast', { kind: 'warn', text: 'Channels are loading. Try again in a moment.' }); return; }
     await m.ensureCss?.();

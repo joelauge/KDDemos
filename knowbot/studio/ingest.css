@@ -14,6 +14,7 @@
   border-bottom: 1px solid var(--line);
 }
 #in-map-slot[data-mode="ribbon"] { height: 56px; min-height: 56px; }
+#in-map-slot[data-mode="ribbon"] .map-band { cursor: pointer; }
 /* ribbon peek (retrieval playback): an overlay that grows down over the content, never a layout change */
 #in-map-slot .map-band[data-peek="yes"] {
   position: absolute; top: 0; left: 0; right: 0; height: 168px; z-index: 20;
@@ -51,6 +52,8 @@
 .map-countwrap, .map-emptyl { display: inline-flex; align-items: baseline; gap: 6px; }
 .map-count { font: 500 12.5px/1 var(--mono); color: var(--strong); min-width: 3ch; display: inline-block; text-align: right; }
 .map-unit { margin-left: -2px; }
+.map-read { font-size: 12px; color: var(--dim); }
+.map-read[hidden] { display: none; }
 .map-sep { color: var(--dim); }
 .map-scale { font-size: 11.5px; color: var(--dim); }
 .map-hud-r { display: flex; align-items: center; gap: 6px; flex: none; }
@@ -65,6 +68,13 @@
 .map-btn:active { transform: translateY(1px); }
 .map-btn[aria-pressed="true"] { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
 .map-btn > span:first-child { display: inline-flex; }
+.map-btn[hidden] { display: none; }
+.map-fold > span:first-child { transform: rotate(180deg); }
+/* touch: every map control is a full 44 x 44 target */
+@media (pointer: coarse) {
+  .map-btn { min-width: 44px; height: 44px; justify-content: center; }
+  .map-btn::after { inset: 0; }
+}
 
 .map-legend {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
@@ -72,9 +82,13 @@
 }
 .map-note { flex: none; font-size: 12px; color: var(--muted); padding: 2px 8px; margin-left: -8px; border-radius: 999px; background: color-mix(in srgb, var(--panel) 90%, transparent); }
 .map-chips {
-  display: flex; gap: 6px; min-width: 0; overflow: hidden; pointer-events: auto;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  /* scrolls sideways instead of clipping at the pane edge; soft fades at both ends say "more this way" */
+  display: flex; gap: 6px; min-width: 0; overflow-x: auto; overflow-y: hidden; pointer-events: auto; scrollbar-width: none; overscroll-behavior-x: contain;
+  padding: 0 14px; margin: 0 -14px; border-radius: 999px;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 24px), transparent);
 }
+.map-chips::-webkit-scrollbar { display: none; }
+.map-chips:focus-visible { outline: var(--st-focus); outline-offset: 1px; }
 .map-chip {
   flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 7px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--panel); font-size: 11.5px; color: var(--text);
@@ -83,6 +97,8 @@
 .map-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 0 2px color-mix(in srgb, var(--hue) 22%, transparent); }
 .map-chip-c { font-size: 11px; color: var(--muted); }
 .map-chip.is-off { opacity: .5; }
+.map-chip.is-pre .map-chip-c { font-style: italic; }
+.map-chip.is-pre i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--hue); }
 .map-chip.is-off .map-chip-n { text-decoration: line-through; text-decoration-color: var(--dim); }
 
 .map-tip {
@@ -108,12 +124,28 @@
 .map-tbl tr:last-child > * { border-bottom: 0; }
 .map-tbl-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--hue); vertical-align: 1px; }
 
-/* empty / learning states */
+/* empty / learning states: no placeholder dots, a faint grid and the promise */
+.map-empty {
+  position: absolute; left: 50%; top: 54%; z-index: 1; display: inline-flex; align-items: center; gap: 8px; margin: 0; transform: translate(-50%, -50%);
+  padding: 8px 14px; border-radius: 999px; border: 1px dashed var(--line-2); background: color-mix(in srgb, var(--panel) 88%, transparent);
+  font-size: 13px; color: var(--muted); white-space: nowrap; pointer-events: none;
+}
+.map-empty[hidden] { display: none; }
+.map-empty-ico { display: inline-flex; color: var(--accent-2); }
+.map-band[data-state="empty"] .map-stage {
+  background:
+    linear-gradient(color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px) 0 0 / 28px 28px;
+  -webkit-mask-image: radial-gradient(70% 70% at 50% 55%, #000, transparent 85%); mask-image: radial-gradient(70% 70% at 50% 55%, #000, transparent 85%);
+}
+.map-band[data-state="empty"] .map-legend { display: none; }
+/* legend chips only when the Sources rows are folded away (or in the ribbon): next to open rows they repeat them */
+.map-band:not([data-legend="chips"]) .map-chips { display: none; }
 .map-band[data-state="empty"] .map-legend .map-note { color: var(--dim); }
 .map-band[data-state="empty"] .map-hud-r { opacity: .7; }
 
 /* ribbon (56 px): count + compact legend on the left, mini dots on the right */
-.map-band[data-mode="ribbon"] .map-hud { padding-top: 4px; }
+.map-band[data-mode="ribbon"] .map-hud { padding-top: 4px; align-items: flex-start; }
 .map-band[data-mode="ribbon"] .map-hud-l { height: 24px; }
 .map-band[data-mode="ribbon"] .map-legend { padding-bottom: 5px; right: auto; max-width: 46%; }
 .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-chips { -webkit-mask-image: none; mask-image: none; }
@@ -136,8 +168,14 @@
 /* While files learn (before any answer) the map and the rows hold FIXED shares of the pane and never shrink: the
    (empty) thread absorbs everything that appears later (suggestions, banner), so nothing above it shifts.
    B's post-answer rules (higher specificity) take over once the thread has an answer. */
-.st-bot > #in-intake-slot[data-busy="yes"]:has(> .in-panel:not([data-collapsed="yes"])) { flex-shrink: 0; max-height: 30%; min-height: min(30%, 180px); }
+.st-bot > #in-intake-slot[data-busy="yes"]:has(> .in-panel:not([data-collapsed="yes"])) { flex-shrink: 0; max-height: 38%; min-height: min(30%, 180px); }
 .st-bot > #in-map-slot:not([data-mode="ribbon"]) { flex-shrink: 0; height: min(42%, 440px); }
+/* once files exist the band yields room to the rows (all four stage tracks stay in view while they learn) */
+.st-bot > #in-map-slot[data-files="yes"]:not([data-mode="ribbon"]) { height: clamp(200px, 32%, 290px); }
+/* a ribbon opened for a look (tap / Expand) is a real band again, not B's post-answer strip */
+.st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #in-map-slot#in-map-slot[data-expanded="yes"]:not([data-mode="ribbon"]) {
+  height: min(40%, 380px) !important; min-height: 180px !important; flex: none !important;
+}
 /* After the first answer B's grid compacts the band to a strip (studio.css); the map lays its clusters out
    left→right there (never one clump) and peeks to 168 px as an overlay while a retrieval plays. */
 .in-panel { position: relative; padding: 0 var(--st-gutter); border-bottom: 1px solid var(--line); container: in-panel / inline-size; transition: box-shadow var(--dur-3) var(--ease-out); }
@@ -149,7 +187,20 @@
 .in-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0 8px; }
 .in-head-l { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .in-title { margin: 0; font: 700 13.5px/1.2 var(--display); color: var(--strong); letter-spacing: -.1px; }
-.in-head-meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.in-head-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; color: var(--muted); }
+.in-head-meta:empty { display: none; }
+/* status badges: wrap, never truncate; below 480 px the words fold into icons (kept for screen readers) */
+.in-bd { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 7px; border-radius: 999px; background: var(--raise); color: var(--muted); font: 500 11.5px/1 var(--font); white-space: nowrap; }
+.in-bd b { font: 600 11.5px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--strong); }
+.in-bd-i { display: inline-flex; }
+.in-bd.is-learn { color: var(--accent-2); background: var(--accent-soft); }
+.in-bd.is-learn b { color: var(--accent-2); }
+.in-bd.is-learn .in-bd-i { animation: st-rot 1.6s linear infinite; }
+.in-bd.is-warn { color: var(--warn); background: var(--warn-soft); }
+.in-bd.is-warn b { color: var(--warn); }
+.in-bd.is-done { color: var(--good); background: color-mix(in srgb, var(--good) 12%, var(--panel)); animation: in-bd-done 4s var(--ease-out) forwards; }
+@keyframes in-bd-done { 0% { opacity: 0; transform: scale(.9); } 8% { opacity: 1; transform: none; } 85% { opacity: 1; } 100% { opacity: 0; } }
+.in-head-warn { color: var(--warn); }
 .in-replay {
   display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; align-self: center;
   background: var(--raise); color: var(--muted); font: 500 11px/1 var(--mono);
@@ -205,15 +256,23 @@
   transition: border-color var(--dur-2) var(--ease-out), background-color var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease-out);
 }
 .in-row::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--hue); }
-/* failed / rejected: the warn style (spec 1.6) — warm soft fill, --bad-soft border, neutral title. No red in the intake. */
-.in-row[data-phase="failed"], .in-row[data-phase="rejected"] { border-color: color-mix(in srgb, var(--bad-soft) 100%, var(--line-2)); background: color-mix(in srgb, var(--warn-soft) 100%, var(--panel)); }
-.in-row[data-phase="failed"]::before { background: var(--warn); }
-.in-row[data-phase="rejected"]::before { background: var(--line-2); }
+.in-row[data-phase="failed"], .in-row[data-phase="rejected"] { border-color: var(--line); background: var(--panel); }
+/* failed / rejected: a neutral surface with a 2 px warning-hue rule down the left edge (no muddy fill) */
+.in-row[data-phase="failed"]::before, .in-row[data-phase="rejected"]::before { top: 0; bottom: 0; left: 0; width: 2px; border-radius: 11px 0 0 11px; background: var(--warn); }
+.in-row[data-phase="rejected"] .in-ico, .in-row[data-phase="failed"] .in-ico { color: var(--muted); }
 .in-row[data-stall="yes"] { border-style: dashed; border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
 .in-row[data-off="off"] .in-ico, .in-row[data-off="off"] .in-namewrap, .in-row[data-off="off"]::before { opacity: .5; }
 .in-row[data-off="off"] .in-name-v { text-decoration: line-through; text-decoration-color: var(--dim); }
 
 .in-row-main { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 30px; }
+/* explicit cells: a hidden include box (failed / not added rows) never slides the icon, name and status left */
+@container in-panel (min-width: 481px) {
+  :is(.in-panel:not([data-compact="yes"]) .in-row, .in-row:is([data-note="yes"], [data-phase="failed"], [data-phase="rejected"])) > .in-row-main > .in-inc { grid-column: 1; }
+  :is(.in-panel:not([data-compact="yes"]) .in-row, .in-row:is([data-note="yes"], [data-phase="failed"], [data-phase="rejected"])) > .in-row-main > .in-ico { grid-column: 2; }
+  :is(.in-panel:not([data-compact="yes"]) .in-row, .in-row:is([data-note="yes"], [data-phase="failed"], [data-phase="rejected"])) > .in-row-main > .in-namewrap { grid-column: 3; }
+  :is(.in-panel:not([data-compact="yes"]) .in-row, .in-row:is([data-note="yes"], [data-phase="failed"], [data-phase="rejected"])) > .in-row-main > .in-status { grid-column: 4; }
+  :is(.in-panel:not([data-compact="yes"]) .in-row, .in-row:is([data-note="yes"], [data-phase="failed"], [data-phase="rejected"])) > .in-row-main > .in-kebab { grid-column: 5; }
+}
 .in-inc { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 30px; cursor: pointer; }
 .in-inc[hidden] { display: none; }
 .in-inc-box { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
@@ -229,11 +288,29 @@
 .in-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 14px/1.3 var(--font); color: var(--strong); }
 .in-tag { flex: none; height: 18px; padding: 0 6px; border-radius: 5px; background: var(--raise); color: var(--muted); font: 500 10.5px/18px var(--mono); }
 .in-size { flex: none; font-size: 11.5px; color: var(--dim); }
+/* the file's real first line while it is extracted, with a scan sweep (transform only: compositor) */
+.in-read { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; border-radius: 4px; }
+.in-read[hidden] { display: none; }
+.in-read-t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: italic 400 12px/18px var(--font); color: var(--muted); }
+.in-read::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, transparent 30%, color-mix(in srgb, var(--accent) 22%, transparent) 46%, color-mix(in srgb, var(--accent) 30%, transparent) 54%, transparent 70%);
+  transform: translateX(-100%); animation: in-read-scan 1.6s var(--ease-in-out) infinite;
+}
+@keyframes in-read-scan { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+.in-row[data-reading="yes"] .in-size { display: none; }
+.in-row[data-reading="yes"] .in-name { flex: 0 0 auto; max-width: 58%; }
+.in-row[data-reading="yes"] .in-read { flex: 1 1 0; }
+[data-signature="retrieval"] .in-read::after { animation-play-state: paused; }
 .in-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* one width for every stage text ("Extracting…" → "Vectorizing · 12,345/26,154"): the row never reflows */
+.in-row:not([data-phase="failed"], [data-phase="rejected"]) .in-status { width: 25ch; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .in-row[data-phase="ready"] .in-status { color: var(--good); }
 .in-row[data-phase="failed"] .in-status, .in-row[data-phase="rejected"] .in-status { color: var(--warn); }
 .in-kebab[hidden] { display: none; }
 
+/* NEVER 'visibility: visible' anywhere in this file: on phones the inactive tab pane is hidden with
+   visibility:hidden, and a descendant set to visible would paint through it (round-4: stage dots over the Builder). */
 /* stage track + Ready summary share one cell: the row keeps one height from the first stage to Ready (no shift);
    Ready cross-fades the finished track out and the summary in (opacity/transform only) */
 .in-detail { display: grid; grid-template-columns: minmax(0, 1fr); }
@@ -296,16 +373,38 @@
 .in-sum .in-topic { flex: none; }
 .in-topic { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; background: color-mix(in srgb, var(--hue, var(--accent)) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--hue, var(--accent)) 26%, var(--line)); color: var(--text); font-size: 11.5px; }
 
+/* compact rows (3+ files): one line each, name · stage dots · status, so a whole batch stays in view while it
+   learns. Rows with something to say (stall, retry, failure) keep their full form. */
+.in-panel[data-compact="yes"] .in-rows { gap: 6px; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto 25ch auto; align-items: center; column-gap: 10px;
+  padding: 5px 8px 5px 13px; min-height: 42px;
+}
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"])::before { top: 8px; bottom: 8px; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) > .in-row-main { display: contents; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-status, .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-kebab { order: 2; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-status { text-align: right; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) > .in-detail { order: 1; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-detail-in { opacity: 1 !important; transform: none !important; visibility: inherit !important; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-sum, .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-note, .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-actions { display: none; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-track { grid-template-columns: repeat(6, 16px); margin: 0; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node-l, .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node-c { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-dot { width: 10px; height: 10px; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-dot svg { width: 8px; height: 8px; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node[data-state="active"] .in-dot::before { inset: -5px; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node[data-state="active"] .in-dot::after { width: 3px; height: 3px; }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-conn { top: 4px; left: calc(-50% + 5px); right: calc(50% + 5px); }
+
 /* collapsed one-line Sources chip */
 .in-chip {
-  display: flex; align-items: center; gap: 8px; width: 100%; height: 38px; margin: 8px 0; padding: 0 12px; border-radius: 999px;
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; margin: 8px 0; padding: 4px 12px; border-radius: 19px;
   border: 1px solid var(--line); background: var(--panel); box-shadow: var(--st-shadow-1); color: var(--strong); font: 500 13px/1 var(--font);
   cursor: pointer; text-align: left; overflow: hidden; transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 .in-chip[hidden] { display: none; }
 .in-chip:hover { border-color: var(--line-2); box-shadow: var(--st-shadow-2); }
 .in-chip-t { font: 700 13px/1 var(--display); flex: none; }
-.in-chip-m { flex: none; font-size: 12px; color: var(--muted); }
+.in-chip-m { flex: 0 1 auto; min-width: 0; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .in-chip-dots { display: flex; gap: 10px; min-width: 0; overflow: hidden; margin-left: 4px; -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
 .in-chip-f { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 12px; color: var(--muted); }
 .in-chip-f i { width: 7px; height: 7px; border-radius: 50%; background: var(--hue); }
@@ -319,6 +418,8 @@
 .in-chip-x.is-warn { color: var(--warn); }
 .in-chip-f.is-off { opacity: .5; text-decoration: line-through; }
 .in-chip-ico { margin-left: auto; display: inline-flex; color: var(--dim); flex: none; }
+.in-chip-more { display: none; flex: none; font: 500 11.5px/1 var(--mono); color: var(--muted); }
+.in-chip-more:empty { display: none !important; }
 
 /* empty state: the drop hint (fades in at 1.2 s) */
 .in-empty {
@@ -346,9 +447,9 @@
 
 /* ================================================================== #in-drop-slot: fx layer, drop overlay, menu */
 
-.map-fx { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+.map-fx { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; contain: strict; }
 .in-doc {
-  position: absolute; box-sizing: border-box; padding: 10px 10px 10px 13px; border-radius: 9px; transform-origin: 0 0;
+  position: absolute; box-sizing: border-box; padding: 10px 10px 10px 24px; border-radius: 9px; transform-origin: 0 0;
   background: var(--panel); border: 1px solid var(--line-2); box-shadow: var(--st-shadow-2); overflow: hidden;
 }
 .in-doc::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--hue); }
@@ -357,13 +458,26 @@
 .in-doc-n { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 .in-doc-t { margin: 0; font: 400 9px/15px var(--font); color: var(--text); height: 150px; overflow: hidden; word-break: break-word; -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
 .in-strip { box-shadow: 0 6px 16px -10px rgb(15 23 42 / .35); }
-.in-strip-l { position: absolute; left: 5px; transform: translateY(-50%); padding: 1px 4px; border-radius: 4px; background: var(--accent); color: #fff; font: 600 8px/1.2 var(--mono); }
+/* the scan line that sweeps down the DocCard while the server chunks it (transform only) */
+.in-doc-scan {
+  position: absolute; left: 0; right: 0; top: 0; height: 26px; pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--hue) 20%, transparent) 70%, color-mix(in srgb, var(--hue) 55%, transparent) 96%, transparent);
+  animation: in-doc-scan 1.4s var(--ease-in-out) infinite alternate;
+}
+@keyframes in-doc-scan { from { transform: translateY(-20px); } to { transform: translateY(190px); } }
+/* a soft panel field under a playing shatter: its chips read cleanly over any cluster below them */
+.in-veil {
+  position: absolute; border-radius: 18px; pointer-events: none; opacity: 0;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--st-panel-bot, var(--panel)) 86%, transparent) 62%, transparent);
+}
+.in-strip-l { position: absolute; left: 5px; min-width: 15px; text-align: center; transform: translateY(-50%); padding: 1px 4px; border-radius: 4px; background: var(--accent); color: #fff; font: 600 8px/1.2 var(--mono); }
 .in-doc:not(.in-strip) .in-strip-l { display: none; }
-.in-shatter { position: absolute; inset: 0; contain: layout style; }
-.in-chips { position: absolute; inset: 0; }
+.in-shatter { position: absolute; inset: 0; contain: strict; }
+.in-chips { position: absolute; inset: 0; contain: strict; }
 /* a chip = a positioned shell (translated only) + its face (pill + words) + a 6 px dot; every phase animates
    transform/opacity only, so the whole choreography stays on the compositor */
-.in-atom { position: absolute; display: block; height: 18px; transform-origin: 50% 50%; }
+.in-atom { position: absolute; display: block; height: 18px; transform-origin: 50% 50%; opacity: 0; contain: strict; will-change: transform, opacity; }
+.in-more .in-atom-face { background: var(--panel); border-style: dashed; color: var(--muted); text-align: center; }
 .in-atom-face {
   position: absolute; inset: 0; display: block; padding: 0 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: color-mix(in srgb, var(--hue) 13%, var(--panel)); border: 1px solid color-mix(in srgb, var(--hue) 40%, transparent);
@@ -436,15 +550,50 @@
   .in-btn-add { width: 30px; padding: 0; }
   .in-sum { margin-left: 0; }
 }
+/* a narrow Sources chip (3-column desktop, small panes): the summary stays on ONE line and the files fold to their
+   progress rings (names in the accessible name and the expanded rows), with a "+N" for any beyond six */
+@container in-panel (max-width: 640px) {
+  .in-chip-m { flex-wrap: nowrap; white-space: nowrap; }
+  .in-chip-dots { gap: 5px; -webkit-mask-image: none; mask-image: none; flex: none; }
+  .in-chip-f { font-size: 0; gap: 0; }
+  .in-chip-f > :not(i) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .in-chip-f:nth-child(n + 7) { display: none; }
+  .in-chip-more { display: inline-flex; }
+}
 @container in-panel (max-width: 480px) {
   .in-rm-samples { display: none; }
+  /* every cell has an explicit place, so a hidden include box never shifts the icon / name / status */
   .in-row-main { grid-template-columns: auto auto minmax(0, 1fr) auto; row-gap: 0; }
-  .in-status { grid-column: 3; grid-row: 2; font-size: 11.5px; margin-top: -2px; }
+  .in-inc { grid-column: 1; grid-row: 1 / span 2; }
+  .in-ico { grid-column: 2; grid-row: 1 / span 2; }
+  .in-namewrap { grid-column: 3; grid-row: 1; }
+  .in-status { grid-column: 3; grid-row: 2; font-size: 11.5px; margin-top: -2px; width: auto !important; text-align: left !important; }
   .in-kebab { grid-column: 4; grid-row: 1 / span 2; }
-  .in-inc { grid-row: 1 / span 2; }
-  .in-ico { grid-row: 1 / span 2; }
-  .in-head-l { flex-wrap: nowrap; overflow: hidden; }
-  .in-head-meta { overflow: hidden; text-overflow: ellipsis; }
+  /* failed / not added: icon, name and the short status share ONE row */
+  .in-row:is([data-phase="failed"], [data-phase="rejected"]) .in-row-main { grid-template-columns: auto auto minmax(0, 1fr) auto auto; }
+  .in-row:is([data-phase="failed"], [data-phase="rejected"]) :is(.in-inc, .in-ico, .in-namewrap, .in-status, .in-kebab) { grid-row: 1; margin-top: 0; }
+  .in-row:is([data-phase="failed"], [data-phase="rejected"]) .in-status { grid-column: 4; }
+  .in-row:is([data-phase="failed"], [data-phase="rejected"]) .in-kebab { grid-column: 5; }
+  .in-head-l { flex-wrap: wrap; row-gap: 4px; }
+  /* badges: numbers + icons only; the words stay for screen readers */
+  .in-bd:is(.is-learn, .is-warn) .in-bd-w { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .in-head-meta .in-bd.is-done { display: none; }
+  .in-chip-dots { display: none; }
+  .in-chip { flex-wrap: wrap; row-gap: 4px; }
+}
+@container in-panel (max-width: 480px) {
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 2px; padding: 5px 4px 6px 11px; }
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-ico { display: none; }
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-inc { grid-column: 1; grid-row: 1 / span 2; }
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-namewrap { grid-column: 2; grid-row: 1; }
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) > .in-detail { grid-column: 2; grid-row: 2; justify-self: start; }
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-status { grid-column: 2; grid-row: 2; justify-self: end; margin: 0; font-size: 11px; }
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-kebab { grid-column: 3; grid-row: 1 / span 2; }
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-track { grid-template-columns: repeat(6, 14px); }
+}
+@container in-panel (max-width: 480px) {
+  .in-read { display: none !important; }
+  .in-row[data-reading="yes"] .in-name { max-width: none; flex: 0 1 auto; }
 }
 @container in-panel (max-width: 400px) {
   .in-node-l { font-size: 9.5px; letter-spacing: -.1px; }
@@ -453,27 +602,37 @@
 @media (max-width: 899px) {
   #in-map-slot { height: 140px; min-height: 140px; }
   #in-map-slot[data-mode="ribbon"] { height: 56px; min-height: 56px; }
-  /* phones: the learning map gets a third of the pane (the signature moment), still leaving the composer whole */
-  .st-bot > #in-map-slot[data-busy="yes"]:not([data-mode="ribbon"]) { height: min(34%, 300px); }
-  .st-bot > #in-map-slot:not([data-busy="yes"]):not([data-mode="ribbon"]) { height: 140px; }
+  /* phones (spec 1.2): the map is a 140 px band (1,500-dot cap, one shatter, 16 chips) so every learning row stays
+     above the fold; file names live in the legend row under it, not over the canvas */
+  .st-bot > #in-map-slot:not([data-mode="ribbon"]), .st-bot > #in-map-slot[data-files="yes"]:not([data-mode="ribbon"]) { height: 140px; min-height: 140px; }
   .map-hud { padding-top: 8px; }
-  .map-btn { width: 36px; height: 32px; padding: 0; justify-content: center; }
-  .map-btn::after { inset: -6px -4px; }
+  .map-btn { width: 44px; height: 44px; padding: 0; justify-content: center; }
+  .map-btn::after { inset: 0; }
+  .map-hud { padding-top: 6px; }
+  .map-band[data-mode="ribbon"] .map-hud { padding-top: 6px; }
+  .map-empty { font-size: 12.5px; }
   .map-btn-l { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-note { display: none; }
   .map-legend { padding-bottom: 7px; }
   /* the ribbon keeps the count, drops the title: the dot field gets the width */
   .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-title,
   .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-countwrap > .map-sep { display: none; }
+  /* phones: once there is something to count, the glyph names the map and the numbers get the width */
+  .map-band:not([data-state="empty"]) .map-title, .map-band:not([data-state="empty"]) .map-countwrap > .map-sep { display: none; }
+  .map-hud-l { overflow: hidden; flex: 0 1 auto; }
   .map-table { inset: 44px 10px 10px; }
   .in-body { max-height: 38vh; }
+  /* while files learn (before any answer) the 140 px map leaves room for every row: no row hides under the fold */
+  .st-bot:not([data-asked="1"]) > #in-intake-slot[data-busy="yes"]:has(> .in-panel:not([data-collapsed="yes"])) { max-height: 64%; }
+  .st-bot:not([data-asked="1"]) > #in-intake-slot[data-busy="yes"] .in-body { max-height: none; }
   .in-btn { min-height: 44px; }
   .in-btn-add { width: 44px; height: 44px; }
   /* integrator: the Sources header fits the compact strip the pane leaves it after answers (44 px targets + 4 px) */
   .in-head { padding: 2px 0; }
   .in-head-r .in-btn-add, .in-head-r .in-iconbtn { border-color: transparent; background: transparent; }
   .in-iconbtn { width: 44px; height: 44px; }
-  .in-inc { width: 32px; height: 44px; }
+  /* a full 44 x 44 hit area (the box itself stays 17 px); the negative margin keeps the row's rhythm */
+  .in-inc { width: 44px; height: 44px; margin: 0 -6px; }
   .in-row-main { gap: 6px; }
   .in-mi { height: 44px; }
   .in-chip { height: 44px; }
@@ -498,10 +657,14 @@
 :root[data-motion="reduce"] .in-seg i { transition: none; }
 :root[data-motion="reduce"] .in-collapse > span { transition: none; }
 :root[data-motion="reduce"] .map-fx { display: none; }
+:root[data-motion="reduce"] .in-read::after { animation: none; display: none; }
+:root[data-motion="reduce"] .in-bd .in-bd-i, :root[data-motion="reduce"] .in-bd.is-done { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) .in-node[data-state="active"] .in-dot::before { animation: none; display: none; }
   :root:not([data-motion="full"]) .in-conn::after { animation: none; display: none; }
   :root:not([data-motion="full"]) .in-drop::before { animation: none; }
+  :root:not([data-motion="full"]) .in-bd .in-bd-i { animation: none; }
+  :root:not([data-motion="full"]) .in-read::after, :root:not([data-motion="full"]) .in-doc-scan { animation: none; display: none; }
 }
 
 @media (forced-colors: active) {

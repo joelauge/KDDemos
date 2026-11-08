@@ -79,8 +79,7 @@ button:disabled { cursor: default; }
 /* ------------------------------------------------------------------ header */
 .st-header {
   position: relative; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 0 var(--st-gutter); background: color-mix(in srgb, var(--panel) 92%, transparent);
-  backdrop-filter: saturate(1.4) blur(8px); -webkit-backdrop-filter: saturate(1.4) blur(8px);
+  padding: 0 var(--st-gutter); background: var(--panel); contain: layout style;
 }
 .st-header::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--st-hair); opacity: .9; }
 .st-header-left, .st-header-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -153,6 +152,14 @@ button:disabled { cursor: default; }
 .st-price[data-level="solid"] { color: #fff; border: 1px solid transparent; background: linear-gradient(180deg, color-mix(in srgb, var(--btn) 88%, #fff), var(--btn)); box-shadow: 0 1px 0 rgb(255 255 255 / .18) inset, 0 6px 16px -8px var(--btn), 0 0 0 calc(var(--glow) * 8px) color-mix(in srgb, var(--accent) 28%, transparent); }
 .st-price[data-level="solid"]:hover { background: var(--btn-hover); transform: translateY(-1px); }
 .st-price.is-pulse { animation: st-glow 1100ms var(--ease-out) 1; }
+/* r4 (D8): one solid Launch per viewport. E publishes :root[data-co-cta] = card | receipt | sheet (checkout.js).
+   While a Launch card CTA is on screen the header becomes the quiet ghost price pill; while the receipt stage or the
+   checkout sheet is open (their own CTA is the only one that matters) the header price steps out entirely. */
+html:root[data-co-cta] #st-price[data-level="solid"], html:root[data-co-cta] #st-price[data-level="outline"] {
+  color: var(--muted); border: 1px dashed var(--line-2); background: transparent; box-shadow: none; font-weight: 500; animation: none;
+}
+html:root[data-co-cta] #st-price[data-level="solid"]:hover, html:root[data-co-cta] #st-price[data-level="outline"]:hover { color: var(--strong); border-style: solid; background: transparent; transform: none; }
+html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #st-pricewrap { visibility: hidden; }
 @keyframes st-glow { 0% { --glow: 0; } 35% { --glow: 1; } 100% { --glow: 0; } }
 .st-tip {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; width: max-content; max-width: 240px; padding: 8px 10px; border-radius: 8px;
@@ -160,6 +167,26 @@ button:disabled { cursor: default; }
   opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out);
 }
 .st-tipwrap:hover .st-tip, .st-price:focus-visible + .st-tip { opacity: 1; transform: none; transition-delay: 300ms; }
+.st-tipwrap.is-tipoff .st-tip, .st-tipwrap[hidden] .st-tip { opacity: 0 !important; transform: translateY(-4px) !important; transition: none !important; }
+/* Activating (return from checkout, polling for conversion): no selling, a quiet busy state */
+.st-price[data-level="activating"] { color: var(--muted); border: 1px solid var(--line-2); background: var(--panel-2); cursor: progress; gap: 8px; }
+.st-price[data-level="activating"] .st-price-label { display: inline-flex; align-items: center; gap: 8px; }
+/* Live (after conversion): a green pill and the dashboard link replace the price and the trial pill */
+.st-pill-live { color: var(--good); border-color: color-mix(in srgb, var(--good) 30%, var(--line)); background: var(--good-soft); font-weight: 600; }
+.st-pill-live i { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
+.st-pill-live i::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--good); opacity: 0; animation: st-ping 2.4s var(--ease-out) infinite; will-change: transform, opacity; }
+@keyframes st-ping { 0% { transform: scale(1); opacity: .55; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
+:root[data-motion="reduce"] .st-pill-live i::after { animation: none; }
+.st-dash { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); font: 600 13.5px/1 var(--font); white-space: nowrap; text-decoration: none; transition: border-color var(--dur-1), box-shadow var(--dur-1); }
+.st-dash:hover { text-decoration: none; border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); box-shadow: var(--st-shadow-1); }
+.st-dash-ico { display: inline-flex; color: var(--dim); }
+/* pre-paint for a returning live bot (index.html sets data-live): the selling controls never flash */
+:root[data-live] #st-pricewrap, :root[data-live] .st-pill-trial { display: none !important; }
+/* the example answer teaches a bot that doesn't exist yet: gone once the bot is live (C's GhostAnswer) */
+:root[data-live] .sb-ghost { display: none !important; }
+/* CONTRACT-GAP (C): the bot composer's ⋯ menu shows at landing with nothing useful in it; B hides it (no layout change)
+   until the bot has a file or an answer (data-built is B's). C should render it only when it has actions. */
+:root:not([data-built]) #sb-composer-slot .sb-more { visibility: hidden; }
 .st-only-mobile { display: none; }
 
 /* ------------------------------------------------------------------ spine (5 nodes) */
@@ -177,11 +204,13 @@ button:disabled { cursor: default; }
 .st-node-num, .st-node-check { grid-area: 1 / 1; display: grid; place-items: center; transition: opacity var(--dur-2), transform var(--dur-2) var(--ease-spring); }
 .st-node-check { opacity: 0; transform: scale(.6); color: #fff; }
 .st-node[data-state="active"] .st-node-btn, .st-node[data-state="warn"] .st-node-btn { color: var(--strong); font-weight: 600; }
-.st-node[data-state="active"] .st-node-dot {
-  color: var(--accent-2); border: 1.5px solid transparent;
-  background: linear-gradient(var(--panel), var(--panel)) padding-box,
-              conic-gradient(from var(--angle), var(--accent), transparent 30%, var(--accent-2), transparent 70%, var(--accent)) border-box;
-  animation: st-spin 2.4s linear infinite;
+.st-node[data-state="active"] .st-node-dot { color: var(--accent-2); border: 1.5px solid color-mix(in srgb, var(--accent) 22%, var(--line)); background: var(--panel); }
+/* perf r4: the working ring is a pseudo-element rotated by transform (compositor), not an animated conic angle */
+.st-node[data-state="active"] .st-node-dot::before {
+  content: ''; position: absolute; inset: -1.5px; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(var(--accent), transparent 30%, var(--accent-2), transparent 70%, var(--accent));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px)); mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  animation: st-rot 2.4s linear infinite; will-change: transform;
 }
 .st-node[data-state="done"] .st-node-btn { color: var(--text); }
 .st-node.is-current[data-state="done"] .st-node-btn { color: var(--strong); font-weight: 600; }
@@ -199,17 +228,21 @@ button:disabled { cursor: default; }
 .st-spine-compact { display: none; }
 @keyframes st-spin { to { --angle: 360deg; } }
 
-/* Working state (SPEC 2.1): conic border on the active element. Paused under reduce and while a signature runs. */
-.st-working {
-  border: 1px solid transparent !important;
-  background: linear-gradient(var(--panel), var(--panel)) padding-box,
-              conic-gradient(from var(--angle), var(--accent), transparent 30%, var(--accent-2), transparent 70%, var(--accent)) border-box !important;
-  animation: st-spin 2.4s linear infinite;
+/* Working state (SPEC 2.1). perf r4: a still accent border plus an inner ring that breathes on opacity only
+   (compositor), instead of a conic gradient re-painted every frame on every learning file row. */
+.st-working { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)) !important; }
+.st-working::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 16px -8px var(--accent-2);
+  opacity: .15; animation: st-breathe 1.2s var(--ease-in-out, ease-in-out) infinite alternate; will-change: opacity;
 }
-[data-signature] .st-ambient, [data-signature] .st-node[data-state="active"] .st-node-dot, [data-signature] .st-working { animation-play-state: paused; }
-:root[data-motion="reduce"] .st-node[data-state="active"] .st-node-dot,
-:root[data-motion="reduce"] .st-working, :root[data-motion="reduce"] .st-ambient { animation: none; border-color: var(--accent); }
+@keyframes st-breathe { to { opacity: .9; } }
+[data-signature] .st-ambient, [data-signature] .st-node[data-state="active"] .st-node-dot::before, [data-signature] .st-working::after { animation-play-state: paused; }
+:root[data-motion="reduce"] .st-node[data-state="active"] .st-node-dot::before,
+:root[data-motion="reduce"] .st-working::after, :root[data-motion="reduce"] .st-ambient { animation: none; }
+:root[data-motion="reduce"] .st-working::after { opacity: .6; }
 :root[data-motion="reduce"] .st-node[data-state="active"] .st-node-dot { background: var(--panel); border: 1.5px solid var(--accent); }
+:root[data-motion="reduce"] .st-node[data-state="active"] .st-node-dot::before { display: none; }
 
 /* ------------------------------------------------------------------ main + panes */
 .st-main { position: relative; display: grid; flex: none; width: auto; max-width: none; margin: 0; padding: 0; gap: 0; outline: none; grid-template-columns: minmax(360px, .42fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; }
@@ -239,19 +272,19 @@ button:disabled { cursor: default; }
    intake to what its rows need, scrolling inside. Pinning the map (or its table view) keeps it full.
    CONTRACT-GAP (D): bandMode() ribbons at 2 answers and the intake collapses to the Sources chip only when every file is
    Ready; the critic asks for both on the FIRST answer. Until ingest.js does that, this grid gives the thread its room. */
-.st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #sb-thread-slot { flex: 1 1 auto; min-height: min(55%, calc(100% - 250px)); }
-.st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])):not(:has(.map-band[data-table="on"])) {
+.st-bot[data-asked="1"] > #sb-thread-slot { flex: 1 1 auto; min-height: min(55%, calc(100% - 250px)); }
+.st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])):not(:has(.map-band[data-table="on"])) {
   height: clamp(88px, 13%, 120px) !important; min-height: 56px !important; flex: 0 1 auto !important;
 }
-.st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) {
+.st-bot[data-asked="1"] > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) {
   min-height: 48px !important; max-height: 22%; flex: 0 1 auto !important;
 }
-.st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) > .in-panel { max-height: 100%; overflow: auto; overscroll-behavior: contain; }
+.st-bot[data-asked="1"] > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) > .in-panel { max-height: 100%; overflow: auto; overscroll-behavior: contain; }
 @media (max-width: 899px) {
-  .st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])):not(:has(.map-band[data-table="on"])) { height: 72px !important; min-height: 56px !important; }
+  .st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])):not(:has(.map-band[data-table="on"])) { height: 72px !important; min-height: 56px !important; }
   /* the 72 px strip keeps the HUD and the dots; the legend would collide with the HUD (it returns in the full band) */
-  .st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])) .map-legend { display: none; }
-  .st-bot:has(#sb-thread-slot .sb-answer:not(.is-proof)) > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) { max-height: 18%; }
+  .st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])) .map-legend { display: none; }
+  .st-bot[data-asked="1"] > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) { max-height: 18%; }
 }
 .st-bot > #in-drop-slot > * { pointer-events: auto; }
 #sb-drawer-slot { grid-area: 1 / 1 / 2 / -1; position: relative; z-index: 30; min-width: 0; min-height: 0; pointer-events: none; }
@@ -264,7 +297,8 @@ button:disabled { cursor: default; }
 /* ------------------------------------------------------------------ bot header (#st-bot-header) */
 .st-bothead { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 var(--st-gutter); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 80%, transparent); }
 .st-bothead-id { display: flex; flex-direction: column; justify-content: center; min-width: 0; gap: 2px; }
-.st-bothead-name { font: 700 15.5px/1.15 var(--display); color: var(--strong); letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-bothead-name { margin: 0; font: 700 15.5px/1.15 var(--display); color: var(--strong); letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-bothead-id { flex: 0 1 auto; min-width: min(12ch, 30%); }
 .st-status { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--font); color: var(--dim); }
 .st-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dim) 18%, transparent); transition: background-color var(--dur-3), box-shadow var(--dur-3); }
 .st-status[data-state="live"] { color: var(--good); }
@@ -282,6 +316,16 @@ button:disabled { cursor: default; }
 .st-bothead-banner .sb-banner > span:not(.sb-banner-seg) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .st-bothead-banner .sb-banner .sb-btn { white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .st-bothead-banner .sb-banner-seg { margin-left: 4px; flex: none; }
+/* ProofDrawer docked (>= 1440): the banner steps aside for a compact text pill ("3/4 ready", set by syncBannerTitle;
+   the full sentence is its tooltip) so the bot name is never truncated and no unlabeled icon row is left behind. */
+.st-main[data-drawer="open"] .st-bothead-banner { flex: 0 0 auto; justify-content: flex-end; }
+.st-main[data-drawer="open"] .st-bothead-banner > #st-bot-banner { display: none; }
+.st-main[data-drawer="open"] .st-bothead-banner[data-compact]::before {
+  content: attr(data-compact); display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  font: 500 12px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--accent-2); white-space: nowrap;
+}
+.st-main[data-drawer="open"] .st-bothead-id { min-width: 12ch; flex: 1 1 auto; }
 .st-version { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 12px; cursor: pointer; }
 .st-version:hover { color: var(--strong); border-color: var(--line-2); }
 .st-seg { display: inline-flex; padding: 2px; border-radius: 10px; background: var(--raise); border: 1px solid var(--line); }
@@ -308,6 +352,8 @@ button:disabled { cursor: default; }
 .st-log:focus:not(:focus-visible) { outline: none; }
 .st-log:focus-visible, #sb-thread-slot:focus-visible { outline: var(--st-focus); outline-offset: -2px; }
 .st-msg { max-width: 72ch; contain: layout paint; border-radius: 12px; }
+/* perf r4: older Builder turns skip rendering work while off screen (their last size is remembered) */
+.st-msg.is-old { content-visibility: auto; contain-intrinsic-size: auto 96px; }
 .st-log > * { overflow-anchor: auto; }
 /* retired chip rows that still have messages below them: inert, quiet, same height (nothing jumps) */
 .st-chips.is-stale { opacity: .42; filter: saturate(.3); pointer-events: none; transition: opacity var(--dur-3) var(--ease-out); }
@@ -449,9 +495,13 @@ button:disabled { cursor: default; }
 .st-ins-col h3 { margin: 0 0 6px; font: 600 11px/1.4 var(--mono); letter-spacing: .5px; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 4px; }
 .st-ins-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .st-ins-row { display: grid; grid-template-columns: minmax(0, 1fr) 54px 30px; gap: 8px; align-items: center; font-size: 13px; }
-.st-ins-gaps .st-ins-row { grid-template-columns: minmax(0, 1fr) 30px; }
+.st-ins-gaps .st-ins-row { grid-template-columns: minmax(0, 1fr) auto 30px; }
 .st-ins-q { color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.st-ins-row[data-outcome="refused"] .st-ins-q { color: var(--st-refusal); }
+.st-ins-row[data-outcome="refused"] .st-ins-q { color: var(--strong); }
+/* refused rows say so in words, with the shield glyph (never colour alone) */
+.st-ins-tag { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: 999px; font: 500 10.5px/1 var(--mono); letter-spacing: .2px;
+  color: var(--st-refusal); background: color-mix(in srgb, var(--st-refusal) 10%, transparent); border: 1px solid color-mix(in srgb, var(--st-refusal) 28%, transparent); }
+.st-ins-tag .st-ico { width: 11px; height: 11px; }
 .st-ins-bar { height: 6px; border-radius: 3px; background: var(--raise); overflow: hidden; }
 .st-ins-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transform-origin: left; border-radius: 3px; }
 .st-ins-n { font-size: 11.5px; color: var(--muted); text-align: right; }
@@ -475,7 +525,8 @@ textarea.st-text { resize: vertical; }
 /* ------------------------------------------------------------------ overlays */
 #st-overlay-slot { position: relative; z-index: 80; }
 .st-scrim { position: fixed; inset: 0; background: var(--st-scrim); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
-.st-toasts { position: fixed; left: 16px; bottom: 92px; z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; pointer-events: none; max-width: min(380px, calc(100vw - 32px)); }
+.st-toasts { position: fixed; left: 50%; top: calc(var(--st-header-h) + var(--st-spine-h) + 66px); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; width: min(420px, calc(100vw - 32px)); transform: translateX(-50%); }
+.st-toasts > .st-toast { max-width: 100%; }
 .st-toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 12px; border-radius: 12px; background: var(--strong); color: var(--panel); box-shadow: var(--st-shadow-2); font-size: 13.5px; line-height: 1.4; }
 :root[data-theme="dark"] .st-toast { background: #1e293b; color: var(--strong); border: 1px solid var(--line-2); }
 .st-toast-ico { display: inline-flex; color: #a5b4fc; }
@@ -530,7 +581,9 @@ textarea.st-text { resize: vertical; }
 .st-hue { position: relative; display: inline-flex; }
 .st-hue label { width: 28px; height: 28px; border-radius: 50%; background: var(--hue); cursor: pointer; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .1); transition: transform var(--dur-1), box-shadow var(--dur-2); }
 .st-hue label:hover { transform: scale(1.08); }
-.st-hue .st-radio:checked + label { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--hue); }
+.st-hue .st-radio:checked + label { background: var(--hue); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .25); outline: 2px solid var(--hue); outline-offset: 2px; }
+.st-hue .st-radio:checked + label::after { content: ''; position: absolute; inset: 0; margin: auto; width: 8px; height: 8px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .3); }
+.st-hue label { position: relative; }
 .st-hue .st-radio:focus-visible + label { outline: var(--st-focus); outline-offset: 4px; }
 .st-starters { display: grid; gap: 6px; }
 .st-starters:empty { display: none; }
@@ -610,8 +663,8 @@ textarea.st-text { resize: vertical; }
   .st-header-left { gap: 8px; flex: 1 1 auto; }
   .st-header-left .st-botchip { flex: 0 1 auto; }
   .st-only-mobile { display: inline-grid; }
-  .st-botchip { height: 32px; max-width: 42vw; font-size: 13px; }
-  .st-price { height: 34px; padding: 0 10px; font-size: 12.5px; }
+  .st-botchip { height: 44px; max-width: 42vw; font-size: 13px; }
+  .st-price { height: 44px; min-width: 44px; padding: 0 12px; font-size: 12.5px; }
   .st-iconbtn { width: 44px; height: 44px; }
   .st-tip { display: none; }
   .st-pill-net { height: 26px; padding: 0 8px; gap: 4px; font-size: 11.5px; flex: none; }
@@ -633,7 +686,7 @@ textarea.st-text { resize: vertical; }
   .st-app:not([data-tab]) .st-bot { visibility: hidden; }
   .st-setup-head { height: 48px; }
   .st-glyph-lg { width: 30px; height: 30px; }
-  .st-log { padding: 14px var(--st-gutter) 10px; }
+  .st-log { padding: 14px var(--st-gutter) 24px; scroll-padding-bottom: 24px; }
   .st-chips { flex-wrap: wrap; max-height: calc(2 * var(--st-chip-h) + 14px); overflow-y: auto; overscroll-behavior: contain; padding: 2px 2px 4px; margin: -2px; }
   .st-chips.is-overflow { -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
   .st-chip { font-size: 14px; }
@@ -641,11 +694,22 @@ textarea.st-text { resize: vertical; }
   .st-input { min-height: 44px; font-size: 16px; }   /* 16px avoids iOS zoom on focus */
   .st-send, .st-attach { width: 44px; height: 44px; }
   :root.st-kb-open .st-tabs { display: none; }
-  .st-bothead { height: 48px; }
-  .st-seg-btn { height: 36px; }
+  .st-bothead { height: 52px; }
+  .st-seg { padding: 0 2px; border-radius: 12px; }
+  .st-bothead-right { flex: none; position: relative; z-index: 1; }
+  .st-bothead .st-seg-btn { height: 44px; min-width: 52px; justify-content: center; border-radius: 11px; }
+  .st-version { height: 44px; min-width: 44px; padding: 0 10px; border-radius: 10px; }
+  /* a modal sheet or drawer is open: the peek bar would sit above its scrim looking interactive */
+  :root[data-drawer="open"] .st-peek, :root[data-sheet]:not([data-sheet=""]) .st-peek { display: none; }
+  /* ingest-time placeholder never wraps or clips mid-word */
+  .st-input::placeholder, .sb-composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* once asked, the thread takes what is left (>= 96 px): the map strip, intake, suggestions and the composer always
+     fit above the tab bar, down to 375 x 667 (the old 55% minimum pushed the composer under the tabs) */
+  .st-bot[data-asked="1"] > #sb-thread-slot { flex: 1 1 0; min-height: 96px; }
+  .st-bot > #sb-composer-slot { padding-bottom: 0; }
   #sb-drawer-slot { grid-area: 1 / 1 / 2 / 2; }
 
-  .st-tabs { display: block; position: relative; z-index: 30; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 94%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding-bottom: env(safe-area-inset-bottom); }
+  .st-tabs { display: block; position: relative; z-index: 30; border-top: 1px solid var(--line); background: var(--panel); padding-bottom: env(safe-area-inset-bottom); }
   .st-tabs-row { display: grid; grid-template-columns: 1fr 1fr; height: 56px; }
   .st-tab { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 56px; padding: 0 12px; cursor: pointer; color: var(--muted); font: 600 13.5px/1 var(--font); min-width: 0; }
   .st-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -666,8 +730,9 @@ textarea.st-text { resize: vertical; }
   .st-peek-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .st-peek-who { display: inline-flex; color: #a5b4fc; }
 
-  .st-toasts { left: 12px; right: 12px; bottom: calc(var(--st-tabs-h) + 12px + env(safe-area-inset-bottom)); align-items: stretch; max-width: none; }
-  :root[data-drawer="open"] .st-toasts, :root[data-sheet]:not([data-sheet=""]) .st-toasts { bottom: auto; top: calc(var(--st-header-h) + 8px); }
+  .st-toasts { left: 12px; right: 12px; top: auto; width: auto; transform: none; bottom: calc(var(--st-tabs-h) + 12px + env(safe-area-inset-bottom)); align-items: stretch; max-width: none; }
+  /* a bottom sheet is open: above its drag handle (it starts at 12vh), never over the sheet's header */
+  :root[data-drawer="open"] .st-toasts, :root[data-sheet]:not([data-sheet=""]) .st-toasts { bottom: auto; top: max(8px, calc(12dvh - 56px)); }
   .st-drawer-panel { top: auto; left: 0; right: 0; bottom: 0; width: 100%; height: 88vh; height: 88dvh; border-radius: 18px 18px 0 0; border-right: 0; box-shadow: 0 -24px 48px -24px rgb(2 6 23 / .45); }
   .st-drawer-grip { display: block; position: absolute; top: 6px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: var(--line-2); }
   .st-drawer-head { padding-top: 18px; }
@@ -680,3 +745,216 @@ textarea.st-text { resize: vertical; }
 }
 
 @media print { .st-header, .st-spine, .st-tabs, .st-composer-wrap { display: none; } body { overflow: visible; } .st-app { height: auto; } }
+
+/* ------------------------------------------------------------------ touch targets (>= 44 x 44 on touch and phones) */
+/* Visual sizes stay; a transparent ::after extends the hit area where the control is drawn smaller than 44 px. */
+@media (pointer: coarse), (max-width: 899px) {
+  .st-brand, .st-botchip, .st-price, .st-version, .st-seg-btn, .st-toast-x, .st-toast-act, .st-kbd, .st-dash, .st-link-btn, .st-ghostpeek-go { position: relative; }
+  .st-brand::after, .st-botchip::after, .st-price::after, .st-version::after, .st-seg-btn::after, .st-toast-x::after,
+  .st-toast-act::after, .st-kbd::after, .st-dash::after, .st-link-btn::after, .st-ghostpeek-go::after {
+    content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%);
+  }
+  .st-brand { min-width: 44px; min-height: 44px; justify-content: center; }
+  .st-botchip::after { width: 100%; }          /* the chip is wide already; only its height needs the slop */
+  .st-price::after, .st-dash::after { width: 100%; }
+  .st-seg-btn::after { width: 100%; }          /* neighbours share an edge: vertical slop only */
+  .st-seg-btn { min-width: 44px; justify-content: center; }
+  .st-toast-x { width: 36px; height: 36px; }
+  .st-btn, .st-text { min-height: 44px; }
+  .st-btn { height: auto; }
+  .st-btn-sm { min-height: 44px; }
+  .st-node-btn { min-height: 44px; }
+  .st-chip { min-height: 44px; }
+  .st-menu-item { min-height: 44px; }
+}
+
+/* ------------------------------------------------------------------ suggestion row scroller (desktop, r3) */
+/* #sb-suggest-slot is B's slot: app.js adds a chevron while C's row has more chips past the edge. */
+#sb-suggest-slot { position: relative; }
+.st-sugg-more { position: absolute; top: calc(50% + 3px); transform: translateY(-50%); z-index: 2; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); box-shadow: var(--st-shadow-1); cursor: pointer;
+  transition: opacity var(--dur-2) var(--ease-out), background-color var(--dur-1); }
+.st-sugg-more:hover { background: var(--raise); }
+.st-sugg-more[data-dir="r"] { right: 6px; }
+.st-sugg-more[data-dir="l"] { left: 6px; }
+.st-sugg-more[data-dir="l"] .st-ico { transform: rotate(180deg); }
+.st-sugg-more[hidden] { display: none; }
+@media (pointer: coarse), (max-width: 899px) { .st-sugg-more { display: none; } }
+
+/* ------------------------------------------------------------------ first-ready prompt (r3) */
+/* Files are ready but nothing has been asked: the empty thread says what to do instead of showing a blank band.
+   app.js sets data-prompt on the slot (no :has() here: a :has() over the bot pane re-matched on every DOM change and
+   cost long frames under CPU throttle). */
+#sb-thread-slot[data-prompt="1"] { display: grid; place-items: center; }
+#sb-thread-slot[data-prompt="1"] > * { grid-area: 1 / 1; }
+#sb-thread-slot[data-prompt="1"]::before {
+  content: 'Ask your first question: tap a suggestion below, or type your own.'; grid-area: 1 / 1;
+  max-width: 34ch; padding: 10px 16px; border-radius: 999px; text-align: center;
+  font: 500 13.5px/1.45 var(--font); color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel)); border: 1px dashed color-mix(in srgb, var(--accent) 30%, var(--line));
+  animation: st-prompt-in var(--dur-4, 700ms) var(--ease-out) both;
+}
+@keyframes st-prompt-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+:root[data-motion="reduce"] #sb-thread-slot::before { animation: none; }
+
+/* ================================================================== r4 fixes (owner B) */
+
+/* perf: style/layout of a pane stays inside it (the Builder log and the thread are the busy ones) */
+.st-setup { contain: layout paint style; }
+.st-log, .st-bot > #sb-thread-slot { contain: layout paint style; }
+
+/* D8: while the receipt stage is open, the Builder's launch summary collapses to a pointer at it (one CTA on screen).
+   CONTRACT-GAP (E, checkout.js): a real one-line stub ("Receipt is open on the right") would be E's markup; B does it
+   with CSS on E's classes until then. */
+@media (min-width: 1100px) {
+  :root[data-co-cta="receipt"] #st-log .co-sum .co-sum-gets,
+  :root[data-co-cta="receipt"] #st-log .co-sum .co-sum-price,
+  :root[data-co-cta="receipt"] #st-log .co-sum .co-cta,
+  :root[data-co-cta="receipt"] #st-log .co-sum .co-sum-qa,
+  :root[data-co-cta="receipt"] #st-log .co-sum .co-sum-links { display: none !important; }
+  :root[data-co-cta="receipt"] #st-log .co-sum .co-sum-body::after {
+    content: 'Receipt and plan are open on the right \2192'; display: block; margin-top: 10px; padding: 8px 12px; border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 7%, var(--panel)); border: 1px dashed color-mix(in srgb, var(--accent) 30%, var(--line));
+    color: var(--accent-2); font: 600 13px/1.3 var(--font);
+  }
+}
+
+/* D10: a long chip label never overflows its pill: one line, ellipsis (the full text stays the button's name) */
+.st-chip { max-width: 100%; min-width: 0; }
+.st-chip > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 899px) { .st-chip { height: auto; padding-block: 10px; } }
+
+/* D10: offline / reconnecting on phones is an amber dot on the BotChip avatar, so the bot name keeps its room */
+@media (max-width: 899px) {
+  .st-header-right .st-pill-net { display: none !important; }
+  :root[data-net] .st-botchip .st-avatar { position: relative; }
+  :root[data-net] .st-botchip .st-avatar::after {
+    content: ''; position: absolute; right: -2px; top: -2px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--warn); box-shadow: 0 0 0 2px var(--panel);
+  }
+  :root[data-net="reconnecting"] .st-botchip .st-avatar::after { background: var(--accent); }
+}
+
+/* D10: the peek bar has its own slot: it sits over the 32 px spine row (never over the map HUD) */
+@media (max-width: 899px) {
+  .st-peek { top: var(--st-header-h); left: 0; right: 0; height: var(--st-spine-h); min-height: 0; padding: 0 12px; border-radius: 0; box-shadow: 0 6px 12px -10px rgb(2 6 23 / .4); font-size: 12.5px; }
+}
+
+/* D7: mono metadata reads as whole tokens (ProofDrawer docked squeezes these) */
+.in-num, .in-card-fa, .in-bd, .sb-num, .pf-fc-flabel, .st-mono { white-space: nowrap; }
+.st-main[data-drawer="open"] .in-head-l .in-bd-w { display: none; }
+@media (max-width: 1599px) { .st-main[data-drawer="open"] #in-map-slot .map-chips { display: none; } }
+
+/* D9: "Files on the map" scroller: a 44 px hit area on touch without changing the layout */
+@media (pointer: coarse), (max-width: 899px) {
+  .map-chips { padding-top: 11px; padding-bottom: 11px; margin-top: -11px; margin-bottom: -11px; }
+}
+
+/* D1: landing. Before any file exists the map band is a short idle field of atoms (static dots in the file hues), the
+   ghost answer and the drop target move up, and the hero carries the one primary action. CONTRACT-GAP (D): a live
+   240-dot idle field belongs to ingest.js; B paints a static one under the empty band meanwhile. */
+:root:not([data-built]):not([data-returning]):not([data-intent]) .st-bot > #in-map-slot { height: 128px !important; min-height: 128px !important; }
+:root:not([data-built]):not([data-returning]):not([data-intent]) #in-map-slot .map-empty { display: none; }
+:root:not([data-built]):not([data-returning]):not([data-intent]) #in-map-slot .map-band[data-state="empty"] .map-stage {
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--f0) 55%, transparent) 1.3px, transparent 1.8px) 0 0 / 23px 19px,
+    radial-gradient(circle, color-mix(in srgb, var(--f1) 50%, transparent) 1.2px, transparent 1.7px) 9px 7px / 31px 23px,
+    radial-gradient(circle, color-mix(in srgb, var(--f2) 45%, transparent) 1.1px, transparent 1.6px) 4px 13px / 37px 29px,
+    radial-gradient(circle, color-mix(in srgb, var(--f3) 45%, transparent) 1.2px, transparent 1.7px) 17px 3px / 43px 31px;
+  -webkit-mask-image: radial-gradient(60% 75% at 50% 50%, #000, transparent 90%); mask-image: radial-gradient(60% 75% at 50% 50%, #000, transparent 90%);
+  opacity: .8;
+}
+@media (max-width: 899px) {
+  :root:not([data-built]):not([data-returning]):not([data-intent]) .st-bot > #in-map-slot { height: 112px !important; min-height: 112px !important; }
+}
+.st-hero {
+  position: absolute; z-index: 6; left: 0; right: 0; top: 56px; height: 128px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  pointer-events: none;
+}
+.st-hero > * { pointer-events: auto; }
+:root[data-built] .st-hero, :root[data-intent] .st-hero { display: none; }
+.st-hero-go {
+  display: inline-flex; align-items: center; gap: 10px; height: 48px; padding: 0 22px; border-radius: 14px; cursor: pointer;
+  color: #fff; font: 700 15.5px/1 var(--display); letter-spacing: -.2px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--btn) 86%, #fff), var(--btn));
+  box-shadow: 0 1px 0 rgb(255 255 255 / .2) inset, 0 14px 30px -14px var(--btn), 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent);
+  transition: transform var(--dur-1) var(--ease-out), box-shadow var(--dur-2) var(--ease-out), background-color var(--dur-1);
+}
+.st-hero-go:hover { transform: translateY(-1px); background: var(--btn-hover); box-shadow: 0 1px 0 rgb(255 255 255 / .2) inset, 0 18px 34px -14px var(--btn), 0 0 0 8px color-mix(in srgb, var(--accent) 16%, transparent); }
+.st-hero-go:active { transform: translateY(0) scale(.98); }
+.st-hero-ico { display: inline-flex; }
+.st-hero-sub { padding: 4px 8px; border-radius: 999px; background: rgb(255 255 255 / .18); font: 600 11.5px/1 var(--mono); letter-spacing: 0; }
+.st-hero-alt { min-height: 32px; padding: 4px 10px; border-radius: 8px; color: var(--muted); font: 500 13px/1.2 var(--font); cursor: pointer; background: color-mix(in srgb, var(--panel) 85%, transparent); }
+.st-hero-alt:hover { color: var(--strong); text-decoration: underline; text-underline-offset: 2px; }
+@media (max-width: 899px) { .st-hero { top: 48px; height: 112px; } .st-hero-alt { min-height: 44px; } }
+
+/* D1: the example answer's [1] teaches the receipt pattern: legible, with its name beside it */
+:root:not([data-built]) .sb-ghost-art { opacity: .62; }
+:root:not([data-built]) .sb-ghost-chip { filter: none; background: var(--accent); color: #fff; position: relative; }
+:root:not([data-built]) .sb-ghost-chip::after {
+  content: 'receipt'; position: absolute; left: calc(100% + 6px); top: 50%; transform: translateY(-50%); padding: 2px 6px; border-radius: 6px;
+  background: var(--strong); color: var(--panel); font: 500 10.5px/1.3 var(--mono); white-space: nowrap;
+}
+
+/* D6: Proof Run on the stage: a runner strip in the bot header while the 8 + 3 run (app.js paintProofStrip) */
+.st-prun { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; height: 30px; padding: 0 12px 0 10px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); font-size: 12.5px; color: var(--strong); }
+.st-prun[hidden] { display: none; }
+.st-bothead-banner[data-proof] > #st-bot-banner { display: none; }
+.st-prun-ico { display: inline-flex; color: var(--accent-2); flex: none; }
+.st-prun-ticks { display: inline-flex; gap: 3px; flex: none; }
+.st-prun-ticks i { width: 7px; height: 7px; border-radius: 2px; background: var(--line-2); transition: background-color var(--dur-2), opacity var(--dur-2); }
+.st-prun-ticks i[data-expect="refuse"] { border-radius: 50%; }
+.st-prun-ticks i[data-s="running"] { background: var(--accent); }
+.st-prun-ticks i[data-s="pass"] { background: var(--good); }
+.st-prun-ticks i[data-s="pass"][data-expect="refuse"] { background: var(--st-shield, var(--accent-2)); opacity: .6; }
+.st-prun-ticks i[data-s="fail"] { background: var(--warn); }
+.st-prun-n { flex: none; color: var(--accent-2); font-size: 12px; }
+.st-prun-q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.st-prun-q[data-expect="refuse"] { color: var(--st-refusal, var(--muted)); font-style: italic; }
+@media (max-width: 899px) { .st-prun-q { display: none; } }
+.st-main[data-drawer="open"] .st-prun-q { display: none; }
+.st-main[data-drawer="open"] .st-bothead-banner[data-proof] > .st-prun { display: inline-flex; }
+
+/* D10: the 30 s replay (trial creation rate limited): a self-contained rerun of the sample build */
+.st-replay .st-card-head { display: flex; align-items: center; gap: 8px; }
+.st-rp-tag { margin-left: auto; font-size: 11px; color: var(--dim); }
+.st-replay .st-card-head .st-btn { margin-left: 4px; }
+.st-rp-rows { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.st-rp-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 62px 36px 30px; align-items: center; gap: 7px; font-size: 12.5px; }
+.st-rp-unit { display: none; }
+.st-hint-row > span:nth-child(2) { flex: 1 1 0; min-width: 0; }
+.st-hint-row { flex-wrap: nowrap; align-items: flex-start; }
+.st-rp-ico { display: inline-flex; color: var(--hue); }
+.st-rp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--strong); }
+.st-rp-stage { color: var(--muted); font-size: 12px; }
+.st-rp-row[data-stage="ready"] .st-rp-stage { color: var(--good); font-weight: 600; }
+.st-rp-bar { position: relative; height: 4px; border-radius: 2px; background: var(--raise); overflow: hidden; }
+.st-rp-fill { position: absolute; inset: 0; background: var(--hue); transform-origin: left; transform: scaleX(0); border-radius: 2px; }
+.st-rp-atoms { text-align: right; color: var(--strong); font-size: 12px; }
+.st-rp-unit { color: var(--dim); font-size: 11px; }
+.st-rp-status { margin: 10px 0 0; font-size: 13px; color: var(--text); }
+.st-rp-qa { display: grid; gap: 8px; margin-top: 8px; }
+.st-rp-turn { padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); }
+.st-rp-turn.is-refusal { border-style: dashed; }
+.st-rp-q, .st-rp-a { display: flex; gap: 8px; margin: 0; font-size: 13px; line-height: 1.45; }
+.st-rp-q { color: var(--muted); margin-bottom: 4px; }
+.st-rp-a { color: var(--strong); }
+.st-rp-k { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: var(--raise); color: var(--muted); font: 600 10.5px/1 var(--mono); }
+.st-rp-cite { flex: none; display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 5px; background: var(--accent); color: #fff; font: 600 10.5px/1 var(--mono); }
+.st-rp-src { margin: 4px 0 0 26px; font-size: 11px; color: var(--dim); white-space: normal; }
+.is-refusal .st-rp-a { color: var(--st-refusal, var(--text)); font-style: italic; }
+@media (max-width: 380px) { .st-rp-row { grid-template-columns: 16px minmax(0, 1fr) 62px 30px; } .st-rp-bar { display: none; } }
+
+/* D2: an "Ask: …" button whose question was asked (app.js markAsked) */
+.in-ask.is-asked { opacity: .7; cursor: default; color: var(--good); }
+
+/* D10: Live on a phone: the Dashboard link is an icon button (its name stays in the accessibility tree), so the BotChip
+   keeps the bot's name next to the Live pill */
+@media (max-width: 899px) {
+  .st-dash { width: 44px; height: 44px; padding: 0; justify-content: center; border-radius: 12px; }
+  .st-dash > span:first-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .st-pill-live { padding: 0 9px; }
+  .st-botchip { min-width: 0; }
+  .st-header-left .st-botchip { min-width: 88px; }
+}

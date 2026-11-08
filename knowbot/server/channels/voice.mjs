@@ -56,7 +56,7 @@ export async function handleVoice(cx) {
   const reply = async (question) => {
     if (cx.limited(`voice|${caller}`)) return sendXml(res, `${await speak('You are asking very quickly. Please call back in a minute.')}<Hangup/>`);
     const r = await cx.ask(question, { channel: 'voice', callerKey: caller });
-    return sendXml(res, listen(`${await speak(formatSpoken(r))}<Pause length="1"/>${await speak('Anything else?')}`));
+    return sendXml(res, listen(`${await speak(formatSpoken(r, 450, { names: [cx.botName, cx.org] }))}<Pause length="1"/>${await speak('Anything else?')}`));
   };
   const nothing = async () => {
     if (empty >= MAX_EMPTY) return sendXml(res, `${await speak('Thanks for calling. Goodbye.')}<Hangup/>`);
@@ -64,6 +64,10 @@ export async function handleVoice(cx) {
   };
 
   if (!sub) {
+    // A first POST that already carries speech (a re-pointed <Gather> action, a test harness, a call transfer) is answered,
+    // never met with the greeting while the question is silently logged.
+    const heard = String(params.SpeechResult || '').trim();
+    if (heard) return reply(heard);
     const name = cx.botName ? `${cx.botName}. ` : '';
     return sendXml(res, listen(await speak(`Hi, you've reached ${name}I answer from my files and tell you where each answer comes from. What would you like to know?`)));
   }

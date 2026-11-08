@@ -9,7 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
-import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN } from '../trials.mjs';
+import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
+  splitSentences, citeQuotedLines, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk } from '../trials.mjs';
+import { requireCitations } from '../../lib/knowbot.js';
+import { atomize, extractText } from './fake-knowdrive.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1: nothing here may reach a real store
@@ -687,6 +690,34 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.equal(S.kd.calls.filter((x) => x.url === '/api/v1/files/batch_tags').length, batchCalls, 'no second retag');
     const g = await (await c.json(t, '')).json();
     assert.equal(g.converted, true);
+    // r2: the live bot lists only its own files (samples gone), with convertedFiles, and still answers from them
+    assert.equal(g.convertedFiles, 1);
+    assert.deepEqual(g.files.map((f) => f.id), [own.file.id], JSON.stringify(g.files.map((f) => f.name)));
+    assert.ok(!g.files.some((f) => f.sample));
+    const ev = await openSSE(`${S.base}/api/studio/trials/${t.trialId}/events`, c.h(t));
+    const hello = await ev.waitFor((e) => e.event === 'hello');
+    ev.close();
+    assert.equal(hello.data.converted, true);
+    assert.deepEqual(hello.data.files.map((f) => f.id), [own.file.id]);
+  });
+
+  test('r2: convert pushes a reset snapshot so an open Studio drops the sample rows at once', async () => {
+    const t = await c.trial();
+    await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' });
+    const own = await (await c.upload(t, 'own.md', Buffer.from('# Own returns\n\nOur own returns are accepted within 45 days with the receipt.\n'))).json();
+    await c.waitReady(t, 5);
+    const ev = await openSSE(`${S.base}/api/studio/trials/${t.trialId}/events`, c.h(t));
+    await ev.waitFor((e) => e.event === 'hello');
+    const r = await S.api(`/api/studio/trials/${t.trialId}/convert`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer dev-admin', 'x-forwarded-for': nextIp() }, body: JSON.stringify({ account: 'acct7', bucketId: 'own7' }) });
+    assert.equal(r.status, 200);
+    const reset = await ev.waitFor((e) => e.event === 'hello' && e.data.reset === true);
+    ev.close();
+    assert.equal(reset.data.converted, true);
+    assert.equal(reset.data.convertedFiles, 1);
+    assert.deepEqual(reset.data.files.map((f) => f.id), [own.file.id]);
+    const final = (await c.stream(t, '/ask', { question: 'How many days do I have to return something?' })).find((e) => e.event === 'final').data;
+    assert.equal(final.status, 'grounded', JSON.stringify(final.why));
+    assert.ok(final.citations.every((x) => x.fileId === own.file.id), 'the converted bot answers from its own (re-tagged) file only');
   });
 
   // ---------------------------------------------------------------------------------------------- 18
@@ -746,12 +777,14 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.ok(final.closeMiss && final.closeMiss.best >= final.closeMiss.floor - 0.06 && final.closeMiss.best < final.closeMiss.floor, JSON.stringify(final.why));
     const probe = (await c.stream(t, '/ask', { question: "What's the weather in Paris today?" })).find((e) => e.event === 'final').data;
     assert.equal(probe.closeMiss, null, 'probes are never close misses');
-    for (const type of ['close_miss', 'refusal']) {
+    for (const [i, type] of ['close_miss', 'refusal'].entries()) {
       const ev = await c.stream(t, '/setup', { event: { type, data: { question: 'Do you ship to Brazil?', best: final.closeMiss.best, floor: final.closeMiss.floor } } });
       const reply = ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
-      assert.match(reply, /^Close miss: best match \d+/, `${type}: ${reply}`);
       const chips = ev.find((e) => e.event === 'chips').data.chips.map((x) => x.label);
       assert.ok(chips.includes('Add a file') && chips.includes('Rephrase it for me'), chips.join(','));
+      // r2: the same gap advice is not repeated within a 2-turn window
+      if (i === 0) assert.match(reply, /^Close miss: best match \d+/, `${type}: ${reply}`);
+      else { assert.doesNotMatch(reply, /Add a file about/, `${type}: ${reply}`); assert.match(reply, /same gap/i); }
     }
   });
 
@@ -787,6 +820,360 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.equal(j.starters.length, 3, JSON.stringify(j.starters));
     assert.equal(new Set(j.starters.map((x) => x.q)).size, 3);
     assert.ok(j.starters.every((x) => x.top >= 0.72));
+  });
+
+  // ---------------------------------------------------------------------------------------------- fixer r2
+  test('r2: no padding: a generic intro line never rides along on an answer (Studio and /v1)', async () => {
+    const { t } = await sampleTrial();
+    const q = 'How long are batteries covered?';
+    const final = (await c.stream(t, '/ask', { question: q })).find((e) => e.event === 'final').data;
+    assert.equal(final.status, 'grounded');
+    assert.ok(final.proof.quotedLines.some((l) => /800 full charge cycles/.test(l.text)), final.text);
+    assert.ok(!/This page explains|We build bikes/.test(final.text), `Studio answer padded: ${final.text}`);
+    const key = (await (await c.json(t, '/devkey')).json());
+    const k = key.key || key.apiKey || key.token;
+    assert.ok(k, JSON.stringify(key));
+    const v1 = await (await S.api(`/v1/bots/${t.trialId}/chat`, { method: 'POST', headers: { authorization: `Bearer ${k}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: q }) })).json();
+    assert.match(v1.answer, /800 full charge cycles/);
+    assert.ok(!/This page explains|We build bikes/.test(v1.answer), `/v1 answer padded: ${v1.answer}`);
+    // the pure filter drops a generic intro even when it scores within the margin
+    const lines = { 1: 'E-bike batteries are covered for 2 years or 800 full charge cycles.', 2: 'This page explains exactly what is covered, for how long, and how to claim.' };
+    assert.deepEqual(keepRelevantLines(q, [1, 2], (n) => lines[n], () => 0.88), [1]);
+    assert.deepEqual(keepRelevantLines(q, [1, 2], (n) => lines[n], () => 0.88, LINE_MARGIN, { isIntro: (n) => n === 1 }), [1], 'the best line always stays');
+  });
+
+  test('r2: off-topic questions get spread-out similarities, not a flat wall', async () => {
+    const { t } = await sampleTrial();
+    const ev = await c.stream(t, '/ask', { question: 'What is the capital of Mars?' });
+    const hits = ev.find((e) => e.event === 'retrieval').data.hits.map((h) => h.similarity).filter((x) => x != null);
+    assert.ok(hits.length >= 6);
+    assert.ok(new Set(hits.map((x) => Math.round(x * 100))).size >= 3, `distinct scores: ${hits.join(',')}`);
+    assert.ok(Math.max(...hits) < 0.64 && Math.min(...hits) >= 0.41, hits.join(','));
+  });
+
+  test('r2/r4: "call it Spokes, friendly, for my bike shop": the business is Spokes, a greeting is proposed, no no-op rows', async () => {
+    const p = parseIntent('call it Spokes, friendly, for my bike shop');
+    assert.deepEqual([p.patch.name, p.patch.org, p.patch.tone, p.business], ['Spokes', 'Spokes', 'friendly', 'bike shop']);
+    assert.equal(parseIntent('a bot for my customers').patch.org, undefined, 'an audience is not an org');
+    assert.equal(parseIntent('a bot for my dental clinic').patch.org, 'Dental clinic', 'no name: the business type is the org');
+    const q = parseIntent('support bot for my bike shop called Spokes, friendly');
+    assert.equal(q.patch.org, 'Spokes', 'the "called X" clause never leaks into the org');
+    const t = await c.trial();
+    const ev = await c.stream(t, '/setup', { message: 'support bot for my bike shop called Spokes, friendly' });
+    const patch = ev.find((e) => e.event === 'patch').data;
+    assert.ok(patch.diff.some((d) => d.field === 'name' && d.to === 'Spokes'));
+    assert.ok(patch.diff.some((d) => d.field === 'org' && d.to === 'Spokes'));
+    assert.ok(patch.diff.some((d) => d.field === 'greeting' && d.to === 'Hi! Ask me anything about Spokes.'), JSON.stringify(patch.diff));
+    assert.ok(patch.diff.every((d) => JSON.stringify(d.from) !== JSON.stringify(d.to) && !d.unchanged), `no no-op rows: ${JSON.stringify(patch.diff)}`);
+    const reply = ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(reply, /^Done, meet \*\*Spokes\*\*: a friendly support bot for your bike shop\./);
+    assert.doesNotMatch(reply, /Bike shop called/);
+    const chips = ev.find((e) => e.event === 'chips').data.chips.map((x) => x.label);
+    assert.ok(!chips.includes('Run the Proof Run'), 'no Proof Run without files');
+    assert.equal((await (await c.json(t, '')).json()).spec.org, 'Spokes');
+  });
+
+  test('r4: scope asks, custom tone and multi-intent turns are acted on or acknowledged', async () => {
+    const sc = parseIntent('only answer about warranties and returns');
+    assert.ok(sc.intents.includes('set_scope'));
+    assert.equal(sc.scope, 'warranties and returns');
+    assert.equal(parseIntent('stick to pricing').scope, 'pricing');
+    assert.equal(parseIntent('use all my files').scope, '*');
+    assert.equal(parseIntent('just upload').scope, null);
+    const pir = parseIntent('use the samples and make it sound like a pirate');
+    assert.ok(pir.intents.includes('attach_samples'));
+    assert.deepEqual(pir.customTone, { raw: 'pirate', to: 'friendly' });
+    // zero files: the scope ask is explained, chips are files first
+    const t0 = await c.trial();
+    const none = await c.stream(t0, '/setup', { message: 'only answer about warranties and returns' });
+    assert.match(none.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), /Add files first/);
+    assert.deepEqual(none.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Open bot spec']);
+    // a scope over the sample files keeps only the warranty file on, with a ConfigDiff card
+    const t = await c.trial();
+    assert.equal((await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' })).status, 201);
+    const files = await c.waitReady(t, 4);
+    const ev = await c.stream(t, '/setup', { message: 'only answer about warranties and returns' });
+    const reply = ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(reply, /now answers only from lumen-warranty-returns\.md/, reply);
+    const card = ev.find((e) => e.event === 'card')?.data;
+    assert.equal(card?.type, 'config-diff');
+    assert.deepEqual(card.data.rows[0], { field: 'Searching', from: '4 files', to: '1 file' });
+    const spec = (await (await c.json(t, '')).json()).spec;
+    const warranty = files.find((f) => /warranty/.test(f.name));
+    assert.equal(Object.keys(spec.sources).length, 3);
+    assert.ok(!(warranty.id in spec.sources), 'the warranty file stays on');
+    const back = await c.stream(t, '/setup', { message: 'use all my files' });
+    assert.match(back.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), /searches all 4 files again/);
+    assert.deepEqual((await (await c.json(t, '')).json()).spec.sources, {});
+    // multi-intent: the custom tone is saved and acknowledged alongside the other change
+    const mt = await c.stream(t, '/setup', { message: 'make answers shorter and make it sound like a pirate' });
+    const mr = mt.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(mr, /Custom tone noted: "pirate"/, mr);
+    assert.match(mr, /answers are (?:already )?short/, mr);
+    // an unsupported ask inside a multi-intent message is named, never dropped
+    const lg = await c.stream(t, '/setup', { message: 'make it more formal and add our logo' });
+    const lr = lg.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(lr, /tone is formal/);
+    assert.match(lr, /"add our logo"/, lr);
+  });
+
+  test('r4: topics come from section headings; the summary line lists sections, not the first sentence', () => {
+    const md = ['# Lumen Bikes Price List 2026', 'Prices valid from 1 January 2026 until further notice. All prices are in US dollars.', '## 2026 bike range', '| a | b |\n|---|---|\n| 1 | 2 |',
+      '## More models', 'Text.', '## Lumen Commuter 3', 'A city bike.', '## Lumen Trail 5', 'A trail bike.', '## Lumen E-City', 'An e-bike.', '## Accessories', 'Locks and lights.', 'Racks.',
+      '## Payment and finance', 'Pay over 12 months.', '## Common price questions', 'Ask us.'].join('\n\n');
+    const atoms = [];
+    let crumbs = [];
+    for (const b of md.split('\n\n')) { const h = /^(#+)\s+(.+)$/.exec(b); if (h) { crumbs = crumbs.slice(0, h[1].length - 1); crumbs[h[1].length - 1] = h[2]; continue; } atoms.push({ text: b, meta: { breadcrumb: crumbs.join(' > ') } }); }
+    const topics = topicsOf(atoms);
+    assert.deepEqual(topics, ['accessories', 'payment and finance', 'Lumen models']);
+    const line = sectionLine(atoms, 'Price list');
+    assert.equal(line, 'Lumen Bikes Price List 2026: Lumen models, accessories and payment and finance.');
+  });
+
+  test('r4: an own-file naming proposal survives file_ready; generic titles never become an org; spec edits with no files offer files', async () => {
+    const t = await c.trial();
+    const doc = '# Northwind Studio Employee Handbook\n\nThis handbook applies to everyone at Northwind Studio.\n\n## Paid time off\n\nFull-time employees receive 25 days of paid vacation per year.\n\n## Equipment\n\nLaptops are replaced every 3 years.\n';
+    await c.upload(t, 'handbook.md', Buffer.from(doc));
+    await c.waitReady(t, 1);
+    for (let i = 0; i < 40 && !(await (await c.json(t, '')).json()).files?.[0]?.summary; i++) await sleep(100);
+    const at = await c.stream(t, '/setup', { event: { type: 'file_atomized', data: {} } });
+    const ar = at.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(ar, /Northwind Studio's employee handbook\. Call it \*\*Northwind Studio Guide\*\*\?/, ar);
+    const rd = await c.stream(t, '/setup', { event: { type: 'file_ready', data: {} } });
+    const chips = rd.find((e) => e.event === 'chips').data.chips;
+    assert.equal(chips[0].label, 'Call it Northwind Studio Guide', JSON.stringify(chips));
+    assert.equal(chips.filter((x) => x.kind === 'primary').length, 1);
+    const yes = await c.stream(t, '/setup', { message: chips[0].send });
+    assert.equal(yes.find((e) => e.event === 'patch').data.spec.name, 'Northwind Studio Guide');
+    const after = await c.stream(t, '/setup', { event: { type: 'file_ready', data: {} } });
+    assert.ok(!after.find((e) => e.event === 'chips').data.chips.some((x) => /^Call it/.test(x.label)), 'answered: the chip is gone');
+    // a generic title ("Shop Notes") gives no "Shop's notes docs" proposal
+    const t2 = await c.trial();
+    await c.upload(t2, 'notes.md', Buffer.from('# Shop Notes\n\n## Opening\n\nWe open at 8am every weekday morning.\n\n## Parking\n\nParking is free for the first two hours.\n'));
+    await c.waitReady(t2, 1);
+    const g = (await c.stream(t2, '/setup', { event: { type: 'file_atomized', data: {} } })).filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.doesNotMatch(g, /Shop's|notes docs/, g);
+    // no files: a spec edit never offers the Proof Run
+    const t3 = await c.trial();
+    const se = await c.stream(t3, '/setup', { event: { type: 'spec_edit', data: {} } });
+    assert.deepEqual(se.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Open bot spec']);
+  });
+
+  test('r4: fake knowDrive spreads weak candidates and runs two files at once', async () => {
+    const { startFakeKnowDrive: start } = await import('./fake-knowdrive.mjs');
+    const dir = path.join(ROOT, 'studio', 'samples', 'lumen-bikes');
+    const names = (await fsp.readdir(dir)).filter((n) => !n.endsWith('.json'));
+    const kd = await start({ speed: 20, fixtures: await Promise.all(names.map(async (n) => ({ path: n, text: await fsp.readFile(path.join(dir, n), 'utf8'), tags: ['trial:x'] }))) });
+    try {
+      const r = await (await fetch(`${kd.url}/api/v1/vector_stores/vs_fake/search`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer x' },
+        body: JSON.stringify({ query: "What's the capital of Australia?", max_num_results: 9, mode: 'vector', filter: { all_of: ['trial:x'] } }) })).json();
+      const sims = r.data.map((d) => d.score).filter((x) => x < 0.9);
+      assert.ok(Math.max(...sims) - Math.min(...sims) >= 0.012 && new Set(sims.map((x) => Math.round(x * 100))).size >= 3, `spread: ${sims.join(',')}`);
+      assert.ok(Math.min(...sims) >= 0.41, 'floors are kept');
+      assert.ok(Math.max(...sims) < 0.64);
+      // four files uploaded together: two are past "pending" at once
+      for (const n of names) {
+        const fd = new FormData();
+        fd.append('file', new Blob([await fsp.readFile(path.join(dir, n))]), `p-${n}`);
+        await fetch(`${kd.url}/api/v1/ingest`, { method: 'POST', headers: { 'x-vector-store-id': 'vs_fake', authorization: 'Bearer x' }, body: fd });
+      }
+      let maxBusy = 0;
+      for (let i = 0; i < 60; i++) {
+        const busy = [...kd.files.values()].filter((f) => f.filename.startsWith('p-') && !['pending', 'completed'].includes(f.phase)).length;
+        maxBusy = Math.max(maxBusy, busy);
+        await sleep(10);
+      }
+      assert.ok(maxBusy >= 2, `concurrent files: ${maxBusy}`);
+    } finally { await kd.close(); }
+  });
+
+  test('r4: a fresh trial reuses the live trial when the browser presents its restore key', async () => {
+    const ip = nextIp();
+    const a = await (await S.api('/api/studio/trials', { method: 'POST', headers: { 'x-forwarded-for': ip } })).json();
+    const r = await S.api('/api/studio/trials', { method: 'POST', headers: { 'x-forwarded-for': ip, 'content-type': 'application/json' }, body: JSON.stringify({ trialId: a.trialId, restoreKey: a.restoreKey }) });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.trialId, a.trialId);
+    assert.equal(j.reused, true);
+    const bad = await S.api('/api/studio/trials', { method: 'POST', headers: { 'x-forwarded-for': ip, 'content-type': 'application/json' }, body: JSON.stringify({ trialId: a.trialId, restoreKey: 'x'.repeat(20) + '.' + 'y'.repeat(20) }) });
+    assert.equal(bad.status, 201, 'a bad key just creates a new trial');
+    assert.notEqual((await bad.json()).trialId, a.trialId);
+  });
+
+  test('r2: topic casing and fact-based starters (no "How does section 1 work?")', async () => {
+    assert.equal(topicCase('Lumen Commuter 3'), 'Lumen Commuter 3');
+    assert.equal(topicCase('Frame warranty'), 'frame warranty');
+    assert.ok(GENERIC_HEADING_RE.test('Section 1') && GENERIC_HEADING_RE.test('Part II') && !GENERIC_HEADING_RE.test('Parental leave'));
+    const t = await c.trial();
+    const doc = '# Acme Staff Policy\n\n## Section 1\n\nParental leave is paid for 16 weeks at full salary.\n\n## Section 2\n\nExpense claims are reimbursed within 10 business days of approval.\n\n## Section 3\n\nThe annual learning budget costs the company $1,200 per employee.\n';
+    const up = await (await c.upload(t, 'policy.md', Buffer.from(doc))).json();
+    await c.waitReady(t, 1);
+    const q = await (await c.json(t, '/questions')).json();
+    const all = [...q.starters, ...q.proof].map((x) => x.q);
+    assert.ok(all.length >= 2, JSON.stringify(q));
+    assert.ok(!all.some((x) => /section \d/i.test(x)), all.join(' | '));
+    assert.ok(all.some((x) => /parental leave|expense claims|learning budget/i.test(x)), all.join(' | '));
+    assert.ok([...q.starters, ...q.proof].every((x) => x.top >= 0.72 && x.fileId === up.file.id));
+    assert.equal(q.complete, true);
+    assert.deepEqual(q.pending, { files: 0, names: [] });
+  });
+
+  // ---------------------------------------------------------------------------------------------- fixer r3
+  test('r3: sentences end only at real sentence ends; quoted lines stay whole (pure)', () => {
+    assert.deepEqual(splitSentences('To make a warranty claim, email us. Email warranty@lumenbikes.example with photos and your serial number.'),
+      ['To make a warranty claim, email us.', 'Email warranty@lumenbikes.example with photos and your serial number.']);
+    assert.deepEqual(splitSentences('A tube costs $1.50, e.g. for a 700c wheel. See lumenbikes.example/help.html for more. 3 left'),
+      ['A tube costs $1.50, e.g. for a 700c wheel.', 'See lumenbikes.example/help.html for more.', '3 left']);
+    // lib requireCitations alone keeps only the fragment after the address's dot; citeQuotedLines keeps the quoted line
+    const fin = { text: 'To make a warranty claim, email us. Email warranty@lumenbikes.example with photos and your serial number. [1]', citations: [{ n: 1, file_id: 'f1' }], refused: false };
+    assert.match(requireCitations(fin).text, /^example with photos/, 'documents the lib behaviour this guards against');
+    assert.equal(citeQuotedLines(fin, requireCitations).text, fin.text);
+    const two = { ...fin, text: '- Test rides last 30 minutes and require photo ID. We will set the saddle height. [1]\n- Test rides on weekdays need no booking. [1]' };
+    assert.equal(citeQuotedLines(two, requireCitations).text, two.text);
+    const unmarked = { ...fin, text: 'An uncited line.\nA cited one. [1]' };
+    assert.equal(citeQuotedLines(unmarked, requireCitations).text, requireCitations(unmarked).text, 'a line without its own marker is still judged by sentence');
+  });
+
+  test('r3: answerCheck wants the asked-for fact: expected substrings, shared terms, a duration for "how long" (pure)', () => {
+    assert.equal(answerCheck('How long does a test ride last?', ['We will set the saddle height and show you the gears before you head out on the cycle path.']).ok, false);
+    assert.equal(answerCheck('How long does a test ride last?', ['Test rides last 30 minutes and require photo ID.']).ok, true);
+    assert.equal(answerCheck('How much is a Full Overhaul?', ['Full Overhaul is a complete strip-down.']).ok, false);
+    assert.equal(answerCheck('How do I make a warranty claim?', ['example with photos and your serial number.'], ['warranty@lumenbikes.example']).ok, false);
+    assert.equal(answerCheck('How do I make a warranty claim?', ['Warranty claims: Email warranty@lumenbikes.example with photos and your serial number.'], ['warranty@lumenbikes.example']).ok, true);
+  });
+
+  test('r3: curated answers say what was asked, with no fragments, in the Studio and on /v1', async () => {
+    const { t } = await sampleTrial();
+    const key = (await (await c.json(t, '/devkey')).json());
+    const k = key.key || key.apiKey || key.token;
+    const cases = [
+      ['How long does a test ride last?', /30 minutes/, /saddle height/],
+      ['How do I make a warranty claim?', /warranty@lumenbikes\.example/, /^example/i],
+      ['How long is the frame warranty?', /lifetime/, null],
+      ['How long are batteries covered?', /800 full charge cycles/, null],
+      ['Do you offer financing?', /0% financing for 12 months/, null],
+      ['How much does it cost to rent a bike?', /\$45 per day/, /lube|wash/],
+    ];
+    for (const [q, want, never] of cases) {
+      const final = (await c.stream(t, '/ask', { question: q })).find((e) => e.event === 'final').data;
+      assert.equal(final.status, 'grounded', `${q}: ${final.text}`);
+      assert.match(final.text, want, `${q}: ${final.text}`);
+      if (never) assert.doesNotMatch(final.text.split('\n')[0], never, `${q}: ${final.text}`);
+      assert.ok(final.proof.quotedLines.every((l) => /^[A-Z0-9"“]/.test(l.text) && l.text.split(/\s+/).length >= 4), `${q}: fragment quoted: ${final.text}`);
+      assert.ok(final.check?.ok, `${q}: check ${JSON.stringify(final.check)}`);
+      const v1 = await (await S.api(`/v1/bots/${t.trialId}/chat`, { method: 'POST', headers: { authorization: `Bearer ${k}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: q }) })).json();
+      assert.match(v1.answer, want, `/v1 ${q}: ${v1.answer}`);
+      assert.ok(/^[A-Z0-9"“]/.test(v1.answer), `/v1 ${q} starts mid-sentence: ${v1.answer}`);
+    }
+    // the warranty-claim answer (what the Launch card and checkout show) carries the address, not "example with photos…"
+    const claim = (await c.stream(t, '/ask', { question: 'How do I make a warranty claim?' })).find((e) => e.event === 'final').data;
+    assert.ok(claim.text.includes('warranty@lumenbikes.example'), claim.text);
+    assert.deepEqual(claim.check.expected, ['warranty@lumenbikes.example']);
+  });
+
+  test('r3: every curated sample question carries an expected substring and every proof question answers with it', async () => {
+    const sq = JSON.parse(await fsp.readFile(path.join(ROOT, 'studio/samples/lumen-bikes/questions.json'), 'utf8'));
+    const { t } = await sampleTrial();
+    for (const q of sq.proof) {
+      assert.ok(Array.isArray(sq.expect?.[q]) && sq.expect[q].length, `questions.json expect is missing ${q}`);
+      const final = (await c.stream(t, '/ask', { question: q, label: 'Proof Run' })).find((e) => e.event === 'final').data;
+      assert.equal(final.status, 'grounded', q);
+      assert.equal(final.check.ok, true, `${q}: ${final.text} ${JSON.stringify(final.check)}`);
+    }
+  });
+
+  test('r3: the sample corpus is 400+ atoms and keeps every spec fact verbatim', async () => {
+    const dir = path.join(ROOT, 'studio/samples/lumen-bikes');
+    let total = 0;
+    const text = {};
+    for (const f of (await fsp.readdir(dir)).filter((x) => !x.endsWith('.json'))) { const b = await fsp.readFile(path.join(dir, f)); text[f] = extractText(b, '', f); total += atomize(text[f]).length; }
+    assert.ok(total >= 400 && total <= 650, `sample atoms ${total}`);
+    const facts = { 'lumen-warranty-returns.md': ['Lumen frames carry a lifetime warranty for the original owner.', 'Components are covered for 2 years from purchase.', 'E-bike batteries are covered for 2 years or 800 full charge cycles, whichever comes first.', 'Unridden bikes can be returned within 30 days with the receipt.', 'E-bike returns carry a 15% restocking fee.', 'Crash replacement: 40% off a new frame within 3 years of purchase.', 'Email warranty@lumenbikes.example with photos and your serial number.', 'Claims are processed in 5–7 business days.'],
+      'lumen-service-plans.html': ['Basic Tune-Up costs $79.', 'Full Overhaul costs $229.', 'costs $149 per year and includes two tune-ups and 10% off parts.', 'Every new bike gets a free 30-day check.', 'Standard turnaround is 3–5 business days.', 'Mobile service within city limits has a $35 call-out fee.'],
+      'lumen-store-faq.txt': ['The store is open Monday to Saturday 9am–6pm and Sunday 11am–4pm.', 'We are closed on public holidays.', 'Test rides last 30 minutes and require photo ID.', 'Trade-in credit is up to 30% of the original price.', '0% financing for 12 months is available on bikes over $1,000.', 'Bike rentals cost $45 per day.'],
+      'lumen-price-list-2026.md': ['| Lumen Commuter 3 | city | $1,149 | S/M/L | Dynamo lights included |', '| Lumen E-City | e-bike | $3,199 | M/L | 500 Wh battery, about 90 km range |', 'Prices include assembly and the 30-day check.'] };
+    for (const [f, list] of Object.entries(facts)) for (const x of list) assert.ok(text[f].includes(x), `${f} lost "${x}"`);
+    // FAQ answers keep one sentence per line, so a line-level quote is always a whole sentence
+    for (const l of text['lumen-store-faq.txt'].split('\n')) assert.ok(!/[a-z]\. [a-z]/.test(l), `lowercase sentence start in: ${l}`);
+  });
+
+  test('r3: own handbook: paid time off answers with 25 days; starters read naturally; topics are clean', async () => {
+    assert.equal(cleanTopic('Section 4. Travel policy variant 1'), 'Travel policy');
+    assert.equal(cleanTopic('2.3 Paid time off:'), 'Paid time off');
+    assert.equal(cleanTopic('Section 7'), '');
+    assert.equal(cleanTopic('day section full'), '');
+    assert.equal(starterGrammarOk('How long is the economy class used?'), false);
+    assert.equal(starterGrammarOk('How long is the equipment replaced?'), false);
+    assert.equal(starterGrammarOk('How much does the a parking permit cost?'), false);
+    assert.equal(starterGrammarOk('How long are e-bike batteries covered?'), true);
+    assert.deepEqual(topicsOf([{ text: 'x', meta: { breadcrumb: 'Handbook > Section 2. Paid time off' } }, { text: 'y', meta: { breadcrumb: 'Handbook > Section 4. Travel policy variant 1' } }]), ['paid time off', 'travel policy']);
+    const doc = ['# Northwind Employee Handbook', 'This handbook sets out the policies that apply to every Northwind employee.',
+      '## Section 1. Working hours', 'Core hours are 10am to 4pm, Monday to Friday.',
+      '## Section 2. Paid time off', 'Full-time employees receive 25 days of paid vacation per year, plus public holidays.', 'Up to 5 unused days can be carried over into the next year, and carried-over days must be used by 31 March.',
+      '## Section 4. Travel policy variant 1', 'Economy class is used for flights under 6 hours. Business class is allowed for flights over 6 hours with director approval.', 'Hotel costs are reimbursed up to $180 per night in most cities.',
+      '## Section 5. Equipment', 'Laptops are replaced every 3 years. Phones are replaced every 2 years.',
+      '## Section 6. Parental leave', 'Primary carers receive 26 weeks of full pay. Secondary carers receive 4 weeks of full pay.'].join('\n\n');
+    const t = await c.trial();
+    const up = await (await c.upload(t, 'handbook.md', Buffer.from(doc))).json();
+    await c.waitReady(t, 1);
+    const final = (await c.stream(t, '/ask', { question: 'How many days of paid time off do I get?' })).find((e) => e.event === 'final').data;
+    assert.equal(final.status, 'grounded', final.text);
+    assert.match(final.text.split('\n')[0], /25 days of paid vacation/, final.text);
+    assert.ok(final.check.ok);
+    const q = await (await c.json(t, '/questions')).json();
+    const all = [...q.starters, ...q.proof].map((x) => x.q);
+    assert.ok(q.starters.length >= 3, JSON.stringify(q.starters));
+    assert.ok(all.every(starterGrammarOk), all.join(' | '));
+    assert.ok(!all.some((x) => /\b(?:used|replaced)\?$|section \d|variant/i.test(x)), all.join(' | '));
+    for (const s of q.starters) {
+      const fin = (await c.stream(t, '/ask', { question: s.q })).find((e) => e.event === 'final').data;
+      assert.equal(fin.status, 'grounded', `${s.q}: ${fin.text}`);
+      assert.ok(fin.check.ok, `${s.q}: ${fin.text} ${JSON.stringify(fin.check)}`);
+    }
+    const files = await (await c.json(t, '/files')).json();
+    const f = files.files.find((x) => x.id === up.file.id);
+    if (f.summary) {
+      assert.ok(f.summary.topics.length >= 2 && f.summary.topics.every((x) => !/section|variant|\d/i.test(x) && x.split(/\s+/).length >= 1), JSON.stringify(f.summary));
+    }
+  });
+
+  test('r2: a Proof Run asked for while files learn is queued, a partial run never passes, and it starts when all are Ready', async () => {
+    const S2 = await boot({ speed: 0.5 });
+    const c2 = client(S2);
+    try {
+      const t = await c2.trial();
+      await c2.json(t, '/samples', 'POST', { set: 'lumen-bikes' });
+      const turn = async (body) => { const ev = await c2.stream(t, '/setup', body); return { reply: ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), actions: ev.filter((e) => e.event === 'action').map((e) => e.data), chips: ev.find((e) => e.event === 'chips').data.chips }; };
+      // wait for the first Ready file while others still learn
+      let files = [];
+      for (let i = 0; i < 600; i++) { files = (await (await c2.json(t, '/files')).json()).files; if (files.some((f) => f.stage === 'ready')) break; await sleep(25); }
+      assert.ok(files.some((f) => f.stage === 'ready') && files.some((f) => f.stage !== 'ready'), files.map((f) => f.stage).join(','));
+      const q = await (await c2.json(t, '/questions')).json();
+      assert.ok(q.pending.files > 0 && q.complete === false, JSON.stringify(q.pending));
+      const run = await turn({ message: 'run the proof run' });
+      assert.ok(!run.actions.some((a) => a.type === 'run_proof'), 'no partial run while files learn');
+      assert.match(run.reply, /Waiting for \d+ files? to finish learning/);
+      // a client that ran anyway reports 6/6: it does not count as a pass
+      const partial = await turn({ event: { type: 'proof_done', data: { score: { answered: 5, total: 5, refused: 1, probes: 1 } } } });
+      assert.doesNotMatch(partial.reply, /Proof Run passed/);
+      assert.match(partial.reply, /doesn't count yet/);
+      await c2.waitReady(t, 4, 60000);
+      const next = await turn({ message: 'looks good' });
+      assert.ok(next.actions.some((a) => a.type === 'run_proof' && a.mini === false), `queued run starts: ${next.reply}`);
+      assert.match(next.reply, /Running the full Proof Run now/);
+      const full = await (await c2.json(t, '/questions')).json();
+      const total = full.proof.length + full.probes.length;
+      const short = await turn({ event: { type: 'proof_done', data: { score: { passed: total - 2, total: total - 2 } } } });
+      assert.doesNotMatch(short.reply, /Proof Run passed/, 'fewer than the full set never passes');
+      const done = await turn({ event: { type: 'proof_done', data: { score: { passed: total, total } } } });
+      assert.match(done.reply, /Proof Run passed/);
+      // after the pass: no stale proof chip, and a price question gets the card
+      const after = await turn({ message: 'how much to launch?' });
+      assert.ok(after.card || after.actions.some((a) => a.type === 'show_launch') || after.chips.some((x) => x.action?.type === 'show_launch'));
+      assert.ok(!after.chips.some((x) => x.action?.type === 'run_proof'), after.chips.map((x) => x.label).join(','));
+      const ev2 = await c2.stream(t, '/setup', { message: 'how much to launch?' });
+      assert.ok(ev2.some((e) => e.event === 'card' && e.data.type === 'launch') || ev2.some((e) => e.event === 'action' && e.data.type === 'show_launch'), 'asking again still gets the card');
+    } finally { await S2.close(); }
   });
 
   test('r1: a restore key in the shared link reopens the bot on another device (exchanged for the bearer)', async () => {

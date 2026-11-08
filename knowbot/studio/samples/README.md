@@ -17,3 +17,8 @@ addresses use the reserved `.example` domain.
 | `questions.json` | Curated starters, Proof Run questions and off-topic probes. All are re-validated at runtime against the floor |
 
 The facts the Studio tests rely on are written verbatim in the files (spec section 5.1); edit them with care.
+
+About 410 atoms in all (roughly 100 per file), so the ingest map has a real shape at desktop width. Writing rules that
+keep answers whole: each answer-bearing fact is its own paragraph or its own line (FAQ answers are one sentence per
+line), the answer sentence comes first, and no fact is split around an abbreviation. `questions.json` `expect` lists
+the substring every curated answer must contain; the Proof Run's `check` uses it.

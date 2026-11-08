@@ -29,6 +29,11 @@
 // CONTRACT-GAP (B/C): the critic asks for the thread to keep >= 50% of the pane and for the new answer's top to be
 //   scrolled into view on the first answer. D now folds the intake to its chip on answer:start (inside the ask's
 //   input window); the thread's min-height and its scrolling live in studio.css / samplebot.js.
+// CONTRACT-GAP (A, trials.mjs): the 'atoms' preview event is sent at the atomize stage. D now also asks
+//   GET /files/:id/atoms once at the chunk stage so the shatter can start on real chunk text earlier; sending the
+//   preview from the server at 'chunked' would make that request unnecessary.
+// CONTRACT-GAP (B, studio.css): the post-answer rule compacts any non-ribbon band to a strip unless it is pinned. D's
+//   ribbon "Expand" (a look, not a pin) marks #in-map-slot[data-expanded="yes"]; ingest.css lifts the strip for it.
 // CONTRACT-GAP (B, studio.css): once an answer exists the intake slot gets max 22% and the thread min 55%, so a
 //   user-expanded Sources panel shows ~1 row. D marks that state with #in-intake-slot[data-open="user"].
 
@@ -65,6 +70,9 @@ const BACKOFF = [1000, 3000, 9000];
 const MAX_DOTS = 4000;
 const MAX_DOTS_LOW = 1500;
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+// 4 cores or fewer (most phones, throttled laptops): the map canvas renders at DPR <= 1.5 (fewer pixels per blit)
+const LOWCPU = (() => { try { return (navigator.hardwareConcurrency || 8) <= 4; } catch { return false; } })();
+const IDLE_DOTS = 240;
 
 // ------------------------------------------------------------------ small helpers
 
@@ -115,17 +123,37 @@ function fmtSize(bytes) {
   if (b < 1048576) return `${(b / 1024).toFixed(b < 10240 ? 1 : 0)} KB`;
   return `${(b / 1048576).toFixed(b < 10485760 ? 1 : 0)} MB`;
 }
-/** lumen-warranty-returns.md -> lumen-warr…returns.md (keeps the extension). */
+/** A true middle ellipsis that keeps the extension WITH its dot (spec 1.2): lumen-warranty-returns.md (max 21) ->
+ *  "lumen-warr…returns.md"; lumen-service-plans.html (max 16) -> "lumen-serv….html". The tail keeps the last word of
+ *  the name when it fits in about half the budget. Callers put the full name in a title / tooltip / sr-only text. */
 function mid(name, max = 30) {
   const s = String(name || '');
   if (s.length <= max) return s;
   const dot = s.lastIndexOf('.');
   const ext = dot > 0 && s.length - dot <= 6 ? s.slice(dot) : '';
   const base = ext ? s.slice(0, dot) : s;
-  const keep = Math.max(4, max - ext.length - 1);
-  const head = Math.ceil(keep * 0.5), tail = keep - head;
-  return `${base.slice(0, head)}…${base.slice(base.length - tail)}${ext}`;
+  const budget = Math.max(6, max - 1);
+  let tail = ext;
+  const sep = Math.max(base.lastIndexOf('-'), base.lastIndexOf('_'), base.lastIndexOf(' '));
+  const word = sep > 0 ? base.slice(sep + 1) : '';
+  if (word && word.length + ext.length <= Math.floor(budget / 2) && sep >= 4) tail = word + ext;
+  let head = base.slice(0, Math.max(3, budget - tail.length)).replace(/[-_\s.]+$/, '');
+  if (!head) head = base.slice(0, 3);
+  return `${head}…${tail}`;
 }
+/** Markdown/table noise out of preview text: "| Model | Type |" -> "Model · Type", separator rows and heading/emphasis marks gone. */
+function cleanText(t) {
+  return String(t || '')
+    .replace(/\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?/g, ' ')
+    .replace(/-{3,}/g, ' ')
+    .replace(/\s*\|\s*/g, ' · ')
+    .replace(/[#*_`>]+/g, ' ')
+    .replace(/(\s*·\s*){2,}/g, ' · ')
+    .replace(/\s+/g, ' ')
+    .replace(/^\s*·\s*|\s*·\s*$/g, '')
+    .trim();
+}
+const ric = (fn, timeout = 200) => { try { if (window.requestIdleCallback) return window.requestIdleCallback(fn, { timeout }); } catch { /* ignore */ } return setTimeout(fn, 16); };
 const mmss = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 /** 1234567 -> "1,234,567" without toLocaleString (which is slow enough to show up in per-frame tickers). */
 const fmtInt = (n) => { const v = Math.round(Number(n) || 0); return Math.abs(v) < 1000 ? String(v) : String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ','); };
@@ -162,6 +190,7 @@ export function mount(ctx) {
   const intakeSlot = slots.intake || document.getElementById('in-intake-slot');
   const dropSlot = slots.drop || document.getElementById('in-drop-slot');
   const botPane = slots.bot || document.getElementById('st-bot');
+  const appEl = (botPane && botPane.closest && botPane.closest('.st-app')) || document.querySelector('.st-app');
   if (!mapSlot || !intakeSlot || !dropSlot) throw new Error('ingest: slots missing');
 
   const subs = [];
@@ -169,9 +198,22 @@ export function mount(ctx) {
   // Text metrics come from a DETACHED canvas: setting .font on the on-screen canvas forces a document style recalc
   // (expensive right after rows were inserted); a detached context never does.
   const MONO10 = '500 10px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+  // map labels are never below 11 px (round-4 critic: 10 px mono names were hard to read)
+  const MONO11 = '500 11px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+  const SANS11 = 'italic 400 11px Inter, ui-sans-serif, system-ui, sans-serif';
   let textCtx = null;
+  // measured once per (font, text): labels and chips re-use widths across layouts instead of re-measuring per frame
+  const widthCache = new Map();
+  let textFont = '';
   const textWidth = (text, font = MONO10) => {
-    try { if (!textCtx) textCtx = document.createElement('canvas').getContext('2d'); if (textCtx.font !== font) textCtx.font = font; return textCtx.measureText(text).width; } catch { return String(text).length * 6.1; }
+    const key = `${font === MONO10 ? '' : font}|${text}`;
+    const hit = widthCache.get(key);
+    if (hit != null) return hit;
+    let w;
+    try { if (!textCtx) textCtx = document.createElement('canvas').getContext('2d'); if (textFont !== font) { textCtx.font = font; textFont = font; } w = textCtx.measureText(text).width; } catch { w = String(text).length * 6.1; }
+    if (widthCache.size > 4000) widthCache.clear();
+    widthCache.set(key, w);
+    return w;
   };
   const domOff = [];
   const listen = (el, type, fn, opts) => { el.addEventListener(type, fn, opts); domOff.push(() => el.removeEventListener(type, fn, opts)); };
@@ -188,6 +230,11 @@ export function mount(ctx) {
   const waiters = new Set();       // shatter phase waits
   const lastStageSaid = new Map();   // localId -> last announced phase key
   const errorCards = new Set();      // localIds that already have a Builder ErrorCard
+  // The file's real first lines while it is extracted (its own text: the local File for text types, the sample's
+  // source file for samples, else the first atoms once they exist). Rows and the map show them with a scan sweep.
+  const reading = new Map();         // localId -> [up to 3 lines]
+  const readAsked = new Set();
+  let sampleSet = 'lumen-bikes';
   let hueCounter = 0;
   let replayLabel = null;
   let events = null;
@@ -199,6 +246,18 @@ export function mount(ctx) {
   const types = () => (Array.isArray(cfg().types) && cfg().types.length ? cfg().types : DEFAULT_TYPES);
   const listFiles = () => { const s = getState(); return (s.fileOrder || []).map((id) => s.files[id]).filter(Boolean); };
   const liveFiles = () => listFiles().filter((f) => f.phase !== 'rejected');
+  /** THE status selector: the map HUD, the Sources header, the collapsed chip and the 'ingest:counts' event all
+   *  read it, so they can never disagree. searchable = atoms of Ready files (B's "N of M files ready · X atoms"). */
+  function fileCounts(files = liveFiles()) {
+    const c = { total: files.length, ready: 0, failed: 0, learning: 0, read: 0, searchable: 0 };
+    for (const f of files) {
+      if (f.phase === 'failed') { c.failed++; continue; }
+      const a = Number(f.atoms) || 0;
+      c.read += a;
+      if (f.phase === 'ready') { c.ready++; c.searchable += a; } else c.learning++;
+    }
+    return c;
+  }
   const meta = (lid) => { let m = rowMeta.get(lid); if (!m) { m = { lastChangeAt: Date.now() }; rowMeta.set(lid, m); } return m; };
   const isEnabled = (f) => f.enabled !== false && !(f.id && (getState().spec.sources || {})[f.id] === false);
 
@@ -241,11 +300,43 @@ export function mount(ctx) {
     renderCapacity();
   }
 
+  // A file keeps its hue across reloads: the hue is remembered per trial and server file id (D's own localStorage
+  // key; B's store does not persist files). New files take the first hue no live file uses.
+  // CONTRACT-GAP (B, store.js): if the store ever persists files[*].hue, read it here instead of this key.
+  const HUE_KEY = 'knowbot.studio.hues.v1';
+  let hueMem = null;
+  const hueStore = () => {
+    if (hueMem) return hueMem;
+    try { hueMem = JSON.parse(localStorage.getItem(HUE_KEY) || '{}') || {}; } catch { hueMem = {}; }
+    return hueMem;
+  };
+  function storedHue(id) {
+    const t = getState().trial && getState().trial.id;
+    const v = t && id ? (hueStore()[t] || {})[id] : null;
+    return Number.isInteger(v) && v >= 0 && v < 8 ? v : null;
+  }
+  function saveHue(id, hue) {
+    const t = getState().trial && getState().trial.id;
+    if (!t || !id || !Number.isInteger(hue)) return;
+    const all = hueStore();
+    if ((all[t] || {})[id] === hue) return;
+    all[t] = { ...(all[t] || {}), [id]: hue, _at: Date.now() };
+    // keep the 4 most recent trials only
+    const keys = Object.keys(all).sort((a, b) => ((all[b] || {})._at || 0) - ((all[a] || {})._at || 0));
+    for (const kk of keys.slice(4)) delete all[kk];
+    try { localStorage.setItem(HUE_KEY, JSON.stringify(all)); } catch { /* private mode: hues follow file order */ }
+  }
+  function nextHue() {
+    const used = new Set(listFiles().filter((f) => f.phase !== 'rejected').map((f) => f.hue));
+    for (let i = 0; i < 8; i++) { const hv = (hueCounter + i) % 8; if (!used.has(hv)) { hueCounter = hv + 1; return hv; } }
+    return (hueCounter++) % 8;
+  }
   function newFileState({ name, bytes, mime, kind, sample = false, file = null, id = null }) {
     const localId = uid('f');
+    const kept = storedHue(id);
     return {
       localId, id, name: name || 'file', bytes: Number(bytes) || 0, mime: mime || 'application/octet-stream', kind: kind || 'txt',
-      hue: (hueCounter++) % 8, sample: !!sample, enabled: true, phase: 'queued',
+      hue: kept != null ? kept : nextHue(), sample: !!sample, enabled: true, phase: 'queued',
       sent: 0, chunks: 0, atoms: 0, vectorized: 0, pages: null, error: null, summary: null, topics: [], stageAt: {}, file,
     };
   }
@@ -271,14 +362,17 @@ export function mount(ctx) {
   const capSegs = h('div', { class: 'in-cap-segs' });
   capBar.append(capSegs);
   const capLabel = h('span', { class: 'in-cap-label in-num', id: capLabelId });
-  const capWarn = h('span', { class: 'in-cap-warn', hidden: true }, h('span', { html: icon('warn', { size: 13 }) }), 'Close to the 100 MB limit.');
+  const capWarnT = h('span', null, 'Close to the 100 MB limit.');
+  const capWarn = h('span', { class: 'in-cap-warn', hidden: true }, h('span', { html: icon('warn', { size: 13 }) }), capWarnT);
   cap.append(capBar, h('div', { class: 'in-cap-row' }, capLabel, capWarn));
 
   const rowsEl = h('ul', { class: 'in-rows', id: panelId, 'aria-label': 'Files' });
+  // limits come from config (quota.fileBytes / quota.bytes), the same numbers validation and the server use
+  const emptyT = h('p', { class: 'in-empty-t' });
   const empty = h('div', { class: 'in-empty' },
     h('div', { class: 'in-empty-art', 'aria-hidden': 'true', html: icon('upload', { size: 20 }) }),
     h('div', { class: 'in-empty-copy' },
-      h('p', { class: 'in-empty-t' }, isMobile() ? 'Add files · up to 100 MB' : 'Drop files anywhere here · up to 100 MB'),
+      emptyT,
       h('p', { class: 'in-types' }, h('span', { class: 'in-sr' }, 'Supported types: '), TYPE_CHIPS.map((t) => h('span', { class: 'in-type' }, t)))),
     // secondary (outline) until the visitor picks the upload path: the landing has one filled primary, the Builder's
     h('button', { type: 'button', class: 'in-btn in-choose', onclick: () => pick() }, h('span', { html: icon('upload', { size: 15 }) }), 'Choose files'));
@@ -307,7 +401,7 @@ export function mount(ctx) {
   const dropOverlay = h('div', { class: 'in-drop', hidden: true },
     h('div', { class: 'in-drop-frame' },
       h('span', { class: 'in-drop-ico', html: icon('upload', { size: 26 }) }),
-      h('p', { class: 'in-drop-t' }), h('p', { class: 'in-drop-s' }, `${SUPPORTED_COPY} · under 95 MB each`)));
+      h('p', { class: 'in-drop-t' }), h('p', { class: 'in-drop-s' })));
   const menu = h('div', { class: 'in-menu', role: 'menu', hidden: true, tabindex: '-1' });
   dropSlot.innerHTML = '';
   dropSlot.append(dropOverlay, menu);
@@ -322,27 +416,37 @@ export function mount(ctx) {
   const hud = h('div', { class: 'map-hud' });
   const hudTitle = h('span', { class: 'map-title' }, 'Knowledge map');
   const hudCount = h('span', { class: 'map-count in-num', dataset: { value: '0' } }, '0');
-  const hudCountWrap = h('span', { class: 'map-countwrap', hidden: true }, h('span', { class: 'map-sep', 'aria-hidden': 'true' }, '·'), hudCount, h('span', { class: 'map-unit' }, ' atoms'));
+  // One truth with the Builder and the Sources header: "searchable" = atoms of Ready files (what an answer can
+  // quote); "read" = every atom counted so far. Equal → plain "88 atoms".
+  const hudUnit = h('span', { class: 'map-unit' }, ' atoms');
+  const hudRead = h('span', { class: 'map-read in-num', hidden: true });
+  const hudCountWrap = h('span', { class: 'map-countwrap', hidden: true }, h('span', { class: 'map-sep', 'aria-hidden': 'true' }, '·'), hudCount, hudUnit, hudRead);
   const hudEmpty = h('span', { class: 'map-emptyl' }, h('span', { class: 'map-sep', 'aria-hidden': 'true' }, '·'), ' empty');
   const hudScale = h('span', { class: 'map-scale in-num', hidden: true });
   const tableBtn = h('button', { type: 'button', class: 'map-btn', 'aria-pressed': 'false', onclick: () => toggleTable() }, h('span', { html: icon('table', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Table view'));
   const pinBtn = h('button', { type: 'button', class: 'map-btn map-pin', 'aria-pressed': 'false', onclick: () => togglePin() }, h('span', { html: icon('pin', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Pin'));
+  // ribbon -> tap / Expand opens the band for a look (not persisted); Collapse folds it back. Pin keeps it open.
+  const foldBtn = h('button', { type: 'button', class: 'map-btn map-fold', hidden: true, 'aria-expanded': 'true', onclick: () => setExpanded(false) }, h('span', { html: icon('chevronDown', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Collapse'));
+  const expandBtn = h('button', { type: 'button', class: 'map-btn map-expand', hidden: true, 'aria-expanded': 'false', onclick: () => setExpanded(true) }, h('span', { html: icon('chevronDown', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Expand'));
   // before the first atom exists the HUD tells the truth about what is happening ("chunking · 6 chunks"), never "0 atoms"
   const hudStage = h('span', { class: 'map-stagel in-num', hidden: true });
   const hudL = h('div', { class: 'map-hud-l' }, h('span', { class: 'map-glyph', html: icon('atom', { size: 14 }) }), hudTitle, hudCountWrap, hudStage, hudEmpty, hudScale);
-  const hudR = h('div', { class: 'map-hud-r' }, tableBtn, pinBtn);
+  const hudR = h('div', { class: 'map-hud-r' }, tableBtn, expandBtn, foldBtn, pinBtn);
   hud.append(hudL, hudR);
   const legend = h('div', { class: 'map-legend' });
   const legendNote = h('span', { class: 'map-note' }, 'Each dot is one atom, grouped by file');
-  const legendChips = h('span', { class: 'map-chips' });
+  // scrolls sideways (fade mask at the ends) instead of clipping at the pane edge; full names in title + aria
+  const legendChips = h('span', { class: 'map-chips', role: 'list', tabindex: '0', 'aria-label': 'Files on the map' });
   legend.append(legendNote, legendChips);
   const tip = h('div', { class: 'map-tip', role: 'tooltip', hidden: true });
-  const srHead = h('h3', { class: 'in-sr' }, 'Top matches for the last question');
+  // empty state: no placeholder dots (nothing is drawn that is not a real file or atom), just the promise
+  const emptyCap = h('p', { class: 'map-empty' }, h('span', { class: 'map-empty-ico', 'aria-hidden': 'true', html: icon('atom', { size: 16 }) }), 'Atoms appear here as your files are read');
+  const srHead = h('h2', { class: 'in-sr' }, 'Top matches for the last question');
   const srList = h('ol', { class: 'in-sr map-sr' }, h('li', null, 'No question asked yet.'));
   const table = h('div', { class: 'map-table', hidden: true, tabindex: '0', role: 'region', 'aria-label': 'Knowledge map as a table' });
   // shatter layer lives inside the map stage: it moves with the band and is clipped to it
   const mapFx = h('div', { class: 'map-fx', 'aria-hidden': 'true' });
-  stage.append(canvas, mapFx, table, tip);
+  stage.append(emptyCap, canvas, mapFx, table, tip);
   band.append(stage, hud, legend, srHead, srList);
   mapSlot.innerHTML = '';
   mapSlot.dataset.mode = 'full';
@@ -359,6 +463,10 @@ export function mount(ctx) {
     let N = 0, CAPN = 0;
     let X, Y, TX, TY, VX, VY, GLOW, ALPHA, BORN, SEQ, FI, R0;
     let BAND = new Float32Array(0);   // per-dot target alpha multiplier (scope)
+    // INL[i] = 1: dot i has settled on its target and is painted into its file's static layer (an offscreen canvas,
+    // blitted once per frame). Frames then touch only the dots that still move: a settled corpus of 4,000 atoms costs
+    // one drawImage per FILE, not one per atom (round-4 4x-throttle trace: per-dot drawImage was the top cost).
+    let INL = new Uint8Array(0);
     function grow(n) {
       if (n <= CAPN) return;
       const nc = Math.max(n, CAPN * 2, 512);
@@ -366,6 +474,7 @@ export function mount(ctx) {
       X = fa(X); Y = fa(Y); TX = fa(TX); TY = fa(TY); VX = fa(VX); VY = fa(VY); GLOW = fa(GLOW); ALPHA = fa(ALPHA); BORN = fa(BORN); R0 = fa(R0); BAND = fa(BAND);
       const s = new Int32Array(nc); if (SEQ) s.set(SEQ.subarray(0, N)); SEQ = s;
       const f = new Uint16Array(nc); if (FI) f.set(FI.subarray(0, N)); FI = f;
+      const il = new Uint8Array(nc); il.set(INL.subarray(0, N)); INL = il;
       CAPN = nc;
     }
     grow(512);
@@ -376,8 +485,6 @@ export function mount(ctx) {
     let mode = 'full';
     let colors = { f: [], muted: '#64748b', dim: '#94a3b8', accent: '#6366f1', accent2: '#4f46e5', floor: '#9a4508', panel: '#fff', strong: '#0f172a', line: '#cbd5e1' };
     let sprites = [];
-    let ghosts = null;               // idle ghost dots
-    let ghostAlpha = 1;
     let retrieval = null;
     let highlight = null;
     let hover = -1;
@@ -390,7 +497,23 @@ export function mount(ctx) {
     let strip = false;               // clusters laid out left→right (ribbon, peek, or a short band)
     let area = { x0: 0, y0: 0, x1: 0, y1: 0 };   // where dots may be drawn (never under the HUD or the legend)
     let chrome = { hudBottom: 36, hudRight: 180, hudRLeft: 0, legendTop: 0, legendRight: 0 };
+    let chromeStale = true;          // the HUD / legend moved (mode change): re-measure at the next clean-layout moment
     let onRetrievalEnd = null;
+    // Rects the shatter currently covers (stage coords): cluster labels keep clear of them, so a DocCard, a chunk
+    // strip or an atom chip never sits on a "name · stage" label.
+    const occl = new Map();
+    let labelArgs = null;            // [hudB, legT] of the last layout (labels can be re-placed without a full layout)
+    let frameMs = 16;                // smoothed frame time (the shatter drops to 16 chips when frames run long)
+    let lastBaseR = 0;               // dot radius the static layers were painted with
+    let ambA = 1;                    // idle field opacity (240 grey dots behind the empty-state pill; fades out on first file)
+    // the idle field: 240 grey dots in stable, hashed positions (unit square), drifting +/-0.3 px (static under reduce)
+    const AMB = new Float32Array(IDLE_DOTS * 3);
+    for (let i = 0; i < IDLE_DOTS; i++) {
+      const hh = hash32(`idle:${i}`);
+      // denser toward the middle (where clusters will form), never a uniform rectangle of noise
+      const a = ((hh & 0xffff) / 65536) * Math.PI * 2, rr = Math.pow(((hh >>> 16) & 0xffff) / 65536, 0.7);
+      AMB[i * 3] = 0.5 + Math.cos(a) * rr * 0.47; AMB[i * 3 + 1] = 0.55 + Math.sin(a) * rr * 0.42; AMB[i * 3 + 2] = (hh % 997) / 97;
+    }
 
     function readColors() {
       const cs = getComputedStyle(document.documentElement);
@@ -399,11 +522,13 @@ export function mount(ctx) {
         f: Array.from({ length: 8 }, (_, i) => v(`--f${i}`, '#6366f1')),
         muted: v('--muted', '#475569'), dim: v('--dim', '#94a3b8'), accent: v('--accent', '#6366f1'), accent2: v('--accent-2', '#4f46e5'),
         floor: v('--warn', '#9a4508'), panel: v('--panel', '#ffffff'), strong: v('--strong', '#0f172a'), line: v('--line-2', '#cbd5e1'),
-        ghost: document.documentElement.getAttribute('data-theme') === 'dark' ? 'rgba(148,163,184,.55)' : 'rgba(100,116,139,.5)',
       };
       sprites = colors.f.map((col) => makeSprite(col));
-      sprites.ghost = makeSprite(colors.ghost);
+      if (typeof labelCache !== 'undefined') labelCache.clear();
       sprites.ring = colors.f.map((col) => makeRing(col));
+      sprites.idle = makeSprite(colors.dim);
+      // the static layers were painted in the old theme's hues: repaint them (dots do not move)
+      for (const r of recs) lyStart(r, false);
       dirty = true;
     }
     // a counted atom that is not vectorized yet: a hollow ring in its file hue (fills when its vector lands)
@@ -424,7 +549,9 @@ export function mount(ctx) {
         const last = legendChips.lastElementChild;
         if (last) { const cr = legendChips.getBoundingClientRect(), lc = last.getBoundingClientRect(); lr = Math.min(cr.right, lc.right) - sr.left; }
         else if (!legendNote.hidden && legendNote.offsetParent) lr = legendNote.getBoundingClientRect().right - sr.left;
+        chromeStale = false;
         chrome = {
+          measured: true,
           hudBottom: Math.max(0, hl.bottom - sr.top), hudRight: Math.max(0, hl.right - sr.left), hudRLeft: hr.width ? hr.left - sr.left : sr.width,
           legendTop: lg.height ? Math.max(0, lg.top - sr.top + 4) : sr.height, legendRight: Math.max(0, lr),
         };
@@ -438,16 +565,25 @@ export function mount(ctx) {
       return s;
     }
 
-    function resize(box) {
-      // ResizeObserver hands us the size after layout (no forced reflow); other callers read it once
+    function resize(box, { known = false } = {}) {
+      // ResizeObserver hands us the size after layout (no forced reflow); other callers read it once.
+      // known: the caller computed the new size itself (peek): no layout read at all, the bottom-anchored legend
+      // simply moves with the bottom edge.
       const r = box && box.width ? box : stage.getBoundingClientRect();
       const w = Math.max(1, Math.round(r.width)), hh = Math.max(1, Math.round(r.height));
-      DPR = Math.min(2, window.devicePixelRatio || 1);
+      const dpr0 = DPR;
+      DPR = Math.min(LOWCPU ? 1.5 : 2, window.devicePixelRatio || 1);
       if (w === W && hh === H && canvas.width === Math.round(w * DPR)) return;
+      if (dpr0 !== DPR) for (const r of recs) lyStart(r, false);
+      const dH = hh - H;
+      // only the height changed and the chrome is known: the HUD is top-anchored and the legend bottom-anchored, so
+      // no layout read is needed (reads here would force a layout other modules' DOM writes just invalidated)
+      if (w === W && chrome.measured && !chromeStale) known = true;
       W = w; H = hh;
       canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);   // CSS sizes the element (100%)
       try { c2d.direction = 'ltr'; c2d.font = MONO10; } catch { /* ignore */ }
-      measureChrome();
+      if (known && chrome.legendTop) chrome = { ...chrome, legendTop: chrome.legendTop + dH };
+      else measureChrome();
       relayout(true);
       if (red) snapAll();
       dirty = true;
@@ -458,7 +594,8 @@ export function mount(ctx) {
     // A short band (the 56 px ribbon, its retrieval peek, or a band squeezed under ~170 px) lays the clusters out
     // left → right across the whole free width instead, so they never stack into one clump.
     function layout() {
-      const live = recs.filter((r) => r.atoms > 0 || r.dots.length);
+      // every file in flight gets a place from second 1 (a progress node until its first atoms are counted)
+      const live = recs.filter((r) => r.atoms > 0 || r.dots.length || !r.failed);
       if (!W || !H) return;
       const mob = isMobile();
       const hudB = Math.min(H * 0.5, chrome.hudBottom || 36);
@@ -470,7 +607,8 @@ export function mount(ctx) {
           // dots live to the right of the HUD text and the compact legend, left of the buttons
           x0 = Math.max(chrome.hudRight || 0, chrome.legendRight || 0) + 16;
           x1 = (chrome.hudRLeft || W) - 14;
-          y0 = 9; y1 = H - 9;
+          // inset by the dot radius plus its halo: no dot is ever cut by the ribbon's top or bottom edge
+          y0 = 13; y1 = H - 12;
           if (x1 - x0 < 60) { x0 = Math.max(8, x1 - 60); }
         } else {
           x0 = mob ? 12 : 20; x1 = W - (mob ? 12 : 20);
@@ -525,81 +663,192 @@ export function mount(ctx) {
         for (const p of P) { p.r.cx = cx0 + p.x * sc; p.r.cy = cy0 + p.y * sc; p.r.rad = p.rad * sc; p.r.seg = null; }
       }
       for (const r of recs) {
+        // a big file reads as structure, not noise: its atoms sit in sequence-order sections (sub-clusters)
+        const nd = Math.ceil(Math.max(0, r.atoms) / k);
+        r.S = (!strip && nd >= 240) ? clamp(Math.round(nd / 180), 3, 8) : 0;
+        r.sec = r.S ? sectionGeo(r.S) : null;
+        r.secPhase = (hash32(`p:${r.key}`) % 628) / 100;
         for (const i of r.dots) { const t = targetOf(r, SEQ[i]); TX[i] = t.x; TY[i] = t.y; }
         // ring slots for counted atoms (cached: draw never hashes)
         const nj = Math.ceil(Math.max(0, r.atoms) / k);
         if (!r.ring || r.ring.length < nj * 2) r.ring = new Float32Array(Math.max(nj * 2, 16));
+        const njChanged = r.nj !== nj;
         r.nj = nj;
         for (let j = 0; j < nj; j++) { const t = targetOf(r, j * k); r.ring[j * 2] = t.x; r.ring[j * 2 + 1] = t.y; }
+        // the file's static layer follows its geometry: moved targets repaint it (hard), new rings extend it (soft)
+        const sg = r.seg ? `${Math.round(r.seg.x * 4)},${Math.round(r.seg.y * 4)},${Math.round(r.seg.w * 4)},${Math.round(r.seg.h * 4)}` : '';
+        const sig = `${Math.round((r.cx || 0) * 4)}|${Math.round((r.cy || 0) * 4)}|${Math.round((r.rad || 0) * 4)}|${sg}|${r.S}|${k}|${r.S ? r.atoms : 0}|${r.secPhase}`;
+        if (sig !== r.lySig) { r.lySig = sig; lyStart(r, true); } else if (njChanged) lyStart(r, false);
       }
       placeLabels(live, hudB, legT);
-      layoutGhosts();
       dirty = true;
     }
-    // Cluster labels: biggest clusters first; each tries below / above / right / left of its cluster and must stay
-    // between the HUD and the legend row and clear of every other label. A label that fits nowhere is hidden
-    // (the legend still names every file).
+    // Cluster labels (11 px, on a contrast backdrop): biggest clusters first; each tries below / above / right / left
+    // (then the diagonals) of its cluster, each nudged up / down by a line height when the first spot is taken. A
+    // label must stay between the HUD and the legend row, clear of every other label, of every cluster's dot disc
+    // (a label never sits on dots) and of a running shatter. A label that fits nowhere is hidden (the rows and the
+    // legend still name the file). Phones put names in the legend row only (no floating labels on a 140 px map).
+    // A file still being read gets a second line: its real first lines of text, cycling, with a scan sweep.
     function placeLabels(live, hudB, legT) {
+      labelArgs = [hudB, legT];
       const placed = [];
-      for (const r of recs) r.lab = null;
-      if (mode === 'ribbon' && !peek) return;
-      const order = live.slice().sort((a, b) => b.atoms - a.atoms);
-      const top = hudB + 14, bot = legT - 4;
-      const overlaps = (x, y, w) => placed.some((p) => x < p.x + p.w + 4 && x + w + 4 > p.x && y - 11 < p.y + 5 && y + 5 > p.y - 11);
+      for (const r of recs) { r.lab = null; r.secLabs = null; }
+      if ((mode === 'ribbon' && !peek) || isMobile()) return;
+      const occ = [...occl.values()];
+      const G = 3;
+      const hit = (a, b) => a.x < b.x + b.w + G && a.x + a.w + G > b.x && a.y < b.y + b.h + G && a.y + a.h + G > b.y;
+      const hitsOcc = (b) => occ.some((o) => hit(b, o));
+      const hitsLabel = (b) => placed.some((p) => hit(b, p));
+      const discs = live.map((q) => ({ x: q.cx, y: q.cy, r: (q.seg ? Math.min(q.seg.w, q.seg.h) / 2 : isPre(q) ? preR(q) : q.rad) + 3 }));
+      const hitsDisc = (b) => discs.some((d) => {
+        const nx = clamp(d.x, b.x, b.x + b.w), ny = clamp(d.y, b.y, b.y + b.h);
+        return (nx - d.x) ** 2 + (ny - d.y) ** 2 < d.r * d.r;
+      });
+      const top = hudB + 4, bot = legT - 2;
+      const order = live.slice().sort((a, b) => b.atoms - a.atoms || a.order - b.order);
+      const textFor = (r, name) => (isPre(r) ? `${name} · ${DOING[r.phase] || 'reading'}` : `${name} · ${fmtInt(Math.max(r.atoms, 0))}`);
       for (const r of order) {
-        let name = mid(r.name, isMobile() ? 16 : 22);
-        let text = `${name} · ${fmtInt(Math.max(r.atoms, 0))}`;
-        let w = textWidth(text) + 10;
+        let name = mid(r.name, 24);
+        let text = textFor(r, name);
+        let w = Math.ceil(textWidth(text, MONO11)) + 12;
         if (strip && r.seg) {
           // one label row under the strip; shorten the name to the segment width
-          for (let n = name.length; w > r.seg.w + 6 && n > 6; n -= 3) { name = mid(r.name, n); text = `${name} · ${r.atoms}`; w = textWidth(text) + 10; }
-          if (w > r.seg.w + 6) { text = String(r.atoms); w = textWidth(text) + 10; }
-          const x = clamp(r.cx - w / 2, 4, Math.max(4, W - w - 4)), y = r.seg.y + r.seg.h + 13;
-          if (y <= bot + 1 && !overlaps(x, y, w)) { r.lab = { x, y, w, text }; placed.push({ x, y, w }); }
+          for (let n = name.length; w > r.seg.w + 6 && n > 8; n -= 2) { name = mid(r.name, n); text = textFor(r, name); w = Math.ceil(textWidth(text, MONO11)) + 12; }
+          if (w > r.seg.w + 6) { text = isPre(r) ? (DOING[r.phase] || '') : fmtInt(r.atoms); w = Math.ceil(textWidth(text, MONO11)) + 12; }
+          const b = { x: clamp(r.cx - w / 2, 4, Math.max(4, W - w - 4)), y: r.seg.y + r.seg.h + 2, w, h: 16 };
+          if (b.y + b.h <= bot + 3 && !hitsLabel(b) && !hitsOcc(b)) { r.lab = { ...b, text }; placed.push(b); }
           continue;
         }
+        const lines = isPre(r) && r.readLines && r.readLines.length ? r.readLines : null;
+        let lw = 0;
+        if (lines) lw = Math.min(236, Math.ceil(Math.max(...lines.map((l) => textWidth(l, SANS11)))) + 14);
+        w = Math.max(w, lw);
+        const hh = lines ? 32 : 16;
+        const R = (isPre(r) ? preR(r) : r.rad) + 6;
         const cands = [
-          [r.cx - w / 2, r.cy + r.rad + 15], [r.cx - w / 2, r.cy - r.rad - 7],
-          [r.cx + r.rad + 6, r.cy + 4], [r.cx - r.rad - 6 - w, r.cy + 4],
+          [r.cx - w / 2, r.cy + R], [r.cx - w / 2, r.cy - R - hh],
+          [r.cx + R, r.cy - hh / 2], [r.cx - R - w, r.cy - hh / 2],
+          [r.cx + R * 0.72, r.cy + R * 0.72], [r.cx - R * 0.72 - w, r.cy + R * 0.72],
+          [r.cx + R * 0.72, r.cy - R * 0.72 - hh], [r.cx - R * 0.72 - w, r.cy - R * 0.72 - hh],
         ];
-        for (const [cx, cy] of cands) {
-          const x = clamp(cx, 4, Math.max(4, W - w - 4));
-          const y = cy;
-          if (y < top || y > bot) continue;
-          if (overlaps(x, y, w)) continue;
-          r.lab = { x, y, w, text }; placed.push({ x, y, w });
-          break;
+        const nudges = [0, 18, -18, 36, -36];
+        let done = false;
+        for (const dy of nudges) {
+          for (const [cx, cy] of cands) {
+            const b = { x: clamp(cx, 4, Math.max(4, W - w - 4)), y: cy + dy, w, h: hh };
+            if (b.y < top || b.y + b.h > bot) continue;
+            if (hitsLabel(b) || hitsDisc(b) || hitsOcc(b)) continue;
+            r.lab = { ...b, text, lines };
+            placed.push(b); done = true;
+            break;
+          }
+          if (done) break;
+        }
+        // no room for the reading line: the plain one-line label alone, anywhere it fits
+        if (!done && lines) {
+          for (const dy of nudges) {
+            for (const [cx, cy] of cands) {
+              const w1 = Math.ceil(textWidth(text, MONO11)) + 12;
+              const b = { x: clamp(cx, 4, Math.max(4, W - w1 - 4)), y: cy + dy, w: w1, h: 16 };
+              if (b.y < top || b.y + b.h > bot || hitsLabel(b) || hitsDisc(b) || hitsOcc(b)) continue;
+              r.lab = { ...b, text, lines: null }; placed.push(b); done = true; break;
+            }
+            if (done) break;
+          }
         }
       }
+      // section labels: the 3 named sections of each big cluster (first, middle, last in reading order), on a
+      // backdrop just under their sub-cluster; dropped when they would collide with any other label
+      for (const r of order) {
+        if (!r.S || !r.secNames || !r.secNames.length || (r.rad || 0) < 46) continue;
+        const out = [];
+        for (const sn of r.secNames) {
+          const sct = Math.min(r.S - 1, Math.floor((sn.seq / Math.max(1, r.atoms)) * r.S));
+          if (out.some((o) => o.s === sct)) continue;
+          const c = secCenter(r, sct);
+          const text = `§ ${sn.text}`;
+          const w = Math.ceil(textWidth(text, MONO11)) + 12;
+          for (const yy of [c.y + c.rs + 3, c.y - c.rs - 19]) {
+            const b = { x: clamp(c.x - w / 2, 4, Math.max(4, W - w - 4)), y: yy, w, h: 16 };
+            if (b.y < top || b.y + b.h > bot || hitsLabel(b) || hitsOcc(b)) continue;
+            out.push({ s: sct, ...b, text }); placed.push(b);
+            break;
+          }
+        }
+        r.secLabs = out.length ? out : null;
+      }
+    }
+    function relabel() { if (labelArgs) { placeLabels(recs.filter((r) => r.atoms > 0 || r.dots.length || !r.failed), labelArgs[0], labelArgs[1]); dirty = true; kick(); } }
+    // Vogel-spiral sub-cluster centres in the unit disc, scaled so every sub-disc stays inside it (cached per S)
+    const secCache = new Map();
+    function sectionGeo(S) {
+      let g = secCache.get(S);
+      if (g) return g;
+      const P = Array.from({ length: S }, (_, s) => { const rr = Math.sqrt((s + 0.5) / S), a = s * GOLDEN; return { x: Math.cos(a) * rr, y: Math.sin(a) * rr }; });
+      let nn = Infinity;
+      for (let a = 0; a < S; a++) for (let b = a + 1; b < S; b++) nn = Math.min(nn, Math.hypot(P[a].x - P[b].x, P[a].y - P[b].y));
+      // sub-clusters keep a visible gutter between them: a big file reads as several dense topics, not one oval
+      const rs = nn * 0.38;
+      const outer = Math.max(...P.map((p) => Math.hypot(p.x, p.y))) + rs;
+      g = { c: P.map((p) => ({ x: p.x / outer, y: p.y / outer })), rs: rs / outer };
+      secCache.set(S, g);
+      return g;
+    }
+    function unitToStage(r, ux, uy) {
+      if (r.seg) return { x: r.seg.x + r.seg.w / 2 + ux * (r.seg.w / 2 - 2), y: r.seg.y + r.seg.h / 2 + uy * (r.seg.h / 2 - 2) };
+      const R = r.rad || 10;
+      return { x: (r.cx || W / 2) + ux * R, y: (r.cy || H / 2) + uy * R };
+    }
+    function secCenter(r, s) {
+      const g = r.sec, c = g.c[s], ph = r.secPhase || 0;
+      const ux = c.x * Math.cos(ph) - c.y * Math.sin(ph), uy = c.x * Math.sin(ph) + c.y * Math.cos(ph);
+      const p = unitToStage(r, ux, uy);
+      return { x: p.x, y: p.y, rs: g.rs * (r.rad || 10) };
     }
     function targetOf(r, seq) {
       const hsh = hash32(`${r.key}:${seq}`);
       const u = (hsh & 0xffff) / 65536, v = ((hsh >>> 16) & 0xffff) / 65536;
-      if (r.seg) {
-        // an elliptical blob inscribed in the file's segment (reads as a cluster, not a rectangle of noise)
-        const a = u * Math.PI * 2, rr = Math.sqrt(v);
-        return { x: r.seg.x + r.seg.w / 2 + Math.cos(a) * rr * (r.seg.w / 2 - 2), y: r.seg.y + r.seg.h / 2 + Math.sin(a) * rr * (r.seg.h / 2 - 2) };
+      const a = u * Math.PI * 2;
+      let ux, uy;
+      if (r.sec && r.atoms > 0) {
+        // sequence order: atom #seq lives in section floor(seq / atoms · S), jittered inside that sub-disc
+        const s = Math.min(r.S - 1, Math.floor((seq / r.atoms) * r.S));
+        const g = r.sec, c = g.c[s], ph = r.secPhase || 0;
+        const cx = c.x * Math.cos(ph) - c.y * Math.sin(ph), cy = c.x * Math.sin(ph) + c.y * Math.cos(ph);
+        // a dense core with a soft edge (radius ~ v^0.68, not the area-uniform v^0.5)
+        const rr = Math.pow(v, 0.68) * g.rs;
+        ux = cx + Math.cos(a) * rr; uy = cy + Math.sin(a) * rr;
+      } else {
+        // an (elliptical, in a strip segment) density blob: denser core, soft edge, never a uniform disc
+        const rr = Math.pow(v, 0.62);
+        ux = Math.cos(a) * rr; uy = Math.sin(a) * rr;
       }
-      const a = u * Math.PI * 2, rr = Math.sqrt(v) * (r.rad || 10);
-      return { x: (r.cx || W / 2) + Math.cos(a) * rr, y: (r.cy || H / 2) + Math.sin(a) * rr };
+      return unitToStage(r, ux, uy);
     }
-    function layoutGhosts() {
-      if (!ghosts) {
-        const n = 240;
-        ghosts = { n, x: new Float32Array(n), y: new Float32Array(n), u: new Float32Array(n), v: new Float32Array(n) };
-        for (let i = 0; i < n; i++) { const hh = hash32(`ghost:${i}`); ghosts.u[i] = (hh & 0xffff) / 65536; ghosts.v[i] = ((hh >>> 16) & 0xffff) / 65536; }
-      }
-      for (let i = 0; i < ghosts.n; i++) {
-        const a = ghosts.u[i] * Math.PI * 2, rr = Math.sqrt(ghosts.v[i]);
-        const cl = i % 5, ca = cl * GOLDEN, cd = cl ? Math.sqrt(cl) * 0.22 : 0;
-        ghosts.x[i] = W / 2 + (Math.cos(ca) * cd * 1.6 + Math.cos(a) * rr * 0.16) * Math.min(W, H * 1.8) * 0.6;
-        ghosts.y[i] = H * 0.54 + (Math.sin(ca) * cd + Math.sin(a) * rr * 0.16) * Math.min(W / 1.8, H) * 0.95;
-      }
+    function setOccluder(id, rect) {
+      if (rect) occl.set(id, rect); else if (!occl.delete(id)) return;
+      relabel();
     }
-
+    function muteLabel(key, on) { const r = recByKey.get(key); if (r && r.muted !== !!on) { r.muted = !!on; r.mutedT = performance.now(); dirty = true; kick(); } }
+    function setSectionNames(key, names) { const r = recByKey.get(key); if (r) { r.secNames = names; relabel(); } }
+    /** The file's real first lines (from its own text), shown under its ring while it is extracted. */
+    function setReading(key, lines) { const r = recByKey.get(key); if (r && (r.readLines || []).join('\n') !== (lines || []).join('\n')) { r.readLines = lines && lines.length ? lines.slice(0, 3) : null; relabel(); } }
+    /** Dot mass on the left / right half of the map (where a shatter's chips would cover the fewest dots). */
+    function halfMass() {
+      let l = 0, rr = 0;
+      for (const r of recs) { if (!r.cx) continue; const m = Math.max(8, r.atoms) * (r.dots.length || isPre(r) ? 1 : 0.3); if (r.cx < W / 2) l += m; else rr += m; }
+      return { left: l, right: rr };
+    }
+    function sectionSeqs(key) {
+      const r = recByKey.get(key);
+      if (!r || !r.S || !r.atoms) return null;
+      const S = r.S, pick = S >= 3 ? [0, Math.floor((S - 1) / 2), S - 1] : [0];
+      return pick.map((s) => Math.min(r.atoms - 1, Math.ceil((s * r.atoms) / S)));
+    }
     // ---- file sync (atoms, vectorized, enabled) → births at the real rate
     function sync(files) {
       let total = 0;
+      let readChanged = false;
       const seen = new Set();
       files.forEach((f, idx) => {
         const key = f.id || f.localId;
@@ -624,8 +873,13 @@ export function mount(ctx) {
           if (!red && !restored.has(f.localId) && !r.halo) r.halo = now + 150;
         }
         r.failed = f.phase === 'failed';
+        r.phase = f.phase;
+        // real progress for the pre-atom node: upload bytes, then the stages that really happened
+        r.prog = fileProgress(f);
         r.enabled = isEnabled(f);
         r.instant = r.instant || restored.has(f.localId);
+        const rl = reading.get(f.localId) || null;
+        if (rl !== r.readSrc) { r.readSrc = rl; r.readLines = rl ? rl.slice(0, 3) : null; readChanged = true; }
         // Born dots follow the real vectorized count. Under reduced motion every counted atom is painted at once
         // (static), so the map never says less than the HUD and the rows.
         const real = r.ready ? r.atoms : (red && RANK[f.phase] >= RANK.atomized) ? r.atoms : (f.phase === 'vectorizing' || f.phase === 'atomized') ? Math.min(Number(f.vectorized) || 0, r.atoms) : 0;
@@ -635,6 +889,7 @@ export function mount(ctx) {
       });
       // files that disappeared (removed): drop their dots
       for (const r of recs.slice()) if (!seen.has(r.key)) removeRec(r);
+      wantTotal = recs.reduce((acc, r) => acc + Math.ceil(Math.max(0, r.atoms) / k), 0);
       recs.sort((a, b) => a.order - b.order);
       recs.forEach((r, i) => { r.idx = i; });
       for (let i = 0; i < N; i++) { const r = recByKey.get(fiKey[FI[i]]); if (r) FI[i] = r.idx; }
@@ -654,17 +909,26 @@ export function mount(ctx) {
         }
       }
       relayout();
+      if (readChanged) relabel();
       for (let i = 0; i < N; i++) { const r = recs[FI[i]]; BAND[i] = r && r.enabled ? 1 : 0.05; }
       dirty = true;
       kick();
       return total;
     }
-    // layout only when something it depends on changed (an event that only moves `vectorized` costs nothing)
-    let layoutSig = '';
+    // Layout only when something it depends on changed (an event that only moves `vectorized` costs nothing).
+    // Structural changes (size, mode, a new file, a file's first atoms) lay out now; a count that merely grew is
+    // laid out once per batch in an idle callback, never inside the frame loop.
+    let layoutSig = '', shapeSig = '', idleLayout = 0;
+    let wantTotal = 0;
     function relayout(force = false) {
-      const sig = `${W}x${H}|${mode}|${peek}|${k}|${recs.map((r) => `${r.key}:${r.atoms}:${r.dots.length ? 1 : 0}`).join(',')}`;
+      const shape = `${W}x${H}|${mode}|${peek}|${k}|${recs.map((r) => `${r.key}:${r.atoms > 0 || r.dots.length ? 1 : 0}:${r.failed ? 'x' : isPre(r) ? r.phase : ''}`).join(',')}`;
+      const sig = `${shape}|${recs.map((r) => r.atoms).join(',')}`;
       if (!force && sig === layoutSig) return;
-      layoutSig = sig;
+      if (!force && shape === shapeSig) {
+        if (!idleLayout) idleLayout = ric(() => { idleLayout = 0; if (!destroyed) relayout(true); }, 180);
+        return;
+      }
+      layoutSig = `${shape}|${recs.map((r) => r.atoms).join(',')}`; shapeSig = shape;
       layout();
     }
     let fiKey = [];
@@ -679,7 +943,7 @@ export function mount(ctx) {
       if (retrieval) endRetrieval();
     }
     function compact(keep) {
-      const fields = [X, Y, TX, TY, VX, VY, GLOW, ALPHA, BORN, R0, BAND, SEQ, FI];
+      const fields = [X, Y, TX, TY, VX, VY, GLOW, ALPHA, BORN, R0, BAND, SEQ, FI, INL];
       keep.forEach((src, dst) => { if (src !== dst) for (const a of fields) a[dst] = a[src]; });
       N = keep.length;
       for (const r of recs) { r.dots = []; r.bySeq.clear(); }
@@ -691,9 +955,9 @@ export function mount(ctx) {
       for (const r of recs) { r.prevBorn = r.dots.length * (r.k || 1); r.dots = []; r.bySeq.clear(); r.pending = 0; r.k = k; }
       N = 0;
       for (const r of recs) { const n = Math.ceil(Math.min(r.prevBorn, r.real) / k); birthNow(r, n, true); }
+      for (const r of recs) lyStart(r, true);
       hudScale.hidden = k <= 1;
       hudScale.textContent = k > 1 ? `· 1 dot = ${k} atoms` : '';
-      legendNote.textContent = k > 1 ? `Each dot is ${k} atoms, grouped by file` : 'Each dot is one atom, grouped by file';
     }
     function nextSeqDot(r) {
       // lowest dot index not yet born and not reserved by a running shatter
@@ -712,7 +976,7 @@ export function mount(ctx) {
       X[i] = x ?? r.cx; Y[i] = y ?? r.cy; TX[i] = t.x; TY[i] = t.y;
       const a = (hash32(`v:${r.key}:${seq}`) & 0xffff) / 65536 * Math.PI * 2;
       VX[i] = still ? 0 : Math.cos(a) * 60; VY[i] = still ? 0 : Math.sin(a) * 60;
-      GLOW[i] = 0; ALPHA[i] = 1; BORN[i] = still ? -1e9 : performance.now(); R0[i] = big ? 3 : 0; SEQ[i] = seq; FI[i] = r.idx;
+      GLOW[i] = 0; ALPHA[i] = 1; BORN[i] = still ? -1e9 : performance.now(); R0[i] = big ? 3 : 0; SEQ[i] = seq; FI[i] = r.idx; INL[i] = 0;
       BAND[i] = r.enabled ? 1 : 0.05;
       if (red || still) { X[i] = TX[i]; Y[i] = TY[i]; VX[i] = VY[i] = 0; }
       r.dots.push(i); r.bySeq.set(seq, i);
@@ -797,7 +1061,8 @@ export function mount(ctx) {
       dirty = true; kick();
     }
     function relax() { if (retrieval && !retrieval.relaxT) { retrieval.relaxT = performance.now(); kick(); } }
-    function endRetrieval() { retrieval = null; if (onRetrievalEnd) { const fn = onRetrievalEnd; queueMicrotask(() => fn()); } }
+    // the peek's DOM work runs in a task after the frame, never inside the map's rAF callback
+    function endRetrieval() { retrieval = null; if (onRetrievalEnd) { const fn = onRetrievalEnd; setTimeout(() => fn(), 0); } }
     function isRetrieving() { return !!retrieval; }
     function fastForward() { if (retrieval) { retrieval.t0 -= 3000; retrieval.ff = true; dirty = true; kick(); } }
     function setHighlight(d) {
@@ -816,44 +1081,150 @@ export function mount(ctx) {
       dirty = true; kick();
     }
 
+    // ---- static layers (one offscreen canvas per file): settled dots + not-yet-vectorized rings, painted once
+    function lyBox(r) {
+      const pad = (lastBaseR || 2.7) + 7;
+      if (r.seg) return { x0: Math.floor(r.seg.x - pad), y0: Math.floor(r.seg.y - pad), w: Math.ceil(r.seg.w + pad * 2), h: Math.ceil(r.seg.h + pad * 2) };
+      const R = (r.rad || 10) + pad;
+      return { x0: Math.floor((r.cx || 0) - R), y0: Math.floor((r.cy || 0) - R), w: Math.ceil(R * 2), h: Math.ceil(R * 2) };
+    }
+    function lyCanvas(L, n, box) {
+      let c = L.c[n];
+      if (!c) { c = L.c[n] = document.createElement('canvas'); L.g[n] = c.getContext('2d'); }
+      const pw = Math.max(1, Math.ceil(box.w * DPR)), ph = Math.max(1, Math.ceil(box.h * DPR));
+      if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph; } else L.g[n].clearRect(0, 0, pw, ph);
+      L.g[n].setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    /** (Re)build a file's layer. hard: clear what is on screen now (targets moved: every dot springs live until it
+     *  settles again); soft: keep showing the current layer and swap when the new one is complete (theme, ring
+     *  cleanup). The build itself is time-sliced (lyBuild) so it never makes one long frame. */
+    function lyStart(r, hard) {
+      if (!W || !H || !r) { if (r) r.ly = null; return; }
+      const box = lyBox(r);
+      let L = r.ly;
+      if (!L) L = r.ly = { c: [null, null], g: [null, null], f: 0, x0: 0, y0: 0, w: 0, h: 0, dpr: 0, bj: 0, building: false, rings: false, drewRing: false };
+      const moved = L.x0 !== box.x0 || L.y0 !== box.y0 || L.w !== box.w || L.h !== box.h || L.dpr !== DPR;
+      if (hard || moved) {
+        for (const i of r.dots) INL[i] = 0;
+        lyCanvas(L, L.f, box);
+        L.rings = false;
+      }
+      L.x0 = box.x0; L.y0 = box.y0; L.w = box.w; L.h = box.h; L.dpr = DPR;
+      lyCanvas(L, 1 - L.f, box);
+      L.bj = -1; L.building = true; L.drewRing = false;
+      dirty = true;
+    }
+    function lyBuild(budget) {
+      const br = lastBaseR, rr = br + 0.6;
+      for (const r of recs) {
+        const L = r.ly;
+        if (!L || !L.building) continue;
+        const g = L.g[1 - L.f];
+        const hue = (r.hue || 0) % 8, sp = sprites[hue], rs = sprites.ring && sprites.ring[hue];
+        if (L.bj < 0) {
+          L.bj = 0;
+          // a big file's topics: a faint halo per sequence-order section, so 15k atoms read as dense topic clusters
+          if (r.S && r.sec && !strip && (r.rad || 0) >= 40) {
+            g.globalAlpha = 1; g.fillStyle = colors.f[hue]; g.strokeStyle = colors.f[hue]; g.lineWidth = 1;
+            for (let sct = 0; sct < r.S; sct++) {
+              const c = secCenter(r, sct), rad = c.rs + br + 3;
+              g.globalAlpha = 0.07; g.beginPath(); g.arc(c.x - L.x0, c.y - L.y0, rad, 0, Math.PI * 2); g.fill();
+              g.globalAlpha = 0.28; g.stroke();
+            }
+          }
+        }
+        const nj = r.nj || 0, ring = r.ring;
+        while (L.bj < nj && budget > 0) {
+          const j = L.bj++; budget--;
+          const i = r.bySeq.get(j * k);
+          if (i != null) {
+            // born: a settled dot is painted here; one still in flight is drawn live and painted when it lands
+            if (INL[i]) { g.globalAlpha = 1; g.drawImage(sp, TX[i] - L.x0 - br, TY[i] - L.y0 - br, br * 2, br * 2); }
+            continue;
+          }
+          if (red || !rs || !ring) continue;
+          g.globalAlpha = 0.62; g.drawImage(rs, ring[j * 2] - L.x0 - rr, ring[j * 2 + 1] - L.y0 - rr, rr * 2, rr * 2);
+          L.drewRing = true;
+        }
+        if (L.bj >= nj) { L.f = 1 - L.f; L.building = false; L.rings = L.drewRing; dirty = true; }
+        if (budget <= 0) return 0;
+      }
+      return budget;
+    }
+    function lyPaint(r, i) {
+      const L = r.ly;
+      if (!L) return false;
+      const br = lastBaseR, sp = sprites[(r.hue || 0) % 8];
+      const x = TX[i] - L.x0 - br, y = TY[i] - L.y0 - br;
+      const gf = L.g[L.f];
+      gf.globalAlpha = 1; gf.drawImage(sp, x, y, br * 2, br * 2);
+      if (L.building && L.bj > Math.floor(SEQ[i] / k)) { const gb = L.g[1 - L.f]; gb.globalAlpha = 1; gb.drawImage(sp, x, y, br * 2, br * 2); }
+      INL[i] = 1;
+      return true;
+    }
+    // big corpora get finer dots, so dense topic clusters keep visible texture instead of becoming solid discs
+    function dotR() { return (wantTotal > 1500 && !strip ? (isMobile() ? 1.4 : 1.6) : (isMobile() ? 1.9 : 2.25)) + (wantTotal < 400 && !strip ? 0.45 : 0); }
+
     // ---- frame
     function step(t, dt) {
       if (destroyed) return false;
       if (!visible) return true;
+      if (dt > 0 && dt < 250) frameMs = frameMs * 0.85 + dt * 0.15;
       const s = Math.min(0.05, (dt || 16) / 1000);
+      const now = performance.now();
       let moving = false;
       const STIFF = 92, DAMP = 14;
+      const br = dotR();
+      if (br !== lastBaseR) { lastBaseR = br; for (const r of recs) lyStart(r, true); }
       for (let i = 0; i < N; i++) {
+        if (INL[i]) continue;                         // settled and painted: costs nothing per frame
         const dx = TX[i] - X[i], dy = TY[i] - Y[i];
-        if (Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05 || Math.abs(VX[i]) > 0.5 || Math.abs(VY[i]) > 0.5) {
+        if (Math.abs(dx) > 0.3 || Math.abs(dy) > 0.3 || Math.abs(VX[i]) > 3 || Math.abs(VY[i]) > 3) {
           VX[i] += (STIFF * dx - DAMP * VX[i]) * s; VY[i] += (STIFF * dy - DAMP * VY[i]) * s;
           X[i] += VX[i] * s; Y[i] += VY[i] * s;
           moving = true;
         } else { X[i] = TX[i]; Y[i] = TY[i]; VX[i] = VY[i] = 0; }
         if (R0[i] > 0) { R0[i] = Math.max(0, R0[i] - s * 3); moving = true; }
-        const target = BAND[i];
-        if (ALPHA[i] !== target) { ALPHA[i] += (target - ALPHA[i]) * Math.min(1, s * 10); if (Math.abs(target - ALPHA[i]) < 0.01) ALPHA[i] = target; moving = true; }
+        if (X[i] === TX[i] && Y[i] === TY[i] && R0[i] === 0 && now - BORN[i] >= 260) {
+          const r = recs[FI[i]];
+          if (r && lyPaint(r, i)) moving = true;      // one more frame: the live copy hands over to the layer
+        } else moving = true;
       }
-      // births at the real vectorized rate
+      // per-file scope alpha (a switched-off file fades to .05 and loses hover)
+      for (const r of recs) {
+        const want = r.enabled ? 1 : 0.05;
+        if (r.la == null) r.la = want;
+        if (r.la !== want) { r.la += (want - r.la) * Math.min(1, s * 10); if (Math.abs(want - r.la) < 0.01) r.la = want; moving = true; }
+        // every counted atom has its dot now: drop the hollow rings from the layer (one soft rebuild)
+        const L = r.ly;
+        if (L && !L.building && L.rings && r.dots.length >= (r.nj || 0) && !r.pending) lyStart(r, false);
+      }
+      // births at the real vectorized rate, at most 240 per frame across all files (a huge vectorized delta is
+      // drawn in over a few frames, never in one long one)
+      let budget = 240;
       for (const r of recs) {
         if (r.pending > 0 && !r.hold) {
           r.acc += r.rate * s;
-          let n = Math.floor(r.acc);
-          if (n > 0) { r.acc -= n; n = Math.min(n, r.pending); r.pending -= n; for (let c = 0; c < n; c++) birth(r, nextSeqDot(r), r.cx + (Math.random() - 0.5) * 4, r.cy + (Math.random() - 0.5) * 4); moving = true; }
+          let n = Math.min(Math.floor(r.acc), budget);
+          if (n > 0) { r.acc -= n; n = Math.min(n, r.pending); r.pending -= n; budget -= n; for (let c = 0; c < n; c++) birth(r, nextSeqDot(r), r.cx + (Math.random() - 0.5) * 4, r.cy + (Math.random() - 0.5) * 4); moving = true; }
         } else r.acc = 0;
       }
-      // the idle placeholder cloud leaves as soon as the first real atom is counted (rings/dots take its place)
-      const hasRecs = recs.some((r) => r.atoms > 0 || r.dots.length);
-      if (red) { const ga = hasRecs ? 0 : 1; if (ga !== ghostAlpha) { ghostAlpha = ga; moving = true; } }
-      else if (hasRecs && ghostAlpha > 0) { ghostAlpha = Math.max(0, ghostAlpha - s * 3.2); moving = true; }
-      else if (!hasRecs && ghostAlpha < 1) { ghostAlpha = Math.min(1, ghostAlpha + s * 2.5); moving = true; }
-      const now = performance.now();
+      // layer builds: at most ~1,200 sprite blits per frame (a 4,000-atom file repaints over a few frames)
+      if (recs.some((r) => r.ly && r.ly.building)) { lyBuild(frameMs > 20 ? 600 : 1200); moving = true; }
+      // the idle field fades out under the first file (and back if every file is removed)
+      const ambWant = recs.length ? 0 : 1;
+      if (ambA !== ambWant) { ambA += (ambWant - ambA) * Math.min(1, s * (red ? 100 : 5)); if (Math.abs(ambWant - ambA) < 0.01) ambA = ambWant; moving = true; }
+      // files still being read (no atom counted yet) show a live progress node: its comet and the reading line are
+      // the only things that move between real events (the shimmer rule); under reduce the node is static
+      const reading = !red && recs.some(isPre);
       const busy = !!document.documentElement.dataset.signature;
       const drift = !red && !busy;
-      const animating = moving || dirty || (retrieval && !retrieval.done) || recs.some((r) => (r.halo && now - r.halo < 400) || (r.labelT > 0 && now - r.labelT < 400)) || (highlight && now - highlight.t0 < 300);
-      // idle drift redraws at ~30 fps; nothing to animate (reduce, busy, still) → no redraw at all
-      // the ±0.3 px idle drift only needs ~20 fps; nothing to animate (reduce, busy, still) → no redraw at all
-      if (animating || (drift && now - lastDraw > 50)) { draw(now, drift); lastDraw = now; dirty = false; }
+      const animating = moving || dirty || reading || (retrieval && !retrieval.done) || recs.some((r) => (r.halo && now - r.halo < 400) || (r.labelT > 0 && now - r.labelT < 400) || (r.mutedT && now - r.mutedT < 220)) || (highlight && now - highlight.t0 < 300);
+      // the +/-0.3 px idle drift only needs ~20 fps; nothing to animate (reduce, busy, still) -> no redraw at all
+      // phones with the Builder tab in front: the pane is hidden, so nothing is drawn (state keeps advancing)
+      if (isMobile() && appEl && appEl.dataset.tab === 'setup') { dirty = true; return true; }
+      // the drift needs ~20 fps with dots, ~12 fps for the idle field alone; still + nothing to animate -> no redraw
+      if (animating || (drift && (N || ambA > 0) && now - lastDraw > (N ? 50 : 80))) { draw(now, drift); lastDraw = now; dirty = false; }
       return true;
     }
     function kick() { if (!removeLoop && !destroyed) removeLoop = motion.loop.add((t, dt) => { const keep = step(t, dt); if (!keep) removeLoop = null; return keep; }); }
@@ -863,15 +1234,19 @@ export function mount(ctx) {
       g.setTransform(DPR, 0, 0, DPR, 0, 0);
       g.clearRect(0, 0, W, H);
       const tt = now * 0.0011;
-      // ghost field (empty state)
-      if (ghostAlpha > 0 && ghosts) {
-        g.globalAlpha = 0.55 * ghostAlpha;
-        const gs = sprites.ghost;
-        for (let i = 0; i < ghosts.n; i++) {
-          const ox = drift ? Math.sin(tt + i * 1.7) * 0.3 : 0, oy = drift ? Math.cos(tt * 0.9 + i * 2.3) * 0.3 : 0;
-          g.drawImage(gs, ghosts.x[i] + ox - 1.6, ghosts.y[i] + oy - 1.6, 3.2, 3.2);
+      // idle field (empty map): 240 grey dots drifting +/-0.3 px behind the "Atoms appear here" pill
+      if (ambA > 0.01 && sprites.idle) {
+        const ar = 1.5, ax0 = 8, ay0 = (chrome.hudBottom || 36) + 4, aw = Math.max(1, W - 16), ah = Math.max(1, (chrome.legendTop || H) - ay0 - 4);
+        g.globalAlpha = 0.5 * ambA;
+        for (let i = 0; i < IDLE_DOTS; i++) {
+          const ph = AMB[i * 3 + 2];
+          const ox = drift ? Math.sin(tt + ph) * 0.3 : 0, oy = drift ? Math.cos(tt * 0.93 + ph * 1.7) * 0.3 : 0;
+          g.drawImage(sprites.idle, ax0 + AMB[i * 3] * aw + ox - ar, ay0 + AMB[i * 3 + 1] * ah + oy - ar, ar * 2, ar * 2);
         }
+        g.globalAlpha = 1;
       }
+      // files being read: a ring per file that fills with its real progress (bytes, then stages), never ahead of it
+      for (const r of recs) if (isPre(r)) drawPre(g, r, now);
       // retrieval state
       const R = retrieval;
       let dimAll = 1, relaxK = 0;
@@ -891,45 +1266,37 @@ export function mount(ctx) {
         dimAll = dimAll + (1 - dimAll) * relaxK;
         if (relaxK >= 1) { R.done = true; endRetrieval(); }
       }
-      const baseR = (isMobile() ? 1.9 : 2.25) + (N < 400 && !strip ? 0.45 : 0);
+      const baseR = lastBaseR || dotR();
       // short bands clip the field to the dot area: nothing ever draws under the HUD text or the legend
       const clipOn = strip;
       if (clipOn) { g.save(); g.beginPath(); g.rect(area.x0 - 4, area.y0 - 4, area.x1 - area.x0 + 8, area.y1 - area.y0 + 8); g.clip(); }
-      // counted-but-not-yet-vectorized atoms: hollow rings in the file hue (the truth between "atoms 16" and "vectors 0/16")
-      if (!red && sprites.ring) {
-        const rr = baseR + 0.6;
-        for (const rec of recs) {
-          if (!rec.nj || !rec.ring) continue;
-          const born = rec.dots.length;
-          if (born >= rec.nj) continue;
-          const sp = sprites.ring[(rec.hue || 0) % 8];
-          let a = 0.62 * (rec.enabled ? 1 : 0.08);
-          if (R) a *= dimAll;
-          if (a <= 0.01) continue;
-          g.globalAlpha = a;
-          const ring = rec.ring;
-          for (let j = 0; j < rec.nj; j++) {
-            if (rec.bySeq.has(j * k)) continue;
-            g.drawImage(sp, ring[j * 2] - rr, ring[j * 2 + 1] - rr, rr * 2, rr * 2);
-          }
-        }
+      // per-file drift offset: a file's layer and its live dots move together (no seam when a dot hands over)
+      const offX = (r) => (drift ? Math.sin(tt + r.idx * 1.37) * 0.3 : 0), offY = (r) => (drift ? Math.cos(tt * 0.93 + r.idx * 2.11) * 0.3 : 0);
+      // static layers: settled dots + hollow rings (counted atoms whose vector has not landed yet)
+      for (const r of recs) {
+        const L = r.ly;
+        if (!L || !L.c[L.f]) continue;
+        let a = r.la ?? 1;
+        if (R) a *= dimAll;
+        if (a <= 0.01) continue;
+        g.globalAlpha = a;
+        g.drawImage(L.c[L.f], L.x0 + offX(r), L.y0 + offY(r), L.w, L.h);
       }
-      // dots
+      // live dots (being born, springing, or waiting for their layer)
       for (let i = 0; i < N; i++) {
-        const f = FI[i];
-        const rec = recs[f];
+        if (INL[i]) continue;
+        const rec = recs[FI[i]];
         if (!rec) continue;
+        if (hitSet && hitSet.has(i)) continue;            // hits are drawn on top
         const sp = sprites[(rec.hue || 0) % 8];
-        let a = ALPHA[i];
+        let a = rec.la ?? 1;
         const age = now - BORN[i];
         let rad = baseR + R0[i];
         if (age < 260) { const k3 = easeOut(age / 260); rad *= k3; a *= k3; }
-        if (hitSet && hitSet.has(i)) continue;            // hits are drawn on top
         if (R) a *= dimAll;
-        const ox = drift ? Math.sin(tt + i * 1.37) * 0.3 : 0, oy = drift ? Math.cos(tt * 0.93 + i * 2.11) * 0.3 : 0;
         if (a <= 0.01) continue;
         g.globalAlpha = a;
-        g.drawImage(sp, X[i] + ox - rad, Y[i] + oy - rad, rad * 2, rad * 2);
+        g.drawImage(sp, X[i] + offX(rec) - rad, Y[i] + offY(rec) - rad, rad * 2, rad * 2);
       }
       g.globalAlpha = 1;
       // retrieval overlay (inside the clip: probe lines never leave the dot area)
@@ -938,24 +1305,46 @@ export function mount(ctx) {
       // cluster halos + labels
       {
         for (const r of recs) {
-          if (!r.dots.length) continue;
-          if (r.halo) {
+          const pre = isPre(r);
+          if (!r.dots.length && !pre) continue;
+          if (r.halo && r.dots.length) {
             const e = (now - r.halo) / 300;
             if (e >= 0 && e <= 1.3 && !red) {
-              const k4 = e <= 1 ? easeOut(e) : 1;
+              const k4 = 1 + 0.15 * (e <= 1 ? easeOut(e) : 1);
               g.globalAlpha = (1 - clamp(e, 0, 1)) * 0.5;
               g.strokeStyle = colors.f[r.hue % 8]; g.lineWidth = 1.5;
-              g.beginPath(); g.arc(r.cx, r.cy, (r.rad + 4) * (1 + 0.15 * k4), 0, Math.PI * 2); g.stroke();
+              g.beginPath();
+              // the halo hugs the cluster's real footprint (an ellipse in a strip segment, a disc otherwise)
+              if (r.seg && g.ellipse) g.ellipse(r.cx, r.cy, (r.seg.w / 2 + 3) * k4, (r.seg.h / 2 + 3) * k4, 0, 0, Math.PI * 2);
+              else g.arc(r.cx, r.cy, (r.rad + 3) * k4, 0, Math.PI * 2);
+              g.stroke();
             }
           }
-          if (r.labelT && r.lab && !R) {
-            const la = r.labelT < 0 ? 1 : clamp((now - r.labelT) / 300, 0, 1);
-            if (la <= 0) continue;
-            g.font = MONO10;
-            const { x: lx, y: ly, w: lw, text } = r.lab;
-            g.globalAlpha = la * 0.88; g.fillStyle = colors.panel;
-            roundRect(g, lx, ly - 10, lw, 15, 5); g.fill();
-            g.globalAlpha = la; g.fillStyle = colors.muted; g.fillText(text, lx + 5, ly);
+          if ((r.labelT || pre) && r.lab && !R) {
+            let la = pre || r.labelT < 0 ? 1 : clamp((now - r.labelT) / 300, 0, 1);
+            // a file whose chips are in flight keeps its label out of the way (180 ms fade), then brings it back
+            if (r.mutedT) { const mk = red ? 1 : clamp((now - r.mutedT) / 180, 0, 1); la *= r.muted ? 1 - mk : mk; }
+            if (la <= 0.01) continue;
+            const { x: lx, y: ly, w: lw, text, lines } = r.lab;
+            g.globalAlpha = la;
+            g.drawImage(labelSprite('c', text, lw, 16, !!lines), lx, ly, lw, lines ? 32 : 16);
+            if (lines && pre) {
+              // the file's real first lines, one at a time (1.6 s each), with a scan sweep across the line being read
+              const n = lines.length, li = red ? 0 : Math.floor(now / 1600) % n;
+              const ph = red ? 1 : (now % 1600) / 1600;
+              const fade = red ? 1 : clamp(ph / 0.12, 0, 1) * clamp((1 - ph) / 0.1, 0, 1);
+              g.globalAlpha = la * fade;
+              g.drawImage(labelSprite('x', lines[li], lw, 15), lx, ly + 16, lw, 15);
+              if (!red) {
+                const sx = lx - 46 + ph * (lw + 46);
+                g.save(); g.beginPath(); g.rect(sx, ly + 16, 46, 15); g.clip();
+                g.globalAlpha = la * fade;
+                g.drawImage(labelSprite('xh', lines[li], lw, 15), lx, ly + 16, lw, 15);
+                g.restore();
+              }
+            }
+            g.globalAlpha = la;
+            if (r.secLabs && r.ready) for (const sl of r.secLabs) g.drawImage(labelSprite('s', sl.text, sl.w, 16), sl.x, sl.y, sl.w, 16);
           }
         }
       }
@@ -1020,9 +1409,25 @@ export function mount(ctx) {
         g.restore();
       }
       // hits: ignite in rank order (40 ms stagger), radius 2.5 → 6, mono labels; below floor: hollow floor rings
-      g.font = MONO10;
+      // (the context font is set once per canvas resize; assigning it per frame forces a style resolve)
       const labRects = [];
       let labeled = 0;
+      // score labels: none in a narrow strip (the dots alone carry the beam there; the expanded map and the proof
+      // card show the numbers), top 3 on phones, 6 otherwise. A label never covers a hit dot, never sits within
+      // 12 px of a higher-ranked labelled hit, and takes a short leader line when it has to stand off its dot.
+      const maxLab = strip && W < 600 ? 0 : isMobile() ? 3 : strip ? 4 : 6;
+      const keptPts = R.refused ? [] : R.hits.filter((x) => x.kept).map((x) => ({ i: x.i, x: X[x.i], y: Y[x.i] }));
+      const labDots = [];
+      const coversDot = (lx, ly, w, self) => keptPts.some((p) => {
+        if (p.i === self) return false;
+        const nx = clamp(p.x, lx - 4, lx + w + 4), ny = clamp(p.y, ly - 10, ly + 4);
+        return (nx - p.x) ** 2 + (ny - p.y) ** 2 < 49;
+      });
+      const coversCluster = (lx, ly, w) => recs.some((q) => {
+        if (!q.dots.length || q.seg) return false;
+        const nx = clamp(q.cx, lx - 4, lx + w + 4), ny = clamp(q.cy, ly - 10, ly + 4), rr = (q.rad || 0) + baseR;
+        return (nx - q.cx) ** 2 + (ny - q.cy) ** 2 < rr * rr;
+      });
       R.hits.forEach((x, n) => {
         const i = x.i; const rec = recs[FI[i]];
         const col = colors.f[(rec?.hue || 0) % 8];
@@ -1036,17 +1441,35 @@ export function mount(ctx) {
           g.globalAlpha = 1; g.fillStyle = col; g.beginPath(); g.arc(X[i], Y[i], rad, 0, Math.PI * 2); g.fill();
           if (red || x.cited) { g.strokeStyle = colors.strong; g.lineWidth = 1.25; g.beginPath(); g.arc(X[i], Y[i], rad + 2, 0, Math.PI * 2); g.stroke(); }
           const label = x.sim != null ? String(Math.round(x.sim * 100)) : '';
-          if (label && labeled < (strip ? 4 : 6) && ik > 0.4 && fade > 0) {
-            // greedy placement: NE, SE, NW, SW of the dot, inside the dot area, clear of other score labels;
-            // a label with no free spot is dropped (lower ranks lose: hits arrive in rank order)
-            const tw = textWidth(label);
-            const cands = [[X[i] + rad + 3, Y[i] - rad - 2], [X[i] + rad + 3, Y[i] + rad + 10], [X[i] - rad - 3 - tw, Y[i] - rad - 2], [X[i] - rad - 3 - tw, Y[i] + rad + 10]];
-            for (const [cx, cy] of cands) {
-              const lx = cx, ly = cy;
-              if (lx - 3 < area.x0 - 4 || lx + tw + 3 > area.x1 + 4 || ly - 9 < area.y0 - 4 || ly + 4 > area.y1 + 4) continue;
-              if (labRects.some((p) => lx - 3 < p.x + p.w + 2 && lx + tw + 5 > p.x && ly - 9 < p.y + 6 && ly + 6 > p.y - 9)) continue;
+          if (label && labeled < maxLab && ik > 0.4 && fade > 0 && !labDots.some((p) => Math.hypot(p.x - X[i], p.y - Y[i]) < 12)) {
+            // Callouts: a pill just outside the hit's own cluster, out along the line from the cluster's centre through
+            // the dot (then +/-0.4, +/-0.8 rad around it), joined to the dot by a leader. It never sits on dots: not on
+            // any cluster's disc, any other hit, or another pill. Then the old hugging spots as a fallback. No free spot:
+            // dropped (lower ranks lose: hits arrive in rank order).
+            const tw = textWidth(label, MONO11);
+            const cands = [];
+            if (rec && !strip && rec.rad) {
+              let th = Math.atan2(Y[i] - rec.cy, X[i] - rec.cx);
+              if (Math.hypot(Y[i] - rec.cy, X[i] - rec.cx) < 2) th = Math.atan2(rec.cy - R.py, rec.cx - R.px);
+              const rimD = rec.rad + 12;
+              for (const dth of [0, 0.4, -0.4, 0.8, -0.8]) {
+                const px = rec.cx + Math.cos(th + dth) * rimD, py = rec.cy + Math.sin(th + dth) * rimD;
+                const c = Math.cos(th + dth), sn = Math.sin(th + dth);
+                const lx = c >= 0.3 ? px : c <= -0.3 ? px - tw : px - tw / 2;
+                const ly = sn >= 0.3 ? py + 10 : sn <= -0.3 ? py : py + 5;
+                cands.push([lx, ly, true]);
+              }
+            }
+            cands.push([X[i] + rad + 3, Y[i] - rad - 2, false], [X[i] + rad + 3, Y[i] + rad + 11, false], [X[i] - rad - 3 - tw, Y[i] - rad - 2, false], [X[i] - rad - 3 - tw, Y[i] + rad + 11, false],
+              [X[i] + rad + 14, Y[i] - rad - 12, true], [X[i] + rad + 14, Y[i] + rad + 21, true], [X[i] - rad - 14 - tw, Y[i] - rad - 12, true], [X[i] - rad - 14 - tw, Y[i] + rad + 21, true]);
+            for (const [lx, ly, lead] of cands) {
+              if (lx - 4 < area.x0 - 4 || lx + tw + 4 > area.x1 + 4 || ly - 10 < area.y0 - 4 || ly + 4 > area.y1 + 4) continue;
+              if (labRects.some((p) => lx - 4 < p.x + p.w + 2 && lx + tw + 6 > p.x && ly - 10 < p.y + 6 && ly + 6 > p.y - 10)) continue;
+              if (coversDot(lx, ly, tw, i)) continue;
+              if (lead && coversCluster(lx, ly, tw)) continue;
               labeled++;
-              labRects.push({ x: lx - 3, y: ly, w: tw + 6, label, lx, a: clamp((ik - 0.4) / 0.6, 0, 1) * fade });
+              labDots.push({ x: X[i], y: Y[i] });
+              labRects.push({ x: lx - 4, y: ly, w: tw + 8, label, lx, a: clamp((ik - 0.4) / 0.6, 0, 1) * fade, lead: lead ? { x: X[i], y: Y[i], tx: clamp(X[i], lx - 4, lx + tw + 4), ty: clamp(Y[i], ly - 10, ly + 4), r: rad + 1 } : null });
               break;
             }
           }
@@ -1061,12 +1484,77 @@ export function mount(ctx) {
       });
       // match labels last, so no dot ever covers a number
       for (const p of labRects) {
+        if (p.lead) {
+          const L = p.lead, d = Math.hypot(L.tx - L.x, L.ty - L.y) || 1;
+          g.globalAlpha = p.a * 0.7; g.strokeStyle = colors.muted; g.lineWidth = 1;
+          g.beginPath(); g.moveTo(L.x + (L.tx - L.x) / d * L.r, L.y + (L.ty - L.y) / d * L.r); g.lineTo(L.tx, L.ty); g.stroke();
+        }
         g.globalAlpha = p.a;
-        g.fillStyle = colors.panel; roundRect(g, p.x, p.y - 9, p.w, 13, 4); g.fill();
-        g.strokeStyle = colors.line; g.lineWidth = 0.75; g.stroke();
-        g.fillStyle = colors.strong; g.fillText(p.label, p.lx, p.y);
+        g.drawImage(labelSprite('m', p.label, p.w, 15), p.x, p.y - 11, p.w, 15);
       }
       g.globalAlpha = 1;
+    }
+    // Text is rasterized once per (label, theme, DPR) into a small sprite; frames only blit it. fillText with a web
+    // font every frame was the single biggest cost of a learning map on a throttled CPU.
+    const labelCache = new Map();
+    function labelSprite(kind, text, w, hh, tall = false) {
+      const key = `${kind}|${text}|${Math.round(w)}|${DPR}|${tall ? 1 : 0}`;
+      let c = labelCache.get(key);
+      if (c) return c;
+      c = document.createElement('canvas');
+      const H2 = kind === 'c' && tall ? 32 : hh;
+      c.width = Math.max(1, Math.ceil(w * DPR)); c.height = Math.ceil(H2 * DPR);
+      const x = c.getContext('2d');
+      x.scale(DPR, DPR);
+      if (kind === 'c' || kind === 's') {
+        // an opaque backdrop with a hairline: the 11 px text keeps its contrast over any dot, ring or beam
+        x.globalAlpha = 0.95; x.fillStyle = colors.panel; roundRect(x, 0.5, 0.5, w - 1, H2 - 1, 6); x.fill();
+        x.globalAlpha = 0.9; x.strokeStyle = colors.line; x.lineWidth = 0.75; x.stroke();
+        x.globalAlpha = 1; x.font = MONO11; x.fillStyle = kind === 's' ? colors.muted : colors.strong; x.fillText(text, 6, 11.5);
+      } else if (kind === 'x' || kind === 'xh') {
+        // the reading line (no backdrop of its own: it sits inside the tall 'c' backdrop)
+        x.font = SANS11; x.fillStyle = kind === 'xh' ? colors.accent2 : colors.muted;
+        x.fillText(fitText(text, w - 12, SANS11), 6, 10.5);
+      } else {
+        x.fillStyle = colors.panel; roundRect(x, 0.5, 0.5, w - 1, hh - 1, 4); x.fill();
+        x.strokeStyle = colors.line; x.lineWidth = 0.75; x.stroke();
+        x.font = MONO11; x.fillStyle = colors.strong; x.fillText(text, 4, hh - 4);
+      }
+      if (labelCache.size > 300) labelCache.clear();
+      labelCache.set(key, c);
+      return c;
+    }
+    function fitText(t, maxW, font) {
+      if (textWidth(t, font) <= maxW) return t;
+      let n = t.length;
+      while (n > 4 && textWidth(`${t.slice(0, n).trimEnd()}…`, font) > maxW) n -= Math.max(1, Math.floor((n * 0.08)));
+      return `${t.slice(0, n).trimEnd()}…`;
+    }
+    function isPre(r) { return !r.failed && !(r.atoms > 0) && !r.dots.length && r.phase !== 'ready'; }
+    function preR(r) { return clamp(r.seg ? Math.min(r.seg.w, r.seg.h) / 2 - 2 : (r.rad || 10) * 0.72, 7, strip ? 14 : 26); }
+    function drawPre(g, r, now) {
+      const col = colors.f[(r.hue || 0) % 8];
+      const R = preR(r);
+      const a0 = -Math.PI / 2;
+      const p = clamp(r.prog || 0, 0, 1);
+      g.globalAlpha = r.enabled ? 1 : 0.15;
+      g.lineCap = 'round';
+      g.strokeStyle = col; g.lineWidth = strip ? 2 : 2.5;
+      g.save(); g.globalAlpha *= 0.2; g.beginPath(); g.arc(r.cx, r.cy, R, 0, Math.PI * 2); g.stroke(); g.restore();
+      if (p > 0.005) { g.beginPath(); g.arc(r.cx, r.cy, R, a0, a0 + p * Math.PI * 2); g.stroke(); }
+      // soft core in the file hue: where this file's atoms will land
+      g.save(); g.globalAlpha *= 0.12; g.fillStyle = col; g.beginPath(); g.arc(r.cx, r.cy, R - 3, 0, Math.PI * 2); g.fill(); g.restore();
+      if (!red && r.phase !== 'queued') {
+        // the comet sweeps the unfilled part of the ring only (it never paints progress that did not happen)
+        const span = Math.PI * 2 * (1 - p);
+        if (span > 0.3) {
+          const t = (now * 0.0011) % 1;
+          const ang = a0 + p * Math.PI * 2 + t * span;
+          g.save(); g.globalAlpha *= 0.55 * Math.sin(Math.PI * t); g.fillStyle = col;
+          g.beginPath(); g.arc(r.cx + Math.cos(ang) * R, r.cy + Math.sin(ang) * R, strip ? 1.8 : 2.4, 0, Math.PI * 2); g.fill(); g.restore();
+        }
+      }
+      g.globalAlpha = 1; g.lineCap = 'butt';
     }
     function roundRect(g, x, y, w, hh, r) {
       g.beginPath();
@@ -1092,21 +1580,37 @@ export function mount(ctx) {
     }
     function setHover(i) { if (i !== hover) { hover = i; dirty = true; kick(); } }
 
-    function setMode(m) { if (m === mode) return; mode = m; measureChrome(); relayout(true); if (red) snapAll(); kick(); }
+    function setMode(m) {
+      if (m === mode) return;
+      mode = m;
+      // The slot's new height lands with the mode: the stage's ResizeObserver re-measures the chrome then (layout is
+      // clean inside its callback, so the reads are free). A mode change without a size change is caught after the
+      // frame instead, never by a read inside a rAF callback right after other modules' writes.
+      chromeStale = true;
+      setTimeout(() => { if (destroyed || !chromeStale) return; measureChrome(); relayout(true); if (red) snapAll(); kick(); }, 140);
+    }
     // opening the peek snaps the dots onto the taller layout (hidden by the clip-path reveal), so the beam's
     // geometry is right from its first frame; closing it lets them spring back
-    function setPeek(v) { if (peek === !!v) return; peek = !!v; resizeNow(); if (peek) snapAll(); }
+    function setPeek(v, hh) {
+      if (peek === !!v) return;
+      peek = !!v;
+      if (hh && W) resize({ width: W, height: hh }, { known: true }); else resizeNow();
+      if (peek) snapAll();
+    }
+    function size() { return { W, H }; }
     function resizeNow() { W = 0; resize(); }
     function remeasure() { measureChrome(); relayout(true); kick(); }
-    function setReduced(v) { red = v; if (v) { snapAll(); ghostAlpha = recs.some((r) => r.atoms > 0 || r.dots.length) ? 0 : 1; } dirty = true; kick(); }
+    function setReduced(v) { red = v; if (v) snapAll(); dirty = true; kick(); }
     function setVisible(v) { visible = v; if (v) { dirty = true; kick(); } }
     function clusterOf(key) { const r = recByKey.get(key); return r ? { x: r.cx, y: r.cy, rad: r.rad } : null; }
     function bornCount() { return N; }
 
     readColors();
-    try { if (/[?&]debug=1/.test(location.search)) window.__inMapDbg = () => ({ W, H, mode, peek, strip, area, N, retrieval: retrieval && { px: retrieval.px, py: retrieval.py, hits: retrieval.hits.map((x) => [Math.round(X[x.i]), Math.round(Y[x.i]), Math.round(TX[x.i]), Math.round(TY[x.i])]) } }); } catch { /* ignore */ }
+    try { if (/[?&]debug=1/.test(location.search)) window.__inMapDbg = () => ({ W, H, mode, peek, strip, area, chrome, N, retrieval: retrieval && { px: retrieval.px, py: retrieval.py, hits: retrieval.hits.map((x) => [Math.round(X[x.i]), Math.round(Y[x.i]), Math.round(TX[x.i]), Math.round(TY[x.i])]) } }); } catch { /* ignore */ }
     return { resize, sync, targetFor, spawn, hold, reserve, release, halo, showLabel, playRetrieval, relax, fastForward, setHighlight,
-      pick, infoOf, setHover, setMode, setPeek, remeasure, setReduced, setVisible, readColors, clusterOf, bornCount, stageOffset, kick, isRetrieving,
+      pick, infoOf, setHover, setMode, setPeek, remeasure, size, setReduced, setVisible, readColors, clusterOf, bornCount, stageOffset, kick, isRetrieving,
+      setOccluder, muteLabel, setSectionNames, sectionSeqs, setReading, halfMass,
+      get frameMs() { return frameMs; },
       set onRetrievalEnd(fn) { onRetrievalEnd = fn; }, get area() { return area; }, get chrome() { return chrome; }, get k() { return k; } };
   }
 
@@ -1118,6 +1622,10 @@ export function mount(ctx) {
     ro = new ResizeObserver((ents) => { const e = ents[ents.length - 1]; const cr = e && e.contentRect; if (cr && cr.width) map.resize({ width: cr.width, height: cr.height }); else if (!resizeRaf) resizeRaf = requestAnimationFrame(() => { resizeRaf = 0; map.resize(); }); });
     ro.observe(stage);
   } catch { listen(window, 'resize', () => map.resize()); }
+  // The HUD and the legend change size (counts, legend chips, a mode's padding): re-measure inside a ResizeObserver
+  // callback, where layout is already clean, instead of reading rects in a rAF callback after fresh DOM writes.
+  let chromeRO = null;
+  try { chromeRO = new ResizeObserver(() => { if (!destroyed) map.remeasure(); }); for (const el of [hudL, hudR, legend, legendChips]) chromeRO.observe(el); } catch { chromeRO = null; }
   let io = null;
   try { io = new IntersectionObserver((ents) => { for (const e of ents) map.setVisible(e.isIntersecting); }); io.observe(stage); } catch { /* always visible */ }
   const mo = new MutationObserver((recsM) => {
@@ -1134,7 +1642,7 @@ export function mount(ctx) {
   let tipTimer = 0;
   function hideTip() { tip.hidden = true; tipFor = null; map.setHover(-1); canvas.style.cursor = ''; }
   listen(canvas, 'pointermove', (e) => {
-    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch' || band.dataset.mode === 'ribbon') return;
     const r = canvas.getBoundingClientRect();
     const i = map.pick(e.clientX - r.left, e.clientY - r.top);
     if (i < 0) { hideTip(); return; }
@@ -1152,6 +1660,7 @@ export function mount(ctx) {
   });
   listen(canvas, 'pointerleave', hideTip);
   listen(canvas, 'click', async (e) => {
+    if (band.dataset.mode === 'ribbon') return;          // the ribbon's tap opens the band (below)
     const r = canvas.getBoundingClientRect();
     const i = map.pick(e.clientX - r.left, e.clientY - r.top);
     map.relax();
@@ -1162,6 +1671,7 @@ export function mount(ctx) {
     emit('drawer:open', { fileId: info.fileId, atomId: a?.atomId ?? null, seq: info.seq });
   });
   listen(band, 'pointerdown', () => map.relax());
+  listen(band, 'click', (e) => { if (band.dataset.mode === 'ribbon' && !(e.target.closest && e.target.closest('button'))) setExpanded(true); });
 
   function positionTip(info) {
     const x = info.x, y = info.y;
@@ -1197,12 +1707,24 @@ export function mount(ctx) {
   let lateIngest = false;
   let lateTimer = 0;
   let tableOn = false;
-  function bandMode() {
+  let expanded = false;          // a ribbon the visitor opened for a look (tap / Expand); folds again on the next ask
+  const answerCount = () => (getState().thread || []).filter((a) => a && a.by !== 'proof').length;
+  // The 56 px in-flow ribbon once the thread has 2 answers (phones: from the first answer), at every width,
+  // unless pinned or opened for a look. A late upload re-opens the full band while it learns.
+  function autoMode() {
     const s = getState();
     if (s.ui && s.ui.mapPinned) return 'full';
-    const answers = (s.thread || []).filter((a) => a && a.by !== 'proof').length;
-    if (answers >= 2 && !lateIngest) return 'ribbon';
+    if (answerCount() >= (isMobile() ? 1 : 2) && !lateIngest) return 'ribbon';
     return 'full';
+  }
+  function bandMode() { const m = autoMode(); return m === 'ribbon' && expanded ? 'full' : m; }
+  function setExpanded(v) {
+    v = !!v;
+    if (expanded === v) return;
+    const hadFocus = band.contains(document.activeElement);
+    expanded = v;
+    updateBand();
+    if (hadFocus) (v ? foldBtn : expandBtn).focus({ preventScroll: true });
   }
   // The slot height changes in one step (no height transition: that would shift the thread on every frame).
   // The band then reveals itself with compositor-only motion (clip-path / transform / opacity).
@@ -1214,7 +1736,7 @@ export function mount(ctx) {
       band.dataset.mode = m;
       mapSlot.dataset.mode = m;
       setPeek(false);
-      map.resize();
+      // no layout read here: the ResizeObserver re-fits the canvas once the slot has its new height
       map.setMode(m);
       if (m === 'ribbon') hideTip();
       if (from && !reduced()) {
@@ -1223,9 +1745,14 @@ export function mount(ctx) {
       }
     }
     const pinned = !!(s.ui && s.ui.mapPinned);
+    const isExp = m === 'full' && expanded && autoMode() === 'ribbon';
+    mapSlot.dataset.expanded = isExp ? 'yes' : '';
     pinBtn.setAttribute('aria-pressed', String(pinned));
-    pinBtn.querySelector('.map-btn-l').textContent = pinned ? 'Pinned' : (m === 'ribbon' ? 'Expand' : 'Pin');
-    pinBtn.title = pinned ? 'Unpin: let the map collapse once you have answers' : 'Keep the map open';
+    pinBtn.querySelector('.map-btn-l').textContent = pinned ? 'Pinned' : 'Pin';
+    pinBtn.title = pinned ? 'Unpin: let the map fold to a ribbon once you have answers' : 'Keep the map open';
+    pinBtn.hidden = m === 'ribbon';
+    expandBtn.hidden = m !== 'ribbon';
+    foldBtn.hidden = !isExp;
     const collapsed = m === 'ribbon';
     if (s.ui && s.ui.mapCollapsed !== collapsed) {
       // CONTRACT-GAP: ui is B's key, but mapCollapsed/mapPinned describe D's band; written like ui.drawer (C) / ui.sheet (E).
@@ -1239,21 +1766,23 @@ export function mount(ctx) {
   let peekAnim = null;
   let peekFrom = 56;
   function setPeek(on) {
-    if (on && !peekOn) { peekFrom = mapSlot.clientHeight || 56; }
-    on = !!on && !tableOn && (band.dataset.mode === 'ribbon' || peekFrom < 170);
+    if (on && !peekOn) { peekFrom = map.size().H || 56; }
+    // Only the desktop compact strip of the FIRST answer peeks (an overlay, for 2.5 s). The ribbon stays a 56 px
+    // in-flow ribbon and never covers the thread; phones never peek.
+    on = !!on && !tableOn && band.dataset.mode !== 'ribbon' && peekFrom < 170 && !isMobile() && answerCount() < 2;
     if (on === peekOn) return;
     peekOn = on;
     try { peekAnim && peekAnim.cancel(); } catch { /* ignore */ }
     const shut = `inset(0 0 ${Math.max(0, PEEK_H - peekFrom)}px 0 round 0 0 14px 14px)`, open = 'inset(0 0 0 0 round 0 0 14px 14px)';
     if (on) {
       band.dataset.peek = 'yes';
-      map.setPeek(true);
+      map.setPeek(true, PEEK_H);
       if (!reduced()) peekAnim = anim(band, [{ clipPath: shut }, { clipPath: open }], { duration: 300, easing: 'out', essential: false });
     } else {
       const a = reduced() ? null
         : anim(band, [{ clipPath: open }, { clipPath: shut }], { duration: 260, easing: 'out', fill: 'forwards', essential: false });
       peekAnim = a;
-      const done = () => { if (peekOn) return; delete band.dataset.peek; map.setPeek(false); if (a) { try { a.cancel(); } catch { /* ignore */ } } };
+      const done = () => { if (peekOn) return; delete band.dataset.peek; map.setPeek(false, peekFrom); if (a) { try { a.cancel(); } catch { /* ignore */ } } };
       if (!a) { done(); return; }
       Promise.resolve(a.finished).then(done, done);
     }
@@ -1290,26 +1819,67 @@ export function mount(ctx) {
     table.innerHTML = '';
     table.append(t);
   }
-  let legendSig = '';
+  // Legend chips are keyed (a count change rewrites one text node, never the whole row). They show only when the
+  // Sources rows are folded away (chip) or in the ribbon: next to open rows they would just repeat the file list.
+  const legendEls = new Map();
+  let legendOrder = '';
+  let legendRemeasure = 0;
   function renderLegend(files) {
-    const shown = files.filter((f) => f.atoms || f.phase === 'ready');
-    const sig = shown.map((f) => `${f.localId}:${f.hue}:${f.atoms || 0}:${isEnabled(f) ? 1 : 0}:${f.name}`).join('|') + (isMobile() ? 'm' : '');
-    if (sig === legendSig) return;
-    legendSig = sig;
-    legendChips.innerHTML = '';
-    for (const f of shown) {
-      legendChips.append(h('span', { class: `map-chip${isEnabled(f) ? '' : ' is-off'}`, style: { '--hue': `var(--f${f.hue % 8})` }, title: f.name },
-        h('i', { 'aria-hidden': 'true' }), h('span', { class: 'map-chip-n' }, mid(f.name, isMobile() ? 14 : 20)), h('span', { class: 'map-chip-c in-num' }, fmtInt(f.atoms || 0))));
+    // phones: the legend row IS where files are named (no floating labels on the 140 px map), from the first stage
+    const mob = isMobile();
+    const shown = mob ? files.filter((f) => f.phase !== 'failed' || f.atoms) : files.filter((f) => f.atoms || f.phase === 'ready');
+    const show = band.dataset.mode === 'ribbon' || isCollapsed || (mob && shown.length > 0);
+    if (band.dataset.legend !== (show ? 'chips' : 'note')) { band.dataset.legend = show ? 'chips' : 'note'; scheduleRemeasure(); }
+    const order = shown.map((f) => f.localId).join('|') + (isMobile() ? 'm' : '');
+    if (order !== legendOrder) {
+      legendOrder = order;
+      const keep = new Set(shown.map((f) => f.localId));
+      for (const [lid, el] of [...legendEls]) if (!keep.has(lid)) { el.root.remove(); legendEls.delete(lid); }
+      for (const f of shown) {
+        let el = legendEls.get(f.localId);
+        if (!el) {
+          const n = h('span', { class: 'map-chip-n' }), c = h('span', { class: 'map-chip-c in-num' });
+          el = { root: h('span', { class: 'map-chip', role: 'listitem' }, h('i', { 'aria-hidden': 'true' }), n, c), n, c, sig: '' };
+          legendEls.set(f.localId, el);
+        }
+        legendChips.append(el.root);              // re-append keeps file order
+      }
+      scheduleRemeasure();
     }
-    // the ribbon's dot field starts right of the legend: re-measure once the legend changed width
-    if (band.dataset.mode === 'ribbon') map.remeasure();
+    for (const f of shown) {
+      const el = legendEls.get(f.localId);
+      const pre = !f.atoms && f.phase !== 'ready';
+      const cnt = pre ? (DOING[f.phase] || 'reading') : fmtInt(f.atoms || 0);
+      const sig = `${f.hue}|${cnt}|${isEnabled(f) ? 1 : 0}|${f.name}|${mob ? 1 : 0}`;
+      if (!el || el.sig === sig) continue;
+      el.sig = sig;
+      el.root.style.setProperty('--hue', `var(--f${f.hue % 8})`);
+      el.root.classList.toggle('is-off', !isEnabled(f));
+      el.root.classList.toggle('is-pre', pre);
+      el.root.title = pre ? `${f.name} · ${cnt}` : `${f.name} · ${plural(f.atoms || 0, 'atom')}`;
+      el.root.setAttribute('aria-label', pre ? `${f.name}, ${cnt}` : `${f.name}, ${plural(f.atoms || 0, 'atom')}${isEnabled(f) ? '' : ', off'}`);
+      const nm = mid(f.name, mob ? 16 : 20);
+      if (el.n.textContent !== nm) el.n.textContent = nm;
+      if (el.c.textContent !== cnt) el.c.textContent = cnt;
+    }
   }
-  let lastTotal = -1;
+  // the ribbon's dot field starts right of the legend: re-measure once (next frame) after the legend changed
+  function scheduleRemeasure() {
+    if (chromeRO || legendRemeasure) return;
+    legendRemeasure = requestAnimationFrame(() => { legendRemeasure = 0; if (!destroyed) map.remeasure(); });
+  }
+  let lastTotal = '', hudWroteAt = 0, hudTimer = 0;
   function syncMap() {
     const files = liveFiles();
     const total = map.sync(files);
     const has = files.some((f) => f.atoms > 0);
-    band.dataset.state = has ? 'live' : files.length ? 'learning' : 'empty';
+    const bstate = has ? 'live' : files.length ? 'learning' : 'empty';
+    // the legend row appears / changes with the state: labels and dots must keep clear of where it now sits
+    if (band.dataset.state !== bstate) { band.dataset.state = bstate; scheduleRemeasure(); }
+    emptyCap.hidden = !!files.length;
+    const note = has ? (map.k > 1 ? `Each dot is ${map.k} atoms, grouped by file` : 'Each dot is one atom, grouped by file')
+      : files.length ? 'Each ring is a file being read · its atoms land as dots' : 'Your files become atoms here';
+    if (legendNote.textContent !== note) legendNote.textContent = note;
     // The HUD never trails the rows: the count is written in the same frame as the authoritative file state.
     // Before any atom exists it names the real stage instead of a misleading "0 atoms".
     const stageText = total > 0 ? '' : hudStageText(files);
@@ -1317,9 +1887,54 @@ export function mount(ctx) {
     hudStage.hidden = !stageText;
     if (stageText && hudStage.textContent !== stageText) hudStage.textContent = stageText;
     hudEmpty.hidden = !!files.length;
-    if (total !== lastTotal) { lastTotal = total; hudCount.dataset.value = String(total); hudCount.textContent = fmtInt(total); }
+    const c = fileCounts(files);
+    const hudSig = `${c.searchable}|${c.read}|${total}`;
+    // HUD count text is written at most every ~100 ms (a trailing write lands the final value)
+    const nowT = performance.now();
+    if (hudSig !== lastTotal && nowT - hudWroteAt < 100) {
+      if (!hudTimer) hudTimer = setTimeout(() => { hudTimer = 0; if (!destroyed) afterChange(null); }, 110 - (nowT - hudWroteAt));
+    } else if (hudSig !== lastTotal) {
+      lastTotal = hudSig; hudWroteAt = nowT;
+      const split = c.searchable !== c.read;
+      const v = split ? c.searchable : c.read;
+      hudCount.dataset.value = String(v); hudCount.textContent = fmtInt(v);
+      hudUnit.textContent = split ? ' searchable' : (v === 1 ? ' atom' : ' atoms');
+      hudRead.hidden = !split;
+      hudRead.textContent = split ? ` · ${fmtInt(c.read)} read` : '';
+      hudCountWrap.title = split ? `${plural(c.searchable, 'atom')} in Ready files can be quoted now; ${fmtInt(c.read)} read so far` : '';
+    }
     renderLegend(files);
     renderTable();
+    nameSections(files);
+  }
+  // Big clusters are drawn as sequence-order sections; name 3 of them (first, middle, last) from the real atom
+  // there: its heading breadcrumb, else its first words. One small lookup per section, once per layout.
+  const secAsked = new Map();
+  function nameSections(files) {
+    if (!api.fileAtoms) return;
+    for (const f of files) {
+      if (f.phase !== 'ready' || !f.id) continue;
+      const seqs = map.sectionSeqs(f.id);
+      if (!seqs) continue;
+      const sig = seqs.join(',');
+      if (secAsked.get(f.id) === sig) continue;
+      secAsked.set(f.id, sig);
+      const id = f.id;
+      Promise.all(seqs.map((seq) => api.fileAtoms(id, { limit: 1, around: seq, span: 0 }).then((r) => {
+        const it = ((r && r.items) || []).find((x) => Number(x.seq) === seq) || ((r && r.items) || [])[0];
+        if (!it) return null;
+        // the section's own heading: the parent of the leaf ("Warranty > Frames part 2" → "Warranty"), else the leaf
+        const parts = it.meta && it.meta.breadcrumb ? String(it.meta.breadcrumb).split(' > ').map((x) => x.trim()).filter(Boolean) : [];
+        const crumb = parts.length >= 2 ? parts[parts.length - 2] : (parts[0] || '');
+        let t = cleanText(crumb || String(it.text || '').split(/\s+/).slice(0, 4).join(' ')).replace(/[.,;:]+$/, '');
+        if (!t) return null;
+        if (t.length > 24) t = `${t.slice(0, 23).trimEnd()}…`;
+        return { seq, text: t };
+      }).catch(() => null))).then((names) => {
+        if (destroyed || secAsked.get(id) !== sig) return;
+        map.setSectionNames(id, names.filter(Boolean));
+      });
+    }
   }
 
   function hudStageText(files) {
@@ -1335,17 +1950,37 @@ export function mount(ctx) {
 
   const rowEls = new Map();  // localId -> refs
 
+  /** ms since this file's stage last really changed, when that is a stall (>= 45 s), else 0. Uses the server's
+   *  stage stamps, so a reload keeps counting from the real change instead of restarting at 0. */
+  function stallElapsed(f) {
+    if (!f || TERMINAL.has(f.phase) || f.phase === 'queued' || f.phase === 'uploading') return 0;
+    const m = rowMeta.get(f.localId) || {};
+    const now = Date.now();
+    let since = m.lastChangeAt || now;
+    const stamps = Object.values(f.stageAt || {}).map(Number).filter((t) => Number.isFinite(t) && t > 0 && t <= now + 1000);
+    if (stamps.length) since = Math.min(since, Math.max(...stamps));
+    const el = Math.max(now - since, Number(f.stalledFor) || 0);
+    return el >= STALL_MS ? el : 0;
+  }
+  const fmtDur = (ms) => { const t = Math.floor(ms / 1000), mm = Math.floor(t / 60), ss = t % 60; return mm ? `${mm}m ${ss}s` : `${ss}s`; };
+  const STAGE_WORD = { uploaded: 'Extracting', extracted: 'Chunking', chunked: 'Atomizing', atomized: 'Vectorizing', vectorizing: 'Vectorizing' };
   function phaseLabel(f) {
     const m = rowMeta.get(f.localId) || {};
+    const st = stallElapsed(f);
+    if (st) return `${STAGE_WORD[f.phase] || 'Working'} · ${fmtDur(st)} (no progress)`;
     switch (f.phase) {
       case 'queued': return 'Queued';
       case 'rejected': return 'Not added';
       case 'uploading': return m.retryAt ? 'Waiting to retry' : `Uploading · ${f.bytes ? Math.floor((f.sent || 0) / f.bytes * 100) : 0}%`;
-      case 'uploaded': return 'Extracting…';
-      case 'extracted': return 'Chunking…';
-      case 'chunked': return 'Atomizing…';
-      case 'atomized': return `Atomized · ${plural(f.atoms || 0, 'atom')}`;
-      case 'vectorizing': return `Vectorizing · ${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`;
+      // live counts as soon as the stage events carry them: bytes in, then chunks, atoms, vectors
+      case 'uploaded': return `Extracting · ${fmtSize(f.bytes)}`;
+      case 'extracted': return f.pages ? `Chunking · ${plural(f.pages, 'page')}` : `Chunking · ${fmtSize(f.bytes)}`;
+      case 'chunked': return f.chunks ? `Atomizing · chunks ${fmtInt(f.chunks)}` : 'Atomizing…';
+      case 'atomized': return f.chunks ? `chunks ${fmtInt(f.chunks)} · atoms ${fmtInt(f.atoms || 0)}` : `Atomized · ${plural(f.atoms || 0, 'atom')}`;
+      case 'vectorizing': {
+        const t = `atoms ${fmtInt(f.atoms || 0)} · vectors ${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`;
+        return t.length <= 25 ? t : `vectors ${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`;
+      }
       case 'ready': return `Ready · ${plural(f.atoms || 0, 'atom')}`;
       case 'failed': return 'Failed';
       default: return f.phase || '';
@@ -1368,10 +2003,13 @@ export function mount(ctx) {
     const name = h('span', { class: 'in-name', id: nameId, title: f.name }, h('span', { 'aria-hidden': 'true', class: 'in-name-v' }, mid(f.name, isMobile() ? 24 : 38)), h('span', { class: 'in-sr' }, f.name));
     const tag = h('span', { class: 'in-tag', hidden: !f.sample }, 'Sample');
     const size = h('span', { class: 'in-size in-num' }, fmtSize(f.bytes));
+    // the file's real first line while it is being extracted, with a scan sweep (decorative: the status says it)
+    const readT = h('span', { class: 'in-read-t' });
+    const read = h('span', { class: 'in-read', hidden: true, 'aria-hidden': 'true' }, readT);
     const status = h('span', { class: 'in-status in-num' });
     const kebab = h('button', { type: 'button', class: 'in-iconbtn in-kebab', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-label': `Actions for ${f.name}`, html: icon('more', { size: 16 }) });
     listen(kebab, 'click', (e) => { e.stopPropagation(); openMenu(f.localId, kebab); });
-    const main = h('div', { class: 'in-row-main' }, incLabel, ico, h('div', { class: 'in-namewrap' }, name, tag, size), status, kebab);
+    const main = h('div', { class: 'in-row-main' }, incLabel, ico, h('div', { class: 'in-namewrap' }, name, tag, size, read), status, kebab);
 
     // stage track
     const track = h('ol', { class: 'in-track', 'aria-label': `Processing stages for ${f.name}` });
@@ -1393,7 +2031,7 @@ export function mount(ctx) {
     const summary = h('div', { class: 'in-sum', hidden: true });
     const detail = h('div', { class: 'in-detail' }, detailInner, summary);
     li.append(main, detail);
-    const refs = { li, inc, incLabel, ico, name, tag, size, status, kebab, track, nodes, note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '' };
+    const refs = { li, inc, incLabel, ico, name, tag, size, read, readT, status, kebab, track, nodes, note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '', readKey: '' };
     rowEls.set(f.localId, refs);
     return refs;
   }
@@ -1424,12 +2062,33 @@ export function mount(ctx) {
     return clamp(last + 1, 1, 5);
   }
 
+  // New rows are built at most 2 per frame: a batch of 4 sample rows (or a 20-file drop) never becomes one long task.
+  // A deferred row's place is held by its skeleton, so nothing below moves while the batch lands.
+  let freshBudget = 2, budgetRaf = 0;
+  const pendingRows = new Set();
+  function takeFresh(lid) {
+    if (!budgetRaf) {
+      budgetRaf = requestAnimationFrame(() => {
+        budgetRaf = 0; freshBudget = 2;
+        const list = [...pendingRows]; pendingRows.clear();
+        for (const x of list) renderRow(x);
+        if (!pendingRows.size && !samplesBusy) { clearSkeletons(); }
+        afterChange(null);
+      });
+    }
+    if (freshBudget > 0) { freshBudget--; return true; }
+    pendingRows.add(lid);
+    return false;
+  }
   function renderRow(lid) {
     const f = getState().files[lid];
     if (!f) return;
     let r = rowEls.get(lid);
     let fresh = false;
-    if (!r) { r = buildRow(f); fresh = true; placeRow(lid, r.li); }
+    if (!r) {
+      if (pendingRows.has(lid) || !takeFresh(lid)) return;
+      r = buildRow(f); fresh = true; placeRow(lid, r.li);
+    }
     const m = meta(lid);
     const phaseChanged = r.lastPhase !== f.phase;
     r.li.dataset.phase = f.phase;
@@ -1444,8 +2103,18 @@ export function mount(ctx) {
     r.incLabel.hidden = !canScope;
     r.inc.checked = isEnabled(f);
     r.inc.disabled = !canScope;
-    r.status.textContent = phaseLabel(f);
+    { const t = phaseLabel(f); if (r.status.textContent !== t) r.status.textContent = t; }
     r.kebab.hidden = f.phase === 'queued';
+    // reading line: from upload until the atoms exist (then the map's shatter shows the real chunks)
+    const rl = reading.get(lid);
+    const showRead = !!(rl && rl.length && RANK[f.phase] >= RANK.uploading && RANK[f.phase] <= RANK.chunked);
+    const rk = showRead ? rl[0] : '';
+    if (rk !== r.readKey) {
+      r.readKey = rk;
+      r.read.hidden = !showRead;
+      r.li.dataset.reading = showRead ? 'yes' : '';
+      if (showRead) { r.readT.textContent = `“${rl[0]}”`; r.read.title = rl.join(' / '); }
+    }
 
     // track nodes
     const st = nodeStates(f);
@@ -1481,7 +2150,9 @@ export function mount(ctx) {
       n.conn.dataset.work = from === 'active' ? (known ? 'measured' : 'busy') : '';
     }
     // counters (tween toward the last real value only)
-    const tick = (el, v, fmt) => { if (motion.ticker && !fresh) motion.ticker(el, v, { ms: 600, format: fmt }); else { el.dataset.value = String(v); el.textContent = fmt(v); } };
+    // counters tween (600 ms) only where they are visible: compact rows and phones hide them, so no per-frame text writes
+    const tween = motion.ticker && !fresh && panel.dataset.compact !== 'yes' && !isMobile() && !reduced();
+    const tick = (el, v, fmt) => { if (tween) motion.ticker(el, v, { ms: 600, format: fmt }); else { const t = fmt(v); el.dataset.value = String(v); if (el.textContent !== t) el.textContent = t; } };
     const fmtN = (n) => fmtInt(n);
     if (f.phase === 'uploading') r.nodes[0].count.textContent = `${f.bytes ? Math.floor((f.sent || 0) / f.bytes * 100) : 0}%`;
     else r.nodes[0].count.textContent = RANK[f.phase] >= 2 || (f.phase === 'failed' && f.id) ? fmtSize(f.bytes) : '';
@@ -1513,9 +2184,8 @@ export function mount(ctx) {
       text = m.retryKind === 'busy' ? `Studio is busy, retrying in ${s}s…` : `Connection lost at ${m.lostPct ?? 0}%. Retrying in ${s}s… (retry ${m.attempt} of 3)`;
       kind = 'warn';
     } else if (!TERMINAL.has(f.phase) && f.phase !== 'queued') {
-      const since = m.lastChangeAt || Date.now();
-      const el = Math.max(Date.now() - since, f.stalledFor || 0);
-      if (el >= STALL_MS) {
+      const el = stallElapsed(f);
+      if (el) {
         r.li.dataset.stall = 'yes';
         text = `Still ${DOING[f.phase] || 'working'} · large files can take a few minutes · ${mmss(el)}`;
         kind = 'stall';
@@ -1524,6 +2194,8 @@ export function mount(ctx) {
     if (r.note.textContent !== text) r.note.textContent = text;
     r.note.dataset.kind = kind;
     r.note.hidden = !text;
+    // rows with something to say (stall, retry, failure) never fold into the compact one-line form
+    r.li.dataset.note = text && kind !== 'muted' ? 'yes' : '';
   }
 
   function actionList(f, m) {
@@ -1589,6 +2261,8 @@ export function mount(ctx) {
     const idx = order.indexOf(lid);
     let before = null;
     for (let i = idx + 1; i < order.length; i++) { const r = rowEls.get(order[i]); if (r && r.li.isConnected) { before = r.li; break; } }
+    // a skeleton holds this row's place: swap it in (same height, so nothing below moves)
+    if (!before && skelEls.length) { const sk = skelEls.shift(); if (sk.isConnected) { rowsEl.replaceChild(li, sk); return; } }
     rowsEl.insertBefore(li, before);
   }
   let enterBatch = 0;
@@ -1613,12 +2287,51 @@ export function mount(ctx) {
 
   // ---------------------------------------------------------------- header, capacity, collapse
 
+  // Status badges (header + collapsed chip): they wrap instead of truncating; below 480 px the words fold into
+  // icons (the words stay for screen readers), so "1 failed" can never be clipped to "1 fai".
+  function badges(c, learnAlways = false) {
+    const out = [
+      h('span', { class: 'in-bd' }, h('b', { class: 'in-num' }, fmtInt(c.total)), h('span', { class: 'in-bd-w' }, c.total === 1 ? ' file' : ' files')),
+      h('span', { class: 'in-bd' }, h('b', { class: 'in-num' }, fmtInt(c.read)), h('span', { class: 'in-bd-w' }, c.read === 1 ? ' atom' : ' atoms')),
+    ];
+    if (c.learning && (learnAlways || c.ready + c.failed)) out.push(h('span', { class: 'in-bd is-learn', title: `${c.learning} still learning` }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('refresh', { size: 11 }) }), h('b', { class: 'in-num' }, String(c.learning)), h('span', { class: 'in-bd-w' }, ' learning')));
+    if (c.failed) out.push(h('span', { class: 'in-bd is-warn', title: `${c.failed} failed` }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('warn', { size: 11 }) }), h('b', { class: 'in-num' }, String(c.failed)), h('span', { class: 'in-bd-w' }, ' failed')));
+    if (allReadyUntil > Date.now() && !c.learning) out.push(h('span', { class: 'in-bd is-done' }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('check', { size: 11 }) }), c.total === 1 ? 'Ready' : `All ${c.ready} ready`));
+    return out;
+  }
+  // When the last file lands: one "All N ready" badge (head + chip) that fades out after 4 s
+  let allReadyUntil = 0, allReadyTimer = 0, lastCountsSig = '', prevLearning = 0;
+  function publishCounts(c) {
+    if (prevLearning > 0 && c.learning === 0 && c.ready > 0) {
+      allReadyUntil = Date.now() + 4000;
+      clearTimeout(allReadyTimer);
+      allReadyTimer = setTimeout(() => { allReadyUntil = 0; headMeta.dataset.sig = ''; chipSig = ''; renderHead(); }, 4100);
+    }
+    prevLearning = c.learning;
+    const sig = `${c.total}|${c.ready}|${c.failed}|${c.learning}|${c.read}|${c.searchable}`;
+    if (sig === lastCountsSig) return;
+    lastCountsSig = sig;
+    // CONTRACT-GAP (C, samplebot.js #st-bot-banner; B, app.js learning copy): bind the Partial pill and the
+    // Builder's "N of M files ready" line to this event (or to the same rule: ready / failed / everything else),
+    // and on learning === 0 swap the pill to "All N files ready" and fade it out. D cannot edit #st-bot-banner.
+    emit('ingest:counts', { ...c });
+  }
   function renderHead() {
     const files = liveFiles();
     const all = listFiles();
     const skel = skelEls.length;
-    const atoms = files.reduce((acc, f) => acc + (f.phase === 'failed' ? 0 : f.atoms || 0), 0);
-    headMeta.textContent = files.length ? `· ${plural(files.length, 'file')} · ${plural(atoms, 'atom')}` : '';
+    const c = fileCounts(files);
+    const atoms = c.read;
+    publishCounts(c);
+    // rebuilt from the files' real phases every time (also right after a reload restores them)
+    const metaSig = `${c.total}|${c.read}|${c.learning}|${c.ready}|${c.failed}|${allReadyUntil > Date.now() ? 1 : 0}`;
+    if (headMeta.dataset.sig !== metaSig) {
+      headMeta.dataset.sig = metaSig;
+      headMeta.innerHTML = '';
+      if (files.length) headMeta.append(...badges(c));
+    }
+    // three or more rows: one line each (name, stage dots, count) so the whole batch stays in view while it learns
+    panel.dataset.compact = all.length + skel >= 3 ? 'yes' : '';
     panel.dataset.state = all.length || skel ? 'files' : 'empty';
     empty.hidden = !!(all.length || skel);
     body.hidden = !(all.length || skel);
@@ -1631,6 +2344,7 @@ export function mount(ctx) {
     // skeleton rows count as busy: the pane takes its learning layout inside the click's input window
     intakeSlot.dataset.busy = skel || all.some((f) => f.phase !== 'ready') ? 'yes' : '';
     mapSlot.dataset.busy = skel || all.some((f) => !TERMINAL.has(f.phase)) ? 'yes' : '';
+    mapSlot.dataset.files = all.length || skel ? 'yes' : '';
     const wantCollapsed = collapsedByUser.auto ? (allReady || (askedCollapse && files.length > 0)) : collapsedByUser.value;
     applyCollapsed(wantCollapsed && all.length > 0 && !skel, files, atoms);
   }
@@ -1647,20 +2361,19 @@ export function mount(ctx) {
   }
   function applyCollapsed(c, files, atoms) {
     if (c) {
-      const ready = files.filter((f) => f.phase === 'ready').length;
-      const failed = files.filter((f) => f.phase === 'failed').length;
-      const learning = files.length - ready - failed;
-      const sig = `${files.length}|${atoms}|${ready}|${failed}|${isMobile() ? 'm' : ''}|${files.slice(0, 8).map((f) => `${f.localId}:${f.phase}:${Math.round(fileProgress(f) * 20)}:${isEnabled(f) ? 1 : 0}`).join(',')}`;
+      const cc = fileCounts(files);
+      const ready = cc.ready, failed = cc.failed, learning = cc.learning;
+      const sig = `${files.length}|${atoms}|${ready}|${failed}|${allReadyUntil > Date.now() ? 1 : 0}|${isMobile() ? 'm' : ''}|${files.slice(0, 8).map((f) => `${f.localId}:${f.phase}:${Math.round(fileProgress(f) * 20)}:${isEnabled(f) ? 1 : 0}`).join(',')}`;
       if (sig !== chipSig) {
         chipSig = sig;
-        const extra = [learning ? `${learning} learning` : '', failed ? `${failed} failed` : ''].filter(Boolean).join(' · ');
         chip.innerHTML = '';
         chip.append(h('span', { class: 'in-chip-t' }, 'Sources'),
-          h('span', { class: 'in-chip-m in-num' }, ` · ${plural(files.length, 'file')} · ${plural(atoms, 'atom')}`, extra ? h('span', { class: `in-chip-x${failed ? ' is-warn' : ''}` }, ` · ${extra}`) : null),
+          h('span', { class: 'in-chip-m' }, badges({ ...cc, read: atoms }, true)),
           h('span', { class: 'in-chip-dots' }, files.slice(0, 8).map((f) => h('span', {
             class: `in-chip-f${isEnabled(f) ? '' : ' is-off'}`, dataset: { phase: f.phase },
             style: { '--hue': `var(--f${f.hue % 8})`, '--p': fileProgress(f).toFixed(3) },
           }, h('i', { 'aria-hidden': 'true' }), mid(f.name, isMobile() ? 12 : 18)))),
+          h('span', { class: 'in-chip-more', 'aria-hidden': 'true' }, files.length > 6 ? `+${files.length - 6}` : ''),
           h('span', { class: 'in-chip-ico', 'aria-hidden': 'true', html: icon('chevronDown', { size: 15 }) }));
         chipDesc.textContent = learning || failed
           ? `${ready} of ${plural(files.length, 'file')} ready${learning ? `, ${learning} still learning` : ''}${failed ? `, ${failed} failed` : ''}. Show files.`
@@ -1671,6 +2384,7 @@ export function mount(ctx) {
     const wasFocusIn = panel.contains(document.activeElement) && document.activeElement !== chip;
     isCollapsed = c;
     panel.dataset.collapsed = c ? 'yes' : '';
+    renderLegend(liveFiles());
     chip.hidden = !c;
     collapseBtn.setAttribute('aria-expanded', String(!c));
     if (c) {
@@ -1718,13 +2432,17 @@ export function mount(ctx) {
   function renderCapacity() {
     const q = quota();
     const { shown, files } = usedBytes();
-    capBar.setAttribute('aria-valuemax', String(q));
-    capBar.setAttribute('aria-valuenow', String(Math.min(q, shown)));
-    capBar.setAttribute('aria-valuetext', `${fmtMB(shown)} MB of ${fmtMB(q)} MB used`);
-    capLabel.textContent = `${fmtMB(shown)} MB of ${fmtMB(q)} MB`;
     const warn = shown >= q * 0.8;
-    cap.dataset.warn = warn ? 'yes' : '';
-    capWarn.hidden = !warn;
+    const capSig = `${q}|${shown}`;
+    if (cap._sig !== capSig) {
+      cap._sig = capSig;
+      capBar.setAttribute('aria-valuemax', String(q));
+      capBar.setAttribute('aria-valuenow', String(Math.min(q, shown)));
+      capBar.setAttribute('aria-valuetext', `${fmtMB(shown)} MB of ${fmtMB(q)} MB used`);
+      capLabel.textContent = `${fmtMB(shown)} MB of ${fmtMB(q)} MB`;
+      cap.dataset.warn = warn ? 'yes' : '';
+      capWarn.hidden = !warn;
+    }
     const seen = new Set();
     for (const f of files) {
       seen.add(f.localId);
@@ -1738,15 +2456,27 @@ export function mount(ctx) {
         capSegs.insertBefore(s, before);
         if (!reduced()) anim(s, [{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { duration: 600, easing: 'out', essential: false });
       }
+      const pending = f.phase === 'queued' || f.phase === 'uploading';
+      const sent = pending ? clamp((f.sent || 0) / Math.max(1, f.bytes), 0, 1).toFixed(3) : '1';
+      const segSig = `${f.hue}|${f.bytes}|${q}|${pending ? 1 : 0}|${sent}|${f.phase === 'failed' ? 1 : 0}`;
+      if (s._sig === segSig) continue;               // no style write (and no style recalc) when nothing changed
+      s._sig = segSig;
       s.style.setProperty('--hue', `var(--f${f.hue % 8})`);
       s.style.flexBasis = `max(3px, ${(100 * (f.bytes || 0) / q).toFixed(4)}%)`;
-      const pending = f.phase === 'queued' || f.phase === 'uploading';
       s.dataset.pending = pending ? 'yes' : '';
-      s.style.setProperty('--sent', String(pending ? clamp((f.sent || 0) / Math.max(1, f.bytes), 0, 1) : 1));
+      s.style.setProperty('--sent', sent);
       s.dataset.state = f.phase === 'failed' ? 'failed' : '';
     }
     for (const [lid, s] of [...capSegEls]) if (!seen.has(lid)) { capSegEls.delete(lid); s.remove(); }
     dropOverlay.querySelector('.in-drop-t').textContent = `Drop to add · ${fmtMB(Math.max(0, q - shown))} MB left`;
+    const each = `${Math.floor(fileCap() / 1048576)} MB`, tot = `${fmtMB(q)} MB`;
+    const et = isMobile() ? `Add files · up to ${each} each, ${tot} total` : `Drop files anywhere here · up to ${each} each, ${tot} total`;
+    if (emptyT.textContent !== et) emptyT.textContent = et;
+    const ds = `${SUPPORTED_COPY} · up to ${each} each`;
+    const dsEl = dropOverlay.querySelector('.in-drop-s');
+    if (dsEl.textContent !== ds) dsEl.textContent = ds;
+    const cw = `Close to the ${tot} limit.`;
+    if (capWarnT.textContent !== cw) capWarnT.textContent = cw;
   }
   function shakeCapacity() {
     if (reduced()) {
@@ -1759,12 +2489,19 @@ export function mount(ctx) {
     setTimeout(() => { cap.dataset.flash = ''; }, 700);
   }
 
-  // one place that re-renders everything a file change touches
+  // One place that re-renders everything a file change touches, at most once per frame: a burst of stage events
+  // (4 files x 6 stages) re-renders each touched row once, then the header, the capacity bar and the map.
   let headRaf = 0;
+  const dirtyRows = new Set();
   function afterChange(lid) {
-    if (lid) renderRow(lid);
+    if (lid) dirtyRows.add(lid);
     if (headRaf) return;
-    headRaf = requestAnimationFrame(() => { headRaf = 0; renderHead(); renderCapacity(); syncMap(); updateLate(); updateBand(); });
+    headRaf = requestAnimationFrame(() => {
+      headRaf = 0;
+      const rows = [...dirtyRows]; dirtyRows.clear();
+      for (const x of rows) renderRow(x);
+      renderHead(); renderCapacity(); syncMap(); updateLate(); updateBand();
+    });
   }
   function rerenderAll() {
     const ids = new Set(getState().fileOrder);
@@ -1774,11 +2511,27 @@ export function mount(ctx) {
   }
 
   // stall + retry countdown clock (1 s, only while something is in flight)
+  // Safety net against a silent stream: while a server-side file is still learning and no event arrived for 8 s,
+  // re-read the file list once (every 8 s at most), so a missed 'ready' can never leave a stale "1 learning".
+  let lastEventAt = Date.now(), lastPollAt = 0, polling = false;
+  function pollIfSilent() {
+    if (polling || !api.listFiles || !getState().trial.id || getState().trial.status === 'expired') return;
+    const now = Date.now();
+    if (now - lastEventAt < 8000 || now - lastPollAt < 8000) return;
+    if (!listFiles().some((f) => f.id && !TERMINAL.has(f.phase))) return;
+    polling = true; lastPollAt = now;
+    api.listFiles().then((r) => {
+      if (destroyed || !r) return;
+      for (const row of (Array.isArray(r.files) ? r.files : [])) if (byId.has(row.id)) applyRow(row, { source: 'poll' });
+      if (r.usage) setUsage(r.usage);
+    }).catch(() => { /* the stream or the next poll will bring it */ }).finally(() => { polling = false; });
+  }
   const clock = setInterval(() => {
+    pollIfSilent();
     for (const f of listFiles()) {
       if (TERMINAL.has(f.phase)) continue;
       const r = rowEls.get(f.localId);
-      if (r) { renderNote(f, r, meta(f.localId)); renderActions(f, r, meta(f.localId)); }
+      if (r) { renderNote(f, r, meta(f.localId)); renderActions(f, r, meta(f.localId)); const t = phaseLabel(f); if (r.status.textContent !== t) r.status.textContent = t; }
     }
   }, 1000);
 
@@ -1797,6 +2550,7 @@ export function mount(ctx) {
       if (next.phase !== 'failed') m.failedNode = null;
       emit('file:stage', { localId: lid, phase: next.phase, prev: prev.phase, file: next });
       stageAnnounce(next);
+      if (RANK[next.phase] >= RANK.chunked && next.phase !== 'ready') fetchEarlyPreview(lid);
       if (next.phase === 'ready' && !readyEmitted.has(lid)) {
         readyEmitted.add(lid);
         if (mark) mark('firstReady');
@@ -1819,8 +2573,64 @@ export function mount(ctx) {
       emit('file:stage', { localId: lid, phase: next.phase, prev: prev.phase, file: next });
     }
     if (prev.vectorized !== next.vectorized || prev.atoms !== next.atoms) checkWaiters(lid);
+    // the file's own first lines, from the moment it is on its way (rows created at 'uploaded' included)
+    if (RANK[next.phase] >= RANK.uploading && RANK[next.phase] <= RANK.chunked && !readAsked.has(lid)) fetchReading(lid);
     afterChange(lid);
     maybeShatter(lid);
+  }
+  // The 'atoms' preview event arrives at the atomize stage. The chunks' text already exists at the chunk stage, so
+  // ask for it once then: the shatter starts on real text as soon as there is any (an empty answer changes nothing).
+  const earlyAsked = new Set();
+  function fetchEarlyPreview(lid) {
+    const f = getState().files[lid];
+    if (!f || !f.id || restored.has(lid) || previews.has(f.id) || earlyAsked.has(f.id) || !api.fileAtoms || reduced()) return;
+    earlyAsked.add(f.id);
+    const id = f.id;
+    api.fileAtoms(id, { limit: 12 }).then((r) => {
+      const items = ((r && r.items) || []).filter((x) => x && x.text);
+      if (!items.length || previews.has(id) || destroyed) return;
+      onEvent('atoms', { fileId: id, items: items.map((x) => ({ seq: x.seq, atomId: x.atomId, text: String(x.text).slice(0, 200) })) });
+    }).catch(() => { /* the atoms event will bring it */ });
+  }
+  function linesFrom(text, kind) {
+    let t = String(text || '');
+    if (kind === 'html' || /<[a-z][^>]*>/i.test(t.slice(0, 600))) {
+      t = t.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr|title|section)>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"');
+    }
+    const out = [];
+    for (const raw of t.split(/\r?\n/)) {
+      const l = cleanText(raw);
+      if (l.length < 4 || /^[-=_*·|\s]+$/.test(l)) continue;
+      out.push(l.length > 90 ? `${l.slice(0, 89).trimEnd()}…` : l);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }
+  function setReadingLines(lid, lines) {
+    if (destroyed || !lines || !lines.length || reading.has(lid)) return;
+    const f = getState().files[lid];
+    if (!f || TERMINAL.has(f.phase)) return;
+    reading.set(lid, lines);
+    afterChange(lid);
+    maybeShatter(lid);
+  }
+  function fetchReading(lid) {
+    const f = getState().files[lid];
+    if (!f || readAsked.has(lid) || restored.has(lid)) return;
+    readAsked.add(lid);
+    try {
+      if (f.file && f.file.slice && ['txt', 'md', 'html'].includes(f.kind)) {
+        f.file.slice(0, 6144).text().then((t) => setReadingLines(lid, linesFrom(t, f.kind))).catch(() => { /* no excerpt: the scan bar alone */ });
+        return;
+      }
+      if (f.sample) {
+        const base = String(f.name || '').split('/').pop();
+        if (!/^[a-z0-9][\w.-]*$/i.test(base) || !/^[a-z0-9-]+$/i.test(sampleSet)) return;
+        fetch(new URL(`./samples/${sampleSet}/${base}`, import.meta.url), { credentials: 'same-origin' })
+          .then((r) => (r.ok ? r.text() : '')).then((t) => setReadingLines(lid, linesFrom(String(t).slice(0, 6144), f.kind))).catch(() => { /* ignore */ });
+      }
+    } catch { /* ignore */ }
   }
   function stageAnnounce(f) {
     const key = `${f.localId}:${f.phase}`;
@@ -1881,6 +2691,7 @@ export function mount(ctx) {
     }
     if (patch.stalledFor >= STALL_MS) { const m = meta(lid); m.lastChangeAt = Math.min(m.lastChangeAt || Date.now(), Date.now() - patch.stalledFor); }
     update(lid, patch, `ingest:${source}`);
+    { const cur = getState().files[lid]; if (cur) saveHue(row.id, cur.hue); }
     if (patch.summary && phase === 'ready' && !summarized.has(lid)) applySummary({ fileId: row.id, oneLine: patch.summary.oneLine, topics: patch.summary.topics, starters: [] }, { fromRow: true });
     return lid;
   }
@@ -1967,7 +2778,8 @@ export function mount(ctx) {
     let accepted = 0, acceptedBytes = 0, overflow = false;
     files.forEach((file, i) => {
       const err = validate(file);
-      const f = newFileState({ name: file.name, bytes: file.size, mime: file.type, kind: kindOf(file.name, file.type) || 'txt', file });
+      // an unsupported type keeps a generic file icon (never a TXT badge on setup.exe)
+      const f = newFileState({ name: file.name, bytes: file.size, mime: file.type, kind: kindOf(file.name, file.type) || 'file', file });
       if (err) {
         f.phase = 'rejected';
         f.error = { ...err, actions: err.code === 'quota' ? ['remove', 'files'] : ['remove'] };
@@ -2302,6 +3114,12 @@ export function mount(ctx) {
   }
   function resolveWaiters(lid, why) { for (const w of [...waiters]) if (w.lid === lid) { waiters.delete(w); w.resolve(why); } }
 
+  // Is there room for the choreography? Read from the map's cached size (ResizeObserver), never from layout.
+  function roomForShatter() {
+    const { H } = map.size();
+    // phones: the 140 px band still plays one (smaller) shatter at a time; desktop needs a real band
+    return !(reduced() || band.dataset.mode === 'ribbon' || tableOn || document.hidden || (H && H < (isMobile() ? 118 : 170)) || map.isRetrieving());
+  }
   function maybeShatter(lid) {
     if (shattered.has(lid) || shatterJobs.has(lid)) return;
     const f = getState().files[lid];
@@ -2309,34 +3127,48 @@ export function mount(ctx) {
     if (restored.has(lid)) { shattered.add(lid); return; }
     if (f.phase === 'failed') { shattered.add(lid); return; }
     const items = previews.get(f.id);
-    if (!items || !items.length) {
-      // no preview yet: if the file is already Ready without one, give up on the shatter honestly (dots still land)
-      return;
-    }
-    if (RANK[f.phase] < RANK.atomized) return;
-    // no room for the choreography (ribbon, a band compacted under an answer, table view, hidden tab): dots land directly
-    if (reduced() || band.dataset.mode === 'ribbon' || tableOn || document.hidden || stage.clientHeight < 170) { shattered.add(lid); return; }
+    const lines = reading.get(lid);
+    // no real text yet: nothing to shatter (the map's reading node shows the file being read meanwhile)
+    if ((!items || !items.length) && (!lines || !lines.length)) return;
+    // Phase A (DocCard) starts once the text is extracted (spec 2.4): with the file's own first lines, so the card is
+    // on screen while it is chunked, and two files past extract play side by side on desktop (director capacity 2)
+    if (RANK[f.phase] < RANK.extracted) return;
+    // no room for the choreography (ribbon, a band compacted under an answer, table view, hidden tab, a beam
+    // playing): dots land directly at their real rate
+    if (!roomForShatter()) { shattered.add(lid); return; }
     shattered.add(lid);
     const key = f.id;
     // no hold while queued: a file waiting for a shatter slot keeps landing real dots at its vectorized rate
-    const job = { aborted: false };
+    const job = { started: false, cancelled: false, ctrl: null, key };
     shatterJobs.set(lid, job);
-    const run = (signal) => runShatter(lid, key, items, signal).catch((err) => { console.error('[ingest] shatter', err); }).finally(() => {
-      map.release(key);
-      shatterJobs.delete(lid);
-    });
+    const run = (signal) => {
+      if (job.cancelled || !roomForShatter()) return Promise.resolve();
+      return runShatter(lid, key, signal).catch((err) => { console.error('[ingest] shatter', err); });
+    };
+    const done = () => { map.release(key, job.cancelled); shatterJobs.delete(lid); };
     const p = motion.director && motion.director.request
       ? motion.director.request('shatter', 1, run, { region: mapSlot, maxMs: 25000 })
       : run(new AbortController().signal);
-    Promise.resolve(p).then(() => { map.release(key); shatterJobs.delete(lid); });
+    Promise.resolve(p).then(done, done);
   }
-  function skipShatter(lid) { const j = shatterJobs.get(lid); if (j && j.ctrl) j.ctrl.abort(); shattered.add(lid); }
+  function skipShatter(lid) { const j = shatterJobs.get(lid); if (j) { j.cancelled = true; if (j.ctrl) j.ctrl.abort(); } shattered.add(lid); }
   function skipAllShatters() { if (motion.director && motion.director.busy() === 'shatter') motion.director.skip(); }
+  /** A beam is about to play (or a question pre-empts): every shatter, running or queued, ends NOW. Its DOM goes in
+   *  this same task (no fade), its atoms land straight on the canvas. One signature at a time, always. */
+  function abortAllShatters() {
+    for (const j of shatterJobs.values()) { j.cancelled = true; if (j.ctrl) j.ctrl.abort(); map.release(j.key, true); }
+    for (const el of [...mapFx.children]) el.remove();
+    skipAllShatters();
+  }
 
-  function chipsFrom(items, cap) {
-    // round-robin over the atoms so every preview atom is represented; 3–6 real words per chip
+  // Chip texts + widths for a file's preview: computed once (idle time when possible), never during the choreography.
+  const chipCache = new Map();     // fileId -> {chips:[{text, w, seq, atomId, ai}], atoms, cardText}
+  function prepChips(fileId, items) {
+    const hit = chipCache.get(fileId);
+    if (hit && hit.items === items) return hit;
+    const cap = 32;
     const groups = items.map((it) => {
-      const words = String(it.text || '').replace(/[#*_`>|]+/g, ' ').split(/\s+/).filter(Boolean);
+      const words = cleanText(it.text).split(/\s+/).filter((w) => w && w !== '·');
       const out = [];
       let i = 0, g = 0;
       while (i < words.length && out.length < 8) {
@@ -2349,85 +3181,176 @@ export function mount(ctx) {
     const chips = [];
     for (let round = 0; chips.length < cap; round++) {
       let any = false;
-      for (const g of groups) {
-        if (round < g.out.length && chips.length < cap) { chips.push({ text: g.out[round], seq: Number(g.it.seq) || 0, atomId: g.it.atomId, ai: groups.indexOf(g) }); any = true; }
-      }
+      groups.forEach((g, gi) => {
+        if (round < g.out.length && chips.length < cap) {
+          const text = g.out[round].length > 44 ? `${g.out[round].slice(0, 43)}…` : g.out[round];
+          chips.push({ text, w: Math.ceil(textWidth(text)) + 14, seq: Number(g.it.seq) || 0, atomId: g.it.atomId, ai: gi });
+          any = true;
+        }
+      });
       if (!any) break;
     }
-    return { chips, atoms: groups.length };
+    const cardText = items.map((x) => cleanText(x.text)).join(' ').slice(0, 340);
+    const v = { items, chips, atoms: groups.length, cardText };
+    chipCache.set(fileId, v);
+    return v;
   }
 
-  // chip widths come from text metrics, never from layout reads (no forced reflow in the middle of the choreography)
-  function chipWidth(text) { return Math.ceil(textWidth(text)) + 14; }
+  // The choreography's DOM work runs AFTER a frame (rAF → task), never inside a FrameRequestCallback, and in
+  // slices of at most ~4 ms: a long batch of chips is spread over several frames instead of one long one.
+  const nextSlice = () => new Promise((r) => { let done = false; const go = () => { if (!done) { done = true; r(); } }; requestAnimationFrame(() => setTimeout(go, 0)); setTimeout(go, 50); });
+  // Native WAAPI for the choreography (transform / opacity only). motion.animate() adds and removes will-change on
+  // every element it touches, which would promote and drop a compositor layer per chip per phase.
+  let springOk = null;
+  const EZ = { out: 'cubic-bezier(.2,.8,.2,1)', spring: 'cubic-bezier(.34,1.4,.64,1)', linear: 'linear' };
+  function ez(n) {
+    const v = (motion.EASE && motion.EASE[n]) || EZ[n] || n || EZ.out;
+    if (String(v).startsWith('linear(')) {
+      if (springOk === null) { try { springOk = typeof CSS !== 'undefined' && CSS.supports('transition-timing-function', v); } catch { springOk = false; } }
+      if (!springOk) return EZ.spring;
+    }
+    return v;
+  }
 
-  async function runShatter(lid, key, items, signal) {
+  /** Resolves with the file's real atom preview once it exists (the 'atoms' event or the early fetch), else null. */
+  function waitPreview(key, signal, ms) {
+    return new Promise((resolve) => {
+      const have = previews.get(key);
+      if (have && have.length) { resolve(have); return; }
+      const t0 = performance.now();
+      const iv = setInterval(() => {
+        const p = previews.get(key);
+        if (p && p.length) { clearInterval(iv); resolve(p); }
+        else if (signal.aborted || performance.now() - t0 > ms) { clearInterval(iv); resolve(null); }
+      }, 120);
+    });
+  }
+
+  async function runShatter(lid, key, signal) {
     const job = shatterJobs.get(lid) || {};
     job.started = true;
-    const ctrl = { abort: () => {} };
-    job.ctrl = ctrl;
     const f0 = getState().files[lid];
-    if (!f0 || signal.aborted) return;
+    if (!f0 || signal.aborted || job.cancelled) return;
     if (firstShatter) { firstShatter = false; try { motion.fpsProbe && motion.fpsProbe(3000); } catch { /* ignore */ } }
     const fast = f0.phase === 'ready';                    // Ready before we started: compressed replay (900 ms total)
     const T = fast ? { a: 160, b: 200, c: 250, d: 330, e: 200, st: 0.35 } : { a: 380, b: 600, c: 700, d: 480, e: 300, st: 1 };
     const mob = isMobile();
     const hue = `var(--f${f0.hue % 8})`;
     const anims = [];
-    const A = (el, kf, o) => { const x = anim(el, kf, { ...o, signal }); anims.push(x); return x; };
-    let slot = 0; while (slotsUsed.has(slot)) slot++; slotsUsed.add(slot);
     const localAbort = new AbortController();
-    ctrl.abort = () => localAbort.abort();
     const aborted = () => signal.aborted || localAbort.signal.aborted;
-    // everything this shatter draws lives in one host: cleanup is one fade on one element, not 40
+    const fx = (el, kf, o = {}) => {
+      let a = null;
+      try { a = el.animate(kf, { duration: o.duration ?? 300, delay: Math.max(0, o.delay || 0), easing: ez(o.easing || 'out'), fill: o.fill || 'none' }); } catch { /* ignore */ }
+      if (!a) return { finished: Promise.resolve(), finish() {} };
+      anims.push(a);
+      if (aborted()) { try { a.finish(); } catch { /* ignore */ } }
+      return a;
+    };
+    const finishAll = () => { for (const x of anims) { try { x.finish(); } catch { /* ignore */ } } };
+    signal.addEventListener('abort', finishAll, { once: true });
+    // Which half of the map: the one with fewer dots under it (chips never sit on a dense cluster), unless the other
+    // running shatter already holds it. Phones have one region.
+    const regions = mob ? 1 : 2;
+    let slot = 0;
+    if (regions === 2) {
+      const hm = map.halfMass();
+      const pref = hm.left <= hm.right ? 0 : 1;
+      slot = !slotsUsed.has(pref) ? pref : !slotsUsed.has(1 - pref) ? 1 - pref : pref;
+    } else { while (slotsUsed.has(slot)) slot++; }
+    slotsUsed.add(slot);
+    const occId = `shatter-${slot}`;
+    // everything this shatter draws lives in one host: cleanup is one element, removed in the same task on abort
     const host = h('div', { class: 'in-shatter', style: { '--hue': hue } });
+    job.ctrl = { abort: () => { localAbort.abort(); finishAll(); host.remove(); map.setOccluder(occId, null); map.muteLabel(key, false); } };
     const cleanup = () => {
       slotsUsed.delete(slot);
-      for (const x of anims) { try { x.finish(); } catch { /* ignore */ } }
+      finishAll();
+      map.setOccluder(occId, null);
+      map.muteLabel(key, false);
       if (!host.isConnected) return;
       if (!reduced() && !aborted() && host.animate) { const a2 = host.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 140, fill: 'forwards' }); a2.finished.then(() => host.remove(), () => host.remove()); }
       else host.remove();
     };
+    // Start animations for a list in slices: at most ~4 ms of work, then yield until after the next frame.
+    // Delays are planned from one start time, so a slice that starts a frame later keeps the stagger's rhythm.
+    const inSlices = async (list, fn) => {
+      const out = [];
+      const t0 = performance.now();
+      let ts = t0;
+      for (let i = 0; i < list.length; i++) {
+        if (aborted()) break;
+        out.push(fn(list[i], i, performance.now() - t0));
+        if (i < list.length - 1 && performance.now() - ts > 4) { await nextSlice(); ts = performance.now(); }
+      }
+      return Promise.all(out);
+    };
     try {
-      // ---- geometry (one read of the stage, the row and the chrome; everything after is writes)
-      const sw = stage.clientWidth, sh = stage.clientHeight;
+      // ---- geometry: the map's cached size and chrome (no layout read anywhere in the choreography)
+      const { W: sw, H: sh } = map.size();
       if (!sw || !sh) return;
       const ch0 = map.chrome || {};
       const top = Math.max(mob ? 34 : 44, (ch0.hudBottom || 0) + 6);
       const bottom = Math.max(mob ? 8 : 34, sh - (ch0.legendTop || sh) + 6);
       const availH = Math.max(40, sh - top - bottom);
-      const cardScale = clamp(availH / 200, 0.4, 1);
+      const cardScale = clamp(availH / 200, mob ? 0.3 : 0.5, 1);
       const cw = 160 * cardScale, ch = 200 * cardScale;
       // desktop: two shatters play side by side, each in its own half of the map
-      const regions = mob ? 1 : 2;
       const regW = (sw - 24) / regions;
       const regX = 12 + regW * (slot % regions);
       const cx = regX + 4;
       const cy = top + Math.max(0, (availH - ch) / 2);
-      // the card rises out of its own FileRow (or from below the map when the row is folded away)
-      let fromX = cx, fromY = sh + 24;
-      const rowEl = rowEls.get(lid);
-      if (rowEl && rowEl.li.isConnected) {
-        const sr = stage.getBoundingClientRect(), rr = rowEl.li.getBoundingClientRect();
-        if (rr.width) { fromX = clamp(rr.left - sr.left + 36, 0, sw - 40); fromY = Math.max(sh * 0.6, rr.top - sr.top); }
-      }
-      mapFx.append(host);
+      // the card rises from the intake below the map
+      const fromX = cx, fromY = sh + 24;
+      const hgt = 18, lineH = 24, gapX = 6;
+      const occH = Math.max(ch + 36, availH + 10);
 
-      // ---- A. DocCard (real atom text, first lines)
-      const text = items.map((x) => String(x.text || '').replace(/\s+/g, ' ').trim()).join(' ');
+      // ---- A. DocCard: the file's real text (its first atoms when they exist, else its own first lines), with a
+      // scan line sweeping down it while the server chunks it (the only motion while we wait for the real stage)
+      const lines = reading.get(lid) || [];
+      const pv0 = previews.get(key);
+      const cardText = pv0 && pv0.length ? prepChips(key, pv0).cardText : lines.join(' ').slice(0, 340);
+      const scan = h('i', { class: 'in-doc-scan', 'aria-hidden': 'true' });
       const card = h('div', { class: 'in-doc', style: { left: `${cx}px`, top: `${cy}px`, width: '160px', height: '200px', transform: `scale(${cardScale})` } },
         h('div', { class: 'in-doc-h' }, h('span', { html: fileIcon(f0.kind, { size: 11 }) }), h('span', { class: 'in-doc-n' }, mid(f0.name, 22))),
-        h('p', { class: 'in-doc-t' }, text.slice(0, 340)));
-      host.append(card);
-      await A(card, [
+        h('p', { class: 'in-doc-t' }, cardText), scan);
+      // a soft panel-coloured field under this shatter's region: the chips read cleanly over any cluster below them
+      const veil = h('div', { class: 'in-veil', style: { left: `${regX - 6}px`, top: `${top - 10}px`, width: `${regW + 12}px`, height: `${occH + 12}px` } });
+      const layer = h('div', { class: 'in-chips' });
+      host.append(veil, card, layer);
+      mapFx.append(host);
+      fx(veil, [{ opacity: 0 }, { opacity: 1 }], { duration: 260, easing: 'out', fill: 'both' });
+      // cluster labels step out of this shatter's region while it plays (re-placed, or hidden if nowhere fits)
+      map.setOccluder(occId, { x: regX, y: top - 8, w: regW, h: occH });
+      // keep the row that is shattering in view in the intake: an IntersectionObserver reports where it is without
+      // forcing a layout; only a row that is (partly) out of view scrolls, by exactly the missing amount
+      try {
+        const rr = rowEls.get(lid);
+        if (rr && rr.li.isConnected && !body.hidden) {
+          const vis = new IntersectionObserver((ents) => {
+            vis.disconnect();
+            const e = ents[ents.length - 1];
+            if (!e || !e.rootBounds || e.intersectionRatio >= 0.98 || aborted()) return;
+            const b0 = e.boundingClientRect, rb = e.rootBounds;
+            const dy = b0.top < rb.top ? b0.top - rb.top - 6 : b0.bottom > rb.bottom ? b0.bottom - rb.bottom + 6 : 0;
+            if (dy) body.scrollBy({ top: dy, behavior: reduced() ? 'auto' : 'smooth' });
+          }, { root: body, threshold: [0, 0.98] });
+          vis.observe(rr.li);
+        }
+      } catch { /* no IntersectionObserver: the row stays where the visitor left it */ }
+      await fx(card, [
         { opacity: 0, transform: `translate(${fromX - cx}px, ${fromY - cy}px) scale(${cardScale * 0.42})` },
         { opacity: 1, transform: `translate(0, 0) scale(${cardScale})` },
       ], { duration: T.a, easing: 'out' }).finished;
       if (aborted()) return;
 
-      // ---- B. Chunk: N = min(chunks, 6) horizontal strips (clip-path clones)
+      // ---- B. Chunk: N = min(chunks, 6) horizontal strips (clip-path clones), #n badges in the card's left gutter
       let w = await waitPhase(lid, RANK.chunked, signal); if (w !== 'ok') return finishEarly(w);
+      scan.remove();
+      // the real chunk text, when it arrived while the card waited
+      { const pv = previews.get(key); if (pv && pv.length && pv !== pv0) { const tEl = card.querySelector('.in-doc-t'); if (tEl) tEl.textContent = prepChips(key, pv).cardText; } }
       const fB = getState().files[lid];
-      const N = clamp(Number(fB.chunks) || Math.ceil((fB.atoms || items.length) / 3), 1, 6);
+      const N = clamp(Number(fB.chunks) || Math.ceil((fB.atoms || 6) / 3), 1, 6);
       const strips = [];
       const frag = document.createDocumentFragment();
       for (let i = 0; i < N; i++) {
@@ -2438,87 +3361,116 @@ export function mount(ctx) {
         st.append(h('span', { class: 'in-strip-l in-num', style: { top: `${((i + 0.5) / N) * 100}%` } }, `#${i + 1}`));
         frag.append(st); strips.push(st);
       }
-      host.append(frag);
+      host.insertBefore(frag, layer);
       card.style.visibility = 'hidden';
       const midN = (N - 1) / 2;
       await Promise.all(strips.map((st, i) => {
         const dir = i < midN ? -1 : i > midN ? 1 : 0;
         const dist = (6 + (8 * Math.abs(i - midN)) / Math.max(1, midN)) * dir;
         st._dy = dist;
-        return A(st, [{ transform: `scale(${cardScale}) translateY(0)` }, { transform: `scale(${cardScale}) translateY(${dist}px)` }], { duration: T.b, delay: i * 40 * T.st, easing: 'spring', fill: 'forwards' }).finished;
+        return fx(st, [{ transform: `scale(${cardScale}) translateY(0)` }, { transform: `scale(${cardScale}) translateY(${dist}px)` }], { duration: T.b, delay: i * 40 * T.st, easing: 'spring', fill: 'forwards' }).finished;
       }));
       if (aborted()) return;
 
-      // ---- C. Atomize: strips become chips of 3–6 real words (≤32 desktop, ≤16 mobile; halved on low detail)
+      // ---- C. Atomize: strips become chips of 3–6 real words (≤32 desktop, ≤16 mobile, 16 when frames run long;
+      // halved on low detail). Chips need the real atom text: wait for it (never invent words); none in time → the
+      // strips dissolve and the atoms simply land on the canvas at their real rate.
       w = await waitPhase(lid, RANK.atomized, signal); if (w !== 'ok') return finishEarly(w);
-      let capN = mob ? 16 : 32; if (lowDetail()) capN = Math.floor(capN / 2);
-      const all = chipsFrom(items, capN).chips;
-      if (!all.length) return;
-      // loose grid to the right of the card, inside this shatter's region; chips that don't fit are dropped
-      const hgt = 18;
+      const items = await waitPreview(key, signal, 3000);
+      if (aborted()) return;
+      if (!items) { strips.forEach((st) => fx(st, [{ opacity: 1 }, { opacity: 0 }], { duration: 240, easing: 'out', fill: 'forwards' })); await sleep(240); return; }
+      const prep = prepChips(key, items);
+      let capN = mob ? 16 : (map.frameMs > 20 || LOWCPU) ? 16 : 32; if (lowDetail()) capN = Math.floor(capN / 2);
+      const pool = prep.chips.slice(0, capN);
       const areaX = cx + cw + 14;
       const areaW = Math.max(70, regX + regW - 6 - areaX);
       const maxY = sh - bottom - hgt;
-      let x = 0, y = 0;
-      const placed = [];
-      for (let i = 0; i < all.length; i++) {
-        const wv = Math.min(chipWidth(all[i].text), areaW);
-        if (x + wv > areaW && x > 0) { x = 0; y += hgt + 7; }
-        const py = top + 2 + y;
-        if (py > maxY) break;
-        const j = hash32(`${key}:${i}`);
-        placed.push({ c: all[i], w: wv, x: areaX + x + ((j & 0xff) / 255 - 0.5) * 6, y: py + (((j >>> 8) & 0xff) / 255 - 0.5) * 5, rot: (((j >>> 16) & 0xff) / 255 - 0.5) * 4 });
-        x += wv + 6;
-      }
-      if (!placed.length) return;
-      const layer = h('div', { class: 'in-chips' });
-      const chipEls = placed.map((p) => {
+      const moreW = Math.ceil(textWidth('+00,000 atoms')) + 14;
+      const flow = (n, extra) => {
+        let x = 0, y = 0;
+        const out = [];
+        const ws = pool.slice(0, n).map((c) => Math.min(c.w, areaW));
+        if (extra) ws.push(Math.min(moreW, areaW));
+        for (let i = 0; i < ws.length; i++) {
+          if (x + ws[i] > areaW && x > 0) { x = 0; y += lineH; }
+          const py = top + 2 + y;
+          if (py > maxY) return null;
+          out.push({ w: ws[i], x: areaX + x, y: py });
+          x += ws[i] + gapX;
+        }
+        return out;
+      };
+      let n = pool.length, slots = null;
+      while (n > 0 && !(slots = flow(n, true))) n--;
+      if (!slots || !n) { strips.forEach((st) => fx(st, [{ opacity: 1 }, { opacity: 0 }], { duration: 240, easing: 'out', fill: 'forwards' })); await sleep(240); return; }
+      const placed = slots.slice(0, n).map((p, i) => ({ ...p, c: pool[i] }));
+      const moreSlot = slots[n];
+      // every chip is built in ONE DOM write (pre-created nodes); from here on each phase only animates their
+      // transform / opacity on the compositor
+      const chipEls = placed.map((p) => h('span', { class: 'in-atom', style: { left: `${p.x}px`, top: `${p.y}px`, width: `${p.w}px` } },
         // face (pill + words) and dot are separate layers so the fly is transform/opacity only (compositor)
-        const el = h('span', { class: 'in-atom', style: { left: `${p.x}px`, top: `${p.y}px`, width: `${p.w}px` } },
-          h('span', { class: 'in-atom-face' }, h('span', { class: 'in-atom-t' }, p.c.text)), h('i', { class: 'in-atom-dot' }));
-        layer.append(el);
-        return el;
-      });
-      host.append(layer);                                   // one DOM write for all chips
-      const atomsN = items.length;
-      strips.forEach((st) => A(st, [{ opacity: 1 }, { opacity: 0 }], { duration: Math.min(300, T.c * 0.45), easing: 'out', fill: 'forwards' }));
-      await Promise.all(chipEls.map((el, i) => {
-        const p = placed[i];
+        h('span', { class: 'in-atom-face' }, h('span', { class: 'in-atom-t' }, p.c.text)), h('i', { class: 'in-atom-dot' })));
+      const moreT = h('span', { class: 'in-atom-t' });
+      const moreEl = h('span', { class: 'in-atom in-more', style: { left: `${moreSlot.x}px`, top: `${moreSlot.y}px`, width: `${moreSlot.w}px` } }, h('span', { class: 'in-atom-face' }, moreT));
+      layer.append(...chipEls, moreEl);
+      const fC = getState().files[lid] || fB;
+      const rest = Math.max(0, (Number(fC.atoms) || 0) - placed.length);
+      if (rest > 0) moreT.textContent = `+${fmtInt(rest)} atoms`;
+      // this file's own cluster label stays out of the way while its chips are in flight
+      map.muteLabel(key, true);
+      const atomsN = prep.atoms;
+      strips.forEach((st) => fx(st, [{ opacity: 1 }, { opacity: 0 }], { duration: Math.min(300, T.c * 0.45), easing: 'out', fill: 'forwards' }));
+      const cList = rest > 0 ? [...chipEls, moreEl] : chipEls;
+      await inSlices(cList, (el, i, late) => {
+        const p = i < placed.length ? placed[i] : { ...moreSlot, c: { ai: atomsN - 1 } };
         const si = clamp(Math.floor((p.c.ai / Math.max(1, atomsN)) * N), 0, N - 1);
-        const fx = cx + cw * 0.15 + ((i * 37) % Math.max(1, cw * 0.6)), fy = cy + ch * ((si + 0.5) / N) + (strips[si]?._dy || 0);
-        const dx = fx - p.x, dy = fy - p.y;
-        return A(el, [
+        const fxX = cx + cw * 0.2 + ((i * 37) % Math.max(1, cw * 0.55)), fyY = cy + ch * ((si + 0.5) / N) + (strips[si]?._dy || 0);
+        const dx = fxX - p.x, dy = fyY - p.y;
+        return fx(el, [
           { opacity: 0, transform: `translate(${dx}px, ${dy}px) scale(.8)` },
-          { opacity: 1, transform: `translate(0, 0) rotate(${p.rot}deg) scale(1)` },
-        ], { duration: T.c * 0.75, delay: i * 12 * T.st, easing: 'spring', fill: 'forwards' }).finished;
-      }));
+          { opacity: 1, transform: 'translate(0, 0) scale(1)' },
+        ], { duration: T.c * 0.75, delay: (i % 8) * 12 * T.st - late, easing: 'spring', fill: 'both' }).finished;
+      });
       if (aborted()) return;
 
       // ---- D. Fly: chips become 6 px dots and land on their real map coordinates; the canvas takes over
       w = await waitPhase(lid, RANK.vectorizing, signal); if (w !== 'ok') return finishEarly(w);
+      // the veil lifts as the chips leave: the dots they become land in plain view
+      fx(veil, [{ opacity: 1 }, { opacity: 0 }], { duration: 320, easing: 'out', fill: 'forwards' });
       // the chips' own seqs are reserved for the hand-off; every other atom keeps streaming in at the real rate
       map.reserve(key, placed.map((p) => p.c.seq));
       const landed = new Set();
       let haloed = false;
       const dur = T.d + 240 * T.st;
-      await Promise.all(chipEls.map((el, i) => {
+      const flyList = rest > 0 ? [...chipEls, moreEl] : chipEls;
+      await inSlices(flyList, (el, i, late) => {
+        const delay = (i % 8) * 12 * T.st - late;
+        if (i >= placed.length) {
+          // "+N atoms" heads for the cluster and dissolves: the rest stream in on the canvas at the real rate
+          const c = map.clusterOf(key);
+          if (!c) return Promise.resolve();
+          const dx = c.x - (moreSlot.x + moreSlot.w / 2), dy = c.y - (moreSlot.y + hgt / 2);
+          return fx(el, [{ transform: 'translate(0, 0) scale(1)', opacity: 1 }, { transform: `translate(${dx}px, ${dy}px) scale(.35)`, opacity: 0 }], { duration: dur, delay, easing: 'out', fill: 'forwards' }).finished;
+        }
         const p = placed[i];
         const t = map.targetFor(key, p.c.seq);
         if (!t) return Promise.resolve();
         const dx = t.x - (p.x + p.w / 2), dy = t.y - (p.y + hgt / 2);
-        const delay = i * 12 * T.st;
-        A(el.firstChild, [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(.25)' }], { duration: dur * 0.34, delay, easing: 'out', fill: 'forwards' });
-        A(el.lastChild, [{ opacity: 0 }, { opacity: 1 }], { duration: dur * 0.3, delay, easing: 'out', fill: 'forwards' });
-        return A(el, [
-          { transform: `translate(0, 0) rotate(${p.rot}deg)`, offset: 0, easing: 'cubic-bezier(.4,0,.2,1)' },
-          { transform: `translate(${dx * 0.06}px, ${dy * 0.06}px) rotate(0deg)`, offset: 0.3, easing: 'cubic-bezier(.2,.8,.2,1)' },
-          { transform: `translate(${dx}px, ${dy}px) rotate(0deg)`, offset: 1 },
+        fx(el.firstChild, [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(.25)' }], { duration: dur * 0.34, delay, easing: 'out', fill: 'forwards' });
+        fx(el.lastChild, [{ opacity: 0 }, { opacity: 1, offset: 0.3 }, { opacity: 1 }], { duration: dur, delay, easing: 'linear', fill: 'forwards' });
+        return fx(el, [
+          { transform: 'translate(0, 0)', offset: 0, easing: 'cubic-bezier(.4,0,.2,1)' },
+          { transform: `translate(${dx * 0.06}px, ${dy * 0.06}px)`, offset: 0.3, easing: 'cubic-bezier(.2,.8,.2,1)' },
+          { transform: `translate(${dx}px, ${dy}px)`, offset: 1 },
         ], { duration: dur, delay, easing: 'linear', fill: 'forwards' }).finished.then(() => {
-          el.style.visibility = 'hidden';
+          // opacity, not visibility: no style recalc of the chip subtree per landing
+          fx(el, [{ opacity: 0 }, { opacity: 0 }], { duration: 1, fill: 'forwards' });
           if (!landed.has(p.c.seq)) { landed.add(p.c.seq); map.spawn(key, p.c.seq, t.x, t.y); }
           if (!haloed) { haloed = true; map.halo(key); }
         });
-      }));
+      });
+      map.setOccluder(occId, null);
+      map.muteLabel(key, false);
       if (aborted()) return;
 
       // ---- E. Ready: halo pulse, label, HUD lands
@@ -2541,8 +3493,28 @@ export function mount(ctx) {
 
   // ================================================================== events stream (D owns it)
 
+  // SSE file rows are coalesced per frame (latest row per file wins; rows are full snapshots and stages never step
+  // back), so a burst of events costs one store write per file per frame instead of one per event.
+  const rowQ = new Map();
+  let rowRaf = 0;
+  function flushRows() {
+    if (rowRaf) { cancelAnimationFrame(rowRaf); rowRaf = 0; }
+    if (!rowQ.size || destroyed) return;
+    const rows = [...rowQ.values()]; rowQ.clear();
+    for (const r of rows) applyRow(r, { source: 'event' });
+  }
   function onEvent(type, data) {
     if (destroyed) return;
+    lastEventAt = Date.now();
+    if (type === 'file' && data && data.id) {
+      // a terminal row (ready / failed) is applied at once: cards, announcements and the first-ready mark never wait
+      if (data.stage === 'ready' || data.stage === 'failed' || !byId.has(data.id)) { rowQ.delete(data.id); applyRow(data, { source: 'event' }); return; }
+      rowQ.set(data.id, data);
+      if (!rowRaf) rowRaf = requestAnimationFrame(() => { rowRaf = 0; flushRows(); });
+      return;
+    }
+    // anything else may depend on the file rows (byId, phases): apply the queued rows first, in order
+    flushRows();
     switch (type) {
       case 'hello': {
         const rows = Array.isArray(data && data.files) ? data.files : null;
@@ -2563,10 +3535,14 @@ export function mount(ctx) {
       case 'atoms': {
         if (!data || !data.fileId || !Array.isArray(data.items)) break;
         const items = data.items.filter((x) => x && x.text).map((x) => ({ seq: Number(x.seq) || 0, atomId: x.atomId || null, text: String(x.text) }));
+        if (!items.length) break;
         previews.set(data.fileId, items);
         for (const it of items) atomText.set(`${data.fileId}:${it.seq}`, { text: it.text.replace(/\s+/g, ' ').trim(), atomId: it.atomId });
         const lid = byId.get(data.fileId);
+        if (lid && !reading.has(lid)) setReadingLines(lid, items.slice(0, 3).map((x) => cleanText(x.text)).filter((x) => x.length >= 4).map((x) => (x.length > 90 ? `${x.slice(0, 89).trimEnd()}…` : x)));
         if (lid) maybeShatter(lid);
+        // chip words + widths for the choreography, measured while the browser is idle (not inside it)
+        ric(() => { if (!destroyed && previews.get(data.fileId) === items) prepChips(data.fileId, items); }, 400);
         break;
       }
       case 'summary': applySummary(data); break;
@@ -2599,6 +3575,7 @@ export function mount(ctx) {
   let samplesBusy = false;
   async function attachSamples(set = 'lumen-bikes') {
     if (samplesBusy) return;
+    if (/^[a-z0-9-]+$/i.test(String(set))) sampleSet = String(set);
     // reserve the rows' final height now (inside the click's input window), so nothing below moves when they land
     if (!listFiles().some((f) => f.sample)) {
       const info = (Array.isArray(cfg().samples) ? cfg().samples : []).find((x) => x && x.id === set);
@@ -2609,13 +3586,14 @@ export function mount(ctx) {
     samplesBusy = true;
     try {
       const r = await api.attachSamples(set);
-      clearSkeletons();
       if (r && r.replay && r.replay.label) replayLabel = r.replay.label;
       const ids = [];
       for (const row of (r && r.files) || []) { const lid = applyRow({ ...row, sample: true }, { source: 'samples' }); if (lid) ids.push(lid); }
       if (r && r.usage) setUsage(r.usage);
       if (ids.length) { mark && mark('firstFile'); emit('files:added', { localIds: ids }); }
       collapsedByUser.auto = true;
+      // rows replace their skeletons one by one (2 per frame); any skeleton left over (fewer files) goes after them
+      if (!pendingRows.size) clearSkeletons();
       afterChange(null);
     } catch (err) {
       clearSkeletons(); renderHead();
@@ -2648,6 +3626,8 @@ export function mount(ctx) {
     setTimeout(() => { panel.dataset.flash = ''; }, 900);
   });
   sub('map:retrieval', (d) => {
+    // one signature at a time: any shatter still on screen ends in this task, before the beam's first frame
+    if (shatterJobs.size || mapFx.childElementCount) abortAllShatters();
     renderSrHits(d);
     // in the ribbon the beam gets room to be read: a temporary overlay peek (never a layout change)
     if (d && Array.isArray(d.hits) && !peekOn) setPeek(true);
@@ -2658,7 +3638,8 @@ export function mount(ctx) {
   // the intake folds to its one-line chip so the answer gets the room. All of it inside the ask's input window.
   sub('answer:start', () => {
     map.relax();
-    if (motion.director && motion.director.busy && motion.director.busy() === 'shatter') { try { motion.director.skip(); } catch { /* ignore */ } }
+    expanded = false;
+    if (shatterJobs.size || mapFx.childElementCount) abortAllShatters();
     if (!askedCollapse && liveFiles().length) { askedCollapse = true; collapsedByUser.auto = true; renderHead(); }
   });
   sub('motion:skip', () => map.fastForward());
@@ -2673,7 +3654,9 @@ export function mount(ctx) {
   sub('change:files', ({ reason } = {}) => {
     if (reason === 'reset') {
       for (const lid of [...rowEls.keys()]) removeRowEl(lid);
-      byId.clear(); previews.clear(); rowMeta.clear(); restored.clear(); summarized.clear(); readyEmitted.clear(); failedEmitted.clear(); shattered.clear();
+      byId.clear(); previews.clear(); rowMeta.clear(); reading.clear(); readAsked.clear(); restored.clear(); summarized.clear(); readyEmitted.clear(); failedEmitted.clear(); shattered.clear();
+      pendingRows.clear(); chipCache.clear(); earlyAsked.clear(); secAsked.clear();
+      if (shatterJobs.size || mapFx.childElementCount) abortAllShatters();
       hueCounter = 0; replayLabel = null;
       if (events) { try { events.close(); } catch { /* ignore */ } events = null; }
       afterChange(null);
@@ -2775,7 +3758,7 @@ export function mount(ctx) {
     if (events) { try { events.close(); } catch { /* ignore */ } }
     for (const m of rowMeta.values()) { clearTimeout(m.retryTimer); if (m.upload) { try { m.upload.abort(); } catch { /* ignore */ } } }
     clearInterval(clock);
-    try { ro && ro.disconnect(); io && io.disconnect(); mo.disconnect(); } catch { /* ignore */ }
+    try { ro && ro.disconnect(); chromeRO && chromeRO.disconnect(); io && io.disconnect(); mo.disconnect(); } catch { /* ignore */ }
     mapSlot.innerHTML = ''; intakeSlot.innerHTML = ''; dropSlot.innerHTML = '';
   }
 

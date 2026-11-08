@@ -64,7 +64,7 @@ function assertLoopback(u, what = 'KNOWDRIVE_BASE_URL') {
  */
 export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', engine = 'scripted', quiet = true, env: extra = {}, studio, channels = true } = {}) {
   if (extra.KNOWDRIVE_BASE_URL) assertLoopback(extra.KNOWDRIVE_BASE_URL); // refuse before starting anything
-  const kd = await startFakeKnowDrive({ speed, queueStaggerMs: 1800, honorScope: true });
+  const kd = await startFakeKnowDrive({ speed, queueStaggerMs: 600, honorScope: true });
   const llm = await startFakeLLM();
   const sink = await startFakeChannelSink({ host: '127.0.0.1' });
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-studio-dev-'));

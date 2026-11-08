@@ -254,7 +254,13 @@ async function journey(browser, dev, cell) {
   check('03-ingest', 'a row reached Atomize', !!atomized);
   await page.waitForTimeout(300);
   await shot(page, cell, '03-ingest');
-  const hud = await page.evaluate(() => { const t = document.querySelector('#in-map-slot')?.innerText || ''; const m = t.replace(/,/g, '').match(/(\d+)\s*atoms?/i); return m ? Number(m[1]) : null; });
+  // the HUD reads "N atoms", or "N searchable · M read" while some files are still vectorizing (D's honest split)
+  const hud = await page.evaluate(() => {
+    const el = document.querySelector('#in-map-slot .map-count');
+    if (el && !el.closest('[hidden]') && Number(el.dataset.value) > 0) return Number(el.dataset.value);
+    const t = document.querySelector('#in-map-slot')?.innerText || '';
+    const m = t.replace(/,/g, '').match(/(\d+)\s*(?:atoms?|searchable|read)\b/i); return m ? Number(m[1]) : null;
+  });
   check('03-ingest', 'HUD atoms counter > 0', hud > 0, { detail: `HUD ${hud}` });
   const builderTalks = await page.waitForFunction(() => /atoms so far|atoms/.test(document.querySelector('#st-log')?.textContent || ''), null, { timeout: 8000 }).then(() => true).catch(() => false);
   check('03-ingest', 'Builder talks during ingest (atom count)', builderTalks, { soft: true });
@@ -463,21 +469,48 @@ async function journey(browser, dev, cell) {
   await builderSay(page, cell, 'launch');
   const nMiy = await page.evaluate(() => (document.querySelector('#st-log')?.innerText.match(/only knows our sample files/gi) || []).length);
   const miy = await page.waitForFunction((n) => (document.querySelector('#st-log')?.innerText.match(/only knows our sample files/gi) || []).length > n, nMiy, { timeout: 12000 }).then(() => true).catch(() => false);
-  await page.waitForFunction(() => [...document.querySelectorAll('#st-log .st-chips:not([hidden]) .st-chip, #st-log [data-card] button')].some((b) => /Launch with samples anyway/i.test(b.innerText)), null, { timeout: 8000 }).catch(() => null);
-  check('12-make-it-yours', 'make-it-yours appears (sample-only)', miy);
+  const anywayChip = await page.waitForFunction(() => [...document.querySelectorAll('#st-log .st-chips:not([hidden]) .st-chip, #st-log [data-card] button')].some((b) => /Launch with samples anyway/i.test(b.innerText)), null, { timeout: 8000 }).then(() => true).catch(() => false);
+  // an earlier, still-open Make it yours (e.g. from "how much to go live?" during ingest) is re-surfaced, never posted twice
+  const miyShown = miy || (nMiy > 0 && anywayChip);
+  check('12-make-it-yours', 'make-it-yours appears (sample-only)', miyShown, { detail: miy ? 'new' : miyShown ? 're-surfaced (open decision)' : 'none' });
+  // r3: a price question while Make it yours is open is answered in one line and brings back the SAME card
+  if (miyShown) {
+    const nCards = await page.evaluate(() => document.querySelectorAll('#st-log .co-miy').length);
+    await builderSay(page, cell, 'how much to launch?');
+    await page.waitForTimeout(2500);
+    const after = await page.evaluate(() => document.querySelectorAll('#st-log .co-miy').length);
+    check('12-make-it-yours', 'price question re-surfaces Make it yours (no second card)', after === nCards, { detail: `${nCards} -> ${after}` });
+  }
+  // r3 (SPEC 11.1): the insights card, when present, counts real asks only (>= 3) and never lists a refused question
+  // under Most asked
+  const ins = await page.evaluate(() => { const c = document.querySelector('#st-log .st-insights'); if (!c) return null;
+    const m = /(\d+) asked/.exec(c.innerText); const top = [...c.querySelectorAll('.st-ins-col:not(.st-ins-gaps) .st-ins-row')];
+    return { asked: m ? Number(m[1]) : 0, refusedInTop: top.some((r) => r.dataset.outcome === 'refused') }; });
+  if (ins) check('12-make-it-yours', 'insights card: >= 3 asked, Most asked = answered only', ins.asked >= 3 && !ins.refusedInTop, { soft: true, detail: JSON.stringify(ins) });
   const anyway = await clickBuilderChip(page, cell, /Launch with samples anyway/i)
     || await page.locator('#st-log button', { hasText: /Launch with samples anyway/i }).last().click().then(() => true).catch(() => false);
   check('12-make-it-yours', 'clicked Launch with samples anyway', anyway);
   const launchCard = await page.waitForFunction(() => {
-    const cards = [...document.querySelectorAll('#st-log [data-card="launch"]')];
-    return cards.some((c) => /\$249/.test(c.innerText) && /For comparison/i.test(c.innerText));
+    // with the receipt stage open the Builder summary folds to a pointer: the price lives in the stage (r4, D8)
+    const cards = [...document.querySelectorAll('#st-log [data-card="launch"], .co-launch.is-stage')];
+    const text = cards.map((c) => c.innerText).join('\n');
+    return /\$249/.test(text) && /For comparison/i.test(text);
   }, null, { timeout: 20000 }).then(() => true).catch(() => false);
   check('12-make-it-yours', 'LaunchCard with $249 and the anchor line', launchCard);
   await page.waitForTimeout(900);
   await shot(page, cell, '12-make-it-yours');
 
   // 13 checkout
-  const cta = page.locator('#st-log [data-card="launch"] button', { hasText: /Launch .*\$249/ }).last();
+  // r4 (D8): one solid CTA per viewport. With the receipt stage open (>= 1100 px) the Builder summary folds to a pointer,
+  // and the stage's CTA is the one to press.
+  const stageOpen = await page.evaluate(() => document.documentElement.getAttribute('data-co-cta') === 'receipt');
+  const cta = stageOpen
+    ? page.locator('.co-launch.is-stage button.co-cta, .co-stage button.co-cta').filter({ hasText: /Launch .*\$249/ }).last()
+    : page.locator('#st-log [data-card="launch"] button', { hasText: /Launch .*\$249/ }).last();
+  if (stageOpen) {
+    const ctas = await page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.offsetParent && /Launch.*\$249/.test(b.innerText) && getComputedStyle(b).visibility !== 'hidden').length);
+    check('13-checkout', 'one visible Launch CTA while the receipt is open', ctas === 1, { soft: true, detail: `${ctas} visible` });
+  }
   if (await cta.count()) await press(cta, 'Launch CTA');
   const sheet = await page.waitForFunction(() => { const d = document.querySelector('#co-modal-slot [role="dialog"]'); return !!d && d.offsetParent !== null; }, null, { timeout: 6000 }).then(() => true).catch(() => false);
   check('13-checkout', 'checkout sheet open', sheet);
@@ -585,7 +618,48 @@ async function journey(browser, dev, cell) {
   check('16-reload', 'no horizontal scroll', await noHScroll(p2));
   await shot(p2, cell, '16-reload');
   check('16-reload', 'no console errors (own-file context)', errs2.filter((e) => !/HTTP 4(00|13|15|22)/.test(e)).length === 0, { soft: true, detail: errs2.slice(0, 3).join(' || ') });
+
+  // shell hit areas (phones): every header / bot-header control takes a 44 x 44 tap around its centre
+  if (cell.mobile) {
+    await p2.evaluate(() => { const e = document.getElementById('st-peek'); if (e) e.hidden = true; });
+    const tiny = await p2.evaluate(() => {
+      const out = [];
+      for (const el of document.querySelectorAll('#st-header button, #st-header a, #st-bot-header .st-version, #st-bot-header .st-seg-btn')) {
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height || getComputedStyle(el).visibility === 'hidden' || el.closest('[hidden]')) continue;
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const ok = [[cx, cy - 21], [cx, cy + 21], [cx - 21, cy], [cx + 21, cy]].every(([x, y]) => { const e = document.elementFromPoint(x, y); return e && (e === el || el.contains(e)); });
+        if (!ok) out.push(`${el.id || el.className} ${Math.round(r.width)}x${Math.round(r.height)}`);
+      }
+      return out;
+    });
+    check('16-reload', 'mobile: shell controls take a 44 x 44 tap', !tiny.length, { detail: tiny.join(', ') });
+  }
+
+  // 17 live: after conversion the shell stops selling, on the return and on every reload
+  const tid = await p2.evaluate(() => window.__studio.store.getState().trial.id);
+  const conv = await fetch(`${dev.url}/api/studio/trials/${tid}/convert`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer dev-admin' }, body: JSON.stringify({ account: 'smoke', bucketId: 'smoke-bot' }) }).then((r) => r.ok).catch(() => false);
+  check('17-live', 'trial converted (admin, fake server)', conv);
+  await p2.reload({ waitUntil: 'domcontentloaded' });
+  const liveHead = await p2.waitForFunction(() => { const pill = document.getElementById('st-livepill'); const price = document.getElementById('st-pricewrap');
+    return pill && !pill.hidden && pill.offsetParent !== null && (!price || price.hidden || price.offsetParent === null); }, null, { timeout: 12000 }).then(() => true).catch(() => false);
+  check('17-live', 'header shows Live (no price, no trial pill)', liveHead && await p2.evaluate(() => { const t = document.getElementById('st-trialpill'); return !t || t.hidden || t.offsetParent === null; }));
+  await pane(p2, cell, 'setup');
+  const liveChips = await p2.waitForFunction(() => { const rows = [...document.querySelectorAll('#st-log .st-chips:not([hidden]):not(.is-stale)')]; const t = rows.length ? rows[rows.length - 1].innerText : '';
+    return /Copy embed code/.test(t) && !/Use sample files|canonical bot/i.test(t) ? t : null; }, null, { timeout: 12000 }).then((h) => h.jsonValue()).catch(() => null);
+  check('17-live', 'Builder offers the live next actions (no setup chips)', !!liveChips, { detail: String(liveChips || '').replace(/\s+/g, ' ') });
+  check('17-live', 'ghost answer hidden', await p2.evaluate(() => { const g = document.querySelector('.sb-ghost'); return !g || g.offsetParent === null; }));
+  await shot(p2, cell, '17-live');
   await ctx2.close();
+
+  // the OS colour scheme is the default theme when nothing is stored
+  if (cell.theme === 'dark' && !cell.mobile) {
+    const ctx3 = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark' });
+    const p3 = await ctx3.newPage();
+    await p3.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
+    check('01-landing', 'OS dark preference is the default theme', (await p3.evaluate(() => document.documentElement.dataset.theme)) === 'dark');
+    await ctx3.close();
+  }
 }
 
 // ------------------------------------------------------------------ main

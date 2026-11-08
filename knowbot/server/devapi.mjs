@@ -28,7 +28,7 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sealKey, openKey } from './providers.mjs';
 import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
-import { ChannelError, channelStatus, publicBase, answerLines, NOT_IN_DATA, formatSpoken } from './channels/util.mjs';
+import { ChannelError, channelStatus, publicBase, answerLines, NOT_IN_DATA, formatSpoken, docTitle } from './channels/util.mjs';
 import { handleSms } from './channels/sms.mjs';
 import { handleVoice } from './channels/voice.mjs';
 import { handleWhatsApp } from './channels/whatsapp.mjs';
@@ -95,6 +95,8 @@ export function createDevApi(o = {}) {
   const studio = o.studio || null;
   const kd = o.kd || null;
   const now = typeof o.now === 'function' ? o.now : () => Date.now();
+  /** Milliseconds between streamed chat.completion.chunk deltas (capped so a whole answer streams in under ~1 s); 0 disables. */
+  const streamPaceMs = Math.max(0, Number(o.streamPaceMs ?? env.KNOWBOT_STREAM_PACE_MS ?? 12) || 0);
   const llmModel = o.llmModel || env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
   const CANON = o.canonical || { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
   const sealSecret = String(o.secret || registry?.secret || env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || 'knowbot-local-dev');
@@ -206,17 +208,20 @@ export function createDevApi(o = {}) {
   async function authKey(req, botId = null) {
     const token = bearerOf(req);
     if (!token) throw new ApiError(401, 'missing_api_key', 'Send your KnowBot API key as "Authorization: Bearer kb_…".');
-    if (!KEY_RE.test(token)) throw new ApiError(401, 'invalid_api_key', 'That is not a KnowBot API key (they start with kb_live_ or kb_trial_).');
+    // a kb_live_/kb_trial_ key that fails to verify is a bad key, not a wrong kind of key: say so
+    const BAD_KEY = 'This API key is invalid, revoked or expired.';
+    if (!/^kb_(?:live|trial)_/.test(token)) throw new ApiError(401, 'invalid_api_key', 'That is not a KnowBot API key (they start with kb_live_ or kb_trial_).');
+    if (!KEY_RE.test(token)) throw new ApiError(401, 'invalid_api_key', BAD_KEY);
     let who;
     if (token.startsWith('kb_trial_')) {
       const d = openTrialKey(token);
-      if (!d) throw new ApiError(401, 'invalid_api_key', 'This API key is not valid.');
+      if (!d) throw new ApiError(401, 'invalid_api_key', BAD_KEY);
       if (!(d.e > now())) throw new ApiError(401, 'expired_api_key', 'This trial key expired with its trial.');
       who = { kind: 'trial', bot: d.t, keyId: `trial:${d.t}`, expiresAt: d.e };
     } else {
       await loadKeys();
       const rec = K.byHash.get(sha256(token));
-      if (!rec) throw new ApiError(401, 'invalid_api_key', 'This API key is not valid, or it was revoked.');
+      if (!rec) throw new ApiError(401, 'invalid_api_key', BAD_KEY);
       rec.lastUsedAt = new Date(now()).toISOString();
       who = { kind: 'live', bot: rec.bot, keyId: rec.id };
     }
@@ -320,7 +325,7 @@ export function createDevApi(o = {}) {
       if (seen.has(k)) continue;
       seen.add(k);
       const filename = String(d.filename || '').split('/').pop();
-      hits.push({ file_id: d.file_id, filename, title: d.attributes?.breadcrumb ? String(d.attributes.breadcrumb).split(' > ')[0] : filename.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[-_]+/g, ' '), url: null, score: round4(simOf(d)), similarity: round4(simOf(d)), text });
+      hits.push({ file_id: d.file_id, filename, title: docTitle(d.attributes?.breadcrumb ? String(d.attributes.breadcrumb).split(' > ')[0] : '', filename), url: null, score: round4(simOf(d)), similarity: round4(simOf(d)), text });
     }
     hits.sort((a, b) => b.similarity - a.similarity);
     return hits;
@@ -393,7 +398,7 @@ export function createDevApi(o = {}) {
       .map((x) => ({ ...x, file: (fin.citations || []).find((c) => c.n === x.n)?.filename || null }));
     const citations = refused ? [] : (fin.citations || []).map((c) => {
       const qs = quoted.filter((x) => x.n === c.n).map((x) => x.text);
-      return { n: c.n, file: c.filename, title: c.title || c.filename, excerpt: (qs.join(' … ') || String(c.snippet || '')).slice(0, 400), ...(c.url ? { url: c.url } : {}),
+      return { n: c.n, file: c.filename, title: docTitle(c.title, c.filename), excerpt: (qs.join(' … ') || String(c.snippet || '')).slice(0, 400), ...(c.url ? { url: c.url } : {}),
         similarity: round4(sims.get(c.filename) ?? null) };
     });
     const hits = (refused ? candidates : results).slice(0, 6).map(hitView);
@@ -516,6 +521,9 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
   // ---------------------------------------------------------------- http helpers
   /** The base every URL we hand out is built on: the public origin, plus /api when the caller came in through /api/v1. */
   const apiBase = (req) => publicBase(req, env) + (req.kbApiPrefix || '');
+  /** The one public form of a proof link, whatever endpoint or channel made it: <origin>/api/p/<id> (served locally and
+   * behind the production Worker, which forwards /api/* only). Every proofUrl this module hands out is built here. */
+  const proofUrlFor = (req, id) => (id ? `${publicBase(req, env)}/api/p/${id}` : null);
   function send(res, status, body, headers = {}) {
     if (res.headersSent) { try { res.end(); } catch {} return; }
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
@@ -568,9 +576,9 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
     return parts.map((t, i) => ({ raw: `${i ? (format === 'bullets' ? '\n' : ' ') : ''}${t}`, text: stripMarks(t).replace(/^\s*[-*•]\s+/, ''), n: [...t.matchAll(/\[(\d{1,3})\]/g)].map((m) => Number(m[1])) }));
   };
   const formatOf = (body) => (String(body?.format || '').toLowerCase() === 'bullets' ? 'bullets' : 'prose');
-  const publicAnswer = (a, base, format = 'prose') => ({
+  const publicAnswer = (a, req, format = 'prose') => ({
     id: a.id, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: a.bot, question: a.question, answer: answerText(a, format), format: a.refused ? 'text' : format, citations: a.citations.map(({ similarity, ...c }) => c),
-    refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor }, ...(a.proofId ? { proofUrl: `${base}/p/${a.proofId}` } : {}),
+    refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
     ...(a.guard ? { guard: a.guard } : {}), usage: { latencyMs: a.latencyMs },
   });
   const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title} — ` : ''}${c.file}`).join('\n')}`.trim());
@@ -584,7 +592,6 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
     const target = await resolveTarget(botId, who);
     const channel = typeof body.channel === 'string' && CHANNELS.includes(body.channel) ? body.channel : 'api';
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
-    const base = apiBase(req);
     const format = formatOf(body);
     if (body.stream === true) {
       sseHead(res);
@@ -594,7 +601,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
         const a = await answer(target, question, { history, channel, callerKey, onRetrieval: (r) => emit('retrieval', r) });
         a.proofId = a.refused ? null : saveProof(a, channel);
         for (const piece of answerPieces(a, format)) emit('delta', { text: piece.text ?? piece.raw, n: piece.n, raw: piece.raw });
-        emit('final', publicAnswer(a, base, format));
+        emit('final', publicAnswer(a, req, format));
         emit('done', { latencyMs: a.latencyMs });
       } catch (e) {
         emit('error', { code: e.code || 'internal_error', message: e instanceof ApiError ? e.message : "Couldn't answer right now." });
@@ -604,7 +611,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
     }
     const a = await answer(target, question, { history, channel, callerKey });
     a.proofId = a.refused ? null : saveProof(a, channel);
-    return send(res, 200, publicAnswer(a, base, format));
+    return send(res, 200, publicAnswer(a, req, format));
   }
 
   // ---------------------------------------------------------------- /v1/chat/completions (OpenAI-compatible)
@@ -618,10 +625,9 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
     const target = await resolveTarget(who.bot, who);
     const id = `chatcmpl-${rid(24)}`, created = Math.floor(now() / 1000), modelName = who.bot;
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
-    const base = apiBase(req);
     const format = formatOf(body);
     const ext = (a) => ({ citations: a.citations.map(({ similarity, ...c }) => c), refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor },
-      ...(a.proofId ? { proofUrl: `${base}/p/${a.proofId}` } : {}), latencyMs: a.latencyMs });
+      ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}), latencyMs: a.latencyMs });
     const usage = (a) => { const p = approxTokens(history.map((m) => m.content).join(' ') + question), c = approxTokens(footnotes(a, format)); return { prompt_tokens: p, completion_tokens: c, total_tokens: p + c }; };
     if (body.stream === true) {
       sseHead(res);
@@ -632,8 +638,15 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
         const a = await answer(target, question, { history, channel: 'api', callerKey });
         a.proofId = a.refused ? null : saveProof(a, 'api');
         const content = footnotes(a, format);
-        const parts = content.split(/(?<=\n)/);
-        for (const p of parts) write(chunk({ content: p }));
+        // token-sized deltas (a word plus its trailing space/newline), paced lightly so a client renders it as a stream;
+        // concatenating every delta gives exactly `content`
+        const parts = content.match(/\S+\s*|\s+/g) || [content];
+        const pace = Math.min(streamPaceMs, 900 / Math.max(1, parts.length));
+        for (const p of parts) {
+          if (res.destroyed || res.writableEnded) break;
+          write(chunk({ content: p }));
+          if (pace >= 1) await new Promise((r) => setTimeout(r, pace));
+        }
         write(chunk({}, 'stop', { knowbot: ext(a) }));
         if (body.stream_options?.include_usage) write({ id, object: 'chat.completion.chunk', created, model: modelName, system_fingerprint: 'knowbot-v1', choices: [], usage: usage(a) });
       } catch (e) {
@@ -674,16 +687,15 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
       transcript = r.transcript; confidence = r.confidence;
     }
     const target = await resolveTarget(botId, who);
-    const base = apiBase(req);
     if (!transcript) return send(res, 200, { transcript: '', answer: null, text: null, spoken: "Sorry, I didn't catch that.", citations: [], refused: false, grounded: false, audio: null, mime: null, heard: false });
     const a = await answer(target, transcript, { channel: 'voice', callerKey: who.keyId });
     a.proofId = a.refused ? null : saveProof(a, 'voice');
-    const spoken = formatSpoken(a);
+    const spoken = formatSpoken(a, 450, { names: [target.name, target.inst?.org, target.spec?.org, target.spec?.name] });
     let audioOut = null, mime = null;
     if (g.tts) {
       try { const s = await synthesize(spoken, { env }); audioOut = s.audio.toString('base64'); mime = s.mime; } catch (e) { log(`[devapi] TTS failed: ${e.message}`); }
     }
-    return send(res, 200, { ...publicAnswer(a, base), transcript, confidence, text: answerText(a), spoken, audio: audioOut, mime, heard: true, speech: { recognition: 'google', synthesis: audioOut ? 'google' : 'browser' } });
+    return send(res, 200, { ...publicAnswer(a, req), transcript, confidence, text: answerText(a), spoken, audio: audioOut, mime, heard: true, speech: { recognition: 'google', synthesis: audioOut ? 'google' : 'browser' } });
   }
 
   // ---------------------------------------------------------------- channels
@@ -695,13 +707,13 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
     const raw = req.method === 'POST' ? await o.readRaw(req, name === 'email' ? 25 * 1024 * 1024 : 1024 * 1024) : Buffer.alloc(0);
     const base = apiBase(req);
     const cx = {
-      env, req, res, url, raw, sub: sub || '', botId: target.id, botName: target.name, base, log, audio: audioStore,
+      env, req, res, url, raw, sub: sub || '', botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, base, log, audio: audioStore,
       background: (p) => track(p),
       limited: (k) => limit(`ch:${name}:${target.id}:${hashCaller(k)}`, limits.channel).limited,
       ask: async (question, { channel, callerKey }) => {
         const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel, callerKey });
         a.proofId = a.refused ? null : saveProof(a, channel);
-        a.proofUrl = a.proofId ? `${base}/p/${a.proofId}` : null;
+        a.proofUrl = proofUrlFor(req, a.proofId);
         return a;
       },
     };
@@ -778,7 +790,19 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
       if (what === 'insights') {
         if (m !== 'GET' || sub) throw new ApiError(405, 'method_not_allowed', 'GET only');
         const lim = Math.max(1, Math.min(50, Number(url.searchParams.get('limit')) || 10));
-        const r = await questionInsights({ kd, store: kd?.store, scopeTags: [`bot:${inst.id}`], limit: lim })
+        // a gap's suggested fix names the nearest file in THIS bot's own sources (its retriever; never a stored question)
+        const nearest = async (q) => {
+          let retr; try { retr = registry.retriever(inst.id); } catch { return null; }
+          const [ret, s] = await Promise.all([retr.search(q, 4), liveSimilarities(retr, q)]);
+          const hit = (ret?.results || []).find((r) => r && r.text && !isQuestionFile(r.filename));
+          if (!hit) return null;
+          const file = String(hit.filename || '').split('/').pop();
+          const sim = s.get(chunkKey(hit.filename, hit.text)) ?? s.get(hit.filename) ?? null;
+          // the other close passages only decide whether the question is on-topic at all (off-topic: refused correctly)
+          const context = (ret?.results || []).filter((r) => r && r !== hit && r.text && !isQuestionFile(r.filename)).map((r) => `${r.title || ''} ${String(r.text).slice(0, 400)}`).join(' ').slice(0, 1600);
+          return { file, title: docTitle(hit.title, file), similarity: round4(sim), text: String(hit.text).slice(0, 400), context };
+        };
+        const r = await questionInsights({ kd, store: kd?.store, scopeTags: [`bot:${inst.id}`], limit: lim, nearest, includeTest: url.searchParams.get('include') === 'test' })
           .catch((e) => { throw new ApiError(502, 'upstream', `question insights failed: ${e.message}`); });
         return send(res, 200, { bot: inst.id, ...r });
       }

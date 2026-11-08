@@ -8,7 +8,7 @@
 // - No custom request headers other than content-type, authorization and x-filename (Worker CORS).
 
 import { hostedApi } from '../lib/site-config.js';
-import { getState, setState, emit } from './store.js';
+import { getState, setState, emit, batch } from './store.js';
 
 export class ApiError extends Error {
   constructor(message, { status = 0, code = 'network', retryAfter = null, detail = null } = {}) {
@@ -89,13 +89,54 @@ async function request(method, path, { body, trial = true, signal, root = false,
 
 /**
  * Parses a text/event-stream fetch Response. Calls onEvent(type, data, id) per frame; `data` is JSON-parsed
- * (raw string if it isn't JSON). Comment lines (':') are pings and are skipped. Resolves when the stream ends.
+ * (raw string if it isn't JSON). Comment lines (':') are pings and are skipped. Resolves when the stream ends and
+ * every parsed event has been delivered.
+ *
+ * Frame coalescing (perf, r3): parsing happens as bytes arrive, but delivery is queued and flushed once per animation
+ * frame inside store.batch(), so a burst of events (fast pipeline, reconnect replay, token deltas) costs one round of
+ * store fan-out and one style/layout pass per frame. Each flush stops after FLUSH_BUDGET ms and continues on the next
+ * frame. Order is unchanged. Hidden tabs (no rAF) flush on a timer.
  */
+const FLUSH_BUDGET = 6;
+const HEAVY = new Set(['final', 'retrieval', 'selected', 'hello', 'card', 'status', 'file', 'atoms']);
 export async function readSSE(response, onEvent) {
   const reader = response.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
   let ev = { type: 'message', data: [], id: null };
+  const q = [];
+  let scheduled = false;
+  let drainWaiters = [];
+  const deliverOne = (type, data, id) => {
+    const t = now();
+    try { onEvent && onEvent(type, data, id); } catch (err) { console.error(`[studio] SSE handler for "${type}" failed`, err); }
+    const perf = globalThis.__kbPerfLog;   // dev/perf probe hook (an array set by a test); off in normal use
+    if (perf && now() - t > 12) perf.push(['sse', type, Math.round(now() - t), Math.round(t)]);
+  };
+  const flush = () => {
+    scheduled = false;
+    const t0 = now();
+    batch(() => {
+      let n = 0;
+      while (q.length) {
+        // Events whose handlers render a lot (a whole answer, the retrieval fan, a replay snapshot) start a frame of
+        // their own instead of sharing one with whatever arrived just before them.
+        if (n && HEAVY.has(q[0][0])) break;
+        const [type, data, id] = q.shift();
+        deliverOne(type, data, id);
+        n++;
+        if (now() - t0 > FLUSH_BUDGET) break;
+      }
+    });
+    if (q.length) schedule();
+    else { const w = drainWaiters; drainWaiters = []; w.forEach((r) => r()); }
+  };
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    nextFrame(flush);
+  }
+  const drained = () => (q.length || scheduled ? new Promise((r) => { drainWaiters.push(r); schedule(); }) : Promise.resolve());
   const dispatch = () => {
     if (!ev.data.length && ev.type === 'message') { ev = { type: 'message', data: [], id: null }; return; }
     const rawData = ev.data.join('\n');
@@ -103,30 +144,56 @@ export async function readSSE(response, onEvent) {
     if (rawData) { try { data = JSON.parse(rawData); } catch { /* keep string */ } } else data = {};
     const { type, id } = ev;
     ev = { type: 'message', data: [], id: null };
-    try { onEvent && onEvent(type, data, id); } catch (err) { console.error(`[studio] SSE handler for "${type}" failed`, err); }
+    q.push([type, data, id]);
+    schedule();
   };
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let nl;
-    while ((nl = buf.search(/\r\n|\r|\n/)) >= 0) {
-      const line = buf.slice(0, nl);
-      buf = buf.slice(nl + (buf[nl] === '\r' && buf[nl + 1] === '\n' ? 2 : 1));
-      if (line === '') { dispatch(); continue; }
-      if (line[0] === ':') continue;
-      const c = line.indexOf(':');
-      const field = c < 0 ? line : line.slice(0, c);
-      let val = c < 0 ? '' : line.slice(c + 1);
-      if (val[0] === ' ') val = val.slice(1);
-      if (field === 'event') ev.type = val || 'message';
-      else if (field === 'data') ev.data.push(val);
-      else if (field === 'id') ev.id = val;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      let t0 = now();
+      while ((nl = buf.search(/\r\n|\r|\n/)) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + (buf[nl] === '\r' && buf[nl + 1] === '\n' ? 2 : 1));
+        if (line === '') {
+          dispatch();
+          // A large chunk (a big 'final' payload, a replay) is parsed in slices so parsing never shares a frame with
+          // a long flush.
+          if (now() - t0 > 6 && buf.length) { await yieldToFrame(); t0 = now(); }
+          continue;
+        }
+        if (line[0] === ':') continue;
+        const c = line.indexOf(':');
+        const field = c < 0 ? line : line.slice(0, c);
+        let val = c < 0 ? '' : line.slice(c + 1);
+        if (val[0] === ' ') val = val.slice(1);
+        if (field === 'event') ev.type = val || 'message';
+        else if (field === 'data') ev.data.push(val);
+        else if (field === 'id') ev.id = val;
+      }
     }
+    buf += dec.decode();
+    if (buf.trim()) { for (const line of buf.split(/\r?\n/)) { if (line.startsWith('data:')) ev.data.push(line.slice(5).replace(/^ /, '')); else if (line.startsWith('event:')) ev.type = line.slice(6).trim(); } }
+    if (ev.data.length) dispatch();
+  } finally {
+    // Whatever was parsed before the end (or an abort) is still delivered, in order, before readSSE settles.
+    await drained();
   }
-  buf += dec.decode();
-  if (buf.trim()) { for (const line of buf.split(/\r?\n/)) { if (line.startsWith('data:')) ev.data.push(line.slice(5).replace(/^ /, '')); else if (line.startsWith('event:')) ev.type = line.slice(6).trim(); } }
-  if (ev.data.length) dispatch();
+}
+
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+const yieldToFrame = () => (typeof globalThis.scheduler?.yield === 'function' ? globalThis.scheduler.yield() : new Promise((r) => setTimeout(r, 0)));
+/** rAF when the page is visible (one flush per painted frame), a short timer otherwise (rAF never fires hidden). */
+function nextFrame(fn) {
+  const hidden = typeof document !== 'undefined' && document.hidden;
+  if (!hidden && typeof requestAnimationFrame === 'function') {
+    let doneOnce = false;
+    const run = () => { if (doneOnce) return; doneOnce = true; clearTimeout(tm); fn(); };
+    const tm = setTimeout(run, 100);          // safety net: a tab hidden mid-wait still drains
+    requestAnimationFrame(run);
+  } else setTimeout(fn, 16);
 }
 
 async function postStream(path, body, { onEvent, signal, until } = {}) {
@@ -371,11 +438,14 @@ export function openEvents({ onEvent, onStatus } = {}) {
     if (closed || !polling) return;
     try {
       const r = await listFiles();
-      for (const row of (r && r.files) || []) {
-        const snap = JSON.stringify(FILE_KEYS.map((k) => row[k]));
-        if (known.get(row.id) !== snap) { known.set(row.id, snap); lastChange = Date.now(); deliver('file', row, null); }
-      }
-      if (r && r.usage) deliver('usage', r.usage, null);
+      // one poll = one round of store notifications (perf r4: every changed row used to fan out on its own)
+      batch(() => {
+        for (const row of (r && r.files) || []) {
+          const snap = JSON.stringify(FILE_KEYS.map((k) => row[k]));
+          if (known.get(row.id) !== snap) { known.set(row.id, snap); lastChange = Date.now(); deliver('file', row, null); }
+        }
+        if (r && r.usage) deliver('usage', r.usage, null);
+      });
     } catch (err) {
       if (err && (err.status === 401 || err.code === 'expired')) { close(); return; }
     }

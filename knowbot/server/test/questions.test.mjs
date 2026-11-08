@@ -12,6 +12,7 @@ import { startFakeLLM } from './fake-llm.mjs';
 import {
   logQuestion, questionInsights, flushQuestions, configureQuestions, _resetQuestions, normalizeQuestion, questionHash, hashCaller,
   scrubQuestion, parseQuestionPath, questionDoc, parseQuestionDoc, questionFromChat, scopeKeyOf, isStudioProbe, registerTestQuestions,
+  questionJaccard, gapSuggestion,
 } from '../questions.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
 
@@ -176,13 +177,22 @@ describe('questions: writer and insights (fake knowDrive)', () => {
     for (const fresh of [false, true]) {
       if (fresh) _resetQuestions(); // read back from knowDrive alone
       const r = await questionInsights({ kd: kdc(), scopeTags: ['trial:tr_probetestaaaaaaaa'] });
-      assert.equal(r.total, 7);
+      // the totals describe exactly the listed questions: test traffic is reported and listed apart, never counted
+      assert.deepEqual([r.total, r.answered, r.refused], [3, 2, 1]);
       assert.equal(r.testTraffic, 4);
+      assert.deepEqual(r.test, { total: 4, answered: 2, refused: 2 });
+      assert.equal(r.testRefused, 2);
+      assert.equal(r.top.reduce((n, t) => n + t.count, 0) + r.more.top, r.total, 'total = Σ top + more');
+      assert.equal(r.gaps.reduce((n, g) => n + g.count, 0) + r.more.gaps, r.refused, 'refused = Σ gaps + more');
+      assert.equal(r.probes.reduce((n, g) => n + g.count, 0) + r.more.probes, r.testTraffic);
+      assert.ok(r.probes.length === 4 && r.probes.every((g) => g.probe === true));
+      assert.ok(r.probes.some((g) => /weather/i.test(g.q) && g.outcome === 'refused'));
       assert.deepEqual(r.gaps.map((g) => g.q), ['Do you ship to Brazil?'], 'probes are never shown as customer gaps');
       assert.ok(!r.top.some((g) => /weather|joke|summarize/i.test(g.q)));
       assert.equal(r.top.find((g) => /frame warranty/.test(g.q)).count, 2, 'the Proof Run ask is not counted');
       const all = await questionInsights({ kd: kdc(), scopeTags: ['trial:tr_probetestaaaaaaaa'], includeTest: true });
       assert.equal(all.gaps.length, 3);
+      assert.deepEqual([all.total, all.refused, all.testTraffic, all.probes.length], [7, 3, 0, 0]);
     }
     registerTestQuestions(['Is this a generated probe?']);
     assert.ok(isStudioProbe('is this a generated probe'));
@@ -233,6 +243,116 @@ describe('questions: writer and insights (fake knowDrive)', () => {
     assert.equal(r.top.find((x) => /brazil/i.test(x.q)).outcome, 'refused');
     const plain = await questionInsights({ kd: kdc(), scopeTags: ['bot:insights'], semantic: false });
     assert.equal(plain.gaps.length, 2, 'without similarity only the identical texts group');
+  });
+
+  test('insights: subject-line + reworded near-duplicates merge (token Jaccard ≥ 0.8); every row carries its origin', async () => {
+    _resetQuestions(); configureQuestions({ debounceMs: 5 });
+    assert.equal(normalizeQuestion('Test ride How long does a test ride last?'), 'how long does a test ride last');
+    assert.equal(normalizeQuestion('Quick question Do you ship to Brazil?'), 'do you ship to brazil');
+    assert.equal(normalizeQuestion('Lumen E-City Do you have it in blue?'), 'lumen e city do you have it in blue', 'a lead that adds context is kept');
+    assert.ok(questionJaccard('How long does a test ride usually last?', 'How long does a test ride last') >= 0.8);
+    assert.ok(questionJaccard('Do you ship to Brazil?', 'Can you ship to Brazil?') < 0.8, 'Jaccard alone does not merge different wording');
+    const base = { kd: kdc(), scopeTags: ['bot:jaccard'], root: 'knowbot/_bots/jaccard/', channel: 'email' };
+    const t = Date.UTC(2026, 10, 8, 10);
+    let i = 0;
+    const ask = (question, outcome) => logQuestion({ ...base, question, outcome, callerKey: `j${i++}`, now: t + i * 1000 });
+    await ask('Test ride How long does a test ride last?', 'answered');  // e-mail subject glued in front
+    await ask('How long does a test ride last?', 'answered');
+    await ask('How long does a test ride usually last?', 'answered');    // one extra word: Jaccard 7/8
+    await ask('Is there parking at the shop?', 'refused');
+    await flushQuestions();
+    for (const fresh of [false, true]) {
+      if (fresh) _resetQuestions();
+      const r = await questionInsights({ kd: kdc(), scopeTags: ['bot:jaccard'], semantic: false, suggest: false });
+      assert.equal(r.top.length, 2, JSON.stringify(r.top));
+      assert.equal(r.top[0].count, 3);
+      assert.equal(r.top[0].variants, 2, 'two wordings (the subject-line one normalizes to the plain one)');
+      assert.ok(!/^Test ride How/.test(r.top[0].q), 'the clean wording is shown');
+      assert.ok(r.top.every((x) => x.origin === 'customer') && r.gaps.every((x) => x.origin === 'customer'));
+      assert.equal(r.top.reduce((n, x) => n + x.count, 0) + r.more.top, r.total);
+    }
+  });
+
+  test('gaps carry a suggested fix from the nearest corpus file (never a stored question); setup probes stay out and are labelled', async () => {
+    _resetQuestions(); configureQuestions({ debounceMs: 5 });
+    const trial = 'tr_gapsuggestaaaaaa';
+    // the trial's own corpus file, tagged like the Studio tags uploads
+    const fd = new FormData();
+    fd.append('tags', ['knowbot', 'kind:trial', `trial:${trial}`].join(','));
+    fd.append('mime_type', 'text/markdown');
+    fd.append('file', new Blob(['# Shipping\n\nWe ship to Canada and the United States. Standard shipping takes 3 to 5 business days.\n'], { type: 'text/markdown' }), `knowbot/trials/${trial}/files/shipping.md`);
+    assert.ok((await fetch(`${kd.url}/api/v1/ingest`, { method: 'POST', headers: { authorization: 'Bearer fake-key', 'x-vector-store-id': 'vs_fake' }, body: fd })).ok);
+    const base = { kd: kdc(), scopeTags: [`trial:${trial}`], root: `knowbot/trials/${trial}/`, channel: 'studio' };
+    let i = 0;
+    const ask = (question, outcome, extra = {}) => logQuestion({ ...base, question, outcome, callerKey: `g${i++}`, ...extra });
+    await ask('Do you ship to Brazil?', 'refused');
+    await ask('Who is the president of France?', 'refused', { origin: 'probe' }); // a Builder probe
+    await ask('Summarize the shipping file', 'answered', { origin: 'setup' });
+    await flushQuestions();
+    await kd.settle();
+    const r = await questionInsights({ kd: kdc(), scopeTags: [`trial:${trial}`], semantic: false });
+    assert.deepEqual(r.gaps.map((g) => g.q), ['Do you ship to Brazil?'], 'a setup probe is never a customer gap');
+    const sg = r.gaps[0].suggestion;
+    assert.ok(sg && ['add_file', 'expand_file', 'off_topic'].includes(sg.kind), JSON.stringify(sg));
+    assert.equal(sg.action.type, 'request_upload');
+    assert.equal(sg.nearest?.file, 'shipping.md', 'the nearest file is corpus, never a stored question');
+    assert.ok(sg.nearest.similarity > 0 && sg.nearest.similarity <= 1, 'similarity, never RRF');
+    assert.match(sg.text, /Shipping/);
+    assert.ok(r.probes.find((p) => /president/i.test(p.q)).origin === 'probe');
+    assert.ok(r.probes.find((p) => /summarize/i.test(p.q)).origin === 'setup');
+    // with includeTest the probe is a gap again, labelled by origin so a UI can mark it
+    const all = await questionInsights({ kd: kdc(), scopeTags: [`trial:${trial}`], semantic: false, includeTest: true, suggest: false });
+    assert.equal(all.gaps.find((g) => /president/i.test(g.q)).origin, 'probe');
+    // a caller-supplied nearest() (live bots) and the suggestion kinds
+    const custom = await questionInsights({ kd: kdc(), scopeTags: [`trial:${trial}`], semantic: false, nearest: async () => ({ file: 'faq.md', title: 'FAQ', similarity: 0.81 }) });
+    assert.equal(custom.gaps[0].suggestion.kind, 'expand_file');
+    assert.equal(gapSuggestion('Who is the president of France?', { file: 'lumen-faq.md', title: 'Lumen FAQ', similarity: 0.52, text: 'Lumen bikes ship worldwide.' }).kind, 'off_topic');
+    assert.equal(gapSuggestion('Is there parking?', null).kind, 'add_file');
+    assert.equal(gapSuggestion('Is there parking?', { file: 'a.md', similarity: null }).kind, 'add_file');
+  });
+
+  test('off-topic gaps are "working as intended" (no file suggested); in-domain gaps suggest a file and come first', () => {
+    const cup = gapSuggestion('Who won the 1998 World Cup?', { file: 'lumen-faq.md', title: 'Lumen FAQ', similarity: 0.61, text: 'Lumen ships worldwide. Our cup holders fit every frame.', context: 'Warranty Frames carry a lifetime warranty.' });
+    assert.deepEqual([cup.kind, cup.inDomain, cup.status, cup.action.type], ['off_topic', false, 'working_as_intended', 'none']);
+    assert.match(cup.text, /^Off-topic: refused correctly/);
+    assert.ok(!/Add a file/i.test(cup.text), cup.text);
+    // the same similarity, but the question is about something the files talk about: a real gap
+    const helmet = gapSuggestion('Do you sell helmets?', { file: 'catalog.md', title: 'Catalog', similarity: 0.61, text: 'E-City bike, 500 Wh battery.', context: 'Accessories: locks, lights and helmets.' });
+    assert.deepEqual([helmet.kind, helmet.inDomain, helmet.action.type], ['add_file', true, 'request_upload']);
+    // at or above the 0.65 bar it is never called off-topic
+    assert.equal(gapSuggestion('Who won the 1998 World Cup?', { file: 'a.md', title: 'A', similarity: 0.7, text: 'nothing alike' }).inDomain, true);
+  });
+
+  test('paraphrases answered from the same file group under the most frequent wording, with channels and byChannel', async () => {
+    _resetQuestions();
+    const base = { kd: null, scopeTags: ['bot:paraphrase'] };
+    let i = 0;
+    const ask = (question, channel, files, outcome = 'answered') => logQuestion({ ...base, question, outcome, channel, citations: files, callerKey: `p${i++}` });
+    await ask('How much is the Lumen Care Plan?', 'sms', ['lumen-care-plan.md']);
+    await ask('How much is the Lumen Care Plan?', 'api', ['lumen-care-plan.md']);
+    await ask('What does the service plan cost?', 'whatsapp', ['lumen-care-plan.md']);
+    // a different product priced in the same file is a different question
+    await ask('How much is the Premium Plan?', 'web', ['pricing.md']);
+    await ask('How much is the Basic Plan?', 'web', ['pricing.md']);
+    await ask('Who won the 1998 World Cup?', 'voice', [], 'refused');
+    await ask('Do you deliver on Sundays?', 'email', [], 'refused');
+    const r = await questionInsights({ kd: null, scopeTags: ['bot:paraphrase'], nearest: async (q) => (/world cup/i.test(q)
+      ? { file: 'faq.md', title: 'FAQ', similarity: 0.58, text: 'We ship worldwide.' }
+      : { file: 'shipping.md', title: 'Shipping', similarity: 0.7, text: 'We deliver Monday to Saturday.' }) });
+    const care = r.top[0];
+    assert.equal(care.q, 'How much is the Lumen Care Plan?', 'the most frequent wording is shown');
+    assert.deepEqual([care.count, care.variants, care.similar, care.similarLabel], [3, 2, 1, '+1 similar']);
+    assert.deepEqual([...care.channels].sort(), ['api', 'sms', 'whatsapp']);
+    assert.ok(r.top.some((t) => t.q === 'How much is the Premium Plan?' && t.count === 1), 'two named products never merge');
+    assert.ok(r.top.some((t) => t.q === 'How much is the Basic Plan?' && t.count === 1));
+    assert.deepEqual(r.byChannel, { studio: 0, web: 2, api: 1, sms: 1, voice: 1, whatsapp: 1, email: 1 });
+    assert.equal(Object.values(r.byChannel).reduce((a, b) => a + b, 0), r.total);
+    // gaps: the in-domain one first and suggesting a file; the off-topic one is working as intended
+    assert.deepEqual(r.gaps.map((g) => [g.q, g.inDomain, g.status]), [['Do you deliver on Sundays?', true, 'needs_content'], ['Who won the 1998 World Cup?', false, 'working_as_intended']]);
+    assert.equal(r.gaps[1].offTopic, true);
+    assert.deepEqual(r.gaps[1].channels, ['voice']);
+    assert.equal(r.offTopic, 1);
+    _resetQuestions();
   });
 
   test('insights include questions still waiting to be written, and work without knowDrive', async () => {
