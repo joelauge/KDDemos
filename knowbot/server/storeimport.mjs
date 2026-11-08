@@ -51,9 +51,9 @@ import net from 'node:net';
 import dns from 'node:dns';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
-import { findSources, classifyUrl, normalizeUrl, urlKey, anchorsOf, canonicalOf, decodeEntities, robotsCrawlDelay, KIND_RANK, KINDS } from './sitefinder.mjs';
+import { findSources, classifyUrl, normalizeUrl, urlKey, anchorsOf, canonicalOf, decodeEntities, robotsCrawlDelay, compareSources, KIND_RANK, KINDS } from './sitefinder.mjs';
 
-export { decodeEntities };
+export { decodeEntities, KINDS };
 export const USER_AGENT = 'KnowBotStudio/1.0 (+https://knowbot.knowdrive.ai)';
 const UA_TOKEN = 'knowbotstudio';
 const MB = 1024 * 1024;
@@ -134,8 +134,15 @@ const BAD_HOST_RE = /(?:^|\.)(?:localhost|local|internal|localdomain|home\.arpa|
 const MULTI_SUFFIX = new Set(('co.uk org.uk ac.uk gov.uk me.uk ltd.uk plc.uk com.au net.au org.au co.nz org.nz co.jp ne.jp or.jp com.br com.mx co.za '
   + 'com.sg com.hk co.in com.tr com.cn co.kr com.ar com.co co.id com.my com.ph com.tw co.il com.pl com.ua co.th '
   + 'myshopify.com squarespace.com wordpress.com wpcomstaging.com github.io netlify.app vercel.app herokuapp.com pages.dev web.app firebaseapp.com '
-  + 'azurewebsites.net cloudfront.net amazonaws.com').split(' '));
-/** Approximate registrable domain (eTLD+1) with a small built-in suffix list; IP literals are returned as-is. */
+  + 'azurewebsites.net cloudfront.net amazonaws.com '
+  // shared store and site-builder platforms (PSL private section): every tenant is its own site, never "same site"
+  + 'wixsite.com wixstudio.io editorx.io mybigcommerce.com square.site webflow.io bigcartel.com company.site ecwid.com weebly.com '
+  + 'weeblysite.com myshopline.com shoplineapp.com mystrikingly.com strikingly.com jimdosite.com jimdofree.com site123.me godaddysites.com '
+  + 'onshopbase.com myshopbase.com shoplightspeed.com mylightspeed.app storenvy.com sellfy.store myvolusion.com 3dcartstores.com myshopwired.uk '
+  + 'blogspot.com tumblr.com carrd.co gumroad.com ueniweb.com odoo.com wpengine.com kinsta.cloud shopifypreview.com '
+  + 'square.online hubspotpagebuilder.com hs-sites.com framer.website framer.app notion.site super.site').split(' '));
+/** Approximate registrable domain (eTLD+1) with a built-in suffix list (incl. shared store platforms, so a tenant
+ *  such as shop.wixsite.com is its own site); IP literals are returned as-is. */
 export function registrableDomain(host) {
   const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (net.isIP(h)) return normIp(h);
@@ -531,9 +538,17 @@ function mainOf(html) {
   const b = /<body\b[^>]*>([\s\S]*)<\/body\s*>/i.exec(html);
   return b ? b[1] : html;
 }
-/** Imported text can never forge our structure: a line starting with # or "Source:" is escaped. */
+/**
+ * Imported text can never forge our structure: a line starting with # (ATX heading), "Source:" or "Product page:" is
+ * escaped, and so is a setext underline (a line of only '=' or '-' right under a text line, which CommonMark turns
+ * into an H1/H2 that would replace the page's H1 in every later atom's breadcrumb).
+ */
 export function escapeText(text) {
-  return String(text ?? '').replace(/^(\s*)(#{1,6})(?=\s|$)/gm, '$1\\$2').replace(/^(\s*)(Source\s*:|Product page\s*:)/gim, '$1\\$2');
+  const lines = String(text ?? '').replace(/^(\s*)(#{1,6})(?=\s|$)/gm, '$1\\$2').replace(/^(\s*)(Source\s*:|Product page\s*:)/gim, '$1\\$2').split('\n');
+  for (let i = 1; i < lines.length; i++) {
+    if (/^ {0,3}(?:=+|-+)[ \t]*$/.test(lines[i]) && lines[i - 1].trim()) lines[i] = lines[i].replace(/^( {0,3})/, '$1\\');
+  }
+  return lines.join('\n');
 }
 /**
  * Readable text of an HTML page or fragment: scripts/styles/forms stripped, shortcodes converted, boilerplate dropped
@@ -834,17 +849,29 @@ export function slugOf(url) {
   return String(last).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `page-${shortHash(url)}`;
 }
 
-/** Counts of repeated paragraphs across HTML pages: text on more than half the pages (and at least 3) is boilerplate. */
-function createRepeatFilter() {
+/**
+ * Counts of repeated paragraphs across HTML pages: text on more than half the pages (and at least 3) is boilerplate.
+ * Paragraphs are counted by a 64-bit hash (16 hex of sha1), never by their text, and keys seen only once are pruned
+ * every 1,000 pages, so 10,000 product pages hold a few thousand short keys, not every paragraph of the store.
+ */
+function createRepeatFilter({ pruneEvery = 1000 } = {}) {
   const counts = new Map();
   let pages = 0;
+  const keyOf = (n) => createHash('sha1').update(n).digest('hex').slice(0, 16);
   const parasOf = (doc) => doc.sections.filter((s) => s.html && !s.keep).flatMap((s) => s.text.split(/\n{2,}/)).map(normPara).filter((n) => n.length >= 30);
   return {
-    observe(doc) { const ps = new Set(parasOf(doc)); if (!ps.size) return false; pages++; for (const p of ps) counts.set(p, (counts.get(p) || 0) + 1); return true; },
+    observe(doc) {
+      const ps = new Set(parasOf(doc).map(keyOf)); if (!ps.size) return false;
+      pages++;
+      for (const p of ps) counts.set(p, (counts.get(p) || 0) + 1);
+      if (pages % pruneEvery === 0) for (const [k, c] of counts) if (c <= 1) counts.delete(k);
+      return true;
+    },
     get pages() { return pages; },
+    get keys() { return counts.size; },
     apply(doc) {
       if (pages < 4) return doc;
-      const boiler = (p) => { const n = normPara(p); const c = counts.get(n) || 0; return n.length >= 30 && c >= 3 && c / pages > 0.5; };
+      const boiler = (p) => { const n = normPara(p); if (n.length < 30) return false; const c = counts.get(keyOf(n)) || 0; return c >= 3 && c / pages > 0.5; };
       const sections = doc.sections.map((s) => (s.html && !s.keep ? { ...s, text: s.text.split(/\n{2,}/).filter((p) => !boiler(p)).join('\n\n') } : s)).filter((s) => s.text.trim());
       return { ...doc, sections };
     },

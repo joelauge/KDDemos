@@ -15,10 +15,10 @@ import { flushQuestions, _resetQuestions, hashCaller } from '../questions.mjs';
 import { twilioSignature, NOT_IN_DATA } from '../channels/util.mjs';
 import { acceptWebSocket } from '../channels/ws.mjs';
 import {
-  mulawDecode, mulawEncode, twilioToGemini, createGeminiToTwilio, issueStreamToken, claimStreamToken, createToolRunner,
-  systemInstruction, toolDeclarations, MAX_TEXTS_PER_CALL,
+  mulawDecode, mulawEncode, twilioToGemini, createTwilioToGemini, createGeminiToTwilio, issueStreamToken, claimStreamToken, createToolRunner,
+  systemInstruction, toolDeclarations, MAX_TEXTS_PER_CALL, hasFigure, phoneLimits, phoneSessions,
 } from '../channels/voice-live.mjs';
-import { createShop, toE164, handleInText, shopDomainFor } from '../channels/shop.mjs';
+import { createShop, toE164, handleInText, shopDomainFor, textableNumber } from '../channels/shop.mjs';
 import { phoneEngine } from '../channels/voice.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1
@@ -158,6 +158,16 @@ function twilioMediaClient(url) {
     start: (callSid, token) => ws.send(JSON.stringify({ event: 'start', sequenceNumber: '1', streamSid: 'MZ1', start: { streamSid: 'MZ1', accountSid: 'AC1', callSid, tracks: ['inbound'], customParameters: { token }, mediaFormat: { encoding: 'audio/x-mulaw', sampleRate: 8000, channels: 1 } } })),
   };
 }
+/** A signed incoming call, then Twilio's media stream for it with the token from the TwiML. */
+async function startCall(S, bot, callSid, from = PHONE) {
+  const xml = await (await S.twilio(`/v1/channels/${bot}/voice`, { CallSid: callSid, From: from })).text();
+  const token = /name="token" value="([^"]+)"/.exec(xml)?.[1];
+  assert.ok(token, xml);
+  const c = twilioMediaClient(`${S.wsBase}/api/v1/channels/${bot}/voice/media`);
+  await c.opened;
+  c.start(callSid, token);
+  return c;
+}
 const pcm24k = (n, f = 440) => { const b = Buffer.alloc(n * 2); for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(8000 * Math.sin((2 * Math.PI * f * i) / 24000)), i * 2); return b; };
 
 // ------------------------------------------------------------------ units
@@ -183,9 +193,34 @@ describe('voice-live: audio conversion', () => {
     const conv = createGeminiToTwilio();
     const parts = [sine.subarray(0, 1000), sine.subarray(1000, 2002), sine.subarray(2002)].map((p) => Buffer.from(conv(p.toString('base64')), 'base64'));
     assert.deepEqual(Buffer.concat(parts), whole);
-    // and back up: 8 kHz μ-law → 16 kHz PCM follows the decoded samples
+    // and back up: 8 kHz μ-law → 16 kHz PCM follows the decoded samples (each pair: the midpoint from the previous sample, then the sample)
     const up = Buffer.from(twilioToGemini(whole.toString('base64')), 'base64');
-    assert.equal(up.readInt16LE(40), mulawDecode(whole[10]));
+    assert.equal(up.readInt16LE(42), mulawDecode(whole[10]));
+    assert.equal(up.readInt16LE(40), (mulawDecode(whole[9]) + mulawDecode(whole[10])) >> 1);
+  });
+  test('chunk boundaries: split μ-law (at 160-byte frames and odd offsets) upsamples exactly like the whole buffer, no step every 20 ms', () => {
+    const sine8k = Buffer.from(Array.from({ length: 800 }, (_, i) => mulawEncode(Math.round(9000 * Math.sin((2 * Math.PI * 300 * i) / 8000)))));
+    const whole = Buffer.from(createTwilioToGemini()(sine8k.toString('base64')), 'base64');
+    for (const cuts of [[160, 320, 480, 640], [1, 161, 333, 799], [7, 8, 9, 400]]) {
+      const conv = createTwilioToGemini();
+      const edges = [0, ...cuts, sine8k.length];
+      const parts = edges.slice(1).map((e, i) => Buffer.from(conv(sine8k.subarray(edges[i], e).toString('base64')), 'base64'));
+      assert.deepEqual(Buffer.concat(parts), whole, `cuts ${cuts}`);
+    }
+    // the sample interpolated at a 160-byte boundary sits between its neighbours (the old converter repeated the last one)
+    const at = 160 * 2; // 16 kHz sample index of the first sample of the second frame's pair
+    const a = mulawDecode(sine8k[159]), b = mulawDecode(sine8k[160]);
+    assert.equal(whole.readInt16LE(at * 2), (a + b) >> 1);
+  });
+  test('chunk boundaries: 24 kHz PCM split at odd byte offsets downsamples exactly like the whole buffer', () => {
+    const sine = pcm24k(2400);
+    const whole = Buffer.from(createGeminiToTwilio()(sine.toString('base64')), 'base64');
+    for (const cuts of [[1, 1001, 2003, 4799], [3, 5, 7, 9, 11], [999, 1000, 3001], [160, 320, 481]]) {
+      const conv = createGeminiToTwilio();
+      const edges = [0, ...cuts, sine.length];
+      const parts = edges.slice(1).map((e, i) => Buffer.from(conv(sine.subarray(edges[i], e).toString('base64')), 'base64'));
+      assert.deepEqual(Buffer.concat(parts), whole, `cuts ${cuts}`);
+    }
   });
 });
 
@@ -219,9 +254,16 @@ describe('voice-live: prompt, tools, product links', () => {
     assert.match(systemInstruction({ botName: 'X', productLinks: true }), /send_product_link/);
   });
 
-  test('shop domain: SHOP_DOMAIN, else a Shopify store import on the trial, else none', () => {
-    assert.equal(shopDomainFor({}, { SHOP_DOMAIN: 'shop.example.com/' }), 'https://shop.example.com');
+  test('shop domain: the bot\'s own Shopify import or shopDomain; SHOP_DOMAIN only for SHOP_DOMAIN_BOT, never server-wide', () => {
+    const env = { SHOP_DOMAIN: 'shop.example.com/' };
+    assert.equal(shopDomainFor({ id: 'front-desk', kind: 'live', inst: {} }, env), null, 'SHOP_DOMAIN alone applies to no bot');
+    assert.equal(shopDomainFor({ id: 'front-desk', kind: 'live', inst: {} }, { ...env, SHOP_DOMAIN_BOT: 'front-desk' }), 'https://shop.example.com');
+    assert.equal(shopDomainFor({ id: 'clinic', kind: 'live', inst: {} }, { ...env, SHOP_DOMAIN_BOT: 'front-desk' }), null, 'another bot never gets it');
+    assert.deepEqual(toolDeclarations({ org: 'Clinic', productLinks: !!shopDomainFor({ id: 'clinic', kind: 'live', inst: {} }, { ...env, SHOP_DOMAIN_BOT: 'front-desk' }) })[0].functionDeclarations.map((f) => f.name),
+      ['search_knowledge_base', 'end_call']);
     assert.equal(shopDomainFor({ T: { flags: { storeLast: { platform: 'shopify', url: 'https://ugm.example' } } } }, {}), 'https://ugm.example');
+    assert.equal(shopDomainFor({ kind: 'trial', flags: { storeLast: { platform: 'shopify', url: 'https://ugm.example' } } }, {}), 'https://ugm.example', 'from the saved trial doc');
+    assert.equal(shopDomainFor({ kind: 'live', inst: { shopDomain: 'https://ugm.example' } }, {}), 'https://ugm.example', 'a launched bot');
     assert.equal(shopDomainFor({ T: { flags: { storeLast: { platform: 'woocommerce', url: 'https://wp.example' } } } }, {}), null);
     assert.equal(shopDomainFor({ kind: 'live', inst: {} }, {}), null);
     assert.equal(toE164('(415) 555-0199'), '+14155550199');
@@ -269,7 +311,9 @@ describe('voice-live: prompt, tools, product links', () => {
     const s = await run({ name: 'search_knowledge_base', args: { query: 'How much is the dice tray?' } });
     assert.equal(s.status, 'ok');
     assert.equal(s.say, 'According to the Magnetic Dice Tray page, the magnetic dice tray is $29.99.');
-    assert.equal(s.sources[0].title, 'Magnetic Dice Tray');
+    // only what to say and where it came from: no raw excerpts or page addresses the model could read beyond the answer
+    assert.deepEqual(Object.keys(s).sort(), ['say', 'source_titles', 'status']);
+    assert.deepEqual(s.source_titles, ['Magnetic Dice Tray']);
     assert.deepEqual(await run({ name: 'search_knowledge_base', args: { query: OFF } }), { status: 'not_in_data', say: NOT_IN_DATA });
     assert.deepEqual(asked, ['How much is the dice tray?', OFF]);
     // by name: the handle comes from what this call's searches cited
@@ -291,16 +335,87 @@ describe('voice-live: prompt, tools, product links', () => {
     const plain = createToolRunner({ ask, callSid: 'CA9', callerNumber: PHONE, sendSms: async () => {} });
     assert.equal((await plain({ name: 'send_product_link', args: { product: 'x' } })).status, 'error');
   });
+
+  test('texts: the caller ID by default; a spoken number only in the line\'s country, never premium-rate; quota refusals', async () => {
+    assert.equal(textableNumber(PHONE, '+15550001111'), PHONE);
+    assert.equal(textableNumber('+447700900123', '+15550001111'), null, 'foreign');
+    assert.equal(textableNumber('+447700900123', '+447700900999'), '+447700900123', 'same country as the line');
+    assert.equal(textableNumber('+1 900 555 1234', ''), null, 'premium-rate 900');
+    assert.equal(textableNumber('+1 212 976 1234', ''), null, 'premium 976 exchange');
+    assert.equal(textableNumber('+449012345678', '+447700900999'), null, 'UK premium 09');
+    assert.equal(textableNumber('411', ''), null, 'short code');
+    const texts = [];
+    const ask = async () => ({ refused: false, citations: [], proof: { hits: [] } });
+    let allowed = true;
+    const run = createToolRunner({ ask, callSid: 'CA10', callerNumber: PHONE, sendSms: async (to, body) => { texts.push({ to, body }); }, shopDomain: `${F.url}/shop`, org: 'Acme',
+      env: { TWILIO_FROM_NUMBER: '+15550001111' }, textAllowed: () => allowed });
+    const foreign = await run({ name: 'send_product_link', args: { product: 'magnetic-dice-tray', phone_number: '+44 7700 900123' } });
+    assert.equal(foreign.status, 'error');
+    assert.match(foreign.reason, /same country/);
+    const premium = await run({ name: 'send_product_link', args: { product: 'magnetic-dice-tray', phone_number: '1-900-555-1234' } });
+    assert.equal(premium.status, 'error');
+    assert.equal(texts.length, 0, 'nothing texted to a foreign or premium-rate number');
+    // the caller's own number, spoken back, is still the caller ID
+    assert.equal((await run({ name: 'send_product_link', args: { product: 'magnetic-dice-tray', phone_number: '(415) 555-0199' } })).status, 'ok');
+    allowed = false;
+    assert.deepEqual(await run({ name: 'send_product_link', args: { product: 'magnetic-dice-tray' } }), { status: 'error', retryable: false, reason: 'texts are limited' });
+    assert.equal(texts.length, 1);
+  });
+
+  test('grounding check: a figure (digit, currency, percent, date) is caught; the caller\'s own last four digits are not', () => {
+    assert.ok(hasFigure('It costs $29.99.'));
+    assert.ok(hasFigure('About twenty percent off.'));
+    assert.ok(hasFigure('We open on Monday.'));
+    assert.ok(!hasFigure('Shall I text it to the number ending in 0199?', { lastFour: '0199' }));
+    assert.ok(!hasFigure('You may return it. Goodbye!'));
+    assert.deepEqual(phoneLimits({}), { maxSeconds: 900, maxSessions: 50, maxPerBot: 5 });
+  });
 });
 
 // ------------------------------------------------------------------ end to end through the server
 describe('voice-live: a phone call through the server (fake Twilio, fake Gemini Live, fake Shopify)', () => {
   let S, F, G;
   const toolResponses = [];
+  // what the fake Gemini does in the next session: 'full' (the scripted call below), 'idle', 'texts', 'ungrounded'
+  const mode = { current: 'full' };
+  const toolCall = (send, next, s) => async (id, name, args) => {
+    send({ toolCall: { functionCalls: [{ id, name, args }] } });
+    const r = await next('toolResponse');
+    (s.results ||= []).push(r.toolResponse.functionResponses[0]);
+    return r.toolResponse.functionResponses[0].response;
+  };
   before(async () => {
     _resetQuestions();
     F = await startFakeProviders();
-    G = await startFakeGemini(async ({ send, next }) => {
+    G = await startFakeGemini(async ({ send, next, s }) => {
+      const m = mode.current;
+      s.mode = m;
+      if (m === 'idle') return;
+      if (m === 'texts') {
+        await next('text');
+        const call = toolCall(send, next, s);
+        for (let i = 0; i < 3; i++) await call(`x${i}`, 'send_product_link', { product: 'magnetic-dice-tray' });
+        await call('xf', 'send_product_link', { product: 'magnetic-dice-tray', phone_number: '+44 7700 900123' });
+        await call('xp', 'send_product_link', { product: 'magnetic-dice-tray', phone_number: '+1 900 555 1234' });
+        await call('xe', 'end_call', {});
+        send({ serverContent: { turnComplete: true } });
+        return;
+      }
+      if (m === 'ungrounded') {
+        await next('text');
+        // the caller asks; the model answers with a price and never searched
+        send({ serverContent: { inputTranscription: { text: 'How much is the walnut dice tray?' } } });
+        send({ serverContent: { outputTranscription: { text: 'The walnut dice tray is $49.99.' }, modelTurn: { parts: [{ inlineData: { data: pcm24k(300).toString('base64') } }] } } });
+        send({ serverContent: { turnComplete: true } });
+        // then a grounded turn: searched first, so not flagged
+        send({ serverContent: { inputTranscription: { text: Q } } });
+        await toolCall(send, next, s)('g1', 'search_knowledge_base', { query: Q });
+        send({ serverContent: { outputTranscription: { text: 'According to the Returns Policy, you have 30 days.' } } });
+        send({ serverContent: { turnComplete: true } });
+        await toolCall(send, next, s)('g2', 'end_call', {});
+        send({ serverContent: { turnComplete: true } });
+        return;
+      }
       const hello = await next('text');
       toolResponses.push({ hello: hello.realtimeInput.text });
       const call = async (id, name, args) => {
@@ -321,7 +436,7 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
       send({ serverContent: { turnComplete: true } });
     });
     S = await boot({ TWILIO_AUTH_TOKEN: 'twilio-secret', TWILIO_ACCOUNT_SID: 'AC1', TWILIO_FROM_NUMBER: '+15550001111', TWILIO_API_BASE_URL: `${F.url}/twilio`,
-      GEMINI_API_KEY: 'gkey', GEMINI_LIVE_URL: G.url, SHOP_DOMAIN: `${F.url}/shop` });
+      GEMINI_API_KEY: 'gkey', GEMINI_LIVE_URL: G.url, SHOP_DOMAIN: `${F.url}/shop`, SHOP_DOMAIN_BOT: 'front-desk', KNOWBOT_PHONE_MAX_SESSIONS_PER_BOT: '2' });
   });
   after(async () => { _resetQuestions(); await S.close(); await G.close(); await F.close(); });
 
@@ -372,7 +487,8 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     assert.equal(t1.id, 't1');
     assert.equal(t1.response.status, 'ok');
     assert.match(t1.response.say, /^According to the Returns Policy, you can return any unused item within 30 days/);
-    assert.equal(t1.response.sources[0].title, 'Returns Policy');
+    assert.deepEqual(t1.response.source_titles, ['Returns Policy']);
+    assert.equal(t1.response.sources, undefined, 'no raw excerpts reach the model');
     assert.deepEqual(t2.response, { status: 'not_in_data', say: NOT_IN_DATA });
     // product link texted through Twilio with attribution; sold out refused
     assert.equal(t3.response.status, 'ok');
@@ -428,6 +544,104 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
       assert.notEqual(w.readyState, 1, u);
     }
   });
+
+  test('texts: at most 3 a day to one number across calls; foreign and premium-rate numbers refused', async () => {
+    const smsTo = (to) => F.calls.filter((x) => x.path === '/twilio/2010-04-01/Accounts/AC1/Messages.json' && x.form?.To === to).length;
+    const prior = smsTo(PHONE);
+    assert.ok(prior <= 3);
+    mode.current = 'texts';
+    try {
+      const at = G.sessions.length;
+      const c = await startCall(S, 'front-desk', 'CA20');
+      await until(() => c.closeCode != null, 15000, 'the texting call to end');
+      const r = G.sessions[at].results.map((x) => x.response);
+      for (let i = 0; i < 3; i++) {
+        if (prior + i < 3) assert.equal(r[i].status, 'ok', JSON.stringify(r[i]));
+        else assert.deepEqual(r[i], { status: 'error', retryable: false, reason: 'texts are limited' });
+      }
+      assert.equal(r[3].status, 'error');
+      assert.match(r[3].reason, /same country/);
+      assert.equal(r[4].status, 'error', 'premium-rate');
+      // redialling does not reset it: the next call's first text is refused too
+      const c2 = await startCall(S, 'front-desk', 'CA21');
+      await until(() => c2.closeCode != null, 15000, 'the second texting call to end');
+      assert.deepEqual(G.sessions[at + 1].results[0].response, { status: 'error', retryable: false, reason: 'texts are limited' });
+      assert.equal(smsTo(PHONE), 3);
+      assert.equal(smsTo('+447700900123') + smsTo('+19005551234'), 0);
+    } finally { mode.current = 'full'; }
+  });
+
+  test('grounding: a spoken price with no search is logged and flagged ungrounded in the questions loop; a searched answer is not', async () => {
+    const caller = '+14155550142';
+    mode.current = 'ungrounded';
+    try {
+      const c = await startCall(S, 'front-desk', 'CA22', caller);
+      await until(() => c.closeCode != null, 15000, 'the call to end');
+    } finally { mode.current = 'full'; }
+    assert.ok(S.logs.some((l) => /\[voice-live\] CA22 ungrounded turn/.test(l)), S.logs.filter((l) => /voice-live/.test(l)).join('\n'));
+    const flagged = await until(async () => { await flushQuestions(); const f = [...S.kd.files.values()].filter((x) => x.tags.includes('flag:ungrounded')); return f.length ? f : null; }, 5000, 'a flagged question');
+    assert.equal(flagged.length, 1, 'only the turn with no search');
+    assert.ok(flagged[0].tags.includes('channel:phone') && flagged[0].tags.includes('bot:front-desk') && flagged[0].tags.includes(`from:${hashCaller(caller)}`));
+    assert.match(flagged[0].text, /walnut dice tray/);
+    assert.match(flagged[0].text, /Flagged: ungrounded/);
+  });
+
+  test('a caller redialling fast gets no stream token (busy, hang up)', async () => {
+    const from = '+14155550177';
+    let last = '';
+    for (let i = 0; i < 13; i++) last = await (await S.twilio('/v1/channels/front-desk/voice', { CallSid: `CR${i}`, From: from })).text();
+    assert.match(last, /<Say [^>]*>This line is busy right now\. Please call back in a minute\.<\/Say><Hangup\/>/);
+    assert.ok(!/<Stream|token/.test(last));
+  });
+
+  test('concurrency: over the per-bot cap the media stream is closed with 1013 before a Gemini session opens', async () => {
+    mode.current = 'idle';
+    const open = [];
+    try {
+      const at = G.sessions.length;
+      open.push(await startCall(S, 'front-desk', 'CA30'), await startCall(S, 'front-desk', 'CA31'));
+      await until(() => G.sessions.length === at + 2 && phoneSessions().byBot['front-desk'] === 2, 5000, 'two open calls');
+      const third = await startCall(S, 'front-desk', 'CA32');
+      assert.equal(await third.closed, 1013);
+      await sleep(100);
+      assert.equal(G.sessions.length, at + 2, 'no Gemini session for the refused call');
+      assert.ok(S.logs.some((l) => /CA32 refused: too many phone sessions/.test(l)));
+    } finally {
+      mode.current = 'full';
+      for (const c of open) { c.send({ event: 'stop', streamSid: 'MZ1' }); await c.closed; }
+    }
+    assert.equal(phoneSessions().byBot['front-desk'], undefined, 'closed calls are counted down');
+  });
+
+  test('launch: a Shopify-imported trial keeps texted links on its launched bot; SHOP_DOMAIN never reaches an unrelated bot', async () => {
+    const admin = { authorization: 'Bearer dev-admin', 'content-type': 'application/json' };
+    for (const name of ['Shop Bot', 'Clinic']) assert.equal((await S.api('/api/instances', { method: 'POST', headers: admin, body: JSON.stringify({ name, buckets: ['acme'] }) })).status, 201);
+    const tr = await (await S.api('/api/studio/trials', { method: 'POST' })).json();
+    const T = S.kb.studio.trials.get(tr.trialId);
+    T.flags.storeLast = { at: new Date().toISOString(), url: `${F.url}/shop`, platform: 'shopify', name: 'Acme Store', files: 3 };
+    const conv = await S.api(`/api/studio/trials/${tr.trialId}/convert`, { method: 'POST', headers: admin, body: JSON.stringify({ account: 'acct1', bucketId: 'shopb', bot: 'shop-bot' }) });
+    assert.equal(conv.status, 200);
+    const cj = await conv.json();
+    assert.equal(cj.shopDomain, `${F.url}/shop`);
+    assert.equal(cj.bot, 'shop-bot');
+    assert.equal((await (await S.api('/api/instances/shop-bot', { headers: admin })).json()).shopDomain, `${F.url}/shop`);
+    assert.equal((await (await S.api('/v1/channels/shop-bot')).json()).channels.voice.texts, true);
+    assert.equal((await (await S.api('/v1/channels/clinic')).json()).channels.voice.texts, false, 'SHOP_DOMAIN is set, but only for front-desk');
+    mode.current = 'idle';
+    try {
+      const at = G.sessions.length;
+      for (const [bot, sid, n] of [['shop-bot', 'CA40', 0], ['clinic', 'CA41', 1]]) {
+        const c = await startCall(S, bot, sid);
+        await until(() => G.sessions[at + n]?.setup, 5000, `${bot} setup`);
+        c.send({ event: 'stop', streamSid: 'MZ1' });
+        await c.closed;
+      }
+      const names = (k) => G.sessions[at + k].setup.tools[0].functionDeclarations.map((f) => f.name);
+      assert.deepEqual(names(0), ['search_knowledge_base', 'send_product_link', 'end_call']);
+      assert.deepEqual(names(1), ['search_knowledge_base', 'end_call']);
+      assert.ok(!/send_product_link/.test(G.sessions[at + 1].setup.systemInstruction.parts[0].text));
+    } finally { mode.current = 'full'; }
+  });
 });
 
 describe('voice-live: classic engine (no GEMINI_API_KEY) speaks with ElevenLabs; missing secrets degrade', () => {
@@ -466,5 +680,33 @@ describe('voice-live: classic engine (no GEMINI_API_KEY) speaks with ElevenLabs;
     assert.match(first, /<Say /);
     const st = await (await N.api('/v1/channels/front-desk')).json();
     assert.equal(st.channels.voice.texts, false);
+  });
+});
+
+describe('voice-live: the call length limit', () => {
+  let S, F, G;
+  before(async () => {
+    F = await startFakeProviders();
+    G = await startFakeGemini(async ({ send, next, s }) => {
+      await next('text'); // [call connected]
+      const nudge = await next('text'); // the time-limit message
+      s.nudge = nudge.realtimeInput.text;
+      send({ serverContent: { outputTranscription: { text: "We're out of time for this call. Thanks for calling, goodbye!" }, modelTurn: { parts: [{ inlineData: { data: pcm24k(300).toString('base64') } }] } } });
+      send({ serverContent: { turnComplete: true } });
+    });
+    S = await boot({ TWILIO_AUTH_TOKEN: 'twilio-secret', TWILIO_ACCOUNT_SID: 'AC1', TWILIO_API_BASE_URL: `${F.url}/twilio`, GEMINI_API_KEY: 'gkey', GEMINI_LIVE_URL: G.url, KNOWBOT_PHONE_MAX_SECONDS: '0.5' });
+  });
+  after(async () => { await S.close(); await G.close(); await F.close(); });
+
+  test('at KNOWBOT_PHONE_MAX_SECONDS the agent is told to say goodbye, the goodbye plays, then the call is hung up', async () => {
+    const c = await startCall(S, 'front-desk', 'CA50');
+    await until(() => c.closeCode != null, 10000, 'the call to be ended by the limit');
+    const s = G.sessions.at(-1);
+    assert.match(s.nudge, /^\[time limit\]/);
+    assert.ok(c.got.some((m) => m.event === 'media'), 'the goodbye audio reached the caller');
+    assert.ok(c.got.some((m) => m.event === 'mark' && /^hangup-\d+$/.test(m.mark.name)));
+    assert.equal(F.calls.find((x) => x.path === '/twilio/2010-04-01/Accounts/AC1/Calls/CA50.json')?.form?.Status, 'completed');
+    assert.ok(S.logs.some((l) => /CA50 reached the 0\.5 s call limit/.test(l)));
+    assert.equal(phoneSessions().byBot['front-desk'], undefined);
   });
 });

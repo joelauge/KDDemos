@@ -157,6 +157,26 @@ export function anchorsOf(html, baseUrl) {
   }
   return out;
 }
+const CHROME_OPEN_RE = /^<(nav|header|footer)\b|\brole\s*=\s*["']?(?:navigation|banner|contentinfo)\b|\b(?:id|class)\s*=\s*["'][^"']*?(?:site-?footer|site-?header|footer|header|main-?nav|site-?nav|navbar|menu)[^"']*["']/i;
+/**
+ * The site's menus: the inner HTML of every <nav>, <header>, <footer> (and role=navigation|banner|contentinfo, or a
+ * header/footer/menu class) element, concatenated. Nested matches are taken once (the outer element).
+ */
+export function chromeHtmlOf(html) {
+  const s = String(html ?? '');
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/g;
+  let out = '', take = null, m;
+  while ((m = re.exec(s))) {
+    const close = !!m[1], name = m[2].toLowerCase(), self = !!m[3];
+    if (take) {
+      if (name === take.tag) { if (close) { if (--take.depth === 0) { out += `${s.slice(take.start, m.index)}\n`; take = null; } } else if (!self) take.depth++; }
+      continue;
+    }
+    if (!close && !self && CHROME_OPEN_RE.test(m[0])) take = { tag: name, depth: 1, start: re.lastIndex };
+  }
+  if (take) out += s.slice(take.start);
+  return out;
+}
 /** <link rel="canonical"> of a page, resolved, or null. */
 export function canonicalOf(html, pageUrl) {
   const m = /<link\b[^>]*rel=["']canonical["'][^>]*>/i.exec(String(html || ''));
@@ -265,6 +285,11 @@ const SITEMAP_DEFAULTS = {
  *   base, host, platform, name,
  *   sources: [{ url, kind, rank, via, text?, lastmod?, helpdesk? }]   (ranked, de-duplicated; products included),
  *   productUrls: string[]                                             (every product page URL found outside the feed),
+ *   candidateUrls: string[], candidates: n                            (maybe products: Magento .html, /shop/<x>; read and
+ *                                                                      kept as products only with Product JSON-LD),
+ *   upTo: { product }, approx: ['product']?                           (products counted from candidates only),
+ *   skippedDesks: [{ type, origin, reason }]                          (hosted desks seen but not read: one desk per import,
+ *                                                                      menu-linked help only),
  *   feedTotal: number|null,                                           (the platform feed's product count, when cheap)
  *   helpdesks: [{ type, origin, prefix, api }],
  *   prefetched: Map<url, { html, title, kind }>                       (help-desk articles read through an API),
@@ -291,8 +316,9 @@ export async function findSources(f, det, o = {}) {
     const k = urlKey(u);
     const cur = byKey.get(k);
     if (cur) {
-      // the same page found twice: keep the better-ranked kind, the shorter (unprefixed) URL, every via
-      if (KIND_RANK[kind] < KIND_RANK[cur.kind] && !(cur.kind === 'product' && kind !== 'faq' && kind !== 'policy')) cur.kind = kind;
+      // the same page found twice: keep the better-ranked kind (and its rank: a sitemap 'page' that the footer calls
+      // "Shipping & Returns" becomes a policy and sorts with the policies), the shorter (unprefixed) URL, every via
+      if (KIND_RANK[kind] < KIND_RANK[cur.kind] && !(cur.kind === 'product' && kind !== 'faq' && kind !== 'policy')) { cur.kind = kind; cur.rank = KIND_RANK[kind]; }
       if (new URL(u).pathname.length < new URL(cur.url).pathname.length) cur.url = u;
       if (!cur.via.includes(via)) cur.via.push(via);
       if (extra.text && !cur.text) cur.text = extra.text;
@@ -313,12 +339,7 @@ export async function findSources(f, det, o = {}) {
   const defaults = (SITEMAP_DEFAULTS[platform] || SITEMAP_DEFAULTS.generic).map((p) => `${base}${p}`);
   const sm = await crawlSitemaps(f, { seeds, defaults, inflate: o.inflate, maxFiles: o.maxSitemapFiles || 300 });
   o.onDiscover?.({ step: 'sitemaps', urls: sm.entries.length, sitemaps: sm.files });
-  const productUrls = [];
-  for (const e of sm.entries) {
-    let kind = classifyUrl(e.loc, { platform, hint: e.hint });
-    if (kind === 'product') productUrls.push(e.loc);
-    add(e.loc, kind, 'sitemap', e.lastmod ? { lastmod: e.lastmod } : {});
-  }
+  for (const e of sm.entries) add(e.loc, classifyUrl(e.loc, { platform, hint: e.hint }), 'sitemap', e.lastmod ? { lastmod: e.lastmod } : {});
 
   // 3. platform extras: Shopify's fixed policy pages
   // (unverified guesses: read like any source, but not counted as found until a page answers)
@@ -339,6 +360,10 @@ export async function findSources(f, det, o = {}) {
   const homeHtml = det.home?.html || '';
   const homeUrl = det.home?.url || `${base}/`;
   const deskOrigins = new Map();
+  const inChrome = new Set(anchorsOf(chromeHtmlOf(homeHtml), homeUrl).map((a) => a.url));
+  const siteLabel = siteDomain.split('.')[0].replace(/[^a-z0-9]/g, '');
+  const helpText = (a) => FAQ_RE.test(words(a.text)) || HELP_RE.test(words(a.text)) || POLICY_RE.test(words(a.text)) || / (?:help|support|faq|hc|kb|knowledge) /.test(words(new URL(a.url).pathname));
+  const skippedDesks = [];
   for (const a of anchorsOf(homeHtml, homeUrl)) {
     let u;
     try { u = new URL(a.url); } catch { continue; }
@@ -346,19 +371,28 @@ export async function findSources(f, det, o = {}) {
     if (desk && u.hostname !== host) {
       const prefix = desk === 'intercom' && u.hostname === 'intercom.help' ? `/${u.pathname.split('/')[1] || ''}` : '/';
       const key = `${u.origin}${prefix}`;
-      if (!deskOrigins.has(key)) deskOrigins.set(key, { type: desk, origin: u.origin, prefix, host: u.hostname, linkedFrom: homeUrl });
+      if (deskOrigins.has(key)) { if (inChrome.has(a.url) && helpText(a)) deskOrigins.get(key).menu = true; continue; }
+      // a hosted desk counts only when the site's own menus link it as its help (not a partner's desk in the copy)
+      const label = (desk === 'intercom' && prefix !== '/' ? prefix.slice(1) : u.hostname.split('.')[0]).toLowerCase().replace(/[^a-z0-9]/g, '');
+      deskOrigins.set(key, { type: desk, origin: u.origin, prefix, host: u.hostname, linkedFrom: homeUrl, menu: desk === 'subdomain' || (inChrome.has(a.url) && helpText(a)),
+        brand: desk === 'subdomain' || (!!label && !!siteLabel && (label.includes(siteLabel) || siteLabel.includes(label))) });
       continue;
     }
     const kind = classifyUrl(a.url, { platform, text: a.text });
     if (kind === 'pdf') { add(a.url, 'pdf', 'link', { text: a.text }); continue; }
     if (!f.hostOkFor(a.url)) continue;
-    if (kind === 'pdf') add(a.url, 'pdf', 'link', { text: a.text });
-    else if (kind === 'faq' || kind === 'policy' || kind === 'help') add(a.url, kind, 'nav', { text: a.text });
-    else if (kind === 'product') { add(a.url, 'product', 'nav', { text: a.text }); productUrls.push(normalizeUrl(a.url)); }
+    if (kind === 'faq' || kind === 'policy' || kind === 'help') add(a.url, kind, 'nav', { text: a.text });
+    else if (kind === 'product' || kind === 'candidate') add(a.url, kind, 'nav', { text: a.text });
   }
+  // the site's own help subdomains, plus at most ONE hosted desk (menu-linked; the one named like the site first).
+  // Other desks are reported in the plan, never read.
+  const hosted = [...deskOrigins.values()].filter((d) => d.type !== 'subdomain');
+  const pickDesk = hosted.filter((d) => d.menu).sort((a, b) => (a.brand ? 0 : 1) - (b.brand ? 0 : 1))[0] || null;
+  for (const d of hosted) if (d !== pickDesk) skippedDesks.push({ type: d.type, origin: d.origin, reason: d.menu ? 'one help desk per import' : 'not linked from the site menus as its help' });
+  const desks = [...deskOrigins.values()].filter((d) => d.type === 'subdomain' || d === pickDesk);
 
   // 6. help centres: hosted desks are allowed only because the site links them; Zendesk Guide has a public API
-  for (const d of deskOrigins.values()) {
+  for (const d of desks) {
     o.allowHelpHost?.(d.host);
     let api = false;
     try {
@@ -409,7 +443,8 @@ export async function findSources(f, det, o = {}) {
     try { ok = await f.robotsAllowed(s.url); } catch (e) { if (FATAL.has(e.code)) throw e; }
     if (ok) allowed.push(s); else disallowed++;
   }
-  allowed.sort((a, b) => a.rank - b.rank || (a.via.includes('nav') ? 0 : 1) - (b.via.includes('nav') ? 0 : 1) || a.url.localeCompare(b.url));
+  for (const s of allowed) s.rank = KIND_RANK[s.kind] ?? 9;
+  allowed.sort(compareSources);
 
   // 8. feed totals (cheap probes only)
   let feedTotal = null;
@@ -417,11 +452,22 @@ export async function findSources(f, det, o = {}) {
 
   const counts = Object.fromEntries(KINDS.map((k) => [k, 0]));
   const samples = Object.fromEntries(KINDS.map((k) => [k, []]));
-  let guesses = 0;
-  for (const s of allowed) { if (s.guess && s.via.length === 1) { guesses++; continue; } counts[s.kind]++; if (samples[s.kind].length < 3) samples[s.kind].push(s.url); }
+  let guesses = 0, candidates = 0;
+  const candidateSamples = [];
+  for (const s of allowed) {
+    if (s.guess && s.via.length === 1) { guesses++; continue; }
+    if (s.kind === 'candidate') { candidates++; if (candidateSamples.length < 3) candidateSamples.push(s.url); continue; }
+    counts[s.kind]++; if (samples[s.kind].length < 3) samples[s.kind].push(s.url);
+  }
   if (feedTotal != null && feedTotal > counts.product) counts.product = feedTotal;
+  // candidates (Magento .html, /shop/<x>) may be products or categories: counted apart ("up to N products"); a site
+  // whose only product signal is candidates shows them as its products (approx) so the visitor can still tick them
+  const approx = [];
+  if (!counts.product && candidates) { counts.product = candidates; approx.push('product'); samples.product = candidateSamples; }
   return {
-    base, host, platform, name: det.name || null, sources: allowed, productUrls: [...new Set(productUrls.filter(Boolean))], feedTotal, helpdesks, prefetched,
-    counts, samples, guesses, robots: { crawlDelay, sitemaps: (robots.sitemaps || []).length, sitemapFiles: sm.files, disallowed }, notes,
+    base, host, platform, name: det.name || null, sources: allowed,
+    productUrls: allowed.filter((s) => s.kind === 'product').map((s) => s.url), candidateUrls: allowed.filter((s) => s.kind === 'candidate').map((s) => s.url),
+    feedTotal, helpdesks, skippedDesks, prefetched, counts, samples, candidates, upTo: { product: Math.max(counts.product, (approx.length ? 0 : counts.product) + candidates) }, approx,
+    guesses, robots: { crawlDelay, sitemaps: (robots.sitemaps || []).length, sitemapFiles: sm.files, disallowed }, notes,
   };
 }
