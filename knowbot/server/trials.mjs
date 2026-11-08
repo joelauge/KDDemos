@@ -2344,6 +2344,11 @@ export function createStudio(o = {}) {
   const storeRetryMs = Math.max(0, Number(o.storeRetryMs ?? 1000));
   const storeSaveMs = Math.max(10, Number(o.storeSaveMs ?? 3000));
   const STORE_MAX_RESUMES = 5, STORE_RESUME_MAX_AGE_MS = DAY;
+  // A round that runs out of time with pages left goes on in another round (same job, the written pages skipped),
+  // so a slow site's every product page is read: up to storeMaxRounds rounds of storeBudgetMs each.
+  const storeMaxRounds = Math.max(1, Number(o.storeMaxRounds ?? env.KNOWBOT_STORE_MAX_ROUNDS) || 12);
+  // owner: every product page's own copy, not only the feed's (the per-round time budget no longer limits it)
+  const storeEnrich = o.storeEnrich ?? env.KNOWBOT_STORE_ENRICH ?? 'all';
   const STORE_PROGRESS = new Set(['fetching', 'reading', 'discovering']);
   const STORE_MILESTONES = new Set(['resumed', 'detect', 'plan', 'found', 'building', 'capped', 'built', 'error', 'done']);
   const hostTagOf = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'site';
@@ -2454,9 +2459,9 @@ export function createStudio(o = {}) {
     T.lastActivityAt = now();
     streamJob(req, res, job, 0); // attached before the job starts, so the POST sees every event
     if (wellFormed) {
-      // persisted before anything is read: a restart from here on resumes this job (a bad address never is one)
+      // persisted within storeSaveMs, long before the first page is written: a restart from then on resumes this job
       T.flags.storeJob = { id: job.id, url: body.url, kinds, state: 'running', startedAt: job.startedAt, plan: null, total: null, done: {}, uploaded: 0, written: {}, seq: 0, activeMs: 0, resumes: 0 };
-      flushSpec(T);
+      saveJobSoon(T);
     }
     runStoreJob(T, job, { url: body.url, previous, wellFormed, sharedBytes, kinds })
       .catch((e) => log(`[studio] store job ${T.id}: ${e?.message}`));
@@ -2522,7 +2527,7 @@ export function createStudio(o = {}) {
         const u = written[relOf(r)];
         if (u && !T.storeManifest.has(r.id)) T.storeManifest.set(r.id, { url: u, kind, path: relOf(r) });
       }
-      Object.assign(pj, { done, uploaded: mine.length });
+      Object.assign(pj, { done: { ...done }, uploaded: mine.length });
       const skip = { urls: Object.values(written), paths: [...new Set([...Object.keys(written), ...mine.map(relOf)])] };
       const sharedBytes = usageOf(T, files).bytes - rows.reduce((n, r) => n + (Number(r.bytes) || 0), 0) - T.inflight;
       jobEmit(T, job, 'resumed', { done: mine.length, total: pj.total ?? null, plan: pj.plan || null, resumes: pj.resumes, startedAt: new Date(Number(pj.startedAt)).toISOString() });
@@ -2697,9 +2702,20 @@ export function createStudio(o = {}) {
       if (k === 1 || k % 10 === 0) kickPoller(T);
     }
     const doneFiles = () => (rows.length <= 300 ? rows : rows.map(lightRow));
+    // rounds: the pages written by earlier rounds of this job, per kind, and the skip list for the next round
+    const roundsWritten = {}, roundsExtra = { enriched: 0, productPagesRead: 0 };
+    let round = 0, skipNow = resume ? resume.skip : null;
+    const nextSkip = () => {
+      const w = pjOf()?.written || {};
+      const base = skipNow || { urls: [], paths: [] };
+      return { urls: [...new Set([...base.urls, ...Object.values(w)])], paths: [...new Set([...base.paths, ...Object.keys(w), ...rows.map((f) => f.path).filter(Boolean)])] };
+    };
     try {
-      const r = await importStore(url, { remainingBytes: QUOTA_BYTES - (rowsBytes() - previous.reduce((n, x) => n + (Number(x.bytes) || 0), 0)) - sharedBytes, signal, net: o.storeNet,
-        budgetMs: storeBudgetMs, enrich: o.storeEnrich, onFiles, ...(kinds ? { kinds } : {}), ...(resume ? { skip: resume.skip } : {}),
+      let r;
+      for (;;) {
+      r = await importStore(url, { remainingBytes: QUOTA_BYTES - (rowsBytes() - previous.reduce((n, x) => n + (Number(x.bytes) || 0), 0)) - sharedBytes, signal, net: o.storeNet,
+        budgetMs: storeBudgetMs, enrich: storeEnrich, onFiles, ...(kinds ? { kinds } : {}), ...(skipNow ? { skip: skipNow } : {}),
+        ...(o.storeBatchFiles ? { batchFiles: o.storeBatchFiles } : {}), // tests only: smaller product batches
         onEvent: (ev, d) => {
           if (ev === 'found' || ev === 'plan') foundAny = true;
           if (ev === 'plan' && pjOf()?.state === 'running') {
@@ -2712,6 +2728,18 @@ export function createStudio(o = {}) {
           if (ev === 'plan') job.hosts = storeHostsOf(job.hosts[0] ? `http://${job.hosts[0]}` : '', d.helpdesks);
           if (ev !== 'error') send(ev, d);
         } });
+      const leftTime = Object.values(r.report?.leftOut?.time || {}).reduce((n, x) => n + (Number(x) || 0), 0);
+      if (!r.report?.timeUp || !leftTime || quotaOut || signal.aborted || round + 1 >= storeMaxRounds) break;
+      // time ran out with pages left: another round, same job, the pages written so far skipped
+      round++;
+      for (const [kind, n] of Object.entries(r.report.written || {})) roundsWritten[kind] = (roundsWritten[kind] || 0) + n;
+      roundsExtra.enriched += r.report.enriched || 0; roundsExtra.productPagesRead += r.report.productPagesRead || 0;
+      skipNow = nextSkip();
+      const pj = pjOf();
+      if (pj) { pj.rounds = round; saveJobSoon(T); }
+      log(`[studio] website import ${job.id} for ${T.id}: round ${round + 1} (${uploaded} files written, ${leftTime} pages left)`);
+      send('continuing', { round: round + 1, rounds: storeMaxRounds, uploaded, left: leftTime });
+      }
       if (!rows.length && failedUp) throw new StudioError(502, 'upstream', 'knowDrive did not accept the imported pages. Try again in a minute.');
       // a resumed job: the earlier run's files count in the totals (and replace the import before it, if not yet done)
       if (resume && rows.length) await replacePrevious();
@@ -2719,9 +2747,12 @@ export function createStudio(o = {}) {
       if (rows.length) applyStoreDraft(T, r.name);
       const written = { ...r.report.written };
       for (const [kind, n] of Object.entries(prior)) written[kind] = (written[kind] || 0) + n;
-      const report = { ...r.report, written, uploaded, leftOut: { ...r.report.leftOut, quota: { ...r.report.leftOut.quota }, failed: { ...leftOutFailed } },
+      for (const [kind, n] of Object.entries(roundsWritten)) written[kind] = (written[kind] || 0) + n;
+      const multi = !!resume || round > 0;
+      const report = { ...r.report, written, uploaded, enriched: (r.report.enriched || 0) + roundsExtra.enriched, productPagesRead: (r.report.productPagesRead || 0) + roundsExtra.productPagesRead,
+        ...(round > 0 ? { rounds: round + 1, products: { ...r.report.products, written: written.product || 0 } } : {}), leftOut: { ...r.report.leftOut, quota: { ...r.report.leftOut.quota }, failed: { ...leftOutFailed } },
         ...(resume ? { resumed: { before: resume.mine.length, skipped: { ...(r.report.already || {}) } }, products: { ...r.report.products, written: written.product || 0 } } : {}) };
-      const counts = resume ? { products: written.product || 0, pages: (written.help || 0) + (written.page || 0), policies: written.policy || 0, faqs: written.faq || 0,
+      const counts = multi ? { products: written.product || 0, pages: (written.help || 0) + (written.page || 0), policies: written.policy || 0, faqs: written.faq || 0,
         pdfs: written.pdf || 0, collections: written.collection || 0, blog: written.blog || 0 } : r.counts;
       for (const [kind, n] of Object.entries(leftOutQuota)) report.leftOut.quota[kind] = (report.leftOut.quota[kind] || 0) + n;
       let capped = r.capped;

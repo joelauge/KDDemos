@@ -3294,6 +3294,10 @@ store.registerCard('store-import', (data, el) => {
         advance('add'); reveal(bar); setBar(st.uploaded, st.built);
         say(`Adding files ${st.uploaded.toLocaleString('en-US')} of ${st.built.toLocaleString('en-US')} to your bot…`);
         break;
+      case 'continuing':
+        st.jobStarted = true;
+        say(`Still reading ${host()}: it's a big site, so I'm carrying on with the rest${st.uploaded ? ` · ${nPlural(st.uploaded, 'file')} added` : ''}…`);
+        break;
       case 'error': st.error = d; break;
       default: break;
     }

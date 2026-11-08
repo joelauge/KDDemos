@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createKnowBotServer } from '../server.mjs';
+import { createKnowBotServer, internalSecret } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
@@ -1756,8 +1756,10 @@ async function fakeShop({ slow = 0, slowMs = 120 } = {}) {
     '/sitemap.xml': (u, base) => [200, 'application/xml', `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${base}/pages/faq</loc></url>${
       Array.from({ length: slow }, (_, i) => `<url><loc>${base}/products/slow-${i + 1}</loc></url>`).join('')}</urlset>`],
   };
+  const hits = new Map();
   const s = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
+    hits.set(u.pathname, (hits.get(u.pathname) || 0) + 1);
     const sm = /^\/products\/slow-(\d+)$/.exec(u.pathname);
     if (sm) {
       await sleep(slowMs);
@@ -1771,7 +1773,7 @@ async function fakeShop({ slow = 0, slowMs = 120 } = {}) {
     res.writeHead(status, { 'content-type': type }); res.end(body);
   });
   await new Promise((r) => s.listen(0, '127.0.0.1', r));
-  return { base: `http://127.0.0.1:${s.address().port}`, setPrice: (p) => { price = p; }, close: () => { s.closeAllConnections?.(); return new Promise((r) => s.close(r)); } };
+  return { base: `http://127.0.0.1:${s.address().port}`, hits, setPrice: (p) => { price = p; }, close: () => { s.closeAllConnections?.(); return new Promise((r) => s.close(r)); } };
 }
 
 describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
@@ -1805,7 +1807,7 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     assert.equal(done.data.fileCount, 4, JSON.stringify(done.data.report));
     assert.ok(done.data.files.every((f) => f.origin === 'store' && f.page), JSON.stringify(done.data.files));
     assert.deepEqual(done.data.report.written, { policy: 1, faq: 1, product: 2 });
-    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`));
+    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`) && !f.tags.includes('kind:trial-spec')); // page files (the spec doc records the job)
     assert.equal(rows.length, 4);
     assert.ok(rows.every((f) => f.tags.includes('src:store') && f.tags.includes('site:127.0.0.1') && f.filename.startsWith(`knowbot/trials/${t.trialId}/site/127.0.0.1/`) && f.filename.endsWith('.md')), rows.map((r) => r.filename).join(' '));
     const prods = rows.filter((f) => f.tags.includes('page:product'));
@@ -1954,7 +1956,7 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     assert.equal(done.fileCount, 2);
     assert.deepEqual(done.report.written, { policy: 1, faq: 1 });
     assert.equal(done.report.leftOut.excluded.product, 2);
-    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`));
+    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`) && !f.tags.includes('kind:trial-spec')); // page files (the spec doc records the job)
     assert.equal(rows.length, 2);
     assert.ok(!rows.some((f) => f.tags.includes('page:product')), 'no product file was uploaded');
   });
@@ -2048,6 +2050,225 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     assert.equal(ev[0].data.code, 'blocked_host');
     assert.equal((await (await pc.json(t, '/files')).json()).files.length, 0);
     assert.equal((await pc.stream(t, '/store', { url: 'http://169.254.169.254/latest/meta-data/' })).find((e) => e.event === 'error').data.code, 'blocked_host');
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ restarts
+describe('Enter a Store URL: an import survives a server restart (persisted job, resume, busy endpoint)', () => {
+  let kd, llm, shop;
+  const dataDirs = [], servers = [];
+  const env = (extra = {}) => ({ KNOWDRIVE_BASE_URL: kd.url, KNOWDRIVE_API_KEY: 'fake-key', KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials', KNOWBOT_STUDIO_SAMPLE_MODE: 'live',
+    KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen', ...extra });
+  /** One server instance on the shared fake knowDrive (a "container"): close() is the restart. */
+  async function instance({ studio = {}, envExtra = {} } = {}) {
+    const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-restart-'));
+    dataDirs.push(dataDir);
+    const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, trustProxy: true, env: env(envExtra),
+      studio: { sweep: false, pingMs: 200, pollMs: 40, pollSlowMs: 150, pollIdleMs: 400, storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 }, storeRetryMs: 20,
+        storeSaveMs: 30, storeBatchFiles: 4, resumeDelayMs: 0, ...studio } });
+    await new Promise((r) => kb.server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${kb.server.address().port}`;
+    const S = { kb, kd, base, api: (p, init = {}) => fetch(base + p, init), close: () => new Promise((r) => (kb.server.listening ? kb.server.close(() => r()) : r())) };
+    servers.push(S);
+    return { S, c: client(S) };
+  }
+  const rowsOf = (t) => [...kd.files.values()].filter((f) => f.store === 'vs_fake_trials' && f.tags.includes(`trial:${t.trialId}`) && f.tags.includes('src:store'));
+  const specOf = async (t) => JSON.parse(await (await fetch(`${kd.url}/api/v1/vector_stores/vs_fake_trials/path/content/knowbot/trials/${t.trialId}/_spec.json`, { headers: { authorization: 'Bearer x' } })).text());
+  const until = async (pred, ms = 15000, what = 'condition') => { const t0 = Date.now(); while (!(await pred())) { if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${what}`); await sleep(30); } };
+  /** Start an import on `inst`, let it write some product pages, then stop that server mid-way (a deploy). */
+  async function interrupted(inst, t, minFiles = 8) {
+    const post = await openSSE(`${inst.S.base}/api/studio/trials/${t.trialId}/store`, inst.c.h(t, null, { 'content-type': 'application/json' }), { method: 'POST', body: JSON.stringify({ url: shop.base, owner: true }) });
+    await post.waitFor((e) => e.event === 'uploaded' && e.data.uploaded >= minFiles, 20000);
+    const job = post.events.find((e) => e.event === 'uploaded');
+    await until(async () => { try { return (await specOf(t)).flags.storeJob?.uploaded >= minFiles; } catch { return false; } }, 5000, 'the job to be saved');
+    post.close();
+    await inst.S.close();
+    assert.ok(!post.events.some((e) => e.event === 'done'), 'the import was cut before it finished');
+    return { before: rowsOf(t), hitsBefore: new Map(shop.hits), job };
+  }
+
+  before(async () => {
+    kd = await startFakeKnowDrive({ speed: 3, narrowScope: 'all' });
+    llm = await startFakeLLM({ slowMs: 9000 });
+    shop = await fakeShop({ slow: 24, slowMs: 150 });
+  });
+  after(async () => { for (const x of servers) await x.close(); await shop.close(); await kd.close(); await llm.close(); for (const d of dataDirs) await fsp.rm(d, { recursive: true, force: true }); });
+
+  test('an import cut by a restart resumes (on GET /store) and finishes: no page read or uploaded twice, the right final counts', async () => {
+    const a = await instance();
+    const t = await a.c.trial();
+    const { before, hitsBefore } = await interrupted(a, t);
+    assert.ok(before.length >= 8 && before.length < 28, `interrupted mid-way (${before.length} files)`);
+    const spec0 = await specOf(t);
+    assert.equal(spec0.flags.storeJob.state, 'running');
+    assert.equal(spec0.flags.storeJob.url, shop.base);
+    assert.ok(spec0.flags.storeJob.plan?.product === 24 && spec0.flags.storeJob.total >= 25, JSON.stringify(spec0.flags.storeJob.plan)); // the sitemap's pages (the feed adds 2)
+    assert.ok(Object.keys(spec0.flags.storeJob.written).length >= 8, 'the written page URLs are saved');
+    const jobId = spec0.flags.storeJob.id;
+    assert.ok(before.every((f) => f.tags.includes(`sjob:${jobId}`)), 'every page file carries its job');
+
+    // a new server on the same store and data, no start-up resume: touching the bot resumes the import
+    const b = await instance({ studio: { resumeStoreJobs: false } });
+    await sleep(100);
+    assert.equal(rowsOf(t).length, before.length, 'nothing resumes before the bot is touched');
+    const res = await b.c.json(t, '/store', 'GET');
+    assert.equal(res.status, 200, 'GET /store knows the interrupted import');
+    const ev = parseSSE(await res.text());
+    const names = ev.map((e) => e.event);
+    assert.equal(names[0], 'resumed', names.join(','));
+    assert.equal(ev[0].data.done, before.length);
+    assert.equal(ev[0].data.total, spec0.flags.storeJob.total);
+    assert.ok(ev[0].id > spec0.flags.storeJob.seq, 'event ids continue above the saved ones');
+    const done = ev.at(-1);
+    assert.equal(done.event, 'done', names.join(','));
+    assert.equal(done.data.error, undefined, JSON.stringify(done.data));
+    assert.equal(done.data.resumed, true);
+    assert.equal(done.data.fileCount, 28, 'every page once: 26 products, the FAQ and the refund policy');
+    assert.deepEqual(done.data.report.written, { policy: 1, faq: 1, product: 26 });
+    assert.equal(done.data.counts.products, 26);
+    assert.equal(done.data.report.resumed.before, before.length);
+    // no duplicates in the store, and the files from before the restart are untouched
+    const after = rowsOf(t);
+    assert.equal(after.length, 28);
+    assert.equal(new Set(after.map((f) => f.filename)).size, 28, after.map((f) => f.filename).sort().join('\n'));
+    assert.equal(after.filter((f) => f.tags.includes('page:product')).length, 26);
+    for (const f of before) assert.ok(kd.files.has(f.id), `${f.filename} kept`);
+    assert.ok(after.every((f) => f.tags.includes(`sjob:${jobId}`)));
+    // only the remaining product pages were read: none written before the restart was fetched again
+    for (const f of before.filter((x) => /\/product\/slow-\d+\.md$/.test(x.filename))) {
+      const p = `/products/${f.filename.split('/').pop().replace(/\.md$/, '')}`;
+      assert.equal(shop.hits.get(p), hitsBefore.get(p), `${p} was not read again`);
+    }
+    const spec1 = await specOf(t);
+    assert.equal(spec1.flags.storeJob.state, 'done');
+    assert.equal(spec1.flags.storeJob.uploaded, 28);
+    assert.equal(spec1.flags.storeJob.resumes, 1);
+    assert.equal(spec1.flags.storeLast.files, 28);
+    const files = (await (await b.c.json(t, '/files')).json()).files;
+    assert.equal(files.length, 28);
+    assert.ok(files.filter((f) => f.page === 'product').every((f) => f.url && f.url.startsWith(`${shop.base}/products/`)), 'page URLs are known after the restart');
+    await b.S.close();
+
+    // another restart: the finished import is reported from the doc, nothing resumes
+    const c = await instance();
+    await sleep(150);
+    const again = parseSSE(await (await c.c.json(t, '/store', 'GET')).text());
+    assert.deepEqual(again.map((e) => e.event), ['done']);
+    assert.equal(again[0].data.restored, true);
+    assert.equal(again[0].data.fileCount, 28);
+    assert.equal(again[0].data.error, undefined);
+    assert.equal(rowsOf(t).length, 28);
+    await c.S.close();
+  });
+
+  test('a slow site that outruns the time budget goes on in further rounds until every product page is written once', async () => {
+    const shop = await fakeShop({ slow: 24, slowMs: 700 });   // its own: slow enough to outrun a 1 s budget, its own hit counts
+    after(() => shop.close());
+    const a = await instance({ studio: { storeBudgetMs: 1000, storeMaxRounds: 40 } });
+    const t = await a.c.trial();
+    const res = await a.c.json(t, '/store', 'POST', { url: shop.base, owner: true });
+    assert.equal(res.status, 200);
+    const ev = parseSSE(await res.text());
+    const names = ev.map((e) => e.event);
+    const done = ev.at(-1);
+    assert.equal(done.event, 'done', names.join(','));
+    assert.equal(done.data.error, undefined, JSON.stringify(done.data));
+    const rounds = ev.filter((e) => e.event === 'continuing');
+    assert.ok(rounds.length >= 1, `the budget forced more rounds (${names.filter((n) => n !== 'fetching').join(',')})`);
+    assert.equal(done.data.report.rounds, rounds.length + 1);
+    assert.equal(done.data.fileCount, 28, 'every page once: 26 products, the FAQ and the refund policy');
+    assert.deepEqual(done.data.report.written, { policy: 1, faq: 1, product: 26 });
+    assert.equal(done.data.counts.products, 26);
+    assert.ok(!Object.keys(done.data.report.leftOut.time || {}).length || Object.values(done.data.report.leftOut.time).every((n) => !n), JSON.stringify(done.data.report.leftOut));
+    const after = rowsOf(t);
+    assert.equal(after.length, 28);
+    assert.equal(new Set(after.map((f) => f.filename)).size, 28, 'no page written twice');
+    // every product page's own copy was read (enrich defaults to all), each at most twice (a read cut by the deadline)
+    for (const f of after.filter((x) => /\/product\/slow-\d+\.md$/.test(x.filename))) {
+      const p = `/products/${f.filename.split('/').pop().replace(/\.md$/, '')}`;
+      assert.ok((shop.hits.get(p) || 0) >= 1 && (shop.hits.get(p) || 0) <= 2, `${p} read ${shop.hits.get(p)} times`);
+    }
+    const spec = await specOf(t);
+    assert.equal(spec.flags.storeJob.state, 'done');
+    assert.equal(spec.flags.storeJob.rounds, rounds.length);
+    await a.S.close();
+  });
+
+  test('start-up resumes on its own (busy meanwhile); cancel is persisted and a cancelled import never resumes', async () => {
+    const a = await instance();
+    const t = await a.c.trial();
+    const { before } = await interrupted(a, t, 6);
+    // the next server resumes the import at start-up, with nobody touching the bot
+    const b = await instance();
+    await until(() => rowsOf(t).length > before.length, 15000, 'the start-up resume to upload');
+    const busy = await b.S.api('/api/internal/busy', { headers: { 'x-knowbot-internal': internalSecret('dev-admin') } });
+    assert.equal(busy.status, 200);
+    const bj = await busy.json();
+    assert.equal(bj.busy, true, JSON.stringify(bj));
+    assert.equal(bj.storeJobs, 1);
+    // GET /store reports the resumed job (live), the events stream's hello names it
+    const watch = await openSSE(`${b.S.base}/api/studio/trials/${t.trialId}/store?since=0`, b.c.h(t));
+    const resumed = await watch.waitFor((e) => e.event === 'resumed');
+    assert.equal(resumed.data.done, before.length);
+    const evs = await openSSE(`${b.S.base}/api/studio/trials/${t.trialId}/events`, b.c.h(t));
+    const hello = await evs.waitFor((e) => e.event === 'hello');
+    evs.close();
+    assert.equal(hello.data.storeJob?.state, 'running');
+    const del = await b.c.json(t, '/store', 'DELETE');
+    assert.equal(del.status, 202);
+    const done = await watch.waitFor((e) => e.event === 'done', 20000);
+    watch.close();
+    assert.equal(done.data.cancelled, true);
+    const kept = rowsOf(t).length;
+    assert.ok(kept >= before.length && kept < 28, `cancelled mid-way (${kept})`);
+    assert.equal((await specOf(t)).flags.storeJob.state, 'cancelled', 'the cancel is in the doc');
+    assert.equal((await (await b.S.api('/api/internal/busy', { headers: { 'x-knowbot-internal': internalSecret('dev-admin') } })).json()).busy, false);
+    await b.S.close();
+    // restart again: nothing resumes, GET /store shows the cancelled import
+    const c = await instance();
+    await sleep(300);
+    const replay = parseSSE(await (await c.c.json(t, '/store', 'GET')).text());
+    assert.deepEqual(replay.map((e) => e.event), ['done']);
+    assert.equal(replay[0].data.cancelled, true);
+    assert.equal(rowsOf(t).length, kept, 'a cancelled import never resumes');
+    await c.S.close();
+  });
+
+  test('cancel of an interrupted import before it resumed is persisted too', async () => {
+    const a = await instance();
+    const t = await a.c.trial();
+    const { before } = await interrupted(a, t, 6);
+    const b = await instance({ studio: { resumeStoreJobs: false } });
+    const del = await b.c.json(t, '/store', 'DELETE');
+    assert.equal(del.status, 202);
+    assert.equal((await specOf(t)).flags.storeJob.state, 'cancelled');
+    const replay = parseSSE(await (await b.c.json(t, '/store', 'GET')).text());
+    assert.deepEqual(replay.map((e) => e.event), ['done']);
+    assert.equal(replay[0].data.cancelled, true);
+    await b.S.close();
+    const c = await instance();
+    await sleep(300);
+    assert.equal((await (await c.c.json(t, '')).json()).trialId, t.trialId);
+    await sleep(200);
+    assert.equal(rowsOf(t).length, before.length, 'never resumed');
+    await c.S.close();
+  });
+
+  test('GET /api/internal/busy: only with the header secret derived from the admin token; idle is busy:false', async () => {
+    const a = await instance();
+    // (busy while the start-up resume looks for interrupted imports, then idle: nothing to resume here)
+    let j = null;
+    await until(async () => { const ok = await a.S.api('/api/internal/busy', { headers: { 'x-knowbot-internal': internalSecret('dev-admin') } }); assert.equal(ok.status, 200); j = await ok.json(); return !j.busy; }, 5000, 'idle');
+    assert.deepEqual(j, { busy: false, storeJobs: 0, phone: 0, webVoice: 0 });
+    for (const headers of [{}, { 'x-knowbot-internal': internalSecret('other') }, { 'x-knowbot-internal': 'dev-admin' }, { authorization: 'Bearer dev-admin' }]) {
+      assert.equal((await a.S.api('/api/internal/busy', { headers })).status, 404, JSON.stringify(headers));
+    }
+    assert.equal((await a.S.api('/api/internal/busy', { method: 'POST', headers: { 'x-knowbot-internal': internalSecret('dev-admin') } })).status, 405);
+    await a.S.close();
+    // no admin token on the server: the endpoint does not exist
+    const n = await instance({ envExtra: { KNOWBOT_ADMIN_TOKEN: '' } });
+    assert.equal((await n.S.api('/api/internal/busy', { headers: { 'x-knowbot-internal': internalSecret('') } })).status, 404);
+    await n.S.close();
   });
 });
 
