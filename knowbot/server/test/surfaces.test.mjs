@@ -117,6 +117,17 @@ describe('landing: "Where should it answer?" (studio/index.html, landing.js) nev
     const app = read('studio/app.js');
     assert.match(app, /if \(Array\.isArray\(a\.surfaces\)\) landingSurfaces\(a\.surfaces\)/, 'app.js landingAction saves the hand-off');
   });
+  test('studio price lines: multi-surface total everywhere, and no price on the palette before testing', () => {
+    const app = read('studio/app.js');
+    // priceText() sums one plan line per chosen surface: 3 surfaces + "how much" in Make it yours = $747/mo
+    assert.match(app, /function priceText\(\) \{[\s\S]{0,200}planTotals\(getState\(\)\.spec\?\.surfaces, 'month'/);
+    assert.equal(`${money(planTotals(['webchat', 'sms', 'phone'], 'month', { month: 249 }).total)}/mo`, '$747/mo');
+    const pi = app.slice(app.indexOf('function priceIntent('), app.indexOf('if (isLive())', app.indexOf('function priceIntent(')));
+    assert.match(pi, /if \(miy\) \{[\s\S]*Going live is \*\*\$\{priceText\(\)\}\*\*/, 'the Make it yours price line uses the surface total');
+    assert.match(pi, /plan lines/, 'and says it is per answer surface');
+    assert.doesNotMatch(app, /Going live is \*\*\$\$\{amt\}\/mo\*\*;/, 'no single-surface price in the Make it yours branch');
+    assert.match(app, /\{ id: 'launch', label: launchChipLabel\(\), ico: 'rocket', run: \(\) => launchOpen\('palette'\) \}/, 'the palette hides the price until tested');
+  });
   test('the Builder knowledge base states the per-surface price truthfully (asked directly, cited)', () => {
     const kb = read('studio/kb/pricing-and-trial.md');
     assert.match(kb, /Each answer surface is \$249 per month, or \$2,499 per year/);
@@ -207,7 +218,12 @@ describe('answer surfaces over HTTP (spec route, Builder turn, checkout)', () =>
     ({ j } = await go({ email: 'ana@example.com', interval: 'year' }));
     u = new URL(j.url);
     assert.equal(u.searchParams.get('interval'), 'year');
-    assert.equal(u.searchParams.get('total'), '7497');
+    assert.equal(u.searchParams.get('total'), '7497', 'yearly x 3 = $7,497');
+    assert.equal(u.searchParams.get('price'), '2499', 'the per-surface price follows the interval');
+    const yearSig = u.searchParams.get('sig');
+    assert.match(String(yearSig), /^[A-Za-z0-9_-]{20,}$/, 'the plan params are signed');
+    ({ j } = await go({ email: 'ana@example.com', interval: 'month' }));
+    assert.notEqual(new URL(j.url).searchParams.get('sig'), yearSig, 'the signature covers interval and total');
     ({ j } = await go({ email: 'ana@example.com', surfaces: ['whatsapp', 'webchat'], interval: 'month' }));
     u = new URL(j.url);
     assert.equal(u.searchParams.get('surfaces'), 'webchat,whatsapp', 'removed at checkout');

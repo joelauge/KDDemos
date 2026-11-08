@@ -145,7 +145,7 @@ describe('webvoice: text engine (no GEMINI_API_KEY)', () => {
     const j = await (await S.api('/v1/channels/front-desk')).json();
     assert.equal(j.channels.webVoice.engine, 'text');
     assert.equal(j.channels.webVoice.live, false);
-    assert.equal(j.channels.webVoice.endpoint, 'wss://kb.example.test/api/v1/bots/front-desk/voice/live');
+    assert.equal(j.channels.webVoice.socket, 'wss://kb.example.test/api/v1/bots/front-desk/voice/live');
     assert.equal(j.channels.webVoice.widget, 'https://kb.example.test/lib/voice-widget.js');
     const w = await S.api('/lib/voice-widget.js');
     assert.equal(w.status, 200);
@@ -304,5 +304,51 @@ describe('webvoice: Gemini unreachable', () => {
     assert.match((await b.wait('answer', 15000)).text, /30 days/);
     b.send({ type: 'stop' });
     await b.closed;
+  });
+});
+
+describe('webvoice: session caps', () => {
+  const admin = { authorization: 'Bearer dev-admin', 'content-type': 'application/json' };
+  const opener = (S) => async (bot) => { const b = browser(`${S.wsBase}/v1/bots/${bot}/voice/live`); await b.opened; b.send({ type: 'start' }); return b; };
+  const stopAll = async (...bs) => { for (const b of bs) { try { b.send({ type: 'stop' }); } catch {} await b.closed; } };
+
+  test('one IP holds at most KNOWBOT_WEBVOICE_MAX_PER_IP open sessions (busy, 1013)', async () => {
+    _resetQuestions();
+    const S = await boot({ KNOWBOT_WEBVOICE_MAX_PER_IP: '1', KNOWBOT_WEBVOICE_RATE_LIMIT: '50' });
+    try {
+      const open = opener(S);
+      const a = await open('front-desk'); await a.wait('ready');
+      const b = await open('front-desk');
+      assert.equal((await b.wait('error')).code, 'busy');
+      assert.equal(await b.closed, 1013);
+      await stopAll(a);
+      await until(() => activeWebVoiceSessions() === 0, 2000, 'session released');
+      const c = await open('front-desk'); // the slot is free again
+      await c.wait('ready');
+      await stopAll(c);
+      await until(() => activeWebVoiceSessions() === 0, 2000, 'session released');
+    } finally { _resetQuestions(); await S.close(); }
+  });
+
+  test('one bot holds at most KNOWBOT_WEBVOICE_MAX_PER_BOT open sessions; other bots are unaffected', async () => {
+    _resetQuestions();
+    const S = await boot({ KNOWBOT_WEBVOICE_MAX_PER_BOT: '2', KNOWBOT_WEBVOICE_MAX_PER_IP: '10', KNOWBOT_WEBVOICE_RATE_LIMIT: '50' });
+    try {
+      assert.equal((await S.api('/api/instances', { method: 'POST', headers: admin, body: JSON.stringify({ name: 'Side Desk', buckets: ['acme'] }) })).status, 201);
+      const open = opener(S);
+      const a = await open('front-desk'); await a.wait('ready');
+      const b = await open('front-desk'); await b.wait('ready');
+      assert.equal(activeWebVoiceSessions('front-desk'), 2);
+      const c = await open('front-desk');
+      const e = await c.wait('error');
+      assert.equal(e.code, 'busy');
+      assert.equal(await c.closed, 1013);
+      assert.equal(activeWebVoiceSessions('front-desk'), 2);
+      const d = await open('side-desk'); // another customer's bot still gets a session
+      await d.wait('ready');
+      assert.equal(activeWebVoiceSessions('side-desk'), 1);
+      await stopAll(a, b, d);
+      await until(() => activeWebVoiceSessions() === 0 && activeWebVoiceSessions('front-desk') === 0, 2000, 'sessions released');
+    } finally { _resetQuestions(); await S.close(); }
   });
 });

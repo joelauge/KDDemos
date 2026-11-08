@@ -75,7 +75,9 @@ export async function startFakeStore({ host = '127.0.0.1' } = {}) {
     '/pages/faq': () => [200, 'text/html', page('FAQ', '<details><summary>Do you ship to Canada?</summary><p>Yes, we ship to Canada for a flat $25 fee.</p></details><details><summary>Can I test ride a bike?</summary><p>Test rides last 30 minutes and need a photo ID.</p></details>')],
     '/sitemap.xml': (u, base) => [200, 'application/xml', `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${base}/pages/faq</loc></url></urlset>`],
   };
-  const srv = http.createServer((req, res) => {
+  let delayMs = 0;   // setDelay(ms): every answer waits (the smoke stops an import during a slow discovery)
+  const srv = http.createServer(async (req, res) => {
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
     const u = new URL(req.url, 'http://x');
     const r = routes[u.pathname];
     if (!r) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
@@ -85,7 +87,7 @@ export async function startFakeStore({ host = '127.0.0.1' } = {}) {
   srv.on('clientError', (e, sock) => { try { sock.destroy(); } catch {} });
   await new Promise((r) => srv.listen(0, host, r));
   const port = srv.address().port;
-  return { url: `http://${host}:${port}`, port, close: () => { srv.closeAllConnections?.(); return new Promise((r) => srv.close(() => r())); } };
+  return { url: `http://${host}:${port}`, port, setDelay: (ms) => { delayMs = Math.max(0, Number(ms) || 0); }, close: () => { srv.closeAllConnections?.(); return new Promise((r) => srv.close(() => r())); } };
 }
 
 function assertLoopback(u, what = 'KNOWDRIVE_BASE_URL') {

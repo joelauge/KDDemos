@@ -319,6 +319,32 @@ export function uploadFile(file, { onProgress, signal } = {}) {
 /** GET /files -> {files, usage}. */
 export async function listFiles() { return request('GET', trialPath('/files')); }
 
+/**
+ * One page of the trial's website files of one page kind, for the Sources group's search and paging:
+ * GET /files?origin=store&page=<kind>&q=&offset=&limit= -> {files, total, offset}.
+ * CONTRACT-GAP (F): until /files honours these filters (and answers with `total`) it returns every row; the filter and
+ *   the page are then cut here from that full list (one fetch, reused for 15 s), so the search works either way.
+ */
+let storeListCache = null;   // {at, files}
+export async function listStoreFiles({ page, q = '', offset = 0, limit = 40, fresh = false } = {}) {
+  const query = String(q || '').trim().toLowerCase().slice(0, 120);
+  const qs = new URLSearchParams({ origin: 'store', ...(page ? { page } : {}), ...(query ? { q: query } : {}), offset: String(offset), limit: String(limit) });
+  let r;
+  if (!fresh && storeListCache && Date.now() - storeListCache.at < 15000) r = { files: storeListCache.files };
+  else {
+    r = await request('GET', trialPath(`/files?${qs}`));
+    if (r && Number.isFinite(Number(r.total)) && r.offset != null) return { files: r.files || [], total: Number(r.total), offset: Number(r.offset) };
+    storeListCache = { at: Date.now(), files: Array.isArray(r?.files) ? r.files : [] };
+  }
+  const all = (r.files || []).filter((f) => f && f.origin === 'store' && (!page || (f.page || 'page') === page)
+    && (!query || `${f.name || ''} ${f.url || ''} ${f.path || ''}`.toLowerCase().includes(query)));
+  return { files: all.slice(offset, offset + limit), total: all.length, offset };
+}
+export function forgetStoreFiles(id = null) {
+  if (!storeListCache) return;
+  if (id == null) storeListCache = null; else storeListCache.files = storeListCache.files.filter((f) => f.id !== id);
+}
+
 /** DELETE /files/:fid. */
 export async function deleteFile(fileId) { return request('DELETE', trialPath(`/files/${encodeURIComponent(fileId)}`)); }
 

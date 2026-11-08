@@ -718,6 +718,27 @@ async function storeJourney(browser, dev, cell) {
     const gated = await page.waitForFunction(() => /own or manage/i.test(document.querySelector('.st-si .st-field-msg')?.textContent || ''), null, { timeout: 3000 }).then(() => true).catch(() => false);
     check('18-store', 'import waits for "I own or manage this store"', gated);
     await page.locator('.st-si .st-si-check input[type="checkbox"]').last().check();
+    // Stop during Find: the server job is cancelled (DELETE /store), not only the request; nothing gets imported
+    {
+      const tid0 = await page.evaluate(() => window.__studio.store.getState().trial.id);
+      const tok0 = await page.evaluate(() => window.__studio.store.getState().trial.token);
+      dev.shop.setDelay(1500);
+      await press(page.locator('.st-si button[type="submit"]').last(), 'Find sources');
+      const stopB = page.locator('.st-si-run .st-si-actions button', { hasText: /^\s*Stop\s*$/ }).last();
+      await stopB.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(900);
+      await press(stopB, 'Stop');
+      dev.shop.setDelay(0);   // a job left running would now finish in a second or two and add its files
+      const stopped = await page.waitForFunction(() => /Stopped/.test(document.querySelector('.st-si .st-field-msg')?.textContent || ''), null, { timeout: 20000 }).then(() => true).catch(() => false);
+      const said = await page.locator('.st-si .st-field-msg').last().textContent().catch(() => '');
+      await page.waitForTimeout(6000);
+      const fr = await fetch(`${dev.url}/api/studio/trials/${tid0}/files`, { headers: { authorization: `Bearer ${tok0}` } }).then((x) => x.json()).catch(() => ({}));
+      const storeFiles = (fr.files || []).filter((f) => f.origin === 'store').length;
+      const jr = await fetch(`${dev.url}/api/studio/trials/${tid0}/store?since=0`, { headers: { authorization: `Bearer ${tok0}`, accept: 'text/event-stream' }, signal: AbortSignal.timeout(20000) }).then((x) => x.text()).catch(() => '');
+      const jdone = jr.split('\n\n').map((fr2) => (/^event: done$/m.test(fr2) ? JSON.parse(/^data: (.*)$/m.exec(fr2)[1]) : null)).find(Boolean);
+      check('18-store', 'Stop during Find cancels the server job: no store files appear, the card says so', stopped && storeFiles === 0 && (!jdone || jdone.cancelled === true || !jdone.fileCount),
+        { detail: `msg=${said} storeFiles=${storeFiles} done=${JSON.stringify(jdone && { cancelled: jdone.cancelled, fileCount: jdone.fileCount })}` });
+    }
     await press(page.locator('.st-si button[type="submit"]').last(), 'Find sources');
     // a server with the finder (config.storeJobs) shows the plan first; an older one runs the one-shot import
     const seen = await page.waitForFunction(() => /Shopify store found/.test(document.querySelector('.st-si-run')?.innerText || '') || /Found \d/.test(document.querySelector('.st-si-found')?.textContent || '')

@@ -47,7 +47,7 @@ async function onMessage(msg) {
       console.log(`  tool  ${call.name}(${JSON.stringify(call.args || {})})`);
       const response = call.name === 'end_call' ? { status: 'ok' } : ((await runTool(call)) ?? { status: 'error', reason: 'unknown tool' });
       if (response.say) console.log(`        say: "${response.say}"`);
-      for (const s of response.sources || []) console.log(`        • ${s.title}`);
+      for (const t of response.source_titles || []) console.log(`        • ${t}`);
       if (!response.say) console.log(`        -> ${JSON.stringify(response)}`);
       functionResponses.push({ id: call.id, name: call.name, response });
     }

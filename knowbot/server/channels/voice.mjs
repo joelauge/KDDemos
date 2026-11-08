@@ -106,6 +106,11 @@ export async function handleVoice(cx) {
       // voice-to-voice: hand the call's audio to the media WebSocket; the one-time token binds it to this call and bot
       const callSid = String(params.CallSid || '');
       if (callSid) {
+        // a caller redialling fast gets no stream token (each call holds a Gemini Live session)
+        if (cx.limited(`voice|${caller}`)) {
+          cx.log(`[channels] voice: caller rate-limited on bot ${cx.botId}; no stream token`);
+          return sendXml(res, `<Say voice="${xml(sayVoice)}" language="${xml(lang)}">${xml('This line is busy right now. Please call back in a minute.')}</Say><Hangup/>`);
+        }
         const ws = `${self.replace(/^http/, 'ws')}/media`;
         const token = issueStreamToken({ callSid, botId: cx.botId, from: caller });
         return sendXml(res, `<Connect><Stream url="${xml(ws)}"><Parameter name="token" value="${xml(token)}"/></Stream></Connect>`);

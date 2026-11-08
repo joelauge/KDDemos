@@ -144,18 +144,19 @@ export function createDevApi(o = {}) {
   const background = new Set();
   const track = (p) => { const q = Promise.resolve(p).catch(() => {}).finally(() => background.delete(q)); background.add(q); return q; };
 
-  // ---------------------------------------------------------------- rate limits (sliding minute)
+  // ---------------------------------------------------------------- rate limits (sliding window: a minute unless `ms` says otherwise)
   const windows = new Map();
-  function limit(key, n) {
+  function limit(key, n, ms = 60000) {
     if (!n) return { limited: false, remaining: Infinity, reset: 0 };
     const t = now();
-    const arr = (windows.get(key) || []).filter((x) => t - x < 60000);
-    const reset = Math.ceil(((arr[0] ?? t) + 60000 - t) / 1000);
+    const arr = (windows.get(key) || []).filter((x) => t - x < ms);
+    arr.ms = ms;
+    const reset = Math.ceil(((arr[0] ?? t) + ms - t) / 1000);
     if (arr.length >= n) { windows.set(key, arr); return { limited: true, remaining: 0, reset, retryAfter: Math.max(1, reset) }; }
     arr.push(t); windows.set(key, arr);
     return { limited: false, remaining: n - arr.length, reset };
   }
-  const sweep = setInterval(() => { const t = now(); for (const [k, a] of windows) if (!a.some((x) => t - x < 60000)) windows.delete(k); }, 60000);
+  const sweep = setInterval(() => { const t = now(); for (const [k, a] of windows) if (!a.some((x) => t - x < (a.ms || 60000))) windows.delete(k); }, 60000);
   sweep.unref?.();
 
   // ---------------------------------------------------------------- live keys (hashed, sealed)
@@ -294,14 +295,16 @@ export function createDevApi(o = {}) {
       const T = studio.trials?.get?.(id) || null;
       let spec = T?.specLoaded ? T.spec : null;
       let expiresAt = who?.expiresAt || T?.expiresAt || null;
+      let flags = T?.specLoaded ? T.flags : null;
       if (!spec) {
         const doc = await loadTrialDoc(id);
-        if (doc?.spec) { spec = doc.spec; expiresAt = expiresAt || Date.parse(doc.expiresAt) || null; }
+        if (doc?.spec) { spec = doc.spec; expiresAt = expiresAt || Date.parse(doc.expiresAt) || null; flags = doc.flags || null; }
       }
       if (!spec && T?.spec) spec = T.spec;
       if (!spec) throw new ApiError(404, 'bot_not_found', `No bot "${id}".`);
       if (expiresAt && expiresAt <= now()) throw new ApiError(404, 'bot_not_found', 'This trial expired and its files were deleted.');
-      return { kind: 'trial', id, T, spec, expiresAt: expiresAt || now() + 86400000, name: spec.name || 'Your bot' };
+      // flags (e.g. the Shopify store import that turns on texted product links) also when only the saved doc is loaded
+      return { kind: 'trial', id, T, spec, flags: flags || T?.flags || null, expiresAt: expiresAt || now() + 86400000, name: spec.name || 'Your bot' };
     }
     if (!BOT_ID_RE.test(id)) throw new ApiError(404, 'bot_not_found', `No bot "${botId}".`);
     await registry.ready;
@@ -504,11 +507,11 @@ export function createDevApi(o = {}) {
   }
 
   /** Fire-and-forget: the questions loop (never delays or fails an answer). */
-  function logAnswer(target, a, channel, callerKey) {
+  function logAnswer(target, a, channel, callerKey, extra = {}) {
     try {
       const ch = CHANNELS.includes(channel) ? channel : 'api';
       const base = { question: a.question, outcome: a.refused ? 'refused' : 'answered', citations: a.citations.map((c) => ({ file: c.file })),
-        topScore: a.proof.floor.top ?? a.citations[0]?.similarity ?? null, channel: ch, callerKey };
+        topScore: a.proof.floor.top ?? a.citations[0]?.similarity ?? null, channel: ch, callerKey, ...extra };
       const p = target.kind === 'trial'
         ? logQuestion({ ...base, kd: kd ? { ...kd, store: studio.store } : null, store: studio?.store, scopeTags: [`trial:${target.id}`, 'kind:trial', `expires:${yyyymmdd(target.expiresAt)}`], root: `knowbot/trials/${target.id}/` })
         : logQuestion({ ...base, kd, store: kd?.store, scopeTags: [`bot:${target.id}`], root: `knowbot/_bots/${target.id}/` });
@@ -859,6 +862,8 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     return (ret.results || []).filter((r) => r && r.text && !isQuestionFile(r.filename)).map((r) => ({ text: r.text, file: r.filename, title: r.title || null }));
   }
   const MEDIA_RE = /^(?:\/api)?\/v1\/channels\/([^/]+)\/voice\/media\/?$/;
+  const DAY_MS = 24 * 3600 * 1000;
+  const phoneTexts = { perNumberDay: Number(env.KNOWBOT_PHONE_TEXTS_PER_NUMBER || 3), perBotDay: Number(env.KNOWBOT_PHONE_TEXTS_PER_DAY || 100) };
   // ---------------------------------------------------------------- web voice assistant WebSocket (webvoice.mjs)
   // A launched bot is public (like the chat widget), limited per IP; a trial bot needs its kb_trial_ key in the start
   // message. Questions are answered by this bot's own pipeline and logged with channel 'voice'.
@@ -875,7 +880,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
       const ws = acceptWebSocket(req, socket, head, { maxMessage: 512 * 1024 });
       if (!ws) return;
       handleWebVoice(ws, {
-        env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, callerKey: `ip:${ip}`,
+        env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, callerKey: `ip:${ip}`, ip,
         authorize: async (key) => {
           if (key) return authKey({ headers: { authorization: `Bearer ${key}` } }, target.id);
           if (target.kind === 'live') return { keyId: null };
@@ -910,6 +915,9 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
       handleMediaStream(ws, {
         env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null,
         shopDomain: shopDomainFor(target, env),
+        // texts cost the owner money: at most PHONE_TEXTS_PER_NUMBER per destination per 24 h and PHONE_TEXTS_PER_DAY per bot
+        // (the per-number quota spans every bot on this server: one Twilio account pays for all of them)
+        textAllowed: (to) => !limit(`sms-to:${hashCaller(to)}`, phoneTexts.perNumberDay, DAY_MS).limited && !limit(`sms-bot:${target.id}`, phoneTexts.perBotDay, DAY_MS).limited,
         ask: async (question) => {
           const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'phone', callerKey: ws.callerKey || null });
           a.proofId = a.refused ? null : saveProof(a, 'phone');
@@ -917,15 +925,20 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
         },
         searchRaw: (q) => searchRaw(target, q),
         onStart: ({ from }) => { ws.callerKey = from || null; },
+        // a spoken figure with no search behind it: flagged in the questions loop for the owner to review
+        onUngrounded: ({ question, text }) => logAnswer(target, { question: question || '(question not transcribed)', refused: false, citations: [], proof: { floor: { top: null } } },
+          'phone', ws.callerKey || null, { flags: ['ungrounded'], note: String(text || '').slice(0, 300) }),
         onEnd: ({ callSid, transcript, answers }) => log(`[voice-live] ${callSid || '?'} ended: ${transcript.length} turns, ${answers.length} searches (${answers.filter((x) => x.refused).length} not in the files)`),
       });
     })().catch((e) => { log(`[voice-live] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
     return true;
   }
 
-  function channelsInfo(req, botId) {
+  function channelsInfo(req, botId, target = null) {
     const base = apiBase(req);
     const st = channelStatus(env);
+    // texted checkout links: the gemini engine, Twilio texting configured, and a Shopify store for THIS bot
+    st.voice.texts = !!(st.voice.texts && phoneEngine(env) === 'gemini' && target && shopDomainFor(target, env));
     const url = (n) => `${base}/v1/channels/${encodeURIComponent(botId)}/${n}`;
     return {
       bot: botId,
@@ -937,7 +950,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
         // the widget is a static file at the site root (never under the /api prefix the API may be served from)
         chat: { configured: true, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/chat`, embed: `${publicBase(req, env)}/lib/embed.js` },
         voiceBot: { ...st.voiceBot, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/voice` },
-        webVoice: { configured: true, engine: webVoiceEngine(env), live: webVoiceEngine(env) === 'gemini', endpoint: `${base.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId)}/voice/live`,
+        webVoice: { configured: true, engine: webVoiceEngine(env), live: webVoiceEngine(env) === 'gemini', socket: `${base.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId)}/voice/live`,
           embed: `${publicBase(req, env)}/lib/embed.js`, widget: `${publicBase(req, env)}/lib/voice-widget.js` },
       },
     };
@@ -1112,7 +1125,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
       return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, expiresAt: new Date(Number(data.e)).toISOString(), scope: 'trial',
         rateLimit: { perMinute: limits.trial }, voice: { google: g.stt && g.tts, stt: g.stt ? 'google' : 'browser', tts: g.tts ? 'google' : 'browser' },
         endpoints: { chat: `${base}/v1/bots/${id}/chat`, completions: `${base}/v1/chat/completions`, voice: `${base}/v1/bots/${id}/voice`, channels: `${base}/v1/channels/${id}` },
-        channels: channelsInfo(req, id).channels });
+        channels: channelsInfo(req, id, await resolveTarget(id).catch(() => null)).channels });
     }
     // proof pages
     if ((mt = /^\/(?:v1\/)?p\/([A-Za-z0-9_-]+)$/.exec(p))) {
@@ -1144,7 +1157,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     if ((mt = /^\/v1\/channels\/([^/]+)\/?$/.exec(p))) {
       if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');
       const t = await resolveTarget(decodeURIComponent(mt[1]));
-      return send(res, 200, channelsInfo(req, t.id));
+      return send(res, 200, channelsInfo(req, t.id, t));
     }
     if ((mt = /^\/v1\/channels\/([^/]+)\/([a-z]+)(?:\/(.+))?$/.exec(p))) return channelRoute(req, res, url, decodeURIComponent(mt[1]), mt[2], mt[3] ? decodeURIComponent(mt[3]) : '');
     throw new ApiError(404, 'not_found', `No such endpoint ${m} ${p}. See ${apiBase(req)}/v1 for the API index.`);

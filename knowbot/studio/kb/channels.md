@@ -28,13 +28,13 @@ The telephone (Phone) channel uses Twilio Voice and works for any KnowBot, a tri
 
 Source: /studio/
 
-There are two phone engines. When a Gemini API key is set up, calls are voice-to-voice: the call audio streams to Gemini Live, which listens and speaks itself, and before every answer it looks the question up in the bot's files and reads back the cited answer. Without a Gemini key, the classic engine is used: speech is recognised (Google Cloud Speech-to-Text when set up, otherwise Twilio's own recognition), the bot writes its cited answer, and it is spoken with an ElevenLabs voice when ElevenLabs is set up, otherwise Google Cloud Text-to-Speech, otherwise Twilio's own voice. Every question asked by phone shows up in the bot's question insights under Phone.
+There are two phone engines. When a Gemini API key is set up, calls are voice-to-voice: the call audio streams to Gemini Live, which listens and speaks itself, and before every answer it looks the question up in the bot's files and reads back the cited answer. If it ever speaks a figure, such as a price or a date, without having looked the question up, that turn is flagged as ungrounded in the bot's question insights. A voice-to-voice call ends with a short goodbye after 15 minutes by default, and the server limits how many calls can be open at once. Without a Gemini key, the classic engine is used: speech is recognised (Google Cloud Speech-to-Text when set up, otherwise Twilio's own recognition), the bot writes its cited answer, and it is spoken with an ElevenLabs voice when ElevenLabs is set up, otherwise Google Cloud Text-to-Speech, otherwise Twilio's own voice. Every question asked by phone shows up in the bot's question insights under Phone.
 
 ## Texted checkout links on calls
 
 Source: /studio/
 
-On the voice-to-voice engine, a bot built from a Shopify store import (or with a store configured for phone links) can offer to text the caller a link that puts the product in their cart and opens checkout. It confirms the version and the number first, refuses a sold-out version and offers the in-stock ones, and sends at most 3 texts per call. Each link is tagged for attribution with UTM parameters, a referral code and the call id. Texting needs the Twilio account SID and a Twilio number to send from.
+On the voice-to-voice engine, a bot built from a Shopify store import can offer to text the caller a link that puts the product in their cart and opens checkout. This keeps working after the bot is launched. Bots without a Shopify store never offer texted links. It confirms the version and the number first, refuses a sold-out version and offers the in-stock ones, and sends at most 3 texts per call. Texts go to the number the caller is calling from. Another number is accepted only in the same country as the sending number, and never a premium-rate number or short code. By default one number gets at most 3 texts a day, and each bot has a daily texting cap. Each link is tagged for attribution with UTM parameters, a referral code and the call id. Texting needs the Twilio account SID and a Twilio number to send from.
 
 ## WhatsApp
 

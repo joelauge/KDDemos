@@ -27,18 +27,24 @@ export class KnowBotContainer extends Container {
       // a missing one leaves that feature off ("channel not configured") instead of breaking the container.
       ...pick(env, ['GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
         // plain vars (wrangler.jsonc "vars" or --var), optional
-        'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'SHOP_DOMAIN', 'KNOWBOT_PUBLIC_URL']),
+        // (no SHOP_DOMAIN: product links come from each bot's own Shopify store import, never one server-wide store)
+        'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS']),
     };
   }
 
   // A running container keeps the env and image it started with. When `wrangler secret put` changes a secret (rotated
   // admin token, new knowDrive key) or a deploy ships new code (KNOWBOT_BUILD), compare a fingerprint of the env on
   // every request and restart the container once when it changed.
+  // Long phone calls and web voice sessions: @cloudflare/containers 0.3.7 counts a proxied WebSocket as an in-flight
+  // request until it closes (containerFetch → inflightRequests; isActivityExpired() is false while any is open, and every
+  // forwarded message renews the activity timeout), so sleepAfter never puts a container to sleep mid-call. The restart
+  // below would cut a call, though, so it waits until nothing is in flight; the next request after that restarts it.
   async fetch(request) {
     const fp = await fingerprint(this.envVars);
     let started = null;
     try { started = this.ctx.storage.kv.get(ENV_FP_KEY) ?? null; } catch { /* storage unavailable: no restart check */ }
-    if (started !== fp) {
+    const busy = this.container.running && Number(this.inflightRequests || 0) > 0;
+    if (started !== fp && !busy) {
       if (this.container.running) {
         await this.destroy();
         for (let i = 0; i < 50 && this.container.running; i++) await new Promise((r) => setTimeout(r, 100));

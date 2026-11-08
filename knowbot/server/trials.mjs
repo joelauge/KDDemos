@@ -1271,6 +1271,9 @@ export function createStudio(o = {}) {
   // A restore key is NOT a bearer token: it is HMAC'd under a separate domain, is only accepted by POST /restore
   // (rate-limited), and is exchanged there for the trial bearer. It expires with the trial.
   const restoreSig = (payload) => createHmac('sha256', `knowbot-restore\n${secret}`).update(payload).digest().subarray(0, 18).toString('base64url');
+  /** Checkout plan params signature (domain-separated from trial and restore tokens), so a tampered total is detectable. */
+  const checkoutSig = (trialId, surfaces, interval, price, total) =>
+    createHmac('sha256', `knowbot-checkout\n${secret}`).update([trialId, surfaces.join(','), interval, price, total].join('|')).digest('base64url');
   function signRestore(trialId, expiresAt) {
     const payload = b64u(JSON.stringify({ t: trialId, e: Number(expiresAt) }));
     return `${payload}.${restoreSig(payload)}`;
@@ -3719,7 +3722,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const account = String(body.account ?? '').trim(), bucketId = String(body.bucketId ?? '').trim();
     if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(account)) fail(400, 'bad_request', 'account is required (letters, digits, . _ -)');
     if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(bucketId)) fail(400, 'bad_request', 'bucketId is required (letters, digits, . _ -)');
-    if (T.converted) return { converted: true, files: T.convertedFiles ?? 0 };
+    // the launched bot's storefront: a Shopify store import keeps texted checkout links working after launch (the launch
+    // caller passes it on as the bot's shopDomain, POST /api/instances; the converted trial keeps its flags anyway)
+    const shop = T.flags?.storeLast?.platform === 'shopify' && T.flags.storeLast.url ? { shopDomain: String(T.flags.storeLast.url) } : {};
+    if (T.converted) return { converted: true, files: T.convertedFiles ?? 0, ...shop };
     const rows = await listRows({ tags_all: `trial:${T.id}` });
     const samples = rows.filter((r) => (r.tags || []).some((t) => t.startsWith('sample:')));
     for (const r of samples) await deleteRow(r.id);
@@ -3747,7 +3753,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       pushEvent(T, 'converted', { converted: true, convertedFiles: files, files: after.length });
     } catch (e) { log(`[studio] convert snapshot ${T.id}: ${e.message}`); }
     log(`[studio] converted ${T.id} → account:${account} bucket:${bucketId} (${files} files, ${samples.length} samples removed)`);
-    return { converted: true, files };
+    // convert may name the launched bot (body.bot): it gets the storefront at once
+    if (shop.shopDomain && body.bot && o.registry?.update) {
+      try { await o.registry.update(String(body.bot), { shopDomain: shop.shopDomain }); shop.bot = String(body.bot).toLowerCase(); }
+      catch (e) { log(`[studio] convert ${T.id}: could not set the storefront on bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
+    }
+    return { converted: true, files, ...shop };
   }
   async function sweep() {
     if (!enabled) return { deleted: 0, scanned: 0 };
@@ -4206,10 +4217,15 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       u.searchParams.set('trial', T.id);
       u.searchParams.set('bot', botName(T));
       if (email) u.searchParams.set('email', email);
-      u.searchParams.set('price', String(PRICE));
+      // price is the per-surface amount for the chosen interval; total = price x surfaces. The URL passes through the
+      // browser, so these are display hints signed with sig = HMAC(trial|surfaces|interval|price|total); KnowDrive must
+      // recompute the amount from surfaces x interval and never charge from total.
+      const total = each * surfaces.length;
+      u.searchParams.set('price', String(each));
       u.searchParams.set('surfaces', surfaces.join(','));
       u.searchParams.set('interval', interval);
-      u.searchParams.set('total', String(each * surfaces.length));
+      u.searchParams.set('total', String(total));
+      u.searchParams.set('sig', checkoutSig(T.id, surfaces, interval, each, total));
       u.searchParams.set('return', `${originOf(req)}/studio/?t=${T.id}&launched=1`);
       T.checkoutStartedAt = new Date(now()).toISOString();
       await flushSpec(T);

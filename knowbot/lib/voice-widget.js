@@ -97,14 +97,14 @@ export function downsampleToPcm16(input, from, to = 16000) {
 
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
+  for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
     if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'text') e.textContent = v; else if (k === 'html') e.innerHTML = v; else e.setAttribute(k, v === true ? '' : v);
   }
   for (const c of kids) if (c != null) e.append(c);
   return e;
 }
-const plain = (s) => String(s || '').replace(/\[(\d{1,3})\]/g, '').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1').replace(/[*_`#]/g, '').replace(/\s+/g, ' ').trim();
+const plain = (s) => String(s || '').replace(/\[(\d{1,3})\]/g, '').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1').replace(/[*_`#]/g, '').replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
 
 /**
  * Mounts the voice assistant.
@@ -257,6 +257,7 @@ export function mountVoice(target, o = {}) {
       case 'answer': {
         if (!m.refused) showChips(m.citations, m.proofUrl, false); else showChips([], null, true);
         addLog('agent', plain(m.text));
+        say(m.refused ? 'Not in my sources. Ask something else, or press the mic.' : 'Answered from my sources (links below). Ask a follow-up any time.');
         speak(m.spoken);
         break;
       }

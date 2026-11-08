@@ -20,9 +20,18 @@
 // collapsed, locale-prefixed duplicates folded) and classified as product | faq | policy | help | pdf | collection |
 // blog | page. The plan ranks them: policies and FAQ, then help, then products, then PDFs, collections, blog, pages.
 
-export const KIND_RANK = Object.freeze({ policy: 0, faq: 0, help: 1, product: 2, pdf: 3, collection: 4, blog: 5, page: 6 });
+export const KIND_RANK = Object.freeze({ policy: 0, faq: 0, help: 1, product: 2, candidate: 2.5, pdf: 3, collection: 4, blog: 5, page: 6 });
 export const KINDS = Object.freeze(['policy', 'faq', 'help', 'product', 'pdf', 'collection', 'blog', 'page']);
 const FATAL = new Set(['aborted', 'quota']);
+/**
+ * The order sources are read in, and kept in when a cap applies: by kind (KIND_RANK, never a stale rank), then pages the
+ * site's own menus link (nav/footer) before the rest, then the site's own pages before help-desk articles, then URL.
+ */
+export function compareSources(a, b) {
+  const nav = (s) => (s.via?.some((v) => v === 'nav' || v === 'link') ? 0 : 1);
+  const desk = (s) => (s.via?.includes('helpdesk') && !s.via.some((v) => v === 'nav' || v === 'link' || v === 'sitemap') ? 1 : 0);
+  return (KIND_RANK[a.kind] ?? 9) - (KIND_RANK[b.kind] ?? 9) || nav(a) - nav(b) || desk(a) - desk(b) || String(a.url).localeCompare(String(b.url));
+}
 
 // ------------------------------------------------------------------------------------------------ text helpers
 const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', hellip: '…', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“',
@@ -70,8 +79,11 @@ const PRODUCT_PATH = {
   woocommerce: /^\/(?:[a-z]{2}\/)?product\/[^/]+$/i,
   wix: /\/product-page\/[^/]+$/i,
   squarespace: /\/p\/[^/]+$/i,
-  generic: /\/(?:products?|p|item|items|shop|dp|catalog\/product)\/[^/]+$/i,
+  generic: /\/(?:products?|p|item|items|dp|catalog\/product)\/[^/]+$/i,
 };
+// /shop/<x> and /catalog/<x> are as often category pages as products: candidates, read and kept as a product only when
+// the page carries Product JSON-LD (else read as a collection page)
+const WEAK_PRODUCT_PATH = /\/(?:shop|catalog|store)\/[^/]+$/i;
 const COLLECTION_PATH = /\/(?:collections?|product-category|categories|category|c|shop|catalog|departments?)(?:\/[^/]+)*$|\/collections$/i;
 const BLOG_PATH = /\/(?:blogs?|news|articles?|journal|stories|posts?|magazine|insights)(?:\/|$)/i;
 
@@ -99,11 +111,13 @@ export function classifyUrl(url, { platform = 'generic', hint = null, text = '',
   const pw = words(p.replace(/\.[a-z0-9]{2,5}$/i, ''));
   const prodRe = PRODUCT_PATH[platform] || PRODUCT_PATH.generic;
   const plain = !FAQ_RE.test(pw) && !POLICY_RE.test(pw) && !HELP_RE.test(pw);
-  // Magento: products and categories are both /<url-key>.html; the reader keeps only pages with Product JSON-LD
-  if (platform === 'magento' && /\.html$/i.test(lp) && plain && !BLOG_PATH.test(p) && hint !== 'page') return 'product';
+  // Magento: products and categories are both /<url-key>.html: a candidate until its page shows Product JSON-LD
+  // (a sitemap that names itself a product sitemap is trusted)
+  if (platform === 'magento' && /\.html$/i.test(lp) && plain && !BLOG_PATH.test(p) && hint !== 'page') return hint === 'product' ? 'product' : 'candidate';
   if (hint === 'product' || prodRe.test(p) || (platform !== 'shopify' && PRODUCT_PATH.generic.test(p) && plain)) {
     if (hint !== 'page') return 'product';
   }
+  if (platform !== 'shopify' && WEAK_PRODUCT_PATH.test(p) && plain && hint !== 'page' && hint !== 'collection' && !BLOG_PATH.test(p)) return 'candidate';
   if (helpHost || /\/hc\/[^/]+\/articles\//.test(lp) || /\/support\/solutions\/articles\//.test(lp) || /\/(?:article|articles)\/\d+/.test(lp) && helpHost) return FAQ_RE.test(w) ? 'faq' : POLICY_RE.test(w) ? 'policy' : 'help';
   if (hint === 'collection' || (COLLECTION_PATH.test(p) && !FAQ_RE.test(pw) && !POLICY_RE.test(pw))) return 'collection';
   if (hint === 'blog' || (BLOG_PATH.test(p) && hint !== 'page')) return 'blog';

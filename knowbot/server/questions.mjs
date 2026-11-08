@@ -20,7 +20,9 @@
 //     masked); phone numbers/e-mails of the caller are only ever hashed.
 //
 // Exports (contract, SPEC 11.1):
-//   logQuestion({kd, store, scopeTags, root, question, outcome, citations, topScore, channel, callerKey, origin?})
+//   logQuestion({kd, store, scopeTags, root, question, outcome, citations, topScore, channel, callerKey, origin?, flags?, note?})
+//     flags: review flags such as 'ungrounded' (a phone turn that spoke a figure with no search behind it): tagged
+//     flag:<name> and listed in the file, so the owner can find them; note: what was said (masked like the question).
 //   questionInsights({kd, store, scopeTags, limit, includeTest?, suggest?, nearest?}) → {total, answered, refused,
 //     top:[{q,count,lastAt,outcome,origin,channels[],variants?,similar?,similarLabel?}],
 //     gaps:[{q,count,lastAt,origin,channels[],variants?,inDomain,offTopic?,status,statusLabel?,suggestion:{kind,inDomain,status,text,nearest,action}}],
@@ -144,7 +146,8 @@ export function parseQuestionPath(p) {
 
 /** The markdown body of one question file (the first atom is the question itself, for similarity grouping). */
 export function questionDoc(e) {
-  const meta = { v: 1, q: e.q, hash: e.hash, outcome: e.outcome, channel: e.channel, at: new Date(e.at).toISOString(), top: e.top, files: e.files, ...(e.atoms?.length ? { atoms: e.atoms } : {}), from: e.from || null };
+  const meta = { v: 1, q: e.q, hash: e.hash, outcome: e.outcome, channel: e.channel, at: new Date(e.at).toISOString(), top: e.top, files: e.files, ...(e.atoms?.length ? { atoms: e.atoms } : {}), from: e.from || null,
+    ...(e.flags?.length ? { flags: e.flags } : {}), ...(e.note ? { note: e.note } : {}) };
   // The question alone is the first atom (no heading travels with it), so similarity search compares question to question.
   return [
     e.q, '',
@@ -153,6 +156,8 @@ export function questionDoc(e) {
     `- Asked: ${meta.at}`,
     ...(e.top != null ? [`- Top similarity: ${e.top}`] : []),
     ...(e.files.length ? [`- Cited: ${e.files.join(', ')}`] : []),
+    ...(e.flags?.length ? [`- Flagged: ${e.flags.join(', ')}`] : []),
+    ...(e.note ? [`- Said: ${e.note}`] : []),
     '',
     `<!-- knowbot:question ${JSON.stringify(meta).replace(/--/g, '\\u002d\\u002d')} -->`, '',
   ].join('\n');
@@ -200,7 +205,7 @@ export function logQuestion(o = {}) {
   try { return Promise.resolve(enqueue(o || {})); } catch (e) { try { cfg.logger(`[questions] log failed: ${e.message}`); } catch {} return Promise.resolve({ logged: false, skipped: 'error' }); }
 }
 
-function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, citations = [], topScore = null, channel = 'web', callerKey, now, origin } = {}) {
+function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, citations = [], topScore = null, channel = 'web', callerKey, now, origin, flags = [], note = '' } = {}) {
   const at = Number.isFinite(now) ? now : Date.now();
   const q = scrubQuestion(question);
   if (!q || !normalizeQuestion(q)) return { logged: false, skipped: 'empty' };
@@ -234,8 +239,10 @@ function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, ci
   const top = Number.isFinite(Number(topScore)) && topScore !== null ? Math.round(Number(topScore) * 10000) / 10000 : null;
   const og = cleanOrigin(origin) || (ch === 'studio' && isStudioProbe(q) ? 'probe' : null);
   const path = `${normRoot(root, scopeKey)}questions/${month}/${at}-${hash}-${randomBytes(3).toString('hex')}.md`;
-  const tags = [...new Set([QUESTIONS_TAG, 'knowbot', ...tags0, `outcome:${oc}`, `channel:${ch}`, `month:${month}`, ...(from ? [`from:${from}`] : []), ...(og ? [`origin:${og}`] : [])])];
-  const entry = { q, hash, outcome: oc, channel: ch, at, top, files, atoms, from, path, tags, scopeKey, state: 'pending', test: !!og, origin: og || 'customer' };
+  const fl = [...new Set((Array.isArray(flags) ? flags : [flags]).map((f) => tagSafe(f, 30)).filter(Boolean))].slice(0, 4);
+  const nt = note ? scrubQuestion(String(note)).slice(0, 300) : '';
+  const tags = [...new Set([QUESTIONS_TAG, 'knowbot', ...tags0, `outcome:${oc}`, `channel:${ch}`, `month:${month}`, ...(from ? [`from:${from}`] : []), ...(og ? [`origin:${og}`] : []), ...fl.map((f) => `flag:${f}`)])];
+  const entry = { q, hash, outcome: oc, channel: ch, at, top, files, atoms, from, path, tags, scopeKey, state: 'pending', test: !!og, origin: og || 'customer', ...(fl.length ? { flags: fl } : {}), ...(nt ? { note: nt } : {}) };
 
   const list = recent.get(scopeKey) || [];
   list.push(entry);

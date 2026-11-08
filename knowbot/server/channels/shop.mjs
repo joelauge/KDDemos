@@ -3,8 +3,11 @@
 // sale can be attributed to the call.
 //
 //   shopDomainFor(target, env) → 'https://store.example' | null
-//     SHOP_DOMAIN when set; else a trial bot whose sources came from a Shopify store import (Studio "Import a store");
-//     else a launched bot's own `shopDomain`. Null means the product-link tool is not offered at all.
+//     a trial bot whose sources came from a Shopify store import (Studio "Import a store", T.flags.storeLast, kept after
+//     convert); else a launched bot's own `shopDomain` (set at launch from that import, or by the admin API); else
+//     SHOP_DOMAIN, but only for the one bot named by SHOP_DOMAIN_BOT (never server-wide: an unrelated bot must never text
+//     another merchant's checkout links). Null means the product-link tool is not offered at all.
+//   textableNumber(raw, fromNumber) → E.164 or null: same country as the sending line, no premium-rate / short codes.
 //   createShop({ domain, env, orgName, findHandle }) → { buildProductLink, smsBody }
 //
 // Variant ids come from the storefront's public /products/<handle>.js (cached for an hour). A sold-out version is refused
@@ -29,11 +32,18 @@ const originOf = (u) => { try { const x = new URL(/^https?:\/\//i.test(u) ? u : 
 
 /** Where product links point for this bot, or null (no product links). */
 export function shopDomainFor(target, env = {}) {
-  if (env.SHOP_DOMAIN) return originOf(String(env.SHOP_DOMAIN).trim());
-  const last = target?.T?.flags?.storeLast;
-  if (last && last.platform === 'shopify' && last.url) return originOf(last.url);
+  const fromImport = shopifyImportUrl(target?.T?.flags || target?.flags);
+  if (fromImport) return originOf(fromImport);
   const own = target?.inst?.shopDomain || target?.spec?.shopDomain;
-  return own ? originOf(own) : null;
+  if (own) return originOf(own);
+  const only = String(env.SHOP_DOMAIN_BOT || '').trim().toLowerCase();
+  if (env.SHOP_DOMAIN && only && target?.id && String(target.id).toLowerCase() === only) return originOf(String(env.SHOP_DOMAIN).trim());
+  return null;
+}
+/** The storefront a trial's Shopify store import came from (Studio "Import a store"), or null. */
+export function shopifyImportUrl(flags) {
+  const last = flags?.storeLast;
+  return last && last.platform === 'shopify' && last.url ? String(last.url) : null;
 }
 
 /** Normalize a spoken or caller-ID number to E.164 (North America default). */
@@ -44,6 +54,37 @@ export function toE164(raw) {
   if (d.length === 10) return `+1${d}`;
   if (d.length === 11 && d.startsWith('1')) return `+${d}`;
   return null;
+}
+
+// Country calling codes: 1 and 7 are one digit, these are two, the rest three (enough to compare a number with the line's).
+const CC2 = new Set('20 27 30 31 32 33 34 36 39 40 41 43 44 45 46 47 48 49 51 52 53 54 55 56 57 58 60 61 62 63 64 65 66 81 82 84 86 90 91 92 93 94 95 98'.split(' '));
+export function countryCodeOf(e164) {
+  const d = String(e164 || '').replace(/^\+/, '');
+  if (!/^\d{8,15}$/.test(d)) return null;
+  if (d[0] === '1' || d[0] === '7') return d[0];
+  return CC2.has(d.slice(0, 2)) ? d.slice(0, 2) : d.slice(0, 3);
+}
+// Premium-rate / shared-cost national prefixes (after the country code) that are never texted.
+const PREMIUM = { 44: ['9', '87', '84', '70'], 49: ['900', '137', '138'], 33: ['89', '81', '82'], 34: ['80', '90'], 39: ['89', '4'], 61: ['19'], 64: ['900'], 31: ['900', '909'], 41: ['90'], 353: ['15'] };
+/**
+ * A number texts may go to: E.164, in the same country as the sending line (TWILIO_FROM_NUMBER; +1 when unknown), never a
+ * short code, premium-rate or N11 number. Null otherwise.
+ */
+export function textableNumber(raw, fromNumber = '') {
+  const e = toE164(raw);
+  if (!e) return null;
+  const cc = countryCodeOf(e);
+  if (!cc || cc !== (countryCodeOf(toE164(fromNumber)) || '1')) return null;
+  const national = e.slice(1 + cc.length);
+  if (national.length < 7) return null;
+  if (cc === '1') {
+    if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(national)) return null;
+    const area = national.slice(0, 3), exch = national.slice(3, 6);
+    if (area === '900' || area === '976' || exch === '976' || /^\d11$/.test(area) || /^\d11$/.test(exch)) return null;
+    return e;
+  }
+  if ((PREMIUM[cc] || []).some((p) => national.startsWith(p))) return null;
+  return e;
 }
 
 /**

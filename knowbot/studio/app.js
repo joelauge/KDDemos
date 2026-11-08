@@ -767,9 +767,11 @@ function priceIntent(text, label) {
   const miy = !isLive() ? pendingDecision('make-it-yours') : null;
   addUserMessage(label || text, { keepDecision: !!miy });
   if (miy) {
-    const amt = getState().config?.price?.amount ?? 249;
-    // r8 (D2/D8): the open card already holds the paragraph; the reply is the delta (the price) plus one short line
-    localSay(`Going live is **$${amt}/mo**; building and testing stay free, no card. ${miyRepeatLine(miy)}`, { reply: true, chips: [] })
+    // r8 (D2/D8): the open card already holds the paragraph; the reply is the delta (the price) plus one short line.
+    // The price is the sum over the chosen answer surfaces (one plan line each), the same total checkout shows.
+    const surf = normalizeSurfaces(getState().spec?.surfaces);
+    const lines = surf.length > 1 ? ` (per answer surface, so ${surf.length} plan lines for ${surfacesText(surf)})` : '';
+    localSay(`Going live is **${priceText()}**${lines}; building and testing stay free, no card. ${miyRepeatLine(miy)}`, { reply: true, chips: [] })
       .then(() => surfaceDecision(miy));
     return;
   }
@@ -2779,7 +2781,7 @@ function paletteCommands() {
     { id: 'proof', label: 'Run Proof Run', ico: 'flask', run: () => dispatchAction({ type: 'run_proof' }) },
     { id: 'view', label: getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Toggle Proof view', ico: 'shieldCheck', run: () => setView(getState().ui.view === 'proof' ? 'bot' : 'proof', 'toggle') },
     { id: 'spec', label: 'Open bot spec', ico: 'edit', run: () => openSpec() },
-    { id: 'launch', label: `Launch · ${priceText()}`, ico: 'rocket', run: () => launchOpen('palette') },
+    { id: 'launch', label: launchChipLabel(), ico: 'rocket', run: () => launchOpen('palette') },
     { id: 'channels', label: 'Channels & API (SMS, phone, WhatsApp, email, voice)', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
     ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
@@ -3112,6 +3114,7 @@ function openStoreImport({ url = '', resume = null } = {}) {
 // the trial's events stream: hello names the trial's job (a refresh, another device); a 'store' event of a job that no
 // card here follows (started in another tab) brings the card back attached to it
 let storeJobKnown = null;   // {id, state, seq} of the trial's newest job, as the stream reported it
+let storeStopSent = null;   // the job a pending Stop already cancelled (once per job)
 on('store:job', (j) => trialP.then(() => {
   if (!j || !j.id) return;
   storeJobKnown = j;
@@ -3125,7 +3128,10 @@ on('store:event', (e) => {
   if (!e || !e.job) return;
   const fresh = !storeJobKnown || storeJobKnown.id !== e.job;
   storeJobKnown = { id: e.job, state: e.type === 'done' ? 'done' : 'running', seq: e.seq };
-  if (storeCardApi?.el.isConnected) { storeCardApi.jobId(e.job); if (storeCardApi.streaming()) return; }
+  if (storeCardApi?.el.isConnected) {
+    if (e.type !== 'done' && storeCardApi.stopPending() && storeStopSent !== e.job) { storeStopSent = e.job; api.cancelStoreImport().catch(() => {}); }
+    storeCardApi.jobId(e.job); if (storeCardApi.streaming()) return;
+  }
   if (fresh && e.type !== 'done') openStoreImport({ resume: storeJobKnown });
 });
 
@@ -3162,6 +3168,10 @@ store.registerCard('store-import', (data, el) => {
     form, plan, run);
   el.append(card);
   let ac = null, busy = false, streaming = false, lastUrl = '', curPlan = null, curJob = null, lastStep = '';
+  // Stop / Cancel: the server job exists as soon as the POST stream delivers any event (each carries the job's SSE id),
+  // or the events stream names a running job. Until then a stop is remembered (wantStop) and sent again on the first
+  // event, so a job that was being created as the visitor pressed Stop is cancelled too, never left importing.
+  let sawEvent = false, wantStop = 0;
   let st = null;   // the job's progress as its events report it
   const fresh = () => ({ name: null, platform: null, plan: null, read: {}, readTotal: 0, uploaded: 0, built: 0, buildingSeen: false, recent: [], error: null, jobStarted: false });
   const reveal = (node) => {
@@ -3196,6 +3206,7 @@ store.registerCard('store-import', (data, el) => {
     run.hidden = true; plan.hidden = true; form.hidden = false; card.classList.remove('is-error', 'is-done');
     input.focus(); input.select();
   };
+  const setStopMsg = (t) => { msg.className = 'st-field-msg'; msg.textContent = t; };
   const uploadInstead = () => { addUserMessage('Upload files instead'); dispatchAction({ type: 'request_upload' }, { fromClick: true }); };
   function fail(message) {
     busy = false; streaming = false; ac = null;
@@ -3210,20 +3221,34 @@ store.registerCard('store-import', (data, el) => {
     announce(message, 'assertive');
     queueMicrotask(() => again.focus({ preventScroll: true }));
   }
-  const cancelBtn = () => {
-    const c = btn('Cancel import', 'st-btn-ghost', () => {
-      c.disabled = true; setText(c, 'Cancelling…');
-      api.cancelStoreImport().catch((err) => {
-        if (err?.status === 409) return;   // it had just finished: its 'done' is on the way
-        c.disabled = false; setText(c, 'Cancel import'); toast({ kind: 'warn', text: "Couldn't cancel just now. Try again." });
-      });
+  const jobExists = () => sawEvent || !!st?.jobStarted || storeJobKnown?.state === 'running';
+  /**
+   * Stop (finder) and Cancel import (job): DELETE /store first, then wait for the job's own 'done' on the stream (what
+   * was added, if anything, is reported there). The fetch is aborted only when no job answers: no event arrived and
+   * the server says none runs. "Nothing was imported" is said only by done() for a cancelled job with 0 files.
+   */
+  function requestStop(b, label) {
+    b.disabled = true; setText(b, 'Stopping…');
+    wantStop = Date.now();
+    const restore = () => { b.disabled = false; setText(b, label); wantStop = 0; };
+    const hadJob = jobExists();
+    api.cancelStoreImport().then(() => { say('Stopping the import…'); }, (err) => {
+      if (err?.status !== 409) { restore(); toast({ kind: 'warn', text: "Couldn't stop it just now. Try again." }); return; }
+      // 409: no job running. Either it just finished (its 'done' is on the way) or it was not created yet: the
+      // first event re-sends the cancel (onEvent). With no event at all after a grace period, the request is dropped.
+      const myAc = ac;
+      setTimeout(() => { if (streaming && myAc && ac === myAc && !sawEvent && !hadJob) myAc.abort(); }, 4000);
     });
+  }
+  const cancelBtn = () => {
+    const c = btn('Cancel import', 'st-btn-ghost', () => requestStop(c, 'Cancel import'));
     return c;
   };
 
   // ---- the job's events (the POST stream, or GET /store?since=0 after a refresh): one painter for both
   function onEvent(type, d = {}) {
     if (!st) st = fresh();
+    if (!sawEvent) { sawEvent = true; if (wantStop) api.cancelStoreImport().catch(() => {}); }
     const host = () => st.name || storeHost(lastUrl);
     switch (type) {
       case 'detect':
@@ -3272,9 +3297,13 @@ store.registerCard('store-import', (data, el) => {
   /** The newest names, from the file rows a batch carried (the POST and GET streams carry rows; the events stream not). */
   function addRecent(files) {
     if (!Array.isArray(files) || !files.length) return;
+    const pre = st.name ? `${st.name} · ` : null;
     for (const f of files) {
-      const title = storeTitleOf(f);
-      if (title) st.recent.push({ title, url: storeSafeUrl(f.url) });
+      let title = storeTitleOf(f);
+      if (pre && title.startsWith(pre) && title.length > pre.length) title = title.slice(pre.length);
+      if (!title) continue;
+      st.recent = st.recent.filter((x) => x.title !== title);   // a file built, then added, is listed once
+      st.recent.push({ title, url: storeSafeUrl(f.url) });
     }
     st.recent = st.recent.slice(-5);
     const key = st.recent.map((x) => x.title).join('\n');
@@ -3291,7 +3320,9 @@ store.registerCard('store-import', (data, el) => {
     busy = true; streaming = true; lastUrl = v; ac = new AbortController();
     form.hidden = true; plan.hidden = true; card.classList.remove('is-error', 'is-done');
     resetRun();
-    showActions(btn('Stop', 'st-btn-ghost', () => { if (st?.jobStarted) api.cancelStoreImport().catch(() => {}); else if (ac) ac.abort(); }));
+    sawEvent = false; wantStop = 0;
+    const stopB = btn('Stop', 'st-btn-ghost', () => requestStop(stopB, 'Stop'));
+    showActions(stopB);
     reveal(run); setStep('find');
     say(`Looking at ${storeHost(v)}…`);
     lsSet(STORE_STARTED_KEY, String(Date.now()));
@@ -3305,12 +3336,14 @@ store.registerCard('store-import', (data, el) => {
       } });
     } catch (err) {
       streaming = false;
-      if (err?.code === 'aborted' || ac?.signal?.aborted) { busy = false; ac = null; tryAnother(); announce('Stopped. Nothing was imported.'); return; }
+      // aborted only when no job answered the stop (requestStop) or the card was reset: nothing is claimed here; a job
+      // that was created anyway is cancelled by the events stream (stopPending) and its outcome shown on this card
+      if (err?.code === 'aborted' || ac?.signal?.aborted) { busy = false; ac = null; tryAnother(); setStopMsg('Stopped.'); announce('Stopped.'); return; }
       fail(err?.message && err.status !== 0 ? err.message : "Couldn't reach the studio. Nothing was imported; try again.");
       return;
     }
     streaming = false; busy = false; ac = null;
-    if (st.jobStarted || storeNum(res?.fileCount) > 0) { done(res); return; }
+    if (st.jobStarted || res?.cancelled || wantStop || storeNum(res?.fileCount) > 0) { done(res); return; }
     showPlan(res?.plan && res.plan.counts ? { ...st.plan, ...res.plan } : st.plan || res?.plan || { counts: {} });
   }
 
@@ -3369,6 +3402,7 @@ store.registerCard('store-import', (data, el) => {
     reveal(run); setStep('find');
     found.textContent = `${planFoundLine(planKinds(p).filter((k) => kinds.includes(k.kind)))}.`; reveal(found);
     say(`Starting the import from ${st.name || storeHost(lastUrl)}…`);
+    sawEvent = false; wantStop = 0;
     const c = cancelBtn(); c.dataset.cancel = '1'; showActions(c);
     lsSet(STORE_STARTED_KEY, String(Date.now()));
     try {
@@ -3387,6 +3421,7 @@ store.registerCard('store-import', (data, el) => {
     busy = true; streaming = true; ac = new AbortController();
     form.hidden = true; plan.hidden = true; card.classList.remove('is-error', 'is-done');
     if (!tries) { resetRun(); reveal(run); setStep('find'); say(`Reconnecting to the import from ${storeHost(lastUrl) || 'your website'}…`); }
+    sawEvent = false;   // a Stop still pending is re-sent on this stream's first event
     const c = cancelBtn(); c.dataset.cancel = '1'; showActions(c);
     let res;
     try { res = await api.attachStoreImport({ since: 0, signal: ac.signal, onEvent: (type, d) => { if (!tries || type !== 'detect') onEvent(type, d); } }); }
@@ -3412,6 +3447,9 @@ store.registerCard('store-import', (data, el) => {
     const files = storeNum(res.fileCount) || st?.uploaded || 0;
     if (storeJobKnown?.id) lsSet(STORE_SEEN_KEY, storeJobKnown.id);
     bar.hidden = true; recent.hidden = true;
+    const stopped = !!wantStop; wantStop = 0;
+    // a stop the visitor asked for, and the job's own 'done' says nothing was added: back to the address, said plainly
+    if ((cancelled || stopped) && !files) { tryAnother(); setStopMsg('Stopped. Nothing was imported.'); announce('Stopped. Nothing was imported.'); return; }
     if ((res.error || st?.error) && !files) { fail(st?.error?.message || (cancelled ? 'The import was cancelled. Nothing was added.' : 'The import stopped before it added anything. Try again in a moment.')); return; }
     nodes.forEach((n) => { n.dataset.state = 'done'; });
     card.classList.add('is-done');
@@ -3471,6 +3509,8 @@ store.registerCard('store-import', (data, el) => {
     el: card,
     streaming: () => streaming,
     jobId: (jid) => { curJob = jid; },
+    // a Stop pressed before the job answered (the fetch was then dropped): a job that started anyway is cancelled
+    stopPending: () => !!wantStop && Date.now() - wantStop < 120000,
     resume: (job) => { if (!streaming && !busy) { own.checked = true; reattach(job); } else card.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' }); },
     focus(url) {
       // a running import or a plan waiting for its Import click is kept (a second request only brings it into view)
@@ -3527,24 +3567,127 @@ function groupStoreRows() {
     live.add(k);
     const open = storeGroupOpen.has(k);
     let head = list.querySelector(`:scope > li.st-sg[data-sgroup="${k}"]`);
+    const gid = `st-sg-g-${k}`;
     if (!head) {
-      const b = h('button', { type: 'button', class: 'st-sg-btn', 'aria-expanded': 'false' },
+      const b = h('button', { type: 'button', class: 'st-sg-btn', 'aria-expanded': 'false', 'aria-controls': gid },
         h('span', { class: 'st-sg-ico', 'aria-hidden': 'true', html: icon('link', 14) }), h('span', { class: 'st-sg-l' }), h('span', { class: 'st-sr' }, ', '), h('span', { class: 'st-sg-s sb-num' }), h('span', { class: 'st-sg-chev', 'aria-hidden': 'true' }));
       b.addEventListener('click', () => { if (storeGroupOpen.has(k)) storeGroupOpen.delete(k); else storeGroupOpen.add(k); groupStoreRows(); });
-      head = h('li', { class: 'st-sg', dataset: { sgroup: k } }, b, h('p', { class: 'st-sg-more', hidden: true }));
+      // the group the button controls: it owns the kind's rows (aria-owns) when they are all in the list, or holds a
+      // search with paging over every file of that kind when the server sent only the first rows (big stores)
+      head = h('li', { class: 'st-sg', dataset: { sgroup: k } }, b, h('div', { id: gid, class: 'st-sg-g', role: 'group', 'aria-label': `${storeKindOf(k).label} files`, hidden: true }));
     }
     if (head.nextElementSibling !== lis[0]) list.insertBefore(head, lis[0]);
     const b = head.firstElementChild;
+    const grp = head.querySelector('.st-sg-g');
     const ready = g ? storeNum(g.ready) : lis.filter((li) => li.dataset.phase === 'ready').length;
     setText(b.querySelector('.st-sg-l'), `${storeKindOf(k).label} · ${nPlural(total, 'file')} from your website`);
     setText(b.querySelector('.st-sg-s'), ready >= total ? 'Ready' : `${ready.toLocaleString('en-US')} ready`);
     setAttr(b, 'aria-expanded', open ? 'true' : 'false');
-    const more = head.querySelector('.st-sg-more');
-    setHidden(more, !(open && total > lis.length));
-    if (open && total > lis.length) setText(more, `Showing ${lis.length.toLocaleString('en-US')} of ${nPlural(total, 'file')}. All of them are searchable.`);
-    for (const li of lis) { dset(li, 'sgroup', k); li.classList.toggle('st-sg-hide', !open); }
+    const partial = total > lis.length;   // only the first rows came: the group's own search lists them all
+    setHidden(grp, !open);
+    if (open && partial) {
+      const pn = storeGroupPanel(k);
+      if (pn.el.parentNode !== grp) grp.replaceChildren(pn.el);
+      grp.removeAttribute('aria-owns');
+      pn.total(total);
+    } else {
+      if (grp.firstChild) grp.replaceChildren();
+      if (open) {
+        for (const li of lis) if (!li.id) li.id = `st-sgr-${li.dataset.local}`;
+        setAttr(grp, 'aria-owns', lis.map((li) => li.id).join(' '));
+      } else grp.removeAttribute('aria-owns');
+    }
+    for (const li of lis) { dset(li, 'sgroup', k); li.classList.toggle('st-sg-hide', !open || partial); }
   }
   for (const head of list.querySelectorAll(':scope > li.st-sg')) if (!live.has(head.dataset.sgroup)) head.remove();
+}
+/**
+ * The group's own list for a big store: a search box, one page of rows (40) and Previous / Next, over every website
+ * file of that kind (api.listStoreFiles). Each row links its page (new tab), says its stage, and has the same on/off
+ * switch and Remove as an ordinary row, so any product file can be found, switched off or removed.
+ */
+const storeGroupPanels = new Map();   // kind -> panel
+const STORE_PAGE = 40;
+const STORE_STAGE_TEXT = { ready: 'Ready', failed: "Couldn't learn", uploaded: 'Learning', atomizing: 'Learning', atomized: 'Learning', vectorizing: 'Learning' };
+function storeGroupPanel(kind) {
+  let pn = storeGroupPanels.get(kind);
+  if (pn) return pn;
+  const label = storeKindOf(kind).label;
+  const sid = `st-sgq-${kind}`;
+  const q = h('input', { type: 'search', id: sid, class: 'st-text st-sgp-q', placeholder: 'Name or address', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': `${sid}-n` });
+  const count = h('p', { id: `${sid}-n`, class: 'st-sgp-n', role: 'status' });
+  const ul = h('ul', { class: 'st-sgp-l', 'aria-label': `${label} files` });
+  const prev = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Previous');
+  const next = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Next');
+  const pager = h('div', { class: 'st-sgp-pager' }, prev, next);
+  const el = h('div', { class: 'st-sgp' }, h('label', { for: sid, class: 'st-sgp-ql' }, `Search ${label.toLowerCase()}`), q, count, ul, pager);
+  let offset = 0, total = 0, seq = 0, timer = 0, known = 0;
+  async function load({ fresh = false } = {}) {
+    const my = ++seq;
+    el.setAttribute('aria-busy', 'true');
+    let r;
+    try { r = await api.listStoreFiles({ page: kind, q: q.value, offset, limit: STORE_PAGE, fresh }); }
+    catch { if (my === seq) { el.removeAttribute('aria-busy'); setText(count, "Couldn't load the list. Try again in a moment."); } return; }
+    if (my !== seq) return;
+    el.removeAttribute('aria-busy');
+    total = r.total;
+    if (offset && offset >= total) { offset = Math.max(0, Math.floor((total - 1) / STORE_PAGE) * STORE_PAGE); load(); return; }
+    const sources = getState().spec?.sources || {};
+    ul.replaceChildren(...r.files.map((f) => {
+      const url = storeSafeUrl(f.url);
+      const name = String(f.name || f.path || 'file').replace(/\.md$/i, '');
+      const use = h('input', { type: 'checkbox', class: 'st-sgp-use', checked: sources[f.id] !== false && f.enabled !== false });
+      use.addEventListener('change', () => emit('spec:request', { patch: { sources: { ...(getState().spec?.sources || {}), [f.id]: use.checked } }, by: 'scope' }));
+      const rm = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm st-sgp-rm' }, 'Remove', h('span', { class: 'st-sr' }, ` ${name}`));
+      rm.addEventListener('click', () => removeStoreFile(f, name, rm));
+      return h('li', { class: 'st-sgp-i', dataset: { id: f.id, stage: f.stage || '' } },
+        url ? h('a', { class: 'st-sgp-a', href: url, target: '_blank', rel: 'noopener noreferrer', title: url }, name, h('span', { class: 'st-sr' }, ' (opens in a new tab)'))
+          : h('span', { class: 'st-sgp-a' }, name),
+        h('span', { class: 'st-sgp-st' }, STORE_STAGE_TEXT[f.stage] || 'Learning'),
+        h('label', { class: 'st-sgp-ul' }, use, h('span', null, 'Use'), h('span', { class: 'st-sr' }, ` ${name}`)),
+        rm);
+    }));
+    const from = total ? offset + 1 : 0, to = Math.min(total, offset + r.files.length);
+    setText(count, total ? `${from.toLocaleString('en-US')}–${to.toLocaleString('en-US')} of ${nPlural(total, 'file')}${q.value.trim() ? ` matching "${q.value.trim()}"` : ''}`
+      : q.value.trim() ? `No ${label.toLowerCase()} match "${q.value.trim()}".` : `No ${label.toLowerCase()} yet.`);
+    prev.disabled = offset <= 0; next.disabled = offset + STORE_PAGE >= total;
+    pager.hidden = total <= STORE_PAGE;
+  }
+  async function removeStoreFile(f, name, b) {
+    b.disabled = true;
+    try { await api.deleteFile(f.id); }
+    catch (err) { if (err?.status !== 404) { b.disabled = false; toast({ kind: 'error', text: `Couldn't remove ${name}. Try again.` }); return; } }
+    api.forgetStoreFiles(f.id);
+    storeRowKind.delete(f.id);
+    if (storeGroupInfo && kind === 'product') storeGroupInfo = { ...storeGroupInfo, total: Math.max(0, storeNum(storeGroupInfo.total) - 1) };
+    // CONTRACT-GAP (D, ingest.js): no "remove this file id" request on the bus; a row D also lists (the first 40) is
+    //   dropped from the shared state and the list here, as D's own removeFile does after its DELETE
+    const s = getState();
+    const lid = Object.keys(s.files || {}).find((x) => s.files[x]?.id === f.id);
+    if (lid) {
+      const files = { ...s.files }; delete files[lid];
+      setState({ files, fileOrder: s.fileOrder.filter((x) => x !== lid) }, 'store:remove');
+      document.querySelector(`#in-intake-slot .in-rows > li.in-row[data-local="${CSS.escape(lid)}"]`)?.remove();
+    }
+    emit('file:removed', { localId: lid || null, id: f.id });
+    announce(`${name} removed`);
+    const at = [...ul.children].indexOf(b.closest('li'));
+    await load();
+    const row = ul.children[Math.min(Math.max(0, at), ul.children.length - 1)];
+    (row?.querySelector('a, button') || q).focus({ preventScroll: true });
+    paintStoreGroups();
+  }
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { offset = 0; load(); }, 250); });
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); offset = 0; load(); } });
+  prev.addEventListener('click', () => { offset = Math.max(0, offset - STORE_PAGE); load(); });
+  next.addEventListener('click', () => { offset += STORE_PAGE; load(); });
+  pn = {
+    el,
+    // a new total (more files landed, or some were removed elsewhere) refreshes the page once it changes
+    total(n) { if (n !== known) { const first = !known; known = n; load({ fresh: !first }); } },
+  };
+  storeGroupPanels.set(kind, pn);
+  return pn;
 }
 {
   // D re-renders rows in place and adds new ones to .in-rows (whose panel can be rebuilt): one observer on the slot

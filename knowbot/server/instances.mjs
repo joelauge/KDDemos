@@ -65,7 +65,7 @@ function cleanMask(m) {
 }
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
-const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
+const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'shopDomain', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
 const BUCKET_KEYS = ['id', 'flow', 'name', 'tag', 'builtin', 'createdAt', 'updatedAt'];
 const now = () => new Date().toISOString();
 
@@ -117,6 +117,16 @@ function cleanBot(body, { partial = false, models = [] } = {}) {
     const v = String(body[k] ?? '').trim();
     if (v.length > (k === 'greeting' ? 300 : 80)) throw new InstanceError(400, `${k} too long`);
     out[k] = v || undefined;
+  }
+  // the bot's Shopify storefront (set at launch from a Studio store import): turns on texted checkout links by phone
+  if (body.shopDomain !== undefined) {
+    const v = String(body.shopDomain ?? '').trim();
+    if (v) {
+      let u = null;
+      try { u = new URL(/^https?:\/\//i.test(v) ? v : `https://${v}`); } catch { /* invalid */ }
+      if (!u || !/^https?:$/.test(u.protocol) || v.length > 200 || u.username || u.password) throw new InstanceError(400, 'shopDomain must be a storefront address such as https://shop.example.com');
+      out.shopDomain = `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
+    } else out.shopDomain = undefined;
   }
   if (body.starters !== undefined) {
     if (!Array.isArray(body.starters)) throw new InstanceError(400, 'starters must be an array of strings');

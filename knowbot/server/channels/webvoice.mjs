@@ -17,6 +17,7 @@
 // Protocol (JSON text frames unless noted)
 //   client → {type:'start', key?, engine?:'auto'|'text'}   first message, within 10 s
 //            binary PCM16 LE 16 kHz mono (gemini engine)   {type:'text', text}   {type:'stop'}
+//   status: GET /v1/channels/:botId → channels.webVoice {engine, live, socket (wss URL), widget, embed}
 //   server → {type:'ready', engine, bot:{id,name}, greeting, input:{rate:16000}, output:{rate:24000}, maxSeconds, note?}
 //            {type:'transcript', role:'user'|'agent', text, delta:true}      captions (gemini engine)
 //            binary PCM16 LE 24 kHz mono                                    the model's voice (gemini engine)
@@ -27,14 +28,19 @@
 // Access: a launched bot is public (like the chat widget) and rate limited per IP by devapi.mjs; a trial bot needs its
 // kb_trial_ key in the start message (Studio passes it). Each session is capped in length and in questions.
 // Settings (names only): GEMINI_API_KEY, GEMINI_LIVE_MODEL, GEMINI_VOICE, GEMINI_LIVE_URL (voice-live.mjs),
-// KNOWBOT_WEBVOICE_MAX_SECONDS (default 600), KNOWBOT_WEBVOICE_MAX_SESSIONS (default 50), KNOWBOT_WEBVOICE_ENGINE=text.
+// KNOWBOT_WEBVOICE_MAX_SECONDS (default 600), KNOWBOT_WEBVOICE_MAX_SESSIONS (default 50, all bots),
+// KNOWBOT_WEBVOICE_MAX_PER_BOT (default 10), KNOWBOT_WEBVOICE_MAX_PER_IP (default 2), KNOWBOT_WEBVOICE_ENGINE=text.
+// Over any cap the start is refused with {type:'error', code:'busy'} and close code 1013.
 import { NOT_IN_DATA, formatSpoken, humanTitle } from './util.mjs';
 import { connectGemini, createToolRunner } from './voice-live.mjs';
 
 export const MAX_QUESTIONS_PER_SESSION = 40;
 let active = 0;
-/** Sessions open right now (tests, status). */
-export const activeWebVoiceSessions = () => active;
+const activeByBot = new Map();
+const activeByIp = new Map();
+const bump = (m, k, d) => { const n = (m.get(k) || 0) + d; if (n > 0) m.set(k, n); else m.delete(k); };
+/** Sessions open right now (tests, status): all bots, or one bot's. */
+export const activeWebVoiceSessions = (botId) => (botId == null ? active : activeByBot.get(botId) || 0);
 
 /** 'gemini' when a Gemini key is configured (and not forced off), else 'text'. */
 export function webVoiceEngine(env = {}) {
@@ -96,6 +102,10 @@ export function handleWebVoice(ws, cx) {
   const { env = {}, log = () => {} } = cx;
   const maxSeconds = Math.max(10, Number(env.KNOWBOT_WEBVOICE_MAX_SECONDS || cx.maxSeconds || 600));
   const maxSessions = Math.max(1, Number(env.KNOWBOT_WEBVOICE_MAX_SESSIONS || 50));
+  const maxPerBot = Math.max(1, Number(env.KNOWBOT_WEBVOICE_MAX_PER_BOT || 10));
+  const maxPerIp = Math.max(1, Number(env.KNOWBOT_WEBVOICE_MAX_PER_IP || 2));
+  const botKey = String(cx.botId || '');
+  const ipKey = cx.ip ? String(cx.ip) : null;
   const sid = `wv_${Math.random().toString(36).slice(2, 10)}`;
   let started = false, closed = false, engine = null, session = null, sessionReady = false, questions = 0, counted = false;
   let callerKey = cx.callerKey || null;
@@ -109,7 +119,7 @@ export function handleWebVoice(ws, cx) {
     closed = true;
     clearTimeout(startTimer); clearTimeout(lifeTimer);
     try { session?.close(); } catch {}
-    if (counted) { active -= 1; counted = false; }
+    if (counted) { active -= 1; bump(activeByBot, botKey, -1); if (ipKey) bump(activeByIp, ipKey, -1); counted = false; }
     sendJson({ type: 'end', reason });
     if (ws.readyState === 1) ws.close(code, reason);
     cx.onEnd?.({ sid, engine, transcript, questions });
@@ -195,8 +205,10 @@ export function handleWebVoice(ws, cx) {
       if (who?.keyId) callerKey = who.keyId;
     } catch (e) { return fail('unauthorized', e.message || 'This key is not valid for this bot.'); }
     if (closed) return;
-    if (active >= maxSessions) return fail('busy', 'The voice assistant is busy right now. Please try again in a minute, or type your question.', 1013);
-    active += 1; counted = true;
+    const busy = 'The voice assistant is busy right now. Please try again in a minute, or type your question.';
+    if (active >= maxSessions || (activeByBot.get(botKey) || 0) >= maxPerBot) return fail('busy', busy, 1013);
+    if (ipKey && (activeByIp.get(ipKey) || 0) >= maxPerIp) return fail('busy', 'You already have the voice assistant open in another tab or window. Close it and try again, or type your question.', 1013);
+    active += 1; bump(activeByBot, botKey, 1); if (ipKey) bump(activeByIp, ipKey, 1); counted = true;
     lifeTimer = setTimeout(() => closeAll('time_limit'), maxSeconds * 1000);
     lifeTimer.unref?.();
     engine = msg.engine === 'text' ? 'text' : webVoiceEngine(env);

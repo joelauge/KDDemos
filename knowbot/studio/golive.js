@@ -249,7 +249,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   };
   // web voice assistant: the server says which engine runs (GET …/devkey → channels.webVoice)
   const liveVoice = () => !!(dev().channels && dev().channels.webVoice && dev().channels.webVoice.live);
-  const webVoiceUrl = () => (dev().channels && dev().channels.webVoice && dev().channels.webVoice.endpoint) || `${apiRoot.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId())}/voice/live`;
+  const webVoiceUrl = () => (dev().channels && dev().channels.webVoice && dev().channels.webVoice.socket) || `${apiRoot.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId())}/voice/live`;
   const verifyToken = `kb_verify_${rid(10)}`;
 
   // ------------------------------------------------------------ frame
@@ -407,7 +407,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const id = botId();
     const ch = (name) => `${apiRoot}/v1/channels/${id}/${name}`;
     const embed = `<script type="module" src="${siteBase}lib/embed.js" data-instance="${id}" data-api="${apiBase}"></script>`;
-    return [
+    return phoneByEngine([
       { id: 'sms', name: 'SMS', blurb: 'Customers text a number, your bot texts back with [1] citations and a proof link.', provider: 'Twilio Messaging', hue: 1, url: ch('sms'), status: 'Needs a Twilio number', tryLabel: 'Preview an SMS reply',
         needs: ['A Twilio account and an SMS-capable phone number', 'Your Twilio auth token (to verify X-Twilio-Signature)'],
         steps: ['In Twilio, open Phone Numbers → Active numbers → your number.', 'Under Messaging, set “A message comes in” to Webhook, HTTP POST, and paste the URL below.', 'Add TWILIO_AUTH_TOKEN to your KnowBot environment so every request is signature-checked.'],
@@ -466,8 +466,23 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Browser (fetch)', lang: 'js', secret: true, code: (mode) => `// clip: a Blob from MediaRecorder (audio/webm)\nconst res = await fetch("${apiRoot}/v1/bots/${id}/voice", {\n  method: "POST",\n  headers: { Authorization: "Bearer ${keyFor(mode)}", "Content-Type": clip.type },\n  body: clip,\n});\nconst { transcript, answer, citations, audio, mime } = await res.json();\nnew Audio(\`data:\${mime};base64,\${audio}\`).play();` },
           { label: 'Environment', lang: 'sh', code: 'GEMINI_API_KEY=your_gemini_api_key        # live voice to voice (web voice assistant + phone)\nGOOGLE_STT_API_KEY=your_google_api_key   # optional: the clip endpoint\nGOOGLE_TTS_API_KEY=your_google_api_key\nGOOGLE_TTS_VOICE=en-US-Neural2-F' },
         ] },
-    ];
+    ]);
   };
+  /** The server's phone engine (GET …/devkey → channels.voice): 'gemini' streams the call voice-to-voice (<Connect><Stream>
+   *  to Gemini Live); 'classic' (or unknown) keeps the <Gather> loop copy. Texted checkout links only when voice.texts is true. */
+  function phoneByEngine(list) {
+    const v = (dev().channels && dev().channels.voice) || {};
+    if (v.engine !== 'gemini') return list;
+    return list.map((c) => (c.id !== 'phone' ? c : { ...c,
+      blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.',
+      provider: 'Twilio Media Streams · Gemini Live voice-to-voice',
+      needs: ['A Twilio account and a voice-capable phone number', ...(v.texts ? ['Texting enabled on that number, for the checkout links it can send'] : [])],
+      steps: ['In Twilio, open your number and set “A call comes in” to Webhook, HTTP POST, with the URL below.',
+        'KnowBot answers with <Connect><Stream>: the call is streamed to Gemini Live, which listens and speaks in real time and looks up every answer in your files.',
+        ...(v.texts ? ['When a caller wants a product, it can text them a link that opens checkout with the item already in the cart (up to 3 per call).'] : []),
+        'Every question asked on a call is logged to your question insights.'],
+      configs: c.configs.map((x) => (x.label === 'Environment' ? { ...x, code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token\nGEMINI_API_KEY=your_gemini_api_key        # voice to voice on calls' + (v.texts ? '\nTWILIO_ACCOUNT_SID=your_account_sid\nTWILIO_FROM_NUMBER=+15551234567          # sends checkout links' : '') } : x)) }));
+  }
 
   let chGrid = null, chDetail = null;
   function buildChannels(panel) {
@@ -512,6 +527,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       const el = $('.gl-chcard-status', b);
       if (!c || !el) continue;
       const st = chStatus(c);
+      const prov = $('.gl-chcard-text small', b);
+      if (prov && prov.textContent !== c.provider) prov.textContent = c.provider; // the phone engine arrives with the dev key
       const was = el.textContent;
       el.textContent = st.label;
       el.className = `gl-chcard-status is-${st.tone}`;
