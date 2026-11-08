@@ -28,7 +28,7 @@ The telephone (Phone) channel uses Twilio Voice and works for any KnowBot, a tri
 
 Source: /studio/
 
-Phone calls are voice-to-voice with Gemini Live: the call audio streams to Gemini Live, which listens and speaks itself, and before every answer it looks the question up in the bot's files and reads back the cited answer. If it ever speaks a figure, such as a price or a date, without having looked the question up, that turn is flagged as ungrounded in the bot's question insights. A call ends with a short goodbye after 15 minutes by default, and only a limited number of calls can be open at once. Phone calls need a Gemini API key. Without one, a caller hears a short message that the phone line isn't set up yet, and the call ends. Every question asked by phone shows up in the bot's question insights under Phone.
+Phone calls are voice-to-voice with Gemini Live: the call audio streams to Gemini Live, which listens and speaks itself, and before every answer it looks the question up in the bot's files and reads back the cited answer. If it ever speaks a figure, such as a price or a date, without having looked the question up, that turn is flagged as ungrounded in the bot's question insights. A call ends with a short goodbye after 15 minutes by default, and only a limited number of calls can be open at once. KnowBot runs the voice service for you, so there is nothing extra to set up. Every question asked by phone shows up in the bot's question insights under Phone.
 
 ## Texted checkout links on calls
 
