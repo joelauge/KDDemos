@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-08T17:29:13.336Z",
+  "at": "2026-11-08T17:32:26.792Z",
   "speed": 4,
   "results": [
     {
@@ -8,7 +8,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "149 ms to first Builder message"
+      "detail": "125 ms to first Builder message"
     },
     {
       "cell": "desktop-light-full",
@@ -64,7 +64,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "154 ms"
+      "detail": "120 ms"
     },
     {
       "cell": "desktop-light-full",
@@ -472,7 +472,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_rvwlehzfq43k7kip&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A42931%2Fstudio%2F%3Ft%3Dtr_rvwlehzfq43k7kip%26launched%3D1%26k%3DeyJ0IjoidHJfcnZ3bGVoemZxNDNrN2tpcCIsImUiOjE3OTQ3NjM1OTMyMzl9.qnKCwtB3gvYTk3-UTGEKGi1F%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_su6t7yphv752fgmp&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A37381%2Fstudio%2F%3Ft%3Dtr_su6t7yphv752fgmp%26launched%3D1%26k%3DeyJ0IjoidHJfc3U2dDd5cGh2NzUyZmdtcCIsImUiOjE3OTQ3NjM3ODAzMTF9.YoKhJDjY-WMUPHWFgsyO0wUG%23launched"
     },
     {
       "cell": "desktop-light-full",
@@ -592,7 +592,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "129 ms to first Builder message"
+      "detail": "97 ms to first Builder message"
     },
     {
       "cell": "desktop-dark-full",
@@ -648,7 +648,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "158 ms"
+      "detail": "109 ms"
     },
     {
       "cell": "desktop-dark-full",
@@ -752,7 +752,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "4.7 s"
+      "detail": "4.6 s"
     },
     {
       "cell": "desktop-dark-full",
@@ -1056,7 +1056,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_6hdkrbgzkznjwyvu&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A45025%2Fstudio%2F%3Ft%3Dtr_6hdkrbgzkznjwyvu%26launched%3D1%26k%3DeyJ0IjoidHJfNmhka3JiZ3prem5qd3l2dSIsImUiOjE3OTQ3NjM2MjQ5NDV9.5ZV9V_WVqeImuhAU7_wZob--%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_4phfrxgvyrvsbxaf&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A38827%2Fstudio%2F%3Ft%3Dtr_4phfrxgvyrvsbxaf%26launched%3D1%26k%3DeyJ0IjoidHJfNHBoZnJ4Z3Z5cnZzYnhhZiIsImUiOjE3OTQ3NjM4MTMxNjR9.IUzqa4Rt6yxMJSVoUVgjtwYR%23launched"
     },
     {
       "cell": "desktop-dark-full",
@@ -1184,7 +1184,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "113 ms to first Builder message"
+      "detail": "95 ms to first Builder message"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1240,7 +1240,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "124 ms"
+      "detail": "110 ms"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1344,7 +1344,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "4.0 s"
+      "detail": "4.1 s"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1648,7 +1648,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_cjb3rcj4flsyl5qq&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A33305%2Fstudio%2F%3Ft%3Dtr_cjb3rcj4flsyl5qq%26launched%3D1%26k%3DeyJ0IjoidHJfY2piM3JjajRmbHN5bDVxcSIsImUiOjE3OTQ3NjM2NTYyNzl9.J549lLtVOGrSQwxrljBdOtsQ%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_cic2yiidtaejbv6k&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A45531%2Fstudio%2F%3Ft%3Dtr_cic2yiidtaejbv6k%26launched%3D1%26k%3DeyJ0IjoidHJfY2ljMnlpaWR0YWVqYnY2ayIsImUiOjE3OTQ3NjM4NDU5MjR9.MyB81TQo1qrllGtH47-xDmtS%23launched"
     },
     {
       "cell": "desktop-light-reduce",
@@ -1776,7 +1776,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "149 ms to first Builder message"
+      "detail": "109 ms to first Builder message"
     },
     {
       "cell": "mobile-light-full",
@@ -1904,7 +1904,7 @@
       "name": "price is outline (not solid) before any answer",
       "ok": true,
       "soft": false,
-      "detail": "outline"
+      "detail": "solid (launch card on the table)"
     },
     {
       "cell": "mobile-light-full",
@@ -1944,7 +1944,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "5.2 s"
+      "detail": "5.3 s"
     },
     {
       "cell": "mobile-light-full",
@@ -1984,7 +1984,7 @@
       "name": "price stays outline at the first cited answer (solid only at the peak)",
       "ok": true,
       "soft": false,
-      "detail": "outline"
+      "detail": "solid (launch card on the table)"
     },
     {
       "cell": "mobile-light-full",
@@ -2232,7 +2232,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_rudcpbverkxyc6dj&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A38981%2Fstudio%2F%3Ft%3Dtr_rudcpbverkxyc6dj%26launched%3D1%26k%3DeyJ0IjoidHJfcnVkY3BidmVya3h5YzZkaiIsImUiOjE3OTQ3NjM2ODQ4ODh9.67zmK__OWrNMbVFG23maXA3j%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_hu3n3565656adaju&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A39717%2Fstudio%2F%3Ft%3Dtr_hu3n3565656adaju%26launched%3D1%26k%3DeyJ0IjoidHJfaHUzbjM1NjU2NTZhZGFqdSIsImUiOjE3OTQ3NjM4NzUwMTd9.92nq090aCqVW5cuPssUkAgRV%23launched"
     },
     {
       "cell": "mobile-light-full",
@@ -2368,7 +2368,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "137 ms to first Builder message"
+      "detail": "132 ms to first Builder message"
     },
     {
       "cell": "mobile-dark-full",
@@ -2432,7 +2432,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "93 ms"
+      "detail": "137 ms"
     },
     {
       "cell": "mobile-dark-full",
@@ -2536,7 +2536,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "5.4 s"
+      "detail": "5.5 s"
     },
     {
       "cell": "mobile-dark-full",
@@ -2824,7 +2824,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_2abr5leftcficjzs&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A34529%2Fstudio%2F%3Ft%3Dtr_2abr5leftcficjzs%26launched%3D1%26k%3DeyJ0IjoidHJfMmFicjVsZWZ0Y2ZpY2p6cyIsImUiOjE3OTQ3NjM3MTkwMzZ9.ckLtEdF-tsCkZdMj74B5u43b%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_fbkmopnivbw2i6vk&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A42207%2Fstudio%2F%3Ft%3Dtr_fbkmopnivbw2i6vk%26launched%3D1%26k%3DeyJ0IjoidHJfZmJrbW9wbml2YncyaTZ2ayIsImUiOjE3OTQ3NjM5MTA2Nzh9.LijinUWYsk49lpARDcaUCn-W%23launched"
     },
     {
       "cell": "mobile-dark-full",
