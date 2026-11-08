@@ -1604,7 +1604,7 @@ export function mount(ctx) {
       }
       return null;
     }
-    if (!goLiveMod) goLiveMod = import('./golive.js?v=945e163').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
+    if (!goLiveMod) goLiveMod = import('./golive.js?v=484b978').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
     return goLiveMod;
   }
   async function openGoLive({ tab = 'channels', channel = null, invoker = null } = {}) {
