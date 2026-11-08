@@ -43,6 +43,10 @@ const PROOF_ID_RE = /^[A-Za-z0-9_-]{10,24}$/;
 const CHAT_ROLES = new Set(['system', 'user', 'assistant', 'developer']);
 const MAX_Q = 1000;
 
+/** Response headers a browser client may read on every /v1 response (CORS). Both the OpenAI names (so SDK backoff
+ * works unchanged) and the short x-ratelimit-* names, plus retry-after and x-request-id. */
+export const EXPOSE_HEADERS = 'content-type, retry-after, x-request-id, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset';
+
 /** True for the paths createDevApi().handle serves (the one dispatch test server.mjs uses). */
 // Every /v1 route is also served under /api/v1 (and /p under /api/p): the production Worker forwards only /api/*.
 export const isDevApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p === '/api/v1' || p.startsWith('/api/v1/') || /^\/(?:api\/)?p\/[A-Za-z0-9_-]+$/.test(p)
@@ -232,9 +236,14 @@ export function createDevApi(o = {}) {
     const n = who.kind === 'trial' ? limits.trial : limits.live;
     const r = limit(`key:${who.keyId}`, n);
     if (Number.isFinite(n) && n > 0) {
+      const rem = String(Math.max(0, r.remaining));
       res.setHeader('x-ratelimit-limit', String(n));
-      res.setHeader('x-ratelimit-remaining', String(Math.max(0, r.remaining)));
+      res.setHeader('x-ratelimit-remaining', rem);
       res.setHeader('x-ratelimit-reset', String(r.reset));
+      // OpenAI header names: the official SDKs read these (reset as a duration, e.g. "12s") for their own backoff
+      res.setHeader('x-ratelimit-limit-requests', String(n));
+      res.setHeader('x-ratelimit-remaining-requests', rem);
+      res.setHeader('x-ratelimit-reset-requests', `${Math.max(0, r.reset)}s`);
     }
     if (r.limited) throw new ApiError(429, 'rate_limit_exceeded', `Rate limit reached (${n} requests per minute for this key). Retry in ${r.retryAfter}s.`, {}, { 'retry-after': String(r.retryAfter) });
   }
@@ -357,6 +366,22 @@ export function createDevApi(o = {}) {
         : (m, c) => o.completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
       retriever = registry.retriever(inst.id);
     }
+    // Token metering: every model call's full prompt (system + grounding context + history + question) and its output.
+    // A provider that reports usage ({usage:{prompt_tokens, completion_tokens}} on its result) is counted exactly;
+    // otherwise the count is an estimate (chars / 4) and the response says so (knowbot.usageEstimated).
+    const meter = { calls: 0, prompt: 0, completion: 0, real: { prompt: 0, completion: 0, calls: 0 } };
+    const msgText = (m) => (Array.isArray(m) ? m : [m]).map((x) => (typeof x === 'string' ? x : `${x?.role || ''}: ${typeof x?.content === 'string' ? x.content : JSON.stringify(x?.content ?? '')}`)).join('\n');
+    const outText = (r) => (typeof r === 'string' ? r : String(r?.text ?? r?.content ?? r?.choices?.[0]?.message?.content ?? ''));
+    const rawComplete = complete;
+    complete = async (m, c) => {
+      meter.calls++;
+      meter.prompt += approxTokens(msgText(m)) + 4 * (Array.isArray(m) ? m.length : 1); // + per-message chat framing
+      const r = await rawComplete(m, c);
+      const u = r && typeof r === 'object' ? r.usage : null;
+      if (u && Number.isFinite(Number(u.prompt_tokens))) { meter.real.calls++; meter.real.prompt += Number(u.prompt_tokens); meter.real.completion += Number(u.completion_tokens) || 0; }
+      meter.completion += approxTokens(outText(r));
+      return r;
+    };
     // In select mode an unreachable model falls back to the keyword selector rather than failing the answer.
     const safeComplete = mode === 'select' ? async (m, c) => { try { return await complete(m, c); } catch (e) { log(`[devapi] model failed (${e.message}); keyword fallback`); return ''; } } : complete;
 
@@ -395,17 +420,28 @@ export function createDevApi(o = {}) {
     const text = refused && !guard ? NOT_IN_DATA : String(fin.text || '');
     const lines = refused ? [] : answerLines(text);
     const quoted = lines.map((l) => ({ n: Number(/\[(\d{1,3})\]/.exec(l)?.[1]) || null, text: stripMarks(l).replace(/^\s*[-*•]\s+/, '') })).filter((x) => x.n && x.text)
-      .map((x) => ({ ...x, file: (fin.citations || []).find((c) => c.n === x.n)?.filename || null }));
+      .map((x) => { const c = (fin.citations || []).find((y) => y.n === x.n); return { ...x, file: c?.filename || null, ...(c?.file_id ? { fileId: c.file_id } : {}) }; });
+    // One footnote, one verbatim span: excerpt is the FIRST line quoted under [n] exactly as written (never two lines
+    // stitched together); every line quoted under [n] is listed, each verbatim, in spans (and in proof.quoted).
     const citations = refused ? [] : (fin.citations || []).map((c) => {
       const qs = quoted.filter((x) => x.n === c.n).map((x) => x.text);
-      return { n: c.n, file: c.filename, title: docTitle(c.title, c.filename), excerpt: (qs.join(' … ') || String(c.snippet || '')).slice(0, 400), ...(c.url ? { url: c.url } : {}),
+      const snip = String(c.snippet || '').replace(/\s+/g, ' ').trim();
+      return { n: c.n, file: c.filename, title: docTitle(c.title, c.filename), excerpt: qs[0] || snip, spans: qs.length ? qs : snip ? [snip] : [], ...(c.url ? { url: c.url } : {}),
         similarity: round4(sims.get(c.filename) ?? null) };
     });
     const hits = (refused ? candidates : results).slice(0, 6).map(hitView);
     const latencyMs = Math.round(performance.now() - t0);
+    // usage: exact when every model call reported it; else estimated from the full prompt actually sent (or, when no
+    // model ran, from the question, history and retrieved context the answer was built from)
+    const exact = meter.calls > 0 && meter.real.calls === meter.calls;
+    const ctxChars = (results.length ? results : candidates).reduce((n, r) => n + String(r.text || '').length, 0);
+    const histChars = (Array.isArray(history) ? history : []).reduce((n, m) => n + String(m?.content || '').length, 0);
+    const tokens = exact
+      ? { prompt: meter.real.prompt, completion: meter.real.completion, estimated: false, modelCalls: meter.calls }
+      : { prompt: meter.calls ? meter.prompt : Math.ceil((q.length + histChars + ctxChars) / 4) + 8, completion: Math.max(meter.completion, approxTokens(text)), estimated: true, modelCalls: meter.calls };
     const out = {
       id: `ans_${rid(16)}`, bot: target.id, botName: target.name, question: q, answer: text, refused, grounded: !refused && citations.length > 0, citations,
-      proof: { hits, quoted, floor: { min: floor, top: round4(top) } }, latencyMs, retrievalMs: Math.round(tRet - t0), ...(guard ? { guard: guard.guard || 'guard' } : {}),
+      proof: { hits, quoted, floor: { min: floor, top: round4(top) } }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
     };
     logAnswer(target, out, channel, callerKey);
     return out;
@@ -459,6 +495,41 @@ export function createDevApi(o = {}) {
   }
 
   // ---------------------------------------------------------------- proofs (/p/:id)
+  // The proof page wears the Studio's type system: Plus Jakarta Sans (display), Inter (text), JetBrains Mono (file names,
+  // locators, numbers). System fonts are the fallback when Google Fonts is unreachable.
+  const PROOF_FONTS = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap';
+  const PROOF_CSS = `
+:root{--bg:#f6f7fb;--card:#fff;--ink:#0f172a;--mute:#5b6476;--line:#e3e6ee;--acc:#4f46e5;--acc2:#6366f1;--accbg:#eef0ff;--mark:#fff1a8;--ok:#047857;
+--font:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;--display:'Plus Jakarta Sans','Inter',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#111831;--ink:#e7eaf3;--mute:#a3abc2;--line:#232c47;--acc:#a5b4fc;--acc2:#818cf8;--accbg:#1b2147;--mark:rgba(250,204,21,.22);--ok:#34d399}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--font)}
+main{max-width:680px;margin:0 auto;padding:24px 16px 64px}.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 28px}
+.wm{display:inline-flex;align-items:center;gap:8px;font:700 16px/1 var(--display);letter-spacing:-.3px}.wm b{color:var(--acc);font-weight:700}
+.glyph{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:8px;color:#fff;font:800 14px/1 var(--display);background:linear-gradient(135deg,var(--acc2),var(--acc))}
+@media (prefers-color-scheme:dark){.glyph{color:#0b1020}}
+.ch{font-size:12px;color:var(--mute);border:1px solid var(--line);border-radius:999px;padding:3px 10px;text-transform:lowercase}
+.k{display:flex;flex-wrap:wrap;gap:6px;font-size:12.5px;color:var(--mute);margin:0 0 8px;font-weight:400}
+h1{font:700 clamp(21px,4.6vw,26px)/1.3 var(--display);letter-spacing:-.4px;margin:0 0 10px;overflow-wrap:anywhere}
+h2.k{font:600 12px/1.4 var(--font);letter-spacing:.08em;text-transform:uppercase;margin:0 0 14px}
+.only{display:inline-flex;align-items:center;gap:6px;margin:0 0 20px;font-size:14px;font-weight:500;color:var(--ok)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin:0 0 16px;box-shadow:0 1px 2px rgb(15 23 42/.05)}
+.pill{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--ok);font-weight:600;margin:0 0 10px}
+.pill.r{color:var(--mute)}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}ul{margin:0;padding-left:20px}li{margin:0 0 6px}
+a.n{display:inline-flex;align-items:center;justify-content:center;min-width:24px;min-height:24px;padding:0 6px;margin-left:3px;border-radius:7px;background:var(--accbg);color:var(--acc);font:600 12px/1 var(--mono);text-decoration:none;vertical-align:1px}
+a.n:hover{background:var(--acc);color:var(--card)}a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+ol{list-style:none;margin:0;padding:0}ol li{margin:0 0 18px;scroll-margin-top:16px}ol li:last-child{margin-bottom:0}
+ol li:target .src .num{background:var(--acc);color:var(--card)}
+.src{display:flex;align-items:baseline;gap:8px;font-weight:600}.src .t{overflow-wrap:anywhere}
+.num{flex:none;display:inline-grid;place-items:center;min-width:24px;height:22px;border-radius:7px;background:var(--accbg);color:var(--acc);font-size:12px;font-weight:500}
+.meta{display:flex;flex-wrap:wrap;gap:4px 12px;margin:4px 0 0 32px;font-size:12px;color:var(--mute)}.meta .file{overflow-wrap:anywhere}
+blockquote{margin:8px 0 0 32px;padding:8px 12px;border-left:3px solid var(--acc2);background:var(--accbg);border-radius:0 10px 10px 0}
+mark{background:var(--mark);color:inherit;padding:0 2px;border-radius:3px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+footer{display:flex;flex-direction:column;gap:6px;color:var(--mute);font-size:13px;margin-top:24px}footer .mono{font-size:12px}
+@media (max-width:420px){.card{padding:16px}.meta,blockquote{margin-left:0}}
+@media (prefers-reduced-motion:no-preference){ol li:target blockquote{animation:kbp 900ms cubic-bezier(.2,.8,.2,1)}@keyframes kbp{from{box-shadow:0 0 0 4px color-mix(in srgb,var(--acc2) 35%,transparent)}to{box-shadow:0 0 0 0 transparent}}}
+`;
+  const PROOF_CSP = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:";
   const proofs = new Map();
   const proofDir = path.join(o.dataDir || '.', 'proofs');
   function saveProof(a, channel) {
@@ -477,37 +548,27 @@ export function createDevApi(o = {}) {
   function proofHtml(p) {
     const e = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const lines = answerLines(p.answer);
-    const sup = (s) => e(s).replace(/\[(\d{1,3})\]/g, '<a class="n" href="#s$1" aria-label="source $1">$1</a>');
+    const sup = (s) => e(s).replace(/\[(\d{1,3})\]/g, '<a class="n" href="#s$1"><span class="vh">Source </span>$1</a>');
     const when = new Date(p.at);
+    const bot = p.botName || 'This bot';
+    const owner = /s$/i.test(bot) ? `${bot}’` : `${bot}’s`;
+    const stamp = when.toISOString().replace('T', ' ').replace(/:\d\d\.\d{3}Z$/, ' UTC');
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Answer proof · ${e(p.botName)}</title><meta name="robots" content="noindex">
-<style>
-:root{--bg:#f7f7f5;--card:#fff;--ink:#16161a;--mute:#5d5d66;--line:#e6e4df;--acc:#4f46e5;--accbg:#eef0ff;--mark:#fff3b0;--ok:#0f7a4a}
-@media (prefers-color-scheme:dark){:root{--bg:#0f0f12;--card:#17171c;--ink:#ececf1;--mute:#a1a1ad;--line:#2a2a33;--acc:#a5b4fc;--accbg:#1e1f3a;--mark:rgba(250,204,21,.2);--ok:#4ade80}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-main{max-width:680px;margin:0 auto;padding:32px 16px 64px}
-.k{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:0 0 6px}
-h1{font-size:22px;line-height:1.3;margin:0 0 20px;font-weight:650}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:0 0 16px}
-.pill{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--ok);font-weight:600;margin:0 0 10px}
-.pill.r{color:var(--mute)}ul{margin:0;padding-left:20px}li{margin:0 0 6px}
-a.n{display:inline-block;min-width:20px;padding:0 5px;margin-left:3px;border-radius:6px;background:var(--accbg);color:var(--acc);font-size:12px;font-weight:700;text-align:center;text-decoration:none;vertical-align:1px}
-a.n:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-ol{list-style:none;margin:0;padding:0}ol li{margin:0 0 14px;scroll-margin-top:16px}
-.src{font-weight:600}.file{color:var(--mute);font-size:13px;margin-left:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-blockquote{margin:8px 0 0;padding:8px 12px;border-left:3px solid var(--acc);background:var(--accbg);border-radius:0 8px 8px 0}
-mark{background:var(--mark);color:inherit;padding:0 2px;border-radius:3px}.sim{font-size:12px;color:var(--mute);margin-top:4px}
-footer{color:var(--mute);font-size:13px;margin-top:24px}
-</style></head><body><main>
-<p class="k">${e(p.botName)} · ${e(when.toUTCString().replace(/:\d\d GMT$/, ' UTC'))}</p>
+<title>Answer proof · ${e(bot)}</title><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="${PROOF_FONTS}">
+<style>${PROOF_CSS}</style></head><body><main>
+<header class="top"><span class="wm"><span class="glyph" aria-hidden="true">K</span><span>Know<b>Bot</b></span></span><span class="ch mono">${e(p.channel || 'api')}</span></header>
+<p class="k mono"><span>${e(bot)}</span><span aria-hidden="true">·</span><time datetime="${e(when.toISOString())}">${e(stamp)}</time></p>
 <h1>${e(p.question)}</h1>
+<p class="only"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16"><path d="M8 1.5 2.5 3.6v4.1c0 3.2 2.3 5.9 5.5 6.8 3.2-.9 5.5-3.6 5.5-6.8V3.6L8 1.5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m5.6 8 1.7 1.7 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Answered only from ${e(owner)} files</p>
 <section class="card" aria-label="Answer"><p class="pill${p.refused ? ' r' : ''}">${p.refused ? 'Not in its files' : `Grounded · ${p.citations.length} source${p.citations.length === 1 ? '' : 's'}`}</p>
 ${p.refused ? `<p>${e(p.answer)}</p>` : lines.length > 1 ? `<ul>${lines.map((l) => `<li>${sup(l)}</li>`).join('')}</ul>` : `<p>${sup(lines[0] || '')}</p>`}</section>
-${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k" id="srch">Every line, quoted from its source</p><ol>${p.citations.map((c) => {
+${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="k" id="srch">Every line, quoted from its source</h2><ol>${p.citations.map((c) => {
     const qs = (p.quoted || []).filter((x) => x.n === c.n);
-    return `<li id="s${c.n}"><span class="src">[${c.n}] ${e(c.title || c.file)}</span><span class="file">${e(String(c.file || '').split('/').pop())}</span>${(qs.length ? qs.map((x) => `<blockquote><mark>${e(x.text)}</mark></blockquote>`) : c.excerpt ? [`<blockquote>${e(c.excerpt)}</blockquote>`] : []).join('')}${c.similarity != null ? `<div class="sim">match ${Math.round(c.similarity * 100)}</div>` : ''}</li>`;
+    return `<li id="s${c.n}"><div class="src"><span class="num mono">${c.n}</span><span class="t">${e(c.title || c.file)}</span></div><div class="meta mono"><span class="file">${e(String(c.file || '').split('/').pop())}</span>${c.similarity != null ? `<span>similarity ${e(Number(c.similarity).toFixed(2))}</span>` : ''}${qs.length ? `<span>${qs.length} line${qs.length === 1 ? '' : 's'} quoted</span>` : ''}</div>${(qs.length ? qs.map((x) => `<blockquote><mark>${e(x.text)}</mark></blockquote>`) : c.excerpt ? [`<blockquote>${e(c.excerpt)}</blockquote>`] : []).join('')}</li>`;
   }).join('')}</ol></section>` : ''}
-<footer>This bot answers only from its own files. Every sentence above is a line from the cited file.</footer>
+<footer><span>${e(bot)} answers only from its own files. Every sentence above is a line from the cited file; a question the files do not cover gets a plain “not in my files”.</span><span class="mono">Powered by KnowDrive</span></footer>
 </main></body></html>`;
   }
 
@@ -519,11 +580,20 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
   };
 
   // ---------------------------------------------------------------- http helpers
-  /** The base every URL we hand out is built on: the public origin, plus /api when the caller came in through /api/v1. */
-  const apiBase = (req) => publicBase(req, env) + (req.kbApiPrefix || '');
-  /** The one public form of a proof link, whatever endpoint or channel made it: <origin>/api/p/<id> (served locally and
-   * behind the production Worker, which forwards /api/* only). Every proofUrl this module hands out is built here. */
-  const proofUrlFor = (req, id) => (id ? `${publicBase(req, env)}/api/p/${id}` : null);
+  /**
+   * The ONE base every URL we hand out is built on, whatever path the caller came in through: <public origin>/api, so
+   * every endpoint, webhook, voice callback and snippet reads <origin>/api/v1/…  (/v1/… is served too, as an alias, but
+   * never handed out: the production Worker forwards /api/* only). KNOWBOT_API_PREFIX overrides ('' for a bare /v1 host).
+   */
+  const API_PREFIX = env.KNOWBOT_API_PREFIX != null ? String(env.KNOWBOT_API_PREFIX).replace(/\/+$/, '') : '/api';
+  const apiBase = (req) => publicBase(req, env) + API_PREFIX;
+  /** The one public form of a proof link, whatever endpoint or channel made it: <public origin>/p/<id> (short, so an SMS
+   * keeps its characters for the answer). /api/p/<id> is served too, as an alias. Behind the production Worker, which
+   * forwards /api/* only (KNOWBOT_TRUST_PROXY=1 in its image), the link keeps the /api prefix so it still resolves;
+   * KNOWBOT_PROOF_PREFIX overrides either way. Every proofUrl this module hands out is built here. */
+  const PROOF_PREFIX = env.KNOWBOT_PROOF_PREFIX != null ? String(env.KNOWBOT_PROOF_PREFIX).replace(/\/+$/, '')
+    : /^(1|true|yes)$/i.test(String(env.KNOWBOT_TRUST_PROXY || '')) ? '/api' : '';
+  const proofUrlFor = (req, id) => (id ? `${publicBase(req, env)}${PROOF_PREFIX}/p/${id}` : null);
   function send(res, status, body, headers = {}) {
     if (res.headersSent) { try { res.end(); } catch {} return; }
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
@@ -579,7 +649,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
   const publicAnswer = (a, req, format = 'prose') => ({
     id: a.id, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: a.bot, question: a.question, answer: answerText(a, format), format: a.refused ? 'text' : format, citations: a.citations.map(({ similarity, ...c }) => c),
     refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
-    ...(a.guard ? { guard: a.guard } : {}), usage: { latencyMs: a.latencyMs },
+    ...(a.guard ? { guard: a.guard } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
   });
   const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title} — ` : ''}${c.file}`).join('\n')}`.trim());
 
@@ -627,8 +697,14 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
     const format = formatOf(body);
     const ext = (a) => ({ citations: a.citations.map(({ similarity, ...c }) => c), refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor },
-      ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}), latencyMs: a.latencyMs });
-    const usage = (a) => { const p = approxTokens(history.map((m) => m.content).join(' ') + question), c = approxTokens(footnotes(a, format)); return { prompt_tokens: p, completion_tokens: c, total_tokens: p + c }; };
+      ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}), latencyMs: a.latencyMs, usageEstimated: a.tokens ? !!a.tokens.estimated : true });
+    // real provider usage when every model call reported it; otherwise an estimate from the FULL prompt sent to the model
+    // (system, grounding context, history, question: chars / 4), flagged knowbot.usageEstimated so metering can tell
+    const usage = (a) => {
+      const t = a.tokens || { prompt: approxTokens(history.map((m) => m.content).join(' ') + question), completion: 0, estimated: true };
+      const p = t.prompt, c = t.estimated ? Math.max(t.completion, approxTokens(footnotes(a, format))) : t.completion;
+      return { prompt_tokens: p, completion_tokens: c, total_tokens: p + c };
+    };
     if (body.stream === true) {
       sseHead(res);
       const chunk = (delta, finish = null, extra = {}) => ({ id, object: 'chat.completion.chunk', created, model: modelName, system_fingerprint: 'knowbot-v1', choices: [{ index: 0, delta, logprobs: null, finish_reason: finish }], ...extra });
@@ -741,7 +817,11 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
   function index(req) {
     const base = apiBase(req);
     return {
-      object: 'knowbot.api', version: 'v1', docs: `${base}/v1/openapi.json`,
+      object: 'knowbot.api', version: 'v1', base: `${base}/v1`, docs: `${base}/v1/openapi.json`,
+      // one base for every snippet: each endpoint's `url` is `base` + the rest of its path. /api/v1/… and /v1/… are
+      // aliases (same handlers, same keys); every URL this API returns (webhooks, proof links, voice callbacks) uses `base`.
+      aliases: [`${publicBase(req, env)}/api/v1`, `${publicBase(req, env)}/v1`],
+      note: `/api/v1 and /v1 are aliases; use ${base}/v1 everywhere (it also works behind proxies that forward /api/* only).`,
       auth: 'Authorization: Bearer kb_live_… (or a Studio trial key, kb_trial_…)',
       endpoints: [
         { method: 'POST', path: '/v1/bots/{botId}/chat', about: 'Answer one question with citations. JSON, or SSE with "stream": true (events: retrieval, delta, final, done).' },
@@ -750,15 +830,15 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
         { method: 'POST', path: '/v1/bots/{botId}/voice', about: 'Audio in → transcript → cited answer → audio out (Google speech when configured).' },
         { method: 'GET', path: '/v1/channels/{botId}', about: 'Channel status and webhook URLs.' },
         { method: 'POST', path: '/v1/channels/{botId}/{sms|voice|whatsapp|email}', about: 'Provider webhooks (Twilio, Meta, SendGrid/Postmark/Mailgun).' },
-      ],
+      ].map((e) => ({ ...e, url: `${base}${e.path}` })),
       refusal: NOT_IN_DATA,
     };
   }
   function openapi(req) {
     const base = apiBase(req);
-    const citation = { type: 'object', properties: { n: { type: 'integer' }, file: { type: 'string' }, title: { type: 'string' }, excerpt: { type: 'string' }, url: { type: 'string' } }, required: ['n', 'file', 'excerpt'] };
+    const citation = { type: 'object', properties: { n: { type: 'integer' }, file: { type: 'string' }, title: { type: 'string' }, excerpt: { type: 'string', description: 'One verbatim line quoted under [n] (never two lines joined)' }, spans: { type: 'array', items: { type: 'string' }, description: 'Every line quoted under [n], each verbatim' }, url: { type: 'string' } }, required: ['n', 'file', 'excerpt', 'spans'] };
     const proof = { type: 'object', properties: { hits: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, similarity: { type: ['number', 'null'], description: 'Vector similarity 0–1 (never a rank-fusion score); null with label "keyword match" when unknown.' } } } },
-      quoted: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, text: { type: 'string' }, file: { type: 'string' } } } } } };
+      quoted: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, text: { type: 'string' }, file: { type: 'string' }, fileId: { type: 'string' } } } } } };
     const answerSchema = { type: 'object', properties: { id: { type: 'string' }, answer: { type: 'string' }, citations: { type: 'array', items: citation }, refused: { type: 'boolean' }, grounded: { type: 'boolean' }, proof, proofUrl: { type: 'string' }, usage: { type: 'object', properties: { latencyMs: { type: 'integer' } } } } };
     const errors = { 401: { description: 'Missing, invalid, revoked or expired key' }, 403: { description: 'This key is not valid for this bot' }, 404: { description: 'No such bot' }, 429: { description: 'Rate limit (see retry-after, x-ratelimit-*)' } };
     return {
@@ -778,7 +858,8 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
 
   // ---------------------------------------------------------------- dispatch
   async function route(req, res, url, p, m) {
-    res.setHeader('access-control-expose-headers', 'content-type, retry-after, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset');
+    res.setHeader('access-control-expose-headers', EXPOSE_HEADERS);
+    if (!res.getHeader('x-request-id')) res.setHeader('x-request-id', `req_${rid(16)}`);
     let mt;
     // admin: keys + insights for live bots
     if ((mt = /^\/api\/instances\/([^/]+)\/(keys|insights)(?:\/([^/]*))?$/.exec(p))) {
@@ -818,7 +899,6 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
       const id = decodeURIComponent(mt[1]);
       if (!TRIAL_ID_RE.test(id)) throw new ApiError(404, 'not_found', 'No such trial.');
       const data = studio.verifyToken(bearerOf(req), id); // throws 401 unauthorized / expired
-      req.kbApiPrefix = '/api'; // hand out the /api/v1 form: it works behind the production Worker as well as locally
       const g = googleConfig(env);
       const base = apiBase(req);
       return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, expiresAt: new Date(Number(data.e)).toISOString(), scope: 'trial',
@@ -831,8 +911,8 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><p class="k
       if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
       const pr = PROOF_ID_RE.test(mt[1]) ? await getProof(mt[1]) : null;
       if (url.searchParams.get('format') === 'json') { if (!pr) throw new ApiError(404, 'not_found', 'This proof link has expired.'); return send(res, 200, pr); }
-      const html = pr ? proofHtml(pr) : '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Proof not found</title><body style="font:16px/1.6 system-ui,sans-serif;max-width:560px;margin:48px auto;padding:0 16px"><h1 style="font-size:20px">This proof link has expired</h1><p>Ask the bot again to get a fresh answer with its sources.</p></body></html>';
-      res.writeHead(pr ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:" });
+      const html = pr ? proofHtml(pr) : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Proof link expired</title><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><link rel="stylesheet" href="${PROOF_FONTS}"><style>${PROOF_CSS}</style></head><body><main><header class="top"><span class="wm"><span class="glyph" aria-hidden="true">K</span><span>Know<b>Bot</b></span></span></header><h1>This proof link has expired</h1><p>Ask the bot again to get a fresh answer with its sources.</p></main></body></html>`;
+      res.writeHead(pr ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': PROOF_CSP });
       return res.end(m === 'HEAD' ? undefined : html);
     }
     if (p === '/v1' || p === '/v1/') { if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only'); return send(res, 200, index(req)); }

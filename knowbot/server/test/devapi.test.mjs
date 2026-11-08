@@ -126,7 +126,12 @@ describe('developer API (knowDrive mode)', () => {
     const b = await (await S.api(`/v1/bots/${bot}/chat`, { method: 'POST', headers: auth(), body: JSON.stringify({ question: Q, format: 'bullets' }) })).json();
     assert.equal(b.format, 'bullets');
     assert.match(b.answer, /30 days.*\[1\]$/m, 'format:"bullets" keeps one cited claim per line, marks at the end');
-    assert.deepEqual(Object.keys(j.citations[0]).sort(), ['excerpt', 'file', 'n', 'title']);
+    assert.deepEqual(Object.keys(j.citations[0]).sort(), ['excerpt', 'file', 'n', 'spans', 'title']);
+    for (const c of j.citations) {
+      assert.ok(!c.excerpt.includes(' … '), `one footnote is one verbatim span, never two lines stitched: ${c.excerpt}`);
+      assert.equal(c.excerpt, c.spans[0], 'excerpt is the first verbatim span');
+      for (const sp of c.spans) assert.ok(DOC.includes(sp.replace(/\.$/, '')), `span "${sp}" is verbatim`);
+    }
     assert.equal(j.citations[0].n, 1);
     assert.match(j.citations[0].file, /returns\.md$/);
     assert.ok(DOC.includes(j.citations[0].excerpt.replace(/\.$/, '')), 'the excerpt is the quoted line');
@@ -137,7 +142,8 @@ describe('developer API (knowDrive mode)', () => {
     assert.ok(j.proof.quoted.length >= 1);
     for (const q of j.proof.quoted) assert.ok(DOC.includes(q.text.replace(/\.$/, '')), `quoted "${q.text}" is verbatim`);
     assert.equal(typeof j.usage.latencyMs, 'number');
-    assert.match(j.proofUrl, /^https?:\/\/[^/]+\/api\/p\/[A-Za-z0-9_-]+$/, 'one public proof-link form on every surface');
+    assert.match(j.proofUrl, /^https?:\/\/[^/]+\/p\/[A-Za-z0-9_-]+$/, 'one short public proof-link form on every surface: <origin>/p/<id>');
+    assert.equal((await S.api(new URL(j.proofUrl).pathname.replace(/^\/p\//, '/api/p/'))).status, 200, '/api/p/<id> stays an alias');
     const oai = await (await S.api('/v1/chat/completions', { method: 'POST', headers: auth(), body: JSON.stringify({ model: bot, messages: [{ role: 'user', content: Q }] }) })).json();
     assert.equal(new URL(oai.knowbot.proofUrl).pathname.replace(/[^/]+$/, ''), new URL(j.proofUrl).pathname.replace(/[^/]+$/, ''), '/v1/chat/completions and /v1/bots/:id/chat hand out the same proofUrl form');
     for (const line of oai.choices[0].message.content.split('\n').filter((l) => /^\[\d+\] /.test(l))) {
@@ -148,6 +154,17 @@ describe('developer API (knowDrive mode)', () => {
     const html = await proof.text();
     assert.match(proof.headers.get('content-type'), /text\/html/);
     assert.ok(html.includes('<mark>') && html.includes('within 30 days'));
+    // branded like the Studio: KnowDrive type system, wordmark, "answered only from <bot>'s files", mono metadata
+    assert.ok(/fonts\.googleapis\.com\/css2\?family=Plus\+Jakarta\+Sans[^"]*Inter[^"]*JetBrains\+Mono/.test(html), 'loads the Studio fonts');
+    assert.ok(!/ui-sans-serif/.test(html));
+    assert.match(html, /Know<b>Bot<\/b>/);
+    assert.match(html, /Answered only from [^<]+ files/);
+    assert.match(html, /<div class="meta mono"><span class="file">returns\.md<\/span>/);
+    assert.ok(!/aria-label="source/.test(html), 'no aria-label that hides the visible citation number');
+    const csp = proof.headers.get('content-security-policy');
+    assert.match(csp, /style-src [^;]*https:\/\/fonts\.googleapis\.com/);
+    assert.match(csp, /font-src https:\/\/fonts\.gstatic\.com/);
+    assert.match(csp, /default-src 'none'/);
     assert.equal((await S.api('/p/doesnotexist1')).status, 404);
   });
 
@@ -229,6 +246,12 @@ describe('developer API (knowDrive mode)', () => {
     assert.match(c.message.content, /30 days[^\n]*\[1\]/);
     assert.match(c.message.content, /\n\n\[1\] .*returns\.md$/m, 'citations appended as numbered footnotes');
     for (const k of ['prompt_tokens', 'completion_tokens', 'total_tokens']) assert.equal(typeof j.usage[k], 'number');
+    // usage is never a token count of the bare question: the grounded prompt (system + quoted context + question) is
+    // metered, and an estimate says so (the fake model reports no usage)
+    assert.equal(j.knowbot.usageEstimated, true);
+    assert.ok(j.usage.prompt_tokens > Math.ceil(Q.length / 4) * 3, `prompt_tokens ${j.usage.prompt_tokens} covers the full grounded prompt`);
+    assert.equal(j.usage.total_tokens, j.usage.prompt_tokens + j.usage.completion_tokens);
+    assert.ok(j.usage.completion_tokens >= Math.ceil(c.message.content.length / 4) - 1);
     assert.equal(j.knowbot.refused, false);
     assert.equal(j.knowbot.citations[0].n, 1);
     assert.ok(j.knowbot.proof.quoted.length >= 1);
@@ -277,10 +300,16 @@ describe('developer API (knowDrive mode)', () => {
     assert.match(pre.headers.get('access-control-allow-headers'), /authorization/);
     assert.match(pre.headers.get('access-control-allow-headers'), /x-stainless-lang/);
     assert.match(pre.headers.get('access-control-allow-methods'), /POST/);
+    for (const h of ['retry-after', 'x-request-id', 'x-ratelimit-remaining-requests', 'x-ratelimit-reset-requests']) assert.match(pre.headers.get('access-control-expose-headers'), new RegExp(h), `preflight exposes ${h}`);
     const r = await S.api(`/v1/bots/${bot}/chat`, { method: 'POST', headers: { ...auth(), origin: 'https://app.example.com' }, body: JSON.stringify({ question: Q }) });
     assert.match(r.headers.get('access-control-expose-headers'), /x-ratelimit-remaining/);
     assert.match(r.headers.get('access-control-expose-headers'), /retry-after/);
+    assert.match(r.headers.get('x-request-id') || '', /^req_[A-Za-z0-9]+$/, 'every /v1 response carries x-request-id');
+    assert.ok(Number(r.headers.get('x-ratelimit-limit-requests')) > 0, 'OpenAI rate-limit header names, so SDK backoff works');
+    assert.match(r.headers.get('x-ratelimit-reset-requests') || '', /^\d+s$/);
     await r.text();
+    const bad = await S.api('/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(bad.status, 401); assert.match(bad.headers.get('x-request-id') || '', /^req_/, 'errors carry x-request-id too'); await bad.text();
   });
 
   test('every API call is logged to the questions loop as channel:api, with the caller hashed', async () => {
@@ -305,6 +334,9 @@ describe('developer API (knowDrive mode)', () => {
     assert.equal(dk.expiresAt, t.expiresAt);
     assert.equal(typeof dk.voice.google, 'boolean');
     assert.match(dk.endpoints.chat, new RegExp(`/api/v1/bots/${t.trialId}/chat$`));
+    // the devkey and the channel status hand out the same base
+    assert.match(dk.channels.sms.webhook, new RegExp(`/api/v1/channels/${t.trialId}/sms$`));
+    assert.equal(dk.endpoints.channels.replace(/\/channels\/.*$/, ''), dk.channels.sms.webhook.replace(/\/channels\/.*$/, ''));
     // every URL the devkey payload advertises resolves on this server (no 404s: /lib/embed.js lives at the site root)
     assert.match(dk.channels.chat.embed, /^https?:\/\/[^/]+\/lib\/embed\.js$/);
     const advertised = [];
@@ -360,6 +392,15 @@ describe('developer API (knowDrive mode)', () => {
     const idx = await (await S.api('/v1')).json();
     assert.equal(idx.version, 'v1');
     assert.equal(idx.refusal, NOT_IN_DATA);
+    // one base for every snippet: the index names it, says /v1 and /api/v1 are aliases, and every endpoint url uses it
+    assert.match(idx.base, /^https?:\/\/[^/]+\/api\/v1$/);
+    assert.equal(idx.aliases.length, 2);
+    assert.match(idx.note, /aliases/);
+    for (const e of idx.endpoints) assert.ok(e.url.startsWith(idx.base.replace(/\/v1$/, '')) && e.url.includes('/api/v1/'), e.url);
+    assert.deepEqual((await (await S.api('/api/v1')).json()).base, idx.base);
+    const chV1 = await (await S.api(`/v1/channels/${bot}`)).json(), chApi = await (await S.api(`/api/v1/channels/${bot}`)).json();
+    assert.deepEqual(chV1, chApi, 'the same URLs whichever alias was called');
+    assert.ok(chV1.channels.sms.webhook.startsWith(idx.base + '/channels/'), chV1.channels.sms.webhook);
     const oa = await (await S.api('/v1/openapi.json')).json();
     assert.equal(oa.openapi, '3.1.0');
     assert.ok(oa.paths['/v1/chat/completions'] && oa.paths['/v1/bots/{botId}/chat']);
@@ -367,7 +408,7 @@ describe('developer API (knowDrive mode)', () => {
     // the same API under /api/v1 (the production Worker forwards /api/* only), with proof links that follow the prefix
     const viaApi = await (await S.api(`/api/v1/bots/${bot}/chat`, { method: 'POST', headers: auth(), body: JSON.stringify({ question: Q }) })).json();
     assert.equal(viaApi.refused, false);
-    assert.match(viaApi.proofUrl, /\/api\/p\/[A-Za-z0-9_-]+$/);
+    assert.match(viaApi.proofUrl, /^https?:\/\/[^/]+\/p\/[A-Za-z0-9_-]+$/, 'the same short proof link whichever alias was called');
     assert.equal((await S.api(new URL(viaApi.proofUrl).pathname)).status, 200);
     const oai = await S.api('/api/v1/chat/completions', { method: 'POST', headers: sdkHeaders(K.key), body: JSON.stringify({ model: bot, messages: [{ role: 'user', content: Q }] }) });
     assert.equal((await oai.json()).object, 'chat.completion');
@@ -386,10 +427,23 @@ describe('developer API: rate limit per key', () => {
     const c = await ask(K.key);
     assert.equal(c.status, 429);
     assert.ok(Number(c.headers.get('retry-after')) >= 1);
+    assert.equal(c.headers.get('x-ratelimit-remaining-requests'), '0');
+    assert.match(c.headers.get('access-control-expose-headers'), /retry-after/);
     const e = await c.json();
     assert.deepEqual([e.error.type, e.error.code], ['rate_limit_error', 'rate_limit_exceeded']);
     const K2 = await newKey(S, bot);
     assert.equal((await ask(K2.key)).status, 200);
+  });
+});
+
+describe('developer API: behind the production Worker (forwards /api/* only)', () => {
+  let S, bot, K;
+  before(async () => { _resetQuestions(); S = await boot({ env: { KNOWBOT_TRUST_PROXY: '1' } }); bot = await setupBot(S); K = await newKey(S, bot); });
+  after(async () => { _resetQuestions(); await S.close(); });
+  test('proof links keep the /api prefix there, so they still resolve', async () => {
+    const j = await (await S.api(`/v1/bots/${bot}/chat`, { method: 'POST', headers: { authorization: `Bearer ${K.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: Q }) })).json();
+    assert.match(j.proofUrl, /^https?:\/\/[^/]+\/api\/p\/[A-Za-z0-9_-]+$/);
+    assert.equal((await S.api(new URL(j.proofUrl).pathname)).status, 200);
   });
 });
 

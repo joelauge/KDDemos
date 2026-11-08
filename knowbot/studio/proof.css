@@ -31,11 +31,14 @@
 @keyframes pf-blink { 0%, 45% { opacity: 1; } 55%, 100% { opacity: 0; } }
 @keyframes pf-pulse { 0% { box-shadow: 0 0 0 0 var(--accent-soft); } 70% { box-shadow: 0 0 0 10px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 .is-skel { position: relative; overflow: hidden; }
-.is-skel i, .pf-dskel i {
-  display: block; border-radius: 6px;
-  background: linear-gradient(90deg, var(--raise) 0%, var(--line) 45%, var(--raise) 90%) 0 0 / 220% 100%;
-  animation: pf-shimmer 1.2s linear infinite;
+.is-skel i, .pf-dskel i { position: relative; display: block; overflow: hidden; border-radius: 6px; background: var(--raise); }
+/* r6 perf: the shimmer is a transformed highlight (compositor only); a background-position sweep repainted every
+   skeleton bar on the main thread each frame */
+.is-skel i::after, .pf-dskel i::after {
+  content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0%, var(--line) 50%, transparent 100%);
+  transform: translateX(-100%); animation: pf-shimmer-x 1.2s linear infinite; will-change: transform;
 }
+@keyframes pf-shimmer-x { to { transform: translateX(100%); } }
 
 /* ------------------------------------------------------------------ thread */
 #sb-thread-slot { scroll-behavior: auto; }
@@ -78,10 +81,13 @@
               conic-gradient(from var(--angle), var(--accent), transparent 30%, var(--accent-2), transparent 70%, var(--accent)) border-box;
   animation: pf-angle 2.4s linear infinite;
 }
+/* r6 perf: the rotating border is a main-thread custom-property animation; it runs only while waiting for the first
+   evidence. Once lines stream, the border holds still (the caret and the line reveals carry the motion). */
+.sb-answer[data-status="streaming"] .sb-a-main { animation: none; }
 @keyframes pf-angle { to { --angle: 360deg; } }
 
 /* status: StepTicker -> ProvenancePill */
-.sb-status { display: flex; min-height: 26px; margin-bottom: 8px; }
+.sb-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 26px; margin-bottom: 8px; }
 .sb-tick {
   display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: 999px;
   background: var(--raise); color: var(--muted); font: 500 12.5px/1 var(--font); max-width: 100%;
@@ -143,6 +149,9 @@
   -webkit-mask-image: linear-gradient(90deg, transparent 0, transparent calc(var(--fl) * .5), #000 var(--fl), #000 calc(100% - var(--fr)), transparent calc(100% - var(--fr) * .5), transparent 100%);
   mask-image: linear-gradient(90deg, transparent 0, transparent calc(var(--fl) * .5), #000 var(--fl), #000 calc(100% - var(--fr)), transparent calc(100% - var(--fr) * .5), transparent 100%);
 }
+/* r6: the strip's first item (a card, or the floor divider of a refusal) is a snap point at scrollLeft 0, so proximity
+   snapping can never park the strip a few px in (first card under the left arrow, a sliver of the divider beside it) */
+.pf-strip > :first-child { scroll-snap-align: start; scroll-margin-inline-start: 48px; }
 .pf-strip-nav {
   position: absolute; top: 50%; z-index: 3; display: inline-grid; place-items: center; width: 30px; height: 30px; margin-top: -18px; border-radius: 50%;
   border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); box-shadow: var(--st-shadow-1); cursor: pointer;
@@ -183,7 +192,16 @@
 .pf-rank { flex: none; margin-left: auto; padding-left: 4px; color: var(--muted); font: 500 10.5px/1 var(--mono); white-space: nowrap; }
 .pf-card-ico { display: inline-flex; color: var(--hue); }
 .pf-card-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
-.pf-cited { flex: none; display: inline-grid; place-items: center; min-width: 22px; height: 20px; padding: 0 5px; border-radius: 6px; background: var(--btn); color: #fff; font: 600 11px/1 var(--mono); }
+/* r5: ONE citation chip: the number pill matches the answer's inline .pf-cite (soft accent, 7 px radius), used by the
+   source cards, the claim ledger and the compare card. A card shows its pill(s) bare: no "[1]" brackets anywhere. */
+.pf-npill {
+  display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 7px; vertical-align: 1px;
+  background: var(--accent-soft); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  font: 600 11px/1 var(--mono); white-space: nowrap; box-sizing: border-box;
+}
+.pf-cited { flex: none; display: inline-flex; align-items: center; gap: 3px; }
+.pf-unused-l .pf-npill { height: 17px; min-width: 17px; font-size: 10.5px; padding: 0 4px; }
+.pf-cmp-cite { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
 .pf-cited[hidden] { display: none; }
 .pf-card-loc { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pf-card-snip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
@@ -194,6 +212,11 @@
 .pf-kw { color: var(--muted); font: 500 11.5px/1 var(--font); }
 .pf-below-l { flex-basis: 100%; order: -1; color: var(--st-floor); font: 500 11px/1.2 var(--font); white-space: nowrap; }
 .pf-card.is-below { background: transparent; border-style: dashed; border-color: var(--line-2); }
+/* r7 (D5): above the floor but cut by the keep-top-6 line budget: its own reason, never "below floor" */
+.pf-budget-l { color: var(--muted); }
+.pf-card.is-budget { background: transparent; }
+.pf-card.is-budget .pf-card-bar, .pf-card.is-budget .pf-card-ico { opacity: .6; }
+.pf-card.is-budget:hover, .pf-card.is-budget:focus-visible { background: var(--panel-2); }
 .pf-card.is-below .pf-card-bar, .pf-card.is-below .pf-meter, .pf-card.is-below .pf-card-ico { opacity: .45; filter: grayscale(1); }
 .pf-card.is-below .pf-card-top { color: var(--text); }
 .pf-card.is-below .pf-card-loc { color: var(--muted); }
@@ -261,7 +284,9 @@
   background: linear-gradient(var(--st-mark), var(--st-mark)) no-repeat 0 0 / 0% 100%;
   -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
-.pf-pop-meta { margin: 0 0 8px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.pf-pop-meta { margin: 0 0 8px; color: var(--muted); font-size: 11.5px; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.pf-pop-file, .pf-pop-loc { display: block; max-width: 100%; }
+.pf-pop { box-sizing: border-box; max-width: calc(100vw - 24px); white-space: normal; overflow-wrap: anywhere; }
 .pf-pop-open { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; margin-left: -8px; border-radius: 8px; color: var(--accent-2); font: 600 12.5px/1 var(--font); cursor: pointer; }
 .pf-pop-open:hover { background: var(--accent-soft); }
 
@@ -274,6 +299,10 @@
 .sb-foot-src { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; margin-left: -8px; border-radius: 8px; color: var(--accent-2); font: 600 12px/1 var(--font); cursor: pointer; }
 .sb-foot-src:hover { background: var(--accent-soft); }
 .sb-foot-proof { display: none; }
+/* r6: the one-time "Proof view on" note sits inline beside the answer's status pill (no global toast over the
+   suggestion row); it stays with that answer (it arrives in the same frame as the proof layers: no extra shift) */
+.sb-proofnote { display: none; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-2); font: 600 11.5px/1 var(--font); white-space: nowrap; }
+#st-bot[data-view="proof"] .sb-proofnote { display: inline-flex; }
 #st-bot[data-view="proof"] .sb-foot-bot { display: none; }
 #st-bot[data-view="proof"] .sb-foot-proof { display: inline; }
 /* r4: the answer whose first receipt turned Proof view on keeps its Bot-view layout until that receipt closes (no
@@ -302,8 +331,14 @@
 .pf-fc { display: flex; flex-direction: column; gap: 10px; }
 .pf-fc-rows { --floor: 70%; display: flex; flex-direction: column; }
 .pf-fc-row { display: grid; grid-template-columns: minmax(0, 46%) minmax(0, 1fr) 4.5ch; gap: 10px; align-items: center; min-height: 24px; }
-.pf-fc-axis { min-height: 18px; }
+.pf-fc-axis { min-height: 30px; align-items: stretch; }
+/* r6: two lines: the floor label on top, the lo / hi ticks under it, so the label never collides with a tick */
+.pf-fc-axis .pf-fc-track { min-height: 28px; }
+.pf-fc-axis .pf-fc-axl { align-self: end; }
 .pf-fc-axl { font-size: 10.5px; line-height: 1.2; color: var(--dim); }
+.pf-fc-axl small { font-size: inherit; }
+.pf-fc-axu { align-self: end; text-align: right; font-size: 10px; line-height: 1.2; color: var(--dim); }
+.pf-fc-row > * { min-width: 0; }
 .pf-fc-name, .pf-closest-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--strong); }
 .pf-fc-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--hue); }
 .pf-fc-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -311,10 +346,12 @@
 .pf-fc-loc::before { content: '· '; }
 .pf-fc-track { position: relative; align-self: stretch; display: flex; align-items: center; }
 .pf-fc-track::after { content: ''; position: absolute; top: 0; bottom: 0; left: var(--floor); border-left: 1.5px dashed var(--st-floor); }
-.pf-fc-axis .pf-fc-track::after { top: 10px; }
+.pf-fc-axis .pf-fc-track::after { top: 14px; }
 .pf-fc-flabel { position: absolute; left: var(--floor); top: 0; transform: translateX(-50%); color: var(--st-floor); font-size: 10.5px; line-height: 1; white-space: nowrap; }
 /* r4: the chart is zoomed to a local domain; its two ends are printed so the zoom is never hidden */
-.pf-fc-tick { position: absolute; top: 0; color: var(--dim); font-size: 10px; line-height: 1; }
+.pf-fc-tick { position: absolute; bottom: 2px; color: var(--dim); font-size: 10px; line-height: 1; }
+.pf-fc-flabel[data-edge="start"] { transform: translateX(-2px); }
+.pf-fc-flabel[data-edge="end"] { transform: translateX(calc(-100% + 2px)); }
 .pf-fc-tick.is-lo { left: 0; }
 .pf-fc-tick.is-hi { right: 0; }
 .pf-fc-bar { --hue: var(--accent); display: block; width: 100%; height: 10px; border-radius: 3px; background: color-mix(in srgb, var(--hue) 55%, var(--line)); transform-origin: left; }
@@ -358,7 +395,7 @@
 .pf-table td { padding: 8px 9px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--text); }
 .pf-table tr:last-child td { border-bottom: 0; }
 .pf-table q { color: var(--strong); quotes: '“' '”'; }
-.pf-tn { color: var(--accent-2); }
+.pf-tn { margin-right: 2px; }
 .pf-tf { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
 .pf-dim { color: var(--dim); }
 .pf-table-tight td, .pf-table-tight th { padding: 5px 9px; }
@@ -456,14 +493,21 @@
 .sb-banner-seg i { width: 18px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--hue) 22%, var(--line)); transition: background-color var(--dur-3) var(--ease-out); }
 .sb-banner-seg i.is-ready { background: var(--hue); }
 .sb-banner-seg i.is-failed { background: var(--warn); }
-.sb-banner-x { display: inline-grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 8px; color: var(--muted); cursor: pointer; }
+.sb-banner-x { display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; min-width: 28px; margin-left: auto; border-radius: 8px; color: var(--muted); cursor: pointer; }
+/* r5: the "Ask again" action never collapses below a 44 px target; its quoted question truncates inside it. The id
+   lifts these over the header-pill rules (studio.css .st-bothead-banner .sb-banner .sb-btn { min-width: 0 }). */
+#st-bot-banner .sb-banner.is-reask > .sb-btn { flex: 0 1 auto; min-width: 44px; max-width: 100%; overflow: hidden; }
+#st-bot-banner .sb-banner.is-reask > .sb-btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#st-bot-banner .sb-banner.is-reask > span { flex: 0 1000 auto; }   /* the message gives up its room first */
+#st-bot-banner .sb-banner-x { flex: none; }
 .sb-banner-x:hover { background: var(--raise); }
 
 /* ------------------------------------------------------------------ suggestions (#sb-suggest-slot) */
 #sb-suggest-slot:empty { display: none; }
 .sb-sugg {
   --fl: 0px; --fr: 0px;
-  display: flex; gap: 6px; overflow-x: auto; padding: 8px var(--st-gutter) 2px; scrollbar-width: none; scroll-padding-inline: var(--st-gutter);
+  display: flex; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 8px var(--st-gutter) 2px; scrollbar-width: none; scroll-padding-inline: var(--st-gutter);
+  min-height: calc(var(--st-chip-h, 34px) + 10px); box-sizing: border-box;   /* r7 (D4): a fixed-height in-flow row: chips never stack or overlap mid-stagger */
   -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%);
   mask-image: linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%);
 }
@@ -521,7 +565,7 @@
 .sb-scope { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: 500 12px/1 var(--font); cursor: pointer; }
 .sb-scope:hover { background: var(--raise); }
 .sb-scope > .st-ico:first-child { color: var(--accent-2); }
-.sb-scope-s { display: none; }
+.sb-scope-s, .sb-scope-x { display: none; }
 .sb-comp-meta[hidden] { display: none; }
 .sb-persona { padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-2); font: 600 11.5px/1.3 var(--font); }
 .sb-hint { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
@@ -629,7 +673,7 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
 .pf-cmp-st.is-refused { color: var(--st-refusal); }
 .pf-cmp-line { margin: 0; font-size: 13px; line-height: 1.5; color: var(--strong); }
 .pf-cmp-refusal { color: var(--text); }
-.pf-cmp-n { margin-left: 3px; color: var(--accent-2); font-size: 11px; }
+.pf-cmp-n { margin-left: 4px; }
 .pf-diff { background: var(--st-mark); color: var(--strong); border-radius: 3px; }
 .pf-cmp-cites { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .pf-cmp-open { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; margin-top: auto; height: 26px; padding: 0 6px; margin-left: -6px; border-radius: 7px; color: var(--accent-2); font: 600 12px/1 var(--font); cursor: pointer; }
@@ -659,10 +703,11 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
 .pf-dtitle h2:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
 .pf-dico { display: inline-flex; color: var(--hue); }
 .pf-dname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-dsub { display: flex; align-items: baseline; min-width: 0; margin: 0; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-.pf-dsub > span { flex: none; white-space: nowrap; }
+/* r5: the locator is never ellipsized; the line wraps (whole segments) instead of cutting "atom #51 of 1…" */
+.pf-dsub { display: flex; flex-wrap: wrap; align-items: baseline; row-gap: 2px; min-width: 0; margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.pf-dsub > span { flex: none; white-space: nowrap; max-width: 100%; }
 .pf-dsub > span + span::before { content: '·'; padding: 0 5px; color: var(--dim); }
-.pf-dsub > .pf-dsub-loc { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pf-dsub > .pf-dsub-loc { white-space: normal; overflow-wrap: anywhere; }
 .pf-did { display: flex; align-items: center; gap: 4px; margin: 3px 0 0; font-size: 11.5px; color: var(--dim); }
 .pf-copy { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: var(--muted); cursor: pointer; }
 .pf-copy.pf-copyid { display: inline-flex; align-items: center; gap: 5px; width: auto; height: 24px; padding: 0 7px; margin-left: -7px; font: 500 11px/1 var(--mono); color: var(--dim); }
@@ -677,12 +722,16 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
 .pf-dquote { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12.5px; color: var(--muted); }
 .pf-dquote > span:nth-child(2) { flex: 1 1 auto; }
 .pf-atom { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2); }
-.pf-atom.is-ctx { background: transparent; border-style: dashed; border-color: var(--line-2); }
+.pf-atom.is-ctx { background: transparent; border-style: dashed; border-color: var(--line); }
+/* r6: neighbours are titled as context and recede, so the quoted span is unambiguous */
+.pf-ctx-h { margin: 8px 2px -2px; font: 600 10.5px/1.3 var(--font); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.pf-ctx-h.is-main { color: var(--accent-2); }
+.pf-atom.is-ctx .pf-atom-seq { color: var(--dim); }
 .pf-atom.is-main { background: var(--panel); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); box-shadow: 0 0 0 3px var(--accent-soft); }
 .pf-atom-seq { display: block; margin-bottom: 4px; font-size: 11px; color: var(--muted); }
 .pf-atom-crumb { font-family: var(--font); }
 .pf-atom-text, .pf-atom p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
-.pf-atom.is-ctx .pf-atom-text { color: var(--text); }
+.pf-atom.is-ctx .pf-atom-text, .pf-atom.is-ctx p { color: var(--muted); font-size: 13.5px; }   /* neighbours (seq ±1) recede; --muted stays AA */
 .pf-dfoot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
 .pf-dspan { margin: 0; font-size: 11.5px; color: var(--muted); }
 .pf-dacts { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -693,7 +742,7 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
 
 /* ------------------------------------------------------------------ reduced motion: information stays, movement goes */
 :root[data-motion="reduce"] .sb-caret,
-:root[data-motion="reduce"] .is-skel i, :root[data-motion="reduce"] .pf-dskel i { animation: none; }
+:root[data-motion="reduce"] .is-skel i, :root[data-motion="reduce"] .pf-dskel i, :root[data-motion="reduce"] .is-skel i::after, :root[data-motion="reduce"] .pf-dskel i::after { animation: none; }
 :root[data-motion="reduce"] .pf-spin, :root[data-motion="reduce"] .sb-tick-spin { animation-duration: 2.4s; }
 :root[data-motion="reduce"] .sb-answer[data-status] .sb-a-main { animation: none; }
 :root[data-motion="reduce"] .pf-mark { background-size: 100% 100%; }
@@ -702,7 +751,7 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
 :root[data-motion="reduce"] .sb-answer.is-flash { animation: none; outline: 2px solid var(--accent); outline-offset: 4px; }
 :root[data-motion="reduce"] .sb-chip:hover, :root[data-motion="reduce"] .sb-src:hover { transform: none; }
 [data-signature] .sb-answer[data-status] .sb-a-main { animation-play-state: running; }
-[data-signature] .is-skel i { animation-play-state: paused; }
+[data-signature] .is-skel i, [data-signature] .is-skel i::after { animation-play-state: paused; }
 
 /* ------------------------------------------------------------------ dock column (≥1440): the panel fills the 400 px column */
 @media (min-width: 1440px) {
@@ -722,7 +771,13 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
   .sb-src { height: 44px; }
   .pf-sum { min-height: 44px; }
   .pf-pop-open, .pf-cmp-open { min-height: 44px; }
-  .sb-banner-x { width: 44px; height: 44px; }
+  .sb-banner-x { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+  /* r5 phones: the header pill has little room, so the re-ask offer is the action alone (icon + truncating label, never
+     under 44 x 44); the message and icon go, and the dismiss X shows only when the pill can hold it at 44 px (the offer
+     also retires itself after 20 s or on the next question) */
+  #st-bot-banner .sb-banner.is-reask > .sb-btn { flex: 1 1 auto; min-width: 44px; min-height: 44px; justify-content: flex-start; }
+  #st-bot-banner .sb-banner.is-reask > .st-ico, #st-bot-banner .sb-banner.is-reask > span, #st-bot-banner .sb-banner.is-reask > .sb-banner-x { display: none; }
+  @container (min-width: 150px) { #st-bot-banner .sb-banner.is-reask > .sb-banner-x { display: inline-grid; } }
   .pf-why-btn { min-height: 44px; }
   .pf-learn { margin-left: 0; }
   .sb-link { display: inline-block; min-height: 44px; line-height: 44px; }
@@ -731,6 +786,7 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
   .sb-composer[data-compact="true"] .sb-scope { flex: none; height: 44px; min-width: 44px; padding: 0 8px; gap: 3px; border-color: transparent; background: var(--raise); }
   .sb-composer[data-compact="true"] .sb-scope-l { display: none; }
   .sb-composer[data-compact="true"] .sb-scope-s { display: inline; font-size: 12.5px; font-weight: 600; color: var(--strong); }
+  .sb-composer[data-compact="true"] .sb-scope-x { display: inline; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .sb-composer[data-compact="true"] .sb-more { flex: none; margin-left: 0; }
   .sb-composer[data-compact="true"] .sb-input { padding-left: 6px; }
   .sb-composer[data-compact="true"] .sb-comp-meta { margin-top: 4px; min-height: 0; }
@@ -751,8 +807,15 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
   .pf-fc-row { grid-template-columns: minmax(0, 1fr) 4ch; gap: 2px 8px; }
   .pf-fc-row .pf-fc-name, .pf-fc-axis .pf-fc-axl { grid-column: 1 / -1; }
   .pf-fc-row:not(.pf-fc-axis) { margin-bottom: 6px; }
-  .pf-fc-axis .pf-fc-track { min-height: 14px; }
-  .pf-why, .pf-refusal-actions { margin-left: 0; padding-left: 0; }
+  .pf-fc-axis .pf-fc-track { min-height: 28px; }
+  /* r6: narrow panes never truncate a file name inside the chart or the closest list: it wraps on its own line */
+  .pf-fc-file { white-space: normal; overflow-wrap: anywhere; }
+  .pf-fc-name, .pf-closest-name { flex-wrap: wrap; align-items: baseline; }
+  .pf-closest-f { flex-wrap: wrap; gap: 2px 8px; }
+  .pf-refusal-actions { margin-left: 0; padding-left: 0; }
+  /* r7 (D10): the Why? card keeps its inner gutter on phones (it sat flush on its left border and bled right) */
+  .pf-why { margin-left: 0; padding: 12px 14px; max-width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; }
+  .pf-fc, .pf-fc-rows, .pf-fc-row > * { min-width: 0; }
   .sb-hide-m { display: none; }
   .sb-chip { height: 44px; font-size: 14px; }
   .sb-sugg { padding-top: 6px; }
@@ -778,6 +841,9 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
   }
   .pf-drawer[data-mode="sheet"] .pf-grip::before { content: ''; position: absolute; top: 7px; left: 24px; right: 24px; height: 4px; border-radius: 2px; background: var(--line-2); }
   .pf-drawer[data-mode="sheet"] .pf-dhead { padding-top: 22px; grid-template-columns: 44px minmax(0, 1fr) 44px; }
+  /* r5: phones read the locator whole on its own line, then "match 90 · floor 70" (no orphaned "·" at a line start) */
+  .pf-drawer[data-mode="sheet"] .pf-dsub > .pf-dsub-loc { flex: 1 1 100%; }
+  .pf-drawer[data-mode="sheet"] .pf-dsub > .pf-dsub-loc + span::before { content: none; }
   .pf-drawer[data-mode="sheet"] .pf-ring { width: 44px; height: 44px; }
   .pf-close { width: 44px; height: 44px; }
   .pf-copy { width: 44px; height: 44px; }

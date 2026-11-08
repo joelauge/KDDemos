@@ -213,11 +213,13 @@ export function formatEmail(r, { proofUrl, botName = 'KnowBot', question = '' } 
   return { text, html };
 }
 
-// After "According to X, " only an ordinary sentence opener is lower-cased; a name ("Lumen frames …", "Lumen Care Plan …"),
+// After "According to the X, " only an ordinary sentence opener is lower-cased; a name ("Lumen frames …", "Lumen Care Plan …"),
 // an acronym or anything else keeps the casing the source wrote it in. Even a common opener keeps its capital when the
 // bot's own material treats it as a name: it appears capitalised mid-sentence in the answer, a quote or an excerpt
 // ("our Standard plan …"), or it is one of the bot's name / org tokens.
 const LEAD_LOWER = /^(?:you|your|yours|we|our|ours|they|their|there|it|its|this|that|these|those|the|a|an|all|any|each|every|most|some|no|if|when|after|before|during|within|only|orders?|items?|customers?|refunds?|returns?|shipping|standard|free)$/;
+// Generic document words in a source title are not names ('Warranty lasts …' after '… Warranty Policy' reads 'warranty lasts').
+const DOC_NOUNS = /^(?:warranty|warranties|policy|policies|guide|guides|faq|faqs|terms|conditions|manual|handbook|pricing|prices?|list|lists|service|services|support|info|information|and|of|for|overview|notes|plans?|bikes?|products?|sheet|page|doc|docs|document|e-bike|batteries|battery)$/;
 const NAME_SKIP = new Set(['you', 'your', 'we', 'our', 'the', 'a', 'an', 'my', 'it', 'its']);
 /** Words written with a capital somewhere other than the start of a sentence (lower-cased keys), plus the given names. */
 export function properWords(texts = [], names = []) {
@@ -229,19 +231,35 @@ export function properWords(texts = [], names = []) {
   }
   return out;
 }
-/** Lower-cases the first letter of `s` only for an ordinary sentence opener that is not one of `proper`. */
+// Function words: always an ordinary sentence opener after "According to the X, " ("the Lumen Care Plan costs …").
+const LEAD_FUNCTION = /^(?:you|your|yours|we|our|ours|they|their|there|it|its|this|that|these|those|the|a|an|all|any|each|every|most|some|no|if|when|after|before|during|within|only|to|for|in|on|at|with|as|by|from|yes)$/;
+const CALENDAR = /^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)$/;
+/**
+ * Lower-cases the first letter of `s` after a spoken attribution ("According to the Warranty, e-bike batteries …"), unless
+ * the opening word is a name: an acronym or mixed-case word ("UPS", "iPhone", "E-Bike"), "I", a weekday or month, a word
+ * the bot's own material capitalises mid-sentence or that is part of its name / a source title (`proper`), or the first
+ * word of a multi-word name ("Lumen Care Plan …"). Function words ("The", "Your") always lower-case.
+ */
 export function lowerLead(s, proper = new Set()) {
-  const w = /^[A-Za-z']+/.exec(s)?.[0] || '';
-  if (!w || w.slice(1) !== w.slice(1).toLowerCase()) return s;
+  const w = /^[A-Za-z][A-Za-z'-]*/.exec(s)?.[0] || '';
+  if (!w || !/^[A-Z]/.test(w)) return s;
   const lw = w.toLowerCase();
-  if (!LEAD_LOWER.test(lw) || proper.has(lw)) return s;
-  // "The Lumen Care Plan …": an opener followed by a capitalised word starts a name; keep the capital
-  const next = /^[A-Za-z']+\s+([A-Za-z][A-Za-z']*)/.exec(s)?.[1] || '';
+  if (LEAD_FUNCTION.test(lw)) return s.charAt(0).toLowerCase() + s.slice(1);
+  if (/[A-Z]/.test(w.slice(1)) || /^I(?:'[a-z]+)?$/.test(w) || CALENDAR.test(lw) || proper.has(lw) || proper.has(lw.replace(/'s$/, ''))) return s;
+  // "Lumen Care Plan …": a capitalised word followed by another starts a name; keep the capital
+  const next = /^[A-Za-z'-]+\s+([A-Za-z][A-Za-z']*)/.exec(s)?.[1] || '';
   if (/^[A-Z]/.test(next) && !/^(?:I|I'm|I've|I'll|I'd)$/.test(next)) return s;
   return s.charAt(0).toLowerCase() + s.slice(1);
 }
+/** "the Returns Policy", "the Shipping file" (a title that already starts with an article keeps its own). */
+export function withArticle(title) {
+  const t = String(title || '').trim();
+  if (/^(?:the|a|an|our|your)\s/i.test(t)) return t.replace(/^(\w+)/, (m) => m.toLowerCase());
+  // a one-word topic title reads as a file ("the Shipping file"); a document name stands on its own ("the FAQ", "the Lumen Care Plan")
+  return /\s/.test(t) || DOC_NOUNS.test(t.toLowerCase()) ? `the ${t}` : `the ${t} file`;
+}
 /**
- * Voice: spoken attribution ("According to Lumen warranty returns, …"), no markers, at most two quoted lines,
+ * Voice: spoken attribution ("According to the Lumen Warranty and Returns Policy, e-bike batteries …"), no markers, at most two quoted lines,
  * ≤ ~450 characters. A refusal is the canonical sentence. `names`: the bot's name / org, whose words keep their capital.
  */
 export function formatSpoken(r, max = 450, { names = [] } = {}) {
@@ -250,7 +268,7 @@ export function formatSpoken(r, max = 450, { names = [] } = {}) {
   const byN = new Map((r.citations || []).map((c) => [c.n, c]));
   // the source titles count as names too ("Lumen Bikes Warranty and Returns Policy" → "Lumen frames …" keeps its capital)
   // (only real name words: an ordinary opener such as "Refunds" in a "Refunds" title still reads "And Refunds, refunds go …")
-  const titles = (r.citations || []).flatMap((c) => [humanTitle(c), c.title]).map((t) => String(t || '').split(/\s+/).filter((w) => !LEAD_LOWER.test(w.toLowerCase().replace(/[^a-z']/g, ''))).join(' '));
+  const titles = (r.citations || []).flatMap((c) => [humanTitle(c), c.title]).map((t) => String(t || '').split(/\s+/).filter((w) => { const x = w.toLowerCase().replace(/[^a-z']/g, ''); return !LEAD_LOWER.test(x) && !DOC_NOUNS.test(x); }).join(' '));
   const proper = properWords([r.answer, ...quotes.map((q) => q.text), ...(r.citations || []).map((c) => c.excerpt)], [...names, ...titles]);
   const parts = [];
   let lastN = null;
@@ -260,7 +278,7 @@ export function formatSpoken(r, max = 450, { names = [] } = {}) {
     if (!s) continue;
     if (!/[.!?]$/.test(s)) s += '.';
     const c = byN.get(it.n);
-    if (c && it.n !== lastN) parts.push(`${parts.length ? 'And' : 'According to'} ${humanTitle(c)}, ${lowerLead(s, proper)}`);
+    if (c && it.n !== lastN) parts.push(`${parts.length ? 'And according to' : 'According to'} ${withArticle(humanTitle(c))}, ${lowerLead(s, proper)}`);
     else parts.push(s);
     lastN = it.n;
   }

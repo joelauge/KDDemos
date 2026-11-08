@@ -24,7 +24,9 @@
 //   questionInsights({kd, store, scopeTags, limit, includeTest?, suggest?, nearest?}) → {total, answered, refused,
 //     top:[{q,count,lastAt,outcome,origin,channels[],variants?,similar?,similarLabel?}],
 //     gaps:[{q,count,lastAt,origin,channels[],variants?,inDomain,offTopic?,status,statusLabel?,suggestion:{kind,inDomain,status,text,nearest,action}}],
-//     byChannel:{studio,web,api,sms,voice,whatsapp,email}, offTopic, more:{top, gaps, probes}, testTraffic, testRefused, test:{total, answered, refused}, probes:[{q,count,lastAt,outcome,probe:true}], source}
+//     byChannel:{studio,web,api,sms,voice,whatsapp,email}, offTopic, more:{top, gaps, probes}, testTraffic, testRefused, test:{total, answered, refused}, probes:[{q,count,lastAt,outcome,probe:true}], source,
+//     scope:{key, state:'active'|'empty'|'missing'}, missing?:true, error?:{status:410, code:'scope_gone', message}}
+//     (onMissing:'throw' → a gone trial/bucket throws InsightsScopeError {status:410, code:'scope_gone'} instead)
 //
 // Test traffic: a question logged with origin 'setup' | 'proof' | 'probe' (or one of the Studio's own off-topic probes asked
 // on channel:studio) is tagged origin:<x> and left out of `top` and `gaps` unless includeTest is true, so the learning
@@ -66,7 +68,8 @@ export function configureQuestions(o = {}) {
 
 // ------------------------------------------------------------------ text helpers
 const FILLER_LEAD = /^(?:(?:hi|hello|hey|yo|ok|okay|so|um|uh|please|pls|excuse me|quick question)\b[\s,!.:-]*)+/;
-const FILLER_TAIL = /(?:[\s,]*(?:please|pls|thanks|thank you|thx|ty)\b)+$/;
+// a whole trailing word only: "warranty" / "safety" never lose their "ty" ("thank you")
+const FILLER_TAIL = /(?:(?:^|[\s,]+)(?:please|pls|thanks|thank you|thx|ty)\b)+$/;
 
 // "Test ride How long does a test ride last?": an e-mail subject (or a widget's topic chip) glued in front of the real
 // question. A short lead with no sentence punctuation, followed by a capitalised question word, is dropped.
@@ -141,7 +144,7 @@ export function parseQuestionPath(p) {
 
 /** The markdown body of one question file (the first atom is the question itself, for similarity grouping). */
 export function questionDoc(e) {
-  const meta = { v: 1, q: e.q, hash: e.hash, outcome: e.outcome, channel: e.channel, at: new Date(e.at).toISOString(), top: e.top, files: e.files, from: e.from || null };
+  const meta = { v: 1, q: e.q, hash: e.hash, outcome: e.outcome, channel: e.channel, at: new Date(e.at).toISOString(), top: e.top, files: e.files, ...(e.atoms?.length ? { atoms: e.atoms } : {}), from: e.from || null };
   // The question alone is the first atom (no heading travels with it), so similarity search compares question to question.
   return [
     e.q, '',
@@ -169,6 +172,7 @@ const recent = new Map();   // scopeKey → [entry]  (newest last)
 const seen = new Map();     // dedupe key → time
 const daily = new Map();    // `${scopeKey}|${day}` → count
 const texts = new Map();    // qhash → question text (bounded)
+const cites = new Map();    // qhash → {files, atoms} of its latest answered ask (bounded): evidence for paraphrase grouping
 let queued = 0, warnedFull = false;
 
 function remember(map, key, value, max) {
@@ -224,17 +228,21 @@ function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, ci
 
   const month = monthOf(at);
   const files = [...new Set((Array.isArray(citations) ? citations : []).map((c) => (typeof c === 'string' ? c : c?.file || c?.filename || c?.title || '')).map((s) => String(s).split('/').pop().slice(0, 120)).filter(Boolean))].slice(0, 8);
+  // the cited atom ids (when the answer path knows them): two paraphrases answered from the same atoms are one question
+  const atoms = [...new Set((Array.isArray(citations) ? citations : []).map((c) => (c && typeof c === 'object' ? c.atomId ?? c.atom_id ?? c.chunkId ?? c.chunk_id ?? '' : ''))
+    .map((s) => String(s).trim()).filter((s) => /^[A-Za-z0-9:._-]{1,80}$/.test(s)))].slice(0, 12);
   const top = Number.isFinite(Number(topScore)) && topScore !== null ? Math.round(Number(topScore) * 10000) / 10000 : null;
   const og = cleanOrigin(origin) || (ch === 'studio' && isStudioProbe(q) ? 'probe' : null);
   const path = `${normRoot(root, scopeKey)}questions/${month}/${at}-${hash}-${randomBytes(3).toString('hex')}.md`;
   const tags = [...new Set([QUESTIONS_TAG, 'knowbot', ...tags0, `outcome:${oc}`, `channel:${ch}`, `month:${month}`, ...(from ? [`from:${from}`] : []), ...(og ? [`origin:${og}`] : [])])];
-  const entry = { q, hash, outcome: oc, channel: ch, at, top, files, from, path, tags, scopeKey, state: 'pending', test: !!og, origin: og || 'customer' };
+  const entry = { q, hash, outcome: oc, channel: ch, at, top, files, atoms, from, path, tags, scopeKey, state: 'pending', test: !!og, origin: og || 'customer' };
 
   const list = recent.get(scopeKey) || [];
   list.push(entry);
   if (list.length > cfg.memoryPerScope) list.splice(0, list.length - cfg.memoryPerScope);
   remember(recent, scopeKey, list, 5000);
   remember(texts, hash, q, 20000);
+  if (oc === 'answered' && (files.length || atoms.length)) remember(cites, hash, { files, atoms }, 20000);
 
   if (!kdUsable(kd)) { entry.state = 'memory'; return { logged: true, path, memory: true }; }
   const st = String(store || kd.store || '');
@@ -306,7 +314,7 @@ export async function flushQuestions() {
 /** Forget all in-memory state (tests). */
 export function _resetQuestions() {
   for (const w of writers.values()) if (w.timer) clearTimeout(w.timer);
-  writers.clear(); recent.clear(); seen.clear(); daily.clear(); texts.clear();
+  writers.clear(); recent.clear(); seen.clear(); daily.clear(); texts.clear(); cites.clear();
   queued = 0; warnedFull = false; cfg = { ...DEFAULTS };
 }
 
@@ -356,7 +364,10 @@ async function readQuestionText(kd, store, row, atomsOnly = false) {
 // ------------------------------------------------------------------ grouping + gap suggestions
 const STOP = new Set(['a', 'an', 'the', 'do', 'does', 'did', 'is', 'are', 'was', 'were', 'can', 'could', 'will', 'would', 'should', 'i', 'you', 'we',
   'my', 'your', 'our', 'it', 'its', 'to', 'of', 'in', 'on', 'for', 'at', 'by', 'with', 'from', 'and', 'or', 'me', 'us', 'there', 'any', 'how', 'what',
-  'whats', "what's", 'when', 'where', 'why', 'who', 'which', 'much', 'many', 'long', 'get', 'have', 'has', 'be', 'if', 'this', 'that', 'about', 'tell']);
+  'whats', "what's", 'when', 'where', 'why', 'who', 'which', 'much', 'many', 'long', 'get', 'have', 'has', 'be', 'if', 'this', 'that', 'about', 'tell',
+  // filler that never changes what is asked ("How long does a test ride usually last?")
+  'usually', 'typically', 'normally', 'generally', 'actually', 'exactly', 'really', 'currently', 'still', 'also', 'just', 'even', 'ever', 'roughly',
+  'approximately', 'please', 'thanks', 'thank', 'kindly', 'possible', 'possibly', 'anyone', 'someone', 'guys', 'hey', 'hello', 'hi']);
 const tokensOf = (q) => new Set(normalizeQuestion(q).split(' ').filter(Boolean));
 /** Token Jaccard of two questions' normalized text (0..1). */
 export function questionJaccard(a, b) {
@@ -371,14 +382,19 @@ function mergeGroups(g, o) {
   if (a === b) return;
   const [keep, gone] = a.count >= b.count ? [a, b] : [b, a];
   gone.parent = keep;
+  // the label is the most common wording: each group's own (pre-merge) text count decides
+  const kn = keep.labelN ?? keep.count, gn = gone.labelN ?? gone.count;
+  const takeLabel = !!gone.q && (!keep.q || gn > kn);
   keep.count += gone.count; keep.answered += gone.answered; keep.refused += gone.refused;
   keep.variants = (keep.variants || 1) + (gone.variants || 1);
   for (const [k, v] of Object.entries(gone.origins || {})) keep.origins[k] = (keep.origins[k] || 0) + v;
   keep.channels = keep.channels || {};
   for (const [k, v] of Object.entries(gone.channels || {})) keep.channels[k] = (keep.channels[k] || 0) + v;
   if (!keep.files && gone.files) keep.files = gone.files;
+  if (!keep.atoms && gone.atoms) keep.atoms = gone.atoms;
   keep.rows.push(...gone.rows);
   if (gone.lastAt > keep.lastAt) keep.lastAt = gone.lastAt;
+  if (takeLabel) { keep.q = gone.q; keep.labelN = gn; } else keep.labelN = kn;
   // show the cleanest wording: the shorter text when one contains a glued-on subject line
   if (!keep.q) keep.q = gone.q;
   else if (gone.q && stripSubjectLead(keep.q, { redundant: true }) !== keep.q && stripSubjectLead(gone.q, { redundant: true }) === gone.q) keep.q = gone.q;
@@ -392,7 +408,7 @@ function jaccardMerge(groups, min = 0.8) {
       const x = toks[i], y = toks[j];
       if (!x.size || !y.size || Math.min(x.size, y.size) / Math.max(x.size, y.size) < min) continue;
       let n = 0; for (const t of x) if (y.has(t)) n++;
-      if (n / (x.size + y.size - n) >= min) mergeGroups(list[i], list[j]);
+      if (n / (x.size + y.size - n) >= min && compatibleQuestions(list[i].q, list[j].q)) mergeGroups(list[i], list[j]);
     }
   }
   // a group whose own text is a glued-on subject line shows the clean question
@@ -428,25 +444,61 @@ const capitalisedIn = (q, w) => {
   const s = String(q || '');
   return new RegExp(`(?:^|[^A-Za-z])${x.charAt(0).toUpperCase()}${x.slice(1)}(?![a-z])`).test(s) && !new RegExp(`(?:^|[^A-Za-z])${x}(?![a-z])`).test(s);
 };
-/** True when two questions are the same question in other words (see above). Files: the cited file names of each. */
-export function sameQuestion(a, b, filesA, filesB) {
+// The question's form: a yes/no question ("Is the frame warranty transferable?") and an open one ("What is the warranty?")
+// ask different things, however alike their words or embeddings, so they never group.
+const WH = new Set(['what', 'whats', "what's", 'how', 'hows', "how's", 'when', 'where', 'wheres', "where's", 'why', 'who', 'whos', "who's", 'which', 'whose', 'whom']);
+const AUX = new Set(['is', 'isnt', "isn't", 'are', 'arent', "aren't", 'am', 'was', 'were', 'do', 'dont', "don't", 'does', 'doesnt', "doesn't", 'did', 'didnt', "didn't",
+  'can', 'cant', "can't", 'could', 'will', 'wont', "won't", 'would', 'should', 'shall', 'may', 'might', 'must', 'have', 'has', 'had']);
+/** 'wh' (an open question), 'yn' (a yes/no question) or 'other' (a statement, an imperative: "Tell me about …"). */
+export function questionForm(q) {
+  const w = String(stripSubjectLead(q, { redundant: true }) || '').trim().toLowerCase().replace(/^[^a-z']+/, '').split(/[^a-z']+/)[0] || '';
+  return WH.has(w) ? 'wh' : AUX.has(w) ? 'yn' : 'other';
+}
+/**
+ * True unless two questions are certainly different: a yes/no question vs an open one, or one question that is a narrower
+ * version of the other ("What is the warranty?" vs "What is the warranty on the frame?": every content word of one, plus more).
+ */
+export function compatibleQuestions(a, b) {
+  const fa = questionForm(a), fb = questionForm(b);
+  if (fa !== fb && fa !== 'other' && fb !== 'other') return false;
+  const wa = new Set(contentWords(a)), wb = new Set(contentWords(b));
+  if (wa.size !== wb.size) {
+    const [small, big] = wa.size < wb.size ? [wa, wb] : [wb, wa];
+    if ([...small].every((w) => big.has(w))) return false;
+  }
+  return true;
+}
+/**
+ * True when two questions are the same question in other words (see above). Files: the cited file names of each;
+ * atoms (optional): the cited atom ids of each. The evidence that they were answered from the same material is, in order:
+ * a shared cited atom; the same cited files; or cited files that mostly overlap (Jaccard ≥ 0.5, e.g. one answer also cited
+ * the price list). Without that evidence two questions never merge, however alike their words.
+ */
+export function sameQuestion(a, b, filesA, filesB, atomsA, atomsB) {
   const fa = [...new Set((filesA || []).map(String))].sort(), fb = [...new Set((filesB || []).map(String))].sort();
-  if (!fa.length || fa.length !== fb.length || fa.some((f, i) => f !== fb[i])) return false;
+  const xa = new Set((atomsA || []).map(String)), sharedAtom = (atomsB || []).some((x) => xa.has(String(x)));
+  const sharedFiles = fa.filter((f) => fb.includes(f)).length;
+  const fileOverlap = fa.length && fb.length ? sharedFiles / new Set([...fa, ...fb]).size : 0;
+  if (!sharedAtom && fileOverlap < 0.5) return false;
+  if (!compatibleQuestions(a, b)) return false;
   const wa = contentWords(a), wb = new Set(contentWords(b));
   const shared = wa.filter((w) => wb.has(w) && !(capitalisedIn(a, w) && capitalisedIn(b, w)));
   if (!shared.length) return false;
   const ia = questionIntent(a), ib = questionIntent(b);
   if (ia && ia === ib) return true;
   const all = new Set([...wa, ...wb]);
-  return all.size > 0 && wa.filter((w) => wb.has(w)).length / all.size >= 0.5;
+  return all.size > 0 && wa.filter((w) => wb.has(w)).length / all.size > 0.5;
 }
 function answerMerge(groups) {
-  const list = [...groups.values()].filter((g) => !g.parent && g.q && g.files && g.files.length && g.answered > g.refused)
+  const list = [...groups.values()].filter((g) => !g.parent && g.q && ((g.files && g.files.length) || (g.atoms && g.atoms.length)) && g.answered > g.refused)
     .sort((a, b) => b.count - a.count || b.lastAt - a.lastAt).slice(0, 200);
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) {
-      if (rootOf(list[i]) === rootOf(list[j])) continue;
-      if (sameQuestion(list[i].q, list[j].q, list[i].files, list[j].files)) mergeGroups(list[i], list[j]);
+      const a = rootOf(list[i]), b = rootOf(list[j]);
+      if (a === b) continue;
+      // compare the groups as they stand (shown wording + its cited files), never a member's: no chaining A~B~C into one
+      // group when A and C are different questions (Care Plan ~ "service plan cost" (plans + price list) ~ Premium Plan)
+      if (sameQuestion(a.q, b.q, a.files, b.files, a.atoms, b.atoms)) mergeGroups(a, b);
     }
   }
 }
@@ -537,14 +589,14 @@ const tagVal = (tags, k) => (tags || []).map(String).find((t) => t.startsWith(`$
  * @returns {Promise<{ total:number, answered:number, refused:number, top:Array<{q,count,lastAt,outcome}>, gaps:Array<{q,count,lastAt}>,
  *   more:{top:number,gaps:number,probes:number}, testTraffic:number, testRefused:number, test:{total,answered,refused}, probes:Array<{q,count,lastAt,outcome,probe:true}>, source:string }>}
  */
-export async function questionInsights({ kd = null, store, scopeTags = [], limit = 10, semantic = true, includeTest = false, suggest = true, nearest = null } = {}) {
+export async function questionInsights({ kd = null, store, scopeTags = [], limit = 10, semantic = true, includeTest = false, suggest = true, nearest = null, onMissing = 'report' } = {}) {
   limit = Math.max(1, Math.min(50, Math.floor(Number(limit)) || 10));
   const tags = cleanTags(scopeTags);
   const scopeKey = scopeKeyOf(tags);
   const entries = new Map(); // path → {hash, at, outcome, q?, row?}
   for (const e of recent.get(scopeKey) || []) {
     if (e.state === 'failed' || !tags.every((t) => e.tags.includes(t))) continue;
-    entries.set(e.path, { hash: e.hash, at: e.at, outcome: e.outcome, q: e.q, test: !!e.test, origin: e.origin || (e.test ? 'probe' : 'customer'), channel: e.channel || 'web', files: e.files || null });
+    entries.set(e.path, { hash: e.hash, at: e.at, outcome: e.outcome, q: e.q, test: !!e.test, origin: e.origin || (e.test ? 'probe' : 'customer'), channel: e.channel || 'web', files: e.files || null, atoms: e.atoms || null });
   }
   let source = 'memory';
   const st = String(store || kd?.store || '');
@@ -563,25 +615,45 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
       const test = !!prev?.test || !!tagOrigin || studioProbe;
       const origin = (prev?.origin && prev.origin !== 'customer' ? prev.origin : null) || tagOrigin || (studioProbe ? 'probe' : 'customer');
       entries.set(r.filename, { hash: p.hash, at: prev?.at || p.at || Date.parse(r.created_at) || 0, outcome: tagVal(tg, 'outcome') === 'refused' ? 'refused' : 'answered', q: prev?.q, row: r, test, origin,
-        channel: prev?.channel || tagVal(tg, 'channel') || 'web', files: prev?.files || null });
+        channel: prev?.channel || tagVal(tg, 'channel') || 'web', files: prev?.files || null, atoms: prev?.atoms || null });
     }
   }
+
+  // A scope with no questions is either new ("empty": nothing asked yet) or gone ("missing": a trial or bucket whose files
+  // no longer exist in the store, e.g. an expired trial or a store that was reset). The two must never look alike: a lost
+  // trial reported as "no questions yet" hides the real state. Only trial:/bucket: scopes are checked (a live bot's corpus
+  // is not scope-tagged); the check is one 1-row listing and only runs when there are no questions at all.
+  let scopeState = entries.size ? 'active' : 'empty';
+  if (live && !entries.size && /^(?:trial|bucket):/.test(scopeKey)) {
+    try {
+      const qs = new URLSearchParams({ tags_all: scopeKey, limit: '1' });
+      const res = await kdFetch(kd, `/api/v1/vector_stores/${encodeURIComponent(st)}/files?${qs}`, { timeout: 8000 });
+      if (res.ok) { const j = await res.json(); if (!(Array.isArray(j.data) && j.data.length)) scopeState = 'missing'; }
+    } catch { /* unknown: report empty, never a false "gone" */ }
+  }
+  if (scopeState === 'missing' && onMissing === 'throw') throw new InsightsScopeError(scopeKey);
 
   // group by normalized-question hash; the Studio testing the bot (setup / Proof Run / off-topic probes) is grouped apart,
   // so customer totals and lists always describe the same questions, and test traffic is reported (and listed) on its own
   const groups = new Map(), testGroups = new Map();
   const addTo = (map, e) => {
     let g = map.get(e.hash);
-    if (!g) { g = { hash: e.hash, count: 0, answered: 0, refused: 0, lastAt: 0, q: null, rows: [], parent: null, origins: {}, channels: {}, files: null }; map.set(e.hash, g); }
+    if (!g) { g = { hash: e.hash, count: 0, answered: 0, refused: 0, lastAt: 0, q: null, rows: [], parent: null, origins: {}, channels: {}, files: null, atoms: null }; map.set(e.hash, g); }
     g.count++; g.origins[e.origin || 'customer'] = (g.origins[e.origin || 'customer'] || 0) + 1; g[e.outcome === 'refused' ? 'refused' : 'answered']++;
     const ch = e.channel || 'web'; g.channels[ch] = (g.channels[ch] || 0) + 1;
     if (Array.isArray(e.files) && e.files.length && !g.files) g.files = e.files;
+    if (Array.isArray(e.atoms) && e.atoms.length && !g.atoms) g.atoms = e.atoms;
     if (e.at >= g.lastAt) { g.lastAt = e.at; if (e.q) g.q = e.q; }
     if (!g.q && e.q) g.q = e.q;
     if (e.row) g.rows.push(e.row);
   };
   for (const e of entries.values()) addTo(e.test && !includeTest ? testGroups : groups, e);
-  for (const g of [...groups.values(), ...testGroups.values()]) if (!g.q && texts.has(g.hash)) g.q = texts.get(g.hash);
+  for (const g of [...groups.values(), ...testGroups.values()]) {
+    if (!g.q && texts.has(g.hash)) g.q = texts.get(g.hash);
+    const c = cites.get(g.hash);
+    if (c && !g.files && c.files.length) g.files = c.files;
+    if (c && !g.atoms && c.atoms.length) g.atoms = c.atoms;
+  }
 
   const byCount = () => [...groups.values()].filter((g) => !g.parent).sort((a, b) => b.count - a.count || b.lastAt - a.lastAt);
   const byGap = () => [...groups.values()].filter((g) => !g.parent && g.refused > 0).sort((a, b) => b.refused - a.refused || b.lastAt - a.lastAt);
@@ -589,15 +661,20 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
   // fill in the text of the groups that may be shown
   if (live) {
     const byTest = [...testGroups.values()].sort((a, b) => b.count - a.count || b.lastAt - a.lastAt).slice(0, limit);
-    const want = [...new Set([...byCount().slice(0, limit * 2 + 4), ...byGap().slice(0, limit * 2 + 4), ...byTest])].filter((g) => !g.q && g.rows.length);
+    const want = [...new Set([...byCount().slice(0, limit * 2 + 4), ...byGap().slice(0, limit * 2 + 4), ...byTest])]
+      .filter((g) => g.rows.length && (!g.q || (!g.files && g.answered > g.refused)));
     let i = 0;
     const worker = async () => {
       while (i < want.length) {
         const g = want[i++];
-        const row = g.rows.reduce((a, b) => (String(b.filename) > String(a.filename) ? b : a));
+        // the newest answered ask carries the cited files (a refused one cites nothing)
+        const answeredRows = g.rows.filter((r) => (r.tags || []).map(String).includes('outcome:answered'));
+        const row = (answeredRows.length ? answeredRows : g.rows).reduce((a, b) => (String(b.filename) > String(a.filename) ? b : a));
         const d = await readQuestionMeta(kd, st, row);
-        if (d?.q) { g.q = d.q; remember(texts, g.hash, d.q, 20000); }
+        if (d?.q && !g.q) { g.q = d.q; remember(texts, g.hash, d.q, 20000); }
         if (Array.isArray(d?.files) && d.files.length && !g.files) g.files = d.files.map(String);
+        if (Array.isArray(d?.atoms) && d.atoms.length && !g.atoms) g.atoms = d.atoms.map(String);
+        if (g.files || g.atoms) remember(cites, g.hash, { files: g.files || [], atoms: g.atoms || [] }, 20000);
       }
     };
     await Promise.all(Array.from({ length: Math.min(4, want.length) }, worker));
@@ -625,11 +702,23 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
           if (!tg || !tg.includes(QUESTIONS_TAG) || !tags.every((t) => tg.includes(t))) continue; // fail closed
           const sim = Number.isFinite(Number(d.distance)) ? 1 - Number(d.distance) / 2 : Number(d.score);
           const p = parseQuestionPath(d.filename || d.attributes?.path);
-          if (p && p.hash !== g.hash && sim >= cfg.semanticMin) g.similar.push(p.hash);
+          if (p && p.hash !== g.hash && sim >= cfg.semanticMin) g.similar.push({ hash: p.hash, sim });
         }
       } catch { /* grouping by text alone */ }
     }));
-    for (const g of seeds) for (const h of g.similar || []) { const o = groups.get(h); if (o) mergeGroups(g, o); }
+    // an embedding puts "What is the warranty?" and "Is the frame warranty transferable?" close together, so similarity alone
+    // never groups: the two must also be the same form of question, neither a narrower version of the other, and, when they
+    // share no content word at all, be very close (≥ 0.95)
+    for (const g of seeds) {
+      for (const { hash, sim } of g.similar || []) {
+        const o = groups.get(hash);
+        if (!o || !o.q || rootOf(o) === rootOf(g)) continue;
+        const wo = new Set(contentWords(o.q)), shared = contentWords(g.q).some((w) => wo.has(w));
+        const gq = rootOf(g).q || g.q;
+        const ok = (x) => compatibleQuestions(g.q, x) && compatibleQuestions(gq, x) && (shared || sim >= 0.95);
+        if (ok(o.q) && ok(rootOf(o).q || o.q)) mergeGroups(g, o);
+      }
+    }
   }
 
   const iso = (t) => new Date(t || Date.now()).toISOString();
@@ -669,8 +758,21 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
     test: { total: testAll.length, answered: testAll.length - testRefused, refused: testRefused },
     probes,
     source,
+    // 'active' (questions exist) | 'empty' (nothing asked yet) | 'missing' (the trial/bucket's files are gone: show the
+    // restore or expired state, never "no questions yet"). With onMissing:'throw' a missing scope throws InsightsScopeError.
+    scope: { key: scopeKey, state: scopeState },
+    ...(scopeState === 'missing' ? { missing: true, error: { status: 410, code: 'scope_gone', message: SCOPE_GONE_MESSAGE } } : {}),
   };
 }
+
+export const SCOPE_GONE_MESSAGE = "This bot's files are no longer in the store (the trial expired or was reset), so there are no question insights to show.";
+/** Thrown by questionInsights({onMissing:'throw'}) when the scope's files are gone. status 410, code 'scope_gone'. */
+export class InsightsScopeError extends Error {
+  constructor(scopeKey) { super(SCOPE_GONE_MESSAGE); this.name = 'InsightsScopeError'; this.status = 410; this.code = 'scope_gone'; this.scope = scopeKey; }
+}
+// CONTRACT-GAP (A, server/trials.mjs insights()): when the result has `missing: true` (scope.state 'missing'), answer
+// GET /api/studio/trials/:id/insights with 410 {error:{status:410, code:'scope_gone'|'expired', message}} instead of 200, and
+// do not fall back to localInsights() (its zero counts read as "no questions yet"). B shows the restore/expired state.
 
 /**
  * The user's question inside an /api/chat body: the "QUESTION:" line of a KnowBot prompt, else the last user message.

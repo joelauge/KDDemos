@@ -343,9 +343,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
 
   // ------------------------------------------------------------ dev key (shared by both tabs)
-  // CONTRACT-GAP (A/F): SPEC 11.2 says trial bots get a kb_trial_ key, but no Studio route hands it to the page yet.
-  // Expected: GET /api/studio/trials/:id/devkey (trial bearer auth) -> {key, botId?, expiresAt?, voice?:{google}}.
-  // If B adds api.devKey() it is used instead. Missing route -> the UI says so and snippets carry a placeholder.
+  // GET /api/studio/trials/:id/devkey (trial bearer auth) -> {key: kb_trial_…, botId, expiresAt, voice, endpoints,
+  // rateLimit, channels}. A network failure leaves the key area in its "unavailable" state (placeholder in snippets).
   function loadDev() {
     if (devCache.info && devCache.info.trial === getState().trial.id && Date.now() - devCache.at < 5 * 60e3) return Promise.resolve(devCache.info);
     if (devCache.promise) return devCache.promise;
@@ -354,11 +353,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       let info = { status: 'unavailable', trial: t.id };
       try {
         let r = null;
-        if (typeof api.devKey === 'function') r = await api.devKey();
-        else {
-          const res = await fetch(`${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/devkey`, { headers: t.token ? { authorization: `Bearer ${t.token}` } : {}, credentials: 'omit' });
-          if (res.ok) r = await res.json(); else info.httpStatus = res.status;
-        }
+        const res = await fetch(`${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/devkey`, { headers: t.token ? { authorization: `Bearer ${t.token}` } : {}, credentials: 'omit' });
+        if (res.ok) r = await res.json(); else info.httpStatus = res.status;
         if (r && typeof r.key === 'string' && /^kb_(trial|live)_/.test(r.key)) info = { status: 'ok', trial: t.id, key: r.key, botId: r.botId || null, expiresAt: r.expiresAt || t.expiresAt || null, voice: r.voice || null, endpoints: r.endpoints || null,
           rateLimit: r.rateLimit || null, channels: r.channels && typeof r.channels === 'object' ? r.channels : null };
       } catch { /* network: unavailable */ }
@@ -444,7 +440,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const list = CH();
     list.forEach((c, i) => {
       const card = h('button', { type: 'button', class: 'gl-chcard', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: c.id }, style: { '--gl-hue': `var(--f${c.hue})`, '--i': i } },
-        h('span', { class: 'gl-chcard-ico', html: GLYPH[c.id] }),
+        h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: GLYPH[c.id] }),
         h('span', { class: 'gl-chcard-text' }, h('b', null, c.name), h('small', null, c.provider)),
         h('span', { class: 'gl-chcard-status' }, c.status));
       card.addEventListener('click', () => selectChannel(c.id, { user: true }));
@@ -480,7 +476,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       const was = el.textContent;
       el.textContent = st.label;
       el.className = `gl-chcard-status is-${st.tone}`;
-      b.setAttribute('aria-label', `${c.name}, ${c.provider}. ${st.label}.`);
+      // fixer r5 (D9, WCAG 2.5.3): no aria-label; the accessible name is the visible name, provider and status.
+      b.removeAttribute('aria-label');
       if (animate && was !== st.label && !motion.reduced()) motion.animate(el, [{ opacity: 0, transform: 'scale(.92)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'spring' });
     }
   }
@@ -536,7 +533,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     left.append(h('h4', { class: 'gl-h4' }, 'What you need'), h('ul', { class: 'gl-needs' }, c.needs.map((n) => h('li', null, h('span', { html: icon('check', 13) }), n))));
     if (c.url) {
       left.append(h('h4', { class: 'gl-h4' }, c.id === 'voice' ? 'Voice endpoint' : 'Webhook URL'),
-        h('div', { class: 'gl-url' }, h('span', { class: 'gl-method' }, 'POST'), h('code', { class: 'gl-mono gl-url-v' }, urlParts(c.url)), copyButton(c.url, 'Copy', { small: true, what: 'Webhook URL copied', aria: `Copy ${c.name} webhook URL` })));
+        h('div', { class: 'gl-url' }, h('span', { class: 'gl-method' }, 'POST'), h('code', { class: 'gl-mono gl-url-v' }, urlParts(c.url)), copyButton(c.url, 'Copy', { what: 'Webhook URL copied', aria: `Copy the ${c.name} ${c.id === 'voice' ? 'voice endpoint' : 'webhook'} URL`, iconOnly: true })));
     }
     if (TESTABLE[c.id]) left.append(h('h4', { class: 'gl-h4' }, 'Test event'), testWebhook(c));
     left.append(h('h4', { class: 'gl-h4' }, 'Set it up'), h('ol', { class: 'gl-steps' }, c.steps.map((s, i) => h('li', null, h('span', { class: 'gl-step-n' }, String(i + 1)), h('span', null, s)))));
@@ -546,6 +543,27 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     chDetail.append(head, h('div', { class: 'gl-cd-grid' }, left, right));
     if (animate) motion.animate(chDetail, [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'out' });
     if (!quiet && animate) announce(`${c.name} selected.`, 'polite');
+  }
+
+  /** fixer r6 (D10): a horizontally scrollable <pre> shows an edge fade where more code is hidden (right, and left once
+   *  scrolled), so a phone visitor sees there is more to swipe to. Scroll/resize events only, never a per-frame read. */
+  function preBox(pre) {
+    const box = h('div', { class: 'gl-prebox' }, pre);
+    let raf = 0;
+    const sync = () => {
+      raf = 0;
+      if (!pre.isConnected) return;
+      const over = pre.scrollWidth - pre.clientWidth;
+      const r = over > 2 && pre.scrollLeft < over - 2, l = over > 2 && pre.scrollLeft > 2;
+      if (box.classList.contains('is-fade-r') !== r) box.classList.toggle('is-fade-r', r);
+      if (box.classList.contains('is-fade-l') !== l) box.classList.toggle('is-fade-l', l);
+    };
+    const queue = () => { if (!raf) raf = requestAnimationFrame(sync); };
+    pre.addEventListener('scroll', queue, { passive: true });
+    if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(queue); ro.observe(pre); cleanups.push(() => ro.disconnect()); }
+    else setTimeout(sync, 0);
+    if (typeof MutationObserver === 'function') { const mo = new MutationObserver(queue); mo.observe(pre, { childList: true, subtree: true, characterData: true }); cleanups.push(() => mo.disconnect()); }
+    return box;
   }
 
   /** Tabbed code blocks (role=tablist), each with Copy. */
@@ -580,8 +598,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     pre.id = `${idBase}-pre`;
     if (items.length < 2) tl.hidden = true;
     bar.append(items.length < 2 ? h('span', { class: 'gl-code-label' }, items[0].label) : tl,
-      h('div', { class: 'gl-code-tools' }, show, copyButton(() => codeOf(items[idx], 'copy'), 'Copy', { small: true, what: 'Config copied', aria: 'Copy this config' })));
-    wrap.append(bar, pre);
+      h('div', { class: 'gl-code-tools' }, show, copyButton(() => codeOf(items[idx], 'copy'), 'Copy', { what: 'Config copied', aria: 'Copy this config', iconOnly: true })));
+    wrap.append(bar, preBox(pre));
     paint();
     return wrap;
   }
@@ -601,7 +619,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if (btn.disabled) return;
       btn.disabled = true; btn.classList.add('is-busy'); label.textContent = 'Sending…';
       out.innerHTML = '';
-      out.append(h('div', { class: 'gl-out-skel', 'aria-label': 'Sending the test event' }, h('i'), h('i'), h('i')));
+      out.append(h('div', { class: 'gl-out-skel', role: 'status', 'aria-label': 'Sending the test event' }, h('i'), h('i'), h('i')));
       const t = getState().trial;
       const t0 = performance.now();
       try {
@@ -647,7 +665,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       j.configured === false ? h('p', { class: 'gl-out-note' }, h('span', { html: icon('info', 13) }), ' Not configured on this server, so the adapter answered 503. Set the settings above and send again.') : null,
       j.skipped ? null : h('div', { class: 'gl-code gl-tw-resp' },
         h('div', { class: 'gl-code-bar' }, h('span', { class: 'gl-code-label' }, `Response · ${rs.contentType || 'text/plain'}`),
-          h('div', { class: 'gl-code-tools' }, copyButton(() => (rs.json ? JSON.stringify(rs.json, null, 2) : String(rs.body || '')), 'Copy', { small: true, what: 'Response copied', aria: 'Copy the raw response' }))),
+          h('div', { class: 'gl-code-tools' }, copyButton(() => (rs.json ? JSON.stringify(rs.json, null, 2) : String(rs.body || '')), 'Copy', { what: 'Response copied', aria: 'Copy the raw response', iconOnly: true }))),
         h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'Raw webhook response' }, h('code', { html: rs.json ? highlightJson(rs.json) : highlight(pretty, isXml ? 'xml' : 'text') }))),
       rq.body ? h('details', { class: 'gl-json' }, h('summary', null, `Request body · ${rq.contentType || ''}`),
         h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'Test event request body' }, h('code', { html: reqBody != null ? highlight(reqBody, 'text') : highlightJson(rq.body) }))) : null,
@@ -750,7 +768,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     }[kind];
     screen.append(...intro);
     const ex = exampleExchange();
-    const loadingEx = ex ? null : h('div', { class: 'gl-ex-loading', 'aria-label': 'Loading an example from your trial bot' }, h('span', { class: 'gl-ex-tag' }, 'Example from your trial bot'), h('i'), h('i'), h('i', { class: 'is-short' }));
+    const loadingEx = ex ? null : h('div', { class: 'gl-ex-loading', role: 'status', 'aria-label': 'Loading an example from your trial bot' }, h('span', { class: 'gl-ex-tag' }, 'Example from your trial bot'), h('i'), h('i'), h('i', { class: 'is-short' }));
     if (loadingEx) screen.append(loadingEx);
     const af = askForm({ placeholder: kind === 'email' ? 'Customer email, e.g. “Hi, how long is the warranty?”' : kind === 'sms' ? 'Text your bot…' : 'Message…', button: 'Send', label: `${kind === 'email' ? 'Email' : 'Message'} to your bot`, onAsk });
     el.append(h('div', { class: `gl-device gl-device-${kind}` }, screen), af.form, af.row, meta,
@@ -784,7 +802,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if (kind === 'email') screen.innerHTML = '';
       const now = stamp();
       putQuestion(q, now);
-      const typing = h('p', { class: 'gl-bub is-in is-typing', 'aria-label': `${name} is typing` }, h('i'), h('i'), h('i'));
+      const typing = h('p', { class: 'gl-bub is-in is-typing', role: 'status', 'aria-label': `${name} is typing` }, h('i'), h('i'), h('i'));
       screen.append(typing);
       screen.scrollTop = screen.scrollHeight;
       try {
@@ -802,7 +820,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     function putReply(r, now) {
         const proofLink = (u) => h('a', { class: 'gl-prooflink', href: u, target: '_blank', rel: 'noopener' }, u);
         const proofChip = (u) => (u
-          ? h('a', { class: 'gl-proofchip', href: u, target: '_blank', rel: 'noopener', 'aria-label': `Proof link: ${u}` }, h('span', { html: icon('link', 11) }), 'proof · ', ((m) => (m ? m[1] + m[2] : String(u).replace(/^https?:\/\//, '')))(/^https?:\/\/([^/]+).*?(\/p\/[^?#]+)/.exec(String(u))))
+          ? h('a', { class: 'gl-proofchip', href: u, target: '_blank', rel: 'noopener', title: `Proof link: ${u}` }, h('span', { html: icon('link', 11) }), 'proof · ', ((m) => (m ? m[1] + m[2] : String(u).replace(/^https?:\/\//, '')))(/^https?:\/\/([^/]+).*?(\/p\/[^?#]+)/.exec(String(u))))
           : h('span', { class: 'gl-proofchip is-ph', title: 'The live SMS adds a short proof link here' }, h('span', { html: icon('link', 11) }), 'proof link · added on the live line'));
         const noProof = !r.refused && !r.proofUrl;
         if (kind === 'sms') {
@@ -928,6 +946,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const capSrc = h('p', { class: 'gl-cap-src' });
     // fixer r4 (D11): the published endpoint this demo actually called, under the captions (Stripe-style request line)
     const reqLine = h('p', { class: 'gl-reqline', 'aria-live': 'off' });
+    // fixer r7 (D11): the phone simulator shows the TwiML the voice webhook returned for the last turn
+    const twimlBox = phone ? h('details', { class: 'gl-json gl-twiml', hidden: true }, h('summary', null, 'TwiML returned by the voice webhook'),
+      h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'TwiML response' }, h('code'))) : null;
     const callBar = phone ? h('div', { class: 'gl-callbar' }, h('span', { class: 'gl-call-dot', 'aria-hidden': 'true' }), h('span', { class: 'gl-call-label' }, `${botName()} · KnowBot line`), h('span', { class: 'gl-call-t gl-mono' }, '00:00')) : null;
     const speakToggle = h('input', { type: 'checkbox', checked: true, id: `gl-speak-${rid()}` });
     const engineNote = h('span', { class: 'gl-engine' });
@@ -936,11 +957,11 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const stage = h('div', { class: `gl-vstage${phone ? ' is-phone' : ''}` }, callBar, canvas, micWrap);
     const caps = h('div', { class: 'gl-caps' },
       h('p', { class: 'gl-cap is-you' }, h('span', { class: 'gl-cap-k' }, phone ? 'Caller' : 'You'), capYou),
-      h('p', { class: 'gl-cap is-bot' }, h('span', { class: 'gl-cap-k' }, botName()), capBot), capSrc, reqLine);
+      h('p', { class: 'gl-cap is-bot' }, h('span', { class: 'gl-cap-k' }, botName()), capBot), capSrc, reqLine, twimlBox);
     el.append(stage, status, degraded, caps, typed.form,
       h('div', { class: 'gl-vopts' }, h('label', { class: 'gl-switch', for: speakToggle.id }, speakToggle, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), 'Speak answers'), engineNote),
       h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), phone
-        ? 'Simulates the Twilio <Gather> loop in your browser: greeting, listen, answer with its source, listen again. The real line uses Google speech when configured.'
+        ? 'Each turn posts a signed Twilio <Gather> speech result to your voice webhook and speaks the TwiML it returns: greeting, listen, answer with its source, listen again. The real line uses Google speech when configured.'
         : 'Runs in your browser: speech recognition → your bot → spoken answer with its source. Nothing is recorded or stored.'));
 
     const paintEngine = () => {
@@ -956,59 +977,92 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       micBtn.classList.toggle('is-live', s === 'listening');
       micBtn.setAttribute('aria-pressed', String(s === 'listening' || (phone && state.call)));
       // The visible label is the button's accessible name (WCAG 2.5.3 label in name).
+      const off = state.degraded && !phone;
       const lab = phone
         ? (state.call ? 'Hang up' : `Call ${botName()}`)
-        : s === 'listening' ? 'Listening · tap to stop' : s === 'speaking' ? 'Tap to stop' : s === 'thinking' ? 'Thinking…' : 'Tap or hold to talk';
+        : s === 'listening' ? 'Listening · tap to stop' : s === 'speaking' ? 'Tap to stop' : s === 'thinking' ? 'Thinking…' : off ? 'Mic unavailable' : 'Tap or hold to talk';
       micLabel.textContent = lab;
       micBtn.setAttribute('aria-label', lab === 'Thinking…' ? 'Thinking, please wait' : lab);
+      // fixer r6 (D9): with no usable mic the hint never says "tap the mic": it points at the text field instead
+      if (off && msg && /\b(mic|tap|hold)\b/i.test(msg)) msg = 'Type your question below.';
       if (msg != null) { status.textContent = msg; }
       drawStatic();
     };
+    /** fixer r6 (D9): no mic / no recognition / mic blocked: the mic button is aria-disabled with muted styling (the
+     *  call button in the phone simulator stays live: the call works typed), the hint points at the text field. */
+    function markMicOff() {
+      if (phone) return;
+      state.degraded = true;
+      micBtn.setAttribute('aria-disabled', 'true');
+      micBtn.classList.add('is-off');
+    }
     function degrade(why) {
       degraded.hidden = false;
       $('.gl-vdegraded-t', degraded).textContent = `Mic unavailable, type your question instead. ${why}`.trim();
       el.classList.add('is-degraded');
+      markMicOff();
       typed.input.placeholder = phone ? 'Type what the caller says…' : 'Type your question, the answer is still spoken…';
-      setS('idle', '');
+      setS('idle', phone ? '' : 'Type your question below.');
       try { typed.input.focus({ preventScroll: true }); } catch { /* ignore */ }
       motion.animate(degraded, [{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out' });
-      announce('Microphone unavailable. Type your question instead.', 'polite');
+      announce('Microphone unavailable. Type your question below.', 'polite');
     }
     const hasMicApi = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
     setS('idle', phone ? `Tap to call ${botName()}. It greets you, then listens.` : 'Tap the mic and ask out loud, or hold it while you speak.');
     if ((!SR_CTOR && !googleVoice()) || !hasMicApi) {
       degraded.hidden = false;
       el.classList.add('is-degraded');
+      markMicOff();
+      setS('idle', phone ? null : 'Type your question below.');
       $('.gl-vdegraded-t', degraded).textContent = !hasMicApi ? 'Mic unavailable on this page, type your question instead. Answers are still spoken.' : 'This browser has no speech recognition (try Chrome or Edge). Type your question instead, answers are still spoken.';
     }
 
     // waveform ------------------------------------------------
     const N = 44;
     const levels = new Float32Array(N);
+    // fixer r6 (D6): no layout or style reads inside the animation loop. The canvas size comes from a ResizeObserver,
+    // the colours and the gradient are cached (refreshed on resize, theme change and state change, never per frame).
+    const cv = { w: 0, h: 0, cssW: 320, cssH: 88, cols: null, grad: null, g: null };
+    function measureCanvas() {
+      cv.cssW = Math.max(200, canvas.clientWidth || 320); cv.cssH = canvas.clientHeight || 88;
+      cv.cols = null; cv.grad = null;
+    }
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver((ents) => { const r = ents[0] && ents[0].contentRect; if (r && r.width) { cv.cssW = Math.max(200, r.width); cv.cssH = r.height || 88; cv.grad = null; drawStatic(); } });
+      ro.observe(canvas); cleanups.push(() => ro.disconnect());
+    }
+    if (typeof MutationObserver === 'function') {
+      const mo = new MutationObserver(() => { cv.cols = null; cv.grad = null; drawStatic(); });
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] }); cleanups.push(() => mo.disconnect());
+    }
     function sizeCanvas() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = Math.max(200, canvas.clientWidth || 320), hgt = canvas.clientHeight || 88;
-      if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(hgt * dpr); }
+      const W = Math.round(cv.cssW * dpr), Hh = Math.round(cv.cssH * dpr);
+      if (canvas.width !== W || canvas.height !== Hh) { canvas.width = W; canvas.height = Hh; cv.grad = null; }
       return { dpr, w: canvas.width, h: canvas.height };
     }
     function colors() {
+      if (cv.cols) return cv.cols;
       const css = getComputedStyle(el);
-      return [css.getPropertyValue('--accent').trim() || '#6366f1', css.getPropertyValue('--gl-hue').trim() || css.getPropertyValue('--f5').trim() || '#7c3aed', css.getPropertyValue('--line-2').trim() || '#cbd5e1'];
+      cv.cols = [css.getPropertyValue('--accent').trim() || '#6366f1', css.getPropertyValue('--gl-hue').trim() || css.getPropertyValue('--f5').trim() || '#7c3aed', css.getPropertyValue('--line-2').trim() || '#cbd5e1'];
+      return cv.cols;
     }
     function draw(t = 0) {
-      const g = canvas.getContext('2d');
+      const g = cv.g || (cv.g = canvas.getContext('2d'));
       if (!g) return;
       const { w, h: H, dpr } = sizeCanvas();
       g.clearRect(0, 0, w, H);
       const [c1, c2, idleC] = colors();
-      const grad = g.createLinearGradient(0, 0, w, 0); grad.addColorStop(0, c1); grad.addColorStop(1, c2);
+      if (!cv.grad) { cv.grad = g.createLinearGradient(0, 0, w, 0); cv.grad.addColorStop(0, c1); cv.grad.addColorStop(1, c2); }
+      const grad = cv.grad;
       const gap = w / N, bw = Math.max(2 * dpr, gap * 0.46), mid = H / 2;
       for (let i = 0; i < N; i++) {
         let v = 0;
         const win = Math.sin(Math.PI * (i + .5) / N);
         if (state.s === 'listening' && state.freq) {
           const bin = Math.floor(2 + (i / N) * (state.freq.length * 0.55));
-          v = (state.freq[bin] || 0) / 255;
+          // a silent mic still breathes (low, centred), so "listening" never looks frozen
+          v = Math.max((state.freq[bin] || 0) / 255, (0.07 + 0.05 * Math.sin(t / 220 + i * .45)) * win);
         } else if (state.s === 'listening') {
           v = 0.12 + 0.1 * Math.sin(t / 180 + i * .5);   // no analyser (mic owned by recognition): honest idle pulse
         } else if (state.s === 'speaking') {
@@ -1031,6 +1085,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       state.env *= 0.93;
     }
     function drawStatic() { try { draw(performance.now()); } catch { /* canvas unavailable */ } }
+    requestAnimationFrame(() => setTimeout(() => { measureCanvas(); drawStatic(); }, 0));
     function startLoop() {
       if (state.stopLoop || motion.reduced()) { drawStatic(); return; }
       state.stopLoop = motion.loop.add((t) => {
@@ -1093,7 +1148,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       degraded.hidden = true; el.classList.remove('is-degraded');
       clearYou();
       let finalText = '', errored = null, heardAt = performance.now(), ended = false, misses = state.misses || 0;
-      const NO_SPEECH_MS = 6000;
+      const NO_SPEECH_MS = 7000;
       const noSpeech = setInterval(() => {
         if (gen !== state.gen || ended) { clearInterval(noSpeech); return; }
         if (!capYou.textContent.trim() && performance.now() - heardAt > NO_SPEECH_MS) {
@@ -1134,8 +1189,12 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         state.misses = misses + 1;
         if (phone && state.call && state.misses < 2) { setS('idle', 'I didn\'t catch that. Listening again…'); setTimeout(() => { if (state.call && gen === state.gen) listen(); }, 700); return; }
         state.misses = 0;
-        if (phone && state.call) endCall('I didn\'t hear anything, so the call ended. Tap to call again, or type below.');
-        else setS('idle', 'Didn\'t catch that. Tap the mic again or type below.');
+        if (phone && state.call) { endCall('I didn\'t hear anything, so the call ended. Tap to call again, or type below.'); return; }
+        // fixer r6 (D9): no speech within 7 s: stop, say so, and hand over to the typed field (focused + announced)
+        setS('idle', 'Didn\'t catch that. Type your question instead.');
+        try { typed.input.focus({ preventScroll: true }); } catch { /* ignore */ }
+        if (!motion.reduced()) motion.animate(typed.form, [{ boxShadow: '0 0 0 0 var(--accent-soft)' }, { boxShadow: '0 0 0 6px var(--accent-soft)', offset: .4 }, { boxShadow: '0 0 0 0 transparent' }], { duration: 900, easing: 'out', essential: false });
+        announce('Didn\'t catch that. Type your question instead.', 'assertive');
       };
       try { rec.start(); } catch { ended = true; clearInterval(noSpeech); state.rec = null; closeMic(); degrade('Speech recognition couldn\'t start.'); return; }
       setS('listening', phone ? 'Listening… ask your question.' : 'Listening… speak now. Tap again to stop.');
@@ -1211,7 +1270,57 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
      * POST /v1/bots/:id/voice {text} when Google voice is configured (cited answer + Google audio), else
      * POST /v1/bots/:id/chat (cited answer, spoken by the browser). Studio /ask only if the API is unavailable.
      */
+    /**
+     * fixer r7 (D11): the call simulator exercises the real telephone webhook. Each caller turn goes through the Studio
+     * test route (A), which posts a signed Twilio <Gather> speech result (SpeechResult) to
+     * POST /v1/channels/:id/voice/answer; the TwiML that comes back is spoken here and shown under the captions. When
+     * the telephone channel is not configured on this server, it says so and answers via the chat API instead.
+     */
+    async function askPhone(q) {
+      const t = getState().trial;
+      const t0 = performance.now();
+      let why = 'telephone webhook unavailable here';
+      try {
+        const res = await fetch(`${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/channels/voice/test`, {
+          method: 'POST', credentials: 'omit',
+          headers: { 'content-type': 'application/json', ...(t.token ? { authorization: `Bearer ${t.token}` } : {}) },
+          body: JSON.stringify({ question: q }),
+        });
+        if (res.status === 429) { const e = new Error('rate'); e.status = 429; e.retryAfter = Number(res.headers.get('retry-after')) || null; throw e; }
+        const j = await res.json().catch(() => null);
+        if (j && j.configured === false) why = 'telephone channel not configured on this server';
+        const rs = (j && j.response) || {};
+        if (res.ok && j && j.configured !== false && rs.status >= 200 && rs.status < 300) {
+          const body = String(rs.body || '');
+          const unx = (x) => String(x).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&');
+          const says = [...body.matchAll(/<Say\b[^>]*>([\s\S]*?)<\/Say>/g)].map((m) => unx(m[1]).trim()).filter(Boolean);
+          const plays = [...body.matchAll(/<Play\b[^>]*>([\s\S]*?)<\/Play>/g)].map((m) => unx(m[1]).trim()).filter(Boolean);
+          const spoken = says[0] || '';
+          if (spoken) {
+            const src = /^According to ([^,]{2,80}),/.exec(spoken);
+            const refused = /can't seem to find an answer/i.test(spoken);
+            paintReq({ method: 'POST', path: pub((j.request && j.request.path) || `/v1/channels/${botId()}/voice/answer`), status: rs.status, ms: j.ms ?? Math.round(performance.now() - t0), note: `${j.signed ? 'signed ' : ''}SpeechResult → TwiML` });
+            paintTwiml(body);
+            return { r: { text: spoken, refused, citations: [], srcNote: refused ? null : src ? `Named on the call: ${src[1]}` : null }, audio: null };
+          }
+          if (plays.length) why = 'Google voice audio is played on the real line';
+        }
+      } catch (err) { if (err && err.status === 429) throw err; }
+      const r = await askChannel(q);
+      paintReq({ ...(r.req || {}), ms: r.ms, note: `answers via the chat API (${why})` });
+      paintTwiml(null);
+      return { r, audio: null };
+    }
+    function paintTwiml(body) {
+      if (!twimlBox) return;
+      twimlBox.hidden = !body;
+      if (!body) return;
+      const pretty = String(body).replace(/>\s*</g, '>\n<').replace(/\n(<(?!\/?Response)[^/])/g, '\n  $1');
+      $('code', twimlBox).innerHTML = highlight(pretty, 'xml');
+    }
+
     async function askVoice(q) {
+      if (phone) return askPhone(q);
       const d = await loadDev();
       if (d.status === 'ok' && googleVoice()) {
         const vPath = `/v1/bots/${encodeURIComponent(botId())}/voice`;
@@ -1236,11 +1345,12 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       reqLine.innerHTML = '';
       if (!q || !q.path) return;
       const ok = q.status >= 200 && q.status < 300;
-      reqLine.append(...[h('span', { class: `gl-status${ok ? (q.fallback ? ' is-prev' : ' is-ok') : ' is-bad'}` }, q.fallback ? 'Studio' : String(q.status)),
-        h('code', { class: 'gl-mono' }, `${q.method || 'POST'} `, urlParts(q.path)),
-        q.ms ? h('span', { class: 'gl-mono gl-reqline-ms' }, `${q.ms} ms`) : null,
-        q.note ? h('span', { class: 'gl-reqline-note' }, q.note) : null,
-        q.fallback ? h('span', { class: 'gl-reqline-note' }, 'developer API unavailable on this server') : null].filter(Boolean));
+      // fixer r6 (D7): one wrapping line (status chip, then "POST path · ms · note"), never a column of fragments
+      reqLine.append(h('span', { class: `gl-status${ok ? (q.fallback ? ' is-prev' : ' is-ok') : ' is-bad'}` }, q.fallback ? 'Studio' : String(q.status)),
+        h('span', { class: 'gl-out-line' }, ...[h('code', { class: 'gl-mono' }, `${q.method || 'POST'} `, urlParts(q.path)),
+          q.ms ? [' · ', h('span', { class: 'gl-mono gl-reqline-ms' }, `${q.ms} ms`)] : null,
+          q.note ? [' · ', h('span', { class: 'gl-reqline-note' }, q.note)] : null,
+          q.fallback ? [' · ', h('span', { class: 'gl-reqline-note' }, 'developer API unavailable on this server')] : null].filter(Boolean).flat()));
       if (!motion.reduced()) motion.animate(reqLine, [{ opacity: 0, transform: 'translateY(-3px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out' });
     }
 
@@ -1260,6 +1370,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       capSrc.innerHTML = '';
       if (!r.refused && r.citations.length) capSrc.append(h('span', { html: icon('file', 12) }), ` ${r.citations.map((c) => `[${c.n}] ${c.file || c.title}`).join(' · ')}`);
       else if (r.refused) capSrc.append(h('span', { html: icon('shield', 12) }), ' Canonical refusal: no file covers this.');
+      else if (r.srcNote) capSrc.append(h('span', { html: icon('file', 12) }), ` ${r.srcNote}`);
       announce(text, 'polite');
       const mark = (charIndex) => { for (const s of spans) s.classList.toggle('is-said', Number(s.dataset.at) <= charIndex); state.env = 1; };
       const finish = () => {
@@ -1334,7 +1445,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     let holdT = 0, held = false, suppressClick = false;
     if (!phone) {
       micBtn.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0 || state.s !== 'idle') return;
+        if (e.button !== 0 || state.s !== 'idle' || state.degraded) return;
         held = false; clearTimeout(holdT);
         holdT = setTimeout(() => { held = true; micBtn.classList.add('is-held'); listen(); }, 350);
       });
@@ -1351,6 +1462,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     }
     micBtn.addEventListener('click', () => {
       if (suppressClick) { suppressClick = false; return; }
+      if (state.degraded && !phone) { try { typed.input.focus({ preventScroll: true }); } catch { /* ignore */ } announce('Microphone unavailable. Type your question below.', 'polite'); return; }
       if (phone) { if (state.call) endCall(); else startCall(); return; }
       if (state.s === 'listening') { try { state.rec ? state.rec.stop() : state.mediaRec?.stop(); } catch { /* ignore */ } return; }
       if (state.s === 'speaking') { state.gen++; try { synth && synth.cancel(); state.audioEl?.pause(); } catch { /* ignore */ } setS('idle', 'Stopped. Tap the mic to ask again.'); return; }
@@ -1409,16 +1521,18 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       el.append(h('div', { class: 'gl-ep' },
         h('span', { class: 'gl-method' }, m),
         h('div', { class: 'gl-ep-main' }, h('code', { class: 'gl-mono gl-ep-path' }, h('span', { class: 'gl-ep-base' }, urlParts(apiRoot)), urlParts(p)), h('small', null, d)),
-        copyButton(`${apiRoot}${p}`, 'Copy', { small: true, what: 'Endpoint copied', aria: `Copy ${pub(p)}` })));
+        copyButton(`${apiRoot}${p}`, 'Copy', { what: 'Endpoint copied', aria: `Copy the ${m === 'POST' && /completions/.test(p) ? 'OpenAI-compatible' : 'chat'} endpoint URL`, iconOnly: true })));
     }
-    el.append(h('p', { class: 'gl-ep-canon' }, 'One base for every snippet, SDK and channel webhook: ', h('code', null, `${apiRoot}/v1`)));
+    // fixer r7 (D11): one customer-facing line. CONTRACT-GAP (F): the internal note (bare /v1 is an alias of /api/v1 on
+    // the KnowBot server) belongs in the OpenAPI document's description (server/devapi.mjs), not in this panel.
+    el.append(h('p', { class: 'gl-ep-canon' }, 'Base URL: ', h('code', null, `${apiRoot}/v1`), ' (works with every OpenAI SDK).'));
   }
   function maskKey(k) { return k ? `${k.slice(0, 13)}${'•'.repeat(10)}${k.slice(-4)}` : ''; }
   function keyFor(code) { const k = dev().key; return k ? (code === 'copy' || devState.reveal ? k : maskKey(k)) : 'YOUR_KNOWBOT_KEY'; }
   function paintKey(el, repaint) {
     el.innerHTML = '';
     const d = dev();
-    if (d.status === 'loading') { el.append(h('div', { class: 'gl-key-skel', 'aria-label': 'Loading your key' }, h('i'), h('i'))); return; }
+    if (d.status === 'loading') { el.append(h('div', { class: 'gl-key-skel', role: 'status', 'aria-label': 'Loading your key' }, h('i'), h('i'))); return; }
     if (d.status !== 'ok') {
       el.append(h('div', { class: 'gl-key-off' }, h('span', { html: icon('lock', 15) }),
         h('div', null, h('b', null, 'The developer API isn\'t enabled on this server yet.'), h('small', null, 'Your trial key appears here once it is. The snippets below use a placeholder, and Run it live previews the exact response shape through this Studio.'))));
@@ -1428,7 +1542,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const reveal = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small', 'aria-pressed': String(devState.reveal) }, h('span', { html: icon('eye', 14) }), devState.reveal ? 'Hide' : 'Show');
     reveal.addEventListener('click', () => { devState.reveal = !devState.reveal; repaint(); });
     el.append(
-      h('div', { class: 'gl-key-row' }, h('code', { class: 'gl-mono gl-key-v', 'aria-label': devState.reveal ? 'Trial key' : 'Trial key, hidden' }, keyFor()), reveal, copyButton(d.key, 'Copy key', { small: true, what: 'Trial key copied', aria: 'Copy key' })),
+      h('div', { class: 'gl-key-row' }, h('code', { class: 'gl-mono gl-key-v' }, h('span', { class: 'co-sr' }, devState.reveal ? 'Trial key: ' : 'Trial key, hidden: '), keyFor()), reveal, copyButton(d.key, 'Copy key', { small: true, what: 'Trial key copied', aria: 'Copy key' })),
       h('p', { class: 'gl-key-meta' }, h('span', { html: icon('shieldCheck', 13) }), `Scoped to ${botId()} only · rate-limited · ${exp ? `expires ${exp.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} with your trial` : 'expires with your trial'}. After launch you get kb_live_ keys.`));
   }
 
@@ -1481,7 +1595,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const s = set[devState.lang];
     const pre = h('pre', { class: 'gl-pre gl-pre-lg', id: 'gl-snip-pre', tabindex: '0', 'aria-label': `${s.label} example` }, h('code', { html: highlight(s.code('show'), s.lang) }));
     el.append(
-      h('div', { class: 'gl-code' }, h('div', { class: 'gl-code-bar' }, tl, h('div', { class: 'gl-code-tools' }, sw, copyButton(() => set[devState.lang].code('copy'), 'Copy', { small: true, what: 'Snippet copied', aria: `Copy ${s.label} snippet` }))), pre),
+      h('div', { class: 'gl-code' }, h('div', { class: 'gl-code-bar' }, tl, h('div', { class: 'gl-code-tools' }, sw, copyButton(() => set[devState.lang].code('copy'), 'Copy', { what: 'Snippet copied', aria: `Copy the ${s.label} snippet`, iconOnly: true }))), preBox(pre)),
       h('p', { class: 'gl-key-meta' }, dev().key ? 'Copy includes your trial key.' : 'Replace YOUR_KNOWBOT_KEY with your key.', ` ${s.ep === 'openai' ? 'Install: ' : ''}`, s.ep === 'openai' ? h('code', { class: 'gl-mono' }, s.lang === 'py' ? 'pip install openai' : 'npm i openai') : null));
     if (keep) el.querySelector(`[data-k="${keep}"]`)?.focus();
   }
@@ -1513,15 +1627,14 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       paintSnippets($('.gl-snips', panels.developers));
       runBtn.disabled = true; runBtn.classList.add('is-busy');
       out.innerHTML = '';
-      out.append(h('div', { class: 'gl-out-skel', 'aria-label': 'Running' }, h('i'), h('i'), h('i')));
+      out.append(h('div', { class: 'gl-out-skel', role: 'status', 'aria-label': 'Running' }, h('i'), h('i'), h('i')));
       runMeta.innerHTML = ''; runMeta.append(h('span', { class: 'gl-status' }, 'Running…'));
       revealOut(out, runMeta);
       try {
         const r = await runLive(ep, q);
         renderOut(out, r);
-        const ok = r.status >= 200 && r.status < 300;
+        // fixer r6 (D11): one status line only, in the response block (200 OK · POST path · ms)
         runMeta.innerHTML = '';
-        runMeta.append(h('span', { class: `gl-status${ok ? (r.live ? ' is-ok' : ' is-prev') : ' is-bad'}` }, r.live ? String(r.status) : 'Preview'), `${r.live ? '' : `${r.status} · `}${r.ms} ms`);
       } catch (err) {
         out.innerHTML = '';
         out.append(h('p', { class: 'gl-out-err', role: 'alert' }, h('span', { html: icon('warn', 14) }), err && err.status === 429 ? ` Rate limited. Try again in ${err.retryAfter || 10}s.` : " Couldn't reach your bot. Your question wasn't lost."));
@@ -1584,14 +1697,13 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const ok = r.status >= 200 && r.status < 300;
     // fixer r2 (D11): Element.append() stringifies null ("null" text node); only real nodes go in.
     out.append(...[
-      h('div', { class: 'gl-out-bar' },
+      h('div', { class: 'gl-out-bar', role: 'status' },
         h('span', { class: `gl-status${ok ? (r.live ? ' is-ok' : ' is-prev') : ' is-bad'}` }, r.live ? `${r.status} ${ok ? 'OK' : 'Error'}` : 'Preview'),
-        h('code', { class: 'gl-mono' }, `POST ${pub(r.path)}`),
-        h('span', { class: 'gl-mono gl-out-ms' }, `${r.ms} ms`)),
+        h('span', { class: 'gl-out-line' }, h('code', { class: 'gl-mono' }, 'POST ', urlParts(pub(r.path))), h('span', { class: 'gl-out-sep', 'aria-hidden': 'true' }, ' · '), h('span', { class: 'gl-mono gl-out-ms' }, `${r.ms} ms`))),
       !r.live ? h('p', { class: 'gl-out-note' }, h('span', { html: icon('info', 13) }), ' The /v1 API isn\'t enabled on this server, so this ran through your Studio bot and is shown in the exact /v1 response shape.') : null,
       answer != null ? h('div', { class: `gl-out-answer${refused ? ' is-refused' : ''}` }, h('p', null, lines(String(answer).split('\n\n')[0]).join('\n')),
         cits.length ? h('ul', { class: 'gl-out-cits' }, cits.map((c) => h('li', null, h('span', { class: 'gl-wcite' }, String(c.n)), h('b', null, c.file), c.excerpt ? h('q', null, String(c.excerpt).slice(0, 160)) : null))) : null) : null,
-      h('details', { class: 'gl-json', open: true }, h('summary', null, 'JSON response'), h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'JSON response' }, h('code', { html: highlightJson(j) }))),
+      h('details', { class: 'gl-json', open: true }, h('summary', null, 'JSON response'), preBox(h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'JSON response' }, h('code', { html: highlightJson(j) })))),
     ].filter(Boolean));
     motion.stagger([...out.children], [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out', fill: 'backwards' }, 50);
     announce(refused ? 'Refused with the canonical text.' : `Answer with ${cits.length} citation${cits.length === 1 ? '' : 's'}.`, 'polite');

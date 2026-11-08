@@ -45,7 +45,7 @@
   height: 28px; padding: 0 10px 0 8px; margin-left: -8px; border-radius: 999px; background: color-mix(in srgb, var(--panel) 94%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent);
 }
-.map-stagel { font-size: 12px; color: var(--muted); }
+.map-stagel { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--muted); }
 .map-stagel[hidden] { display: none; }
 .map-glyph { display: inline-flex; color: var(--accent-2); }
 .map-title { font: 600 12.5px/1 var(--font); color: var(--strong); letter-spacing: .1px; }
@@ -96,10 +96,16 @@
 }
 .map-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 0 2px color-mix(in srgb, var(--hue) 22%, transparent); }
 .map-chip-c { font-size: 11px; color: var(--muted); }
+.map-chip-n[hidden] { display: none; }
 .map-chip.is-off { opacity: .5; }
 .map-chip.is-pre .map-chip-c { font-style: italic; }
 .map-chip.is-pre i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--hue); }
 .map-chip.is-off .map-chip-n { text-decoration: line-through; text-decoration-color: var(--dim); }
+/* the phone ribbon's "4 files" fallback: shown only when the per-file dot + count chips cannot all fit */
+.map-chip-sum { display: none; }
+.map-chip-sum i { background: conic-gradient(var(--f0) 0 25%, var(--f1) 0 50%, var(--f2) 0 75%, var(--f3) 0); }
+.map-band[data-legsum="yes"] .map-chip-sum { display: inline-flex; }
+.map-band[data-legsum="yes"] .map-chip:not(.map-chip-sum) { display: none; }
 
 .map-tip {
   position: absolute; z-index: 4; max-width: 260px; padding: 8px 10px; border-radius: 10px; pointer-events: none;
@@ -149,7 +155,7 @@
 .map-band[data-mode="ribbon"] .map-hud-l { height: 24px; }
 .map-band[data-mode="ribbon"] .map-legend { padding-bottom: 5px; right: auto; max-width: 46%; }
 .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-chips { -webkit-mask-image: none; mask-image: none; }
-.map-band[data-mode="ribbon"] .map-note { display: none; }
+.map-band[data-mode="ribbon"] .map-note, .map-band[data-short="yes"] .map-note { display: none; }
 .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-chip { height: 18px; font-size: 10.5px; padding: 0 6px; border-color: transparent; background: transparent; }
 .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-chip-n { display: none; }
 .map-band[data-mode="ribbon"] [data-table] { display: none; }
@@ -163,12 +169,12 @@
 .st-bot > #in-intake-slot { position: relative; flex: 0 1.4 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 #in-intake-slot > .in-panel { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #in-intake-slot .in-body { flex: 0 1 auto; min-height: 56px; }
-.st-bot > #in-intake-slot:has(> .in-panel[data-collapsed="yes"]), .st-bot > #in-intake-slot:has(> .in-panel[data-state="empty"]) { flex-shrink: 0; }
-.st-bot > #in-intake-slot:has(> .in-panel[data-state="files"]:not([data-collapsed="yes"])) { min-height: 158px; }
+.st-bot > #in-intake-slot[data-pcollapsed="yes"], .st-bot > #in-intake-slot[data-pstate="empty"] { flex-shrink: 0; }
+.st-bot > #in-intake-slot[data-pstate="files"]:not([data-pcollapsed="yes"]) { min-height: 158px; }
 /* While files learn (before any answer) the map and the rows hold FIXED shares of the pane and never shrink: the
    (empty) thread absorbs everything that appears later (suggestions, banner), so nothing above it shifts.
    B's post-answer rules (higher specificity) take over once the thread has an answer. */
-.st-bot > #in-intake-slot[data-busy="yes"]:has(> .in-panel:not([data-collapsed="yes"])) { flex-shrink: 0; max-height: 38%; min-height: min(30%, 180px); }
+.st-bot > #in-intake-slot[data-busy="yes"]:not([data-pcollapsed="yes"]) { flex-shrink: 0; max-height: 38%; min-height: min(30%, 180px); }
 .st-bot > #in-map-slot:not([data-mode="ribbon"]) { flex-shrink: 0; height: min(42%, 440px); }
 /* once files exist the band yields room to the rows (all four stage tracks stay in view while they learn) */
 .st-bot > #in-map-slot[data-files="yes"]:not([data-mode="ribbon"]) { height: clamp(200px, 32%, 290px); }
@@ -250,6 +256,9 @@
 /* rows */
 .in-body { max-height: min(34vh, 320px); overflow-y: auto; overscroll-behavior: contain; margin: 0 calc(-1 * var(--st-gutter)); padding: 0 var(--st-gutter) 6px; scrollbar-width: thin; }
 .in-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* a short list scrolls row by row: a resting scroll lands on a row edge, never through a row's Retry button */
+.in-body { scroll-snap-type: y proximity; scroll-padding: 4px 0 6px; }
+.in-rows > .in-row { scroll-snap-align: start; scroll-margin-top: 4px; }
 .in-row {
   position: relative; padding: 9px 10px 9px 13px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel);
   box-shadow: var(--st-shadow-1); contain: layout paint;
@@ -283,7 +292,10 @@
 .in-inc-box:checked + .in-inc-ui { background: var(--accent); border-color: var(--accent); color: #fff; }
 .in-inc-box:focus-visible + .in-inc-ui { outline: var(--st-focus); outline-offset: 2px; }
 .in-inc:hover .in-inc-ui { border-color: var(--accent); }
-.in-ico { display: inline-flex; color: var(--hue); }
+.in-ico { position: relative; display: inline-flex; color: var(--hue); }
+/* the type label sits on the page glyph as HTML text (y 17.6 of a 24 viewBox), centred */
+.in-ico-k, .in-card-fico .in-ico-k { position: absolute; left: 0; right: 0; top: 64.5%; transform: translateY(-50%); text-align: center; font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 600; line-height: 1; color: currentColor; pointer-events: none; letter-spacing: -.02em; }
+.in-card-fico { position: relative; }
 .in-namewrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .in-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 14px/1.3 var(--font); color: var(--strong); }
 .in-tag { flex: none; height: 18px; padding: 0 6px; border-radius: 5px; background: var(--raise); color: var(--muted); font: 500 10.5px/18px var(--mono); }
@@ -298,13 +310,22 @@
   transform: translateX(-100%); animation: in-read-scan 1.6s var(--ease-in-out) infinite;
 }
 @keyframes in-read-scan { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
-.in-row[data-reading="yes"] .in-size { display: none; }
-.in-row[data-reading="yes"] .in-name { flex: 0 0 auto; max-width: 58%; }
-.in-row[data-reading="yes"] .in-read { flex: 1 1 0; }
+.in-row:is([data-reading="yes"], [data-reading="done"]) .in-size { display: none; }
+.in-row:is([data-reading="yes"], [data-reading="done"]) .in-name { flex: 0 0 auto; max-width: 58%; }
+.in-row:is([data-reading="yes"], [data-reading="done"]) .in-read { flex: 1 1 0; }
+/* once the atoms exist the quote stays as the file's title line: no scan sweep, quieter ink */
+.in-row[data-reading="done"] .in-read::after { content: none; animation: none; }
+.in-row[data-reading="done"] .in-read-t { color: var(--dim); }
 [data-signature="retrieval"] .in-read::after { animation-play-state: paused; }
 .in-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
 /* one width for every stage text ("Extracting…" → "Vectorizing · 12,345/26,154"): the row never reflows */
 .in-row:not([data-phase="failed"], [data-phase="rejected"]) .in-status { width: 25ch; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+/* a fixed one-line box with strict containment is a relayout boundary: the per-event stage text ("vectors 51/102")
+   relayouts this cell only, never the intake or the page (round-5 throttled trace: row text writes drove the long
+   frames' layout) */
+.in-row:not([data-phase="failed"], [data-phase="rejected"], [data-stall="yes"]) .in-status { height: 16px; line-height: 16px; contain: strict; }
+/* a stalled row may wrap its status (never "Chunking · 1m 24s (no p…"); "no progress" is on the note line below */
+.in-row[data-stall="yes"] .in-status { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.3; }
 .in-row[data-phase="ready"] .in-status { color: var(--good); }
 .in-row[data-phase="failed"] .in-status, .in-row[data-phase="rejected"] .in-status { color: var(--warn); }
 .in-kebab[hidden] { display: none; }
@@ -317,6 +338,9 @@
 .in-detail > * { grid-area: 1 / 1; min-width: 0; }
 .in-detail-in { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out), visibility 0s linear 0s; }
 .in-row[data-phase="ready"][data-sum="yes"] .in-detail-in { opacity: 0; transform: translateY(-4px); visibility: hidden; transition-delay: 0s, 0s, var(--dur-3); }
+/* a Ready row with its summary: the finished track leaves the cell (never printed under the preview sentence and
+   topic chips; the summary's own fade-in carries the moment) */
+.in-panel:not([data-compact="yes"]) .in-row[data-phase="ready"][data-sum="yes"] .in-detail-in { display: none; }
 .in-row[data-phase="rejected"] .in-track { display: none; }
 
 .in-track { list-style: none; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 10px 0 2px; padding: 0; }
@@ -453,11 +477,20 @@
   background: var(--panel); border: 1px solid var(--line-2); box-shadow: var(--st-shadow-2); overflow: hidden;
 }
 .in-doc::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--hue); }
-.in-doc-h { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px solid var(--line); color: var(--hue); font: 500 8.5px/1 var(--mono); white-space: nowrap; overflow: hidden; }
+.in-doc-h { display: flex; align-items: center; gap: 4px; height: 11px; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px solid var(--line); color: var(--hue); font: 500 8.5px/1 var(--mono); white-space: nowrap; overflow: hidden; }
 .in-doc-h > span:first-child { display: inline-flex; }
 .in-doc-n { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-.in-doc-t { margin: 0; font: 400 9px/15px var(--font); color: var(--text); height: 150px; overflow: hidden; word-break: break-word; -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
-.in-strip { box-shadow: 0 6px 16px -10px rgb(15 23 42 / .35); }
+.in-doc-t {
+  margin: 0; font: 400 9px/15px var(--font); color: var(--text); max-height: 150px; overflow: hidden; overflow-wrap: anywhere;
+  /* whole lines only: the strips split between lines, so no line is ever half-cut or drawn twice */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; line-clamp: 10;
+}
+/* phones: a full-width reading card in the map's top lane, 12 px text, two whole lines */
+.in-doc-m { padding: 6px 10px 6px 14px; border-radius: 10px; }
+.in-doc-m .in-doc-t { font: 400 12px/16px var(--font); max-height: 32px; -webkit-line-clamp: 2; line-clamp: 2; }
+.in-doc-mn { font: 600 11px/16px var(--mono); color: var(--hue); }
+.in-doc-m .in-strip-l { display: none; }
+/* no box-shadow on strips: their clip-path would cut it away anyway (paint for nothing) */
 /* the scan line that sweeps down the DocCard while the server chunks it (transform only) */
 .in-doc-scan {
   position: absolute; left: 0; right: 0; top: 0; height: 26px; pointer-events: none;
@@ -465,26 +498,10 @@
   animation: in-doc-scan 1.4s var(--ease-in-out) infinite alternate;
 }
 @keyframes in-doc-scan { from { transform: translateY(-20px); } to { transform: translateY(190px); } }
-/* a soft panel field under a playing shatter: its chips read cleanly over any cluster below them */
-.in-veil {
-  position: absolute; border-radius: 18px; pointer-events: none; opacity: 0;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--st-panel-bot, var(--panel)) 86%, transparent) 62%, transparent);
-}
+/* the shatter's veil and its atom chips are painted into the map canvas (ingest.js paintVeil / setOverlay) */
 .in-strip-l { position: absolute; left: 5px; min-width: 15px; text-align: center; transform: translateY(-50%); padding: 1px 4px; border-radius: 4px; background: var(--accent); color: #fff; font: 600 8px/1.2 var(--mono); }
 .in-doc:not(.in-strip) .in-strip-l { display: none; }
 .in-shatter { position: absolute; inset: 0; contain: strict; }
-.in-chips { position: absolute; inset: 0; contain: strict; }
-/* a chip = a positioned shell (translated only) + its face (pill + words) + a 6 px dot; every phase animates
-   transform/opacity only, so the whole choreography stays on the compositor */
-.in-atom { position: absolute; display: block; height: 18px; transform-origin: 50% 50%; opacity: 0; contain: strict; will-change: transform, opacity; }
-.in-more .in-atom-face { background: var(--panel); border-style: dashed; color: var(--muted); text-align: center; }
-.in-atom-face {
-  position: absolute; inset: 0; display: block; padding: 0 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  background: color-mix(in srgb, var(--hue) 13%, var(--panel)); border: 1px solid color-mix(in srgb, var(--hue) 40%, transparent);
-  color: var(--strong); font: 500 10px/16px var(--mono); box-shadow: 0 2px 6px -3px rgb(15 23 42 / .3);
-}
-.in-atom-t { position: relative; }
-.in-atom-dot { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: var(--hue); opacity: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--hue) 22%, transparent); }
 
 .in-drop {
   position: absolute; inset: 8px; z-index: 30; display: grid; place-items: center; border-radius: 18px; pointer-events: none;
@@ -588,12 +605,15 @@
   .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-namewrap { grid-column: 2; grid-row: 1; }
   .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) > .in-detail { grid-column: 2; grid-row: 2; justify-self: start; }
   .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-status { grid-column: 2; grid-row: 2; justify-self: end; margin: 0; font-size: 11px; }
+  /* the phone row's second line names the stage beside its dots ("Extracting · 9.6 KB", "Ready · 111 atoms"):
+     the strict (size) containment of the desktop cell would size this auto-width cell to 0 */
+  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"], [data-stall="yes"]) .in-status { contain: layout paint; width: auto; max-width: calc(100% - 96px); }
   .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-kebab { grid-column: 3; grid-row: 1 / span 2; }
   .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-track { grid-template-columns: repeat(6, 14px); }
 }
 @container in-panel (max-width: 480px) {
   .in-read { display: none !important; }
-  .in-row[data-reading="yes"] .in-name { max-width: none; flex: 0 1 auto; }
+  .in-row:is([data-reading="yes"], [data-reading="done"]) .in-name { max-width: none; flex: 0 1 auto; }
 }
 @container in-panel (max-width: 400px) {
   .in-node-l { font-size: 9.5px; letter-spacing: -.1px; }
@@ -614,16 +634,27 @@
   .map-btn-l { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-note { display: none; }
   .map-legend { padding-bottom: 7px; }
+  /* phones: every file keeps its count in view. The legend row wraps (at most a 2nd row) instead of scrolling a
+     count out of view under the edge fade; the map re-measures the legend and lays its clusters out above it. */
+  .map-band:not([data-mode="ribbon"]) .map-chips { flex-wrap: wrap; row-gap: 4px; overflow: visible; -webkit-mask-image: none; mask-image: none; padding-left: 0; padding-right: 0; margin-left: 0; margin-right: 0; }
+  .map-band:not([data-mode="ribbon"]) .map-chip { padding: 0 7px 0 6px; gap: 5px; }
+  /* the 56 px ribbon: tight dot + count chips, all four counts inside the left 46% */
+  .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-chips { gap: 2px; padding-left: 0; margin-left: 0; }
+  .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-chip { padding: 0 3px; gap: 4px; font-size: 10px; }
+  .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-chip-c { font-size: 10px; }
   /* the ribbon keeps the count, drops the title: the dot field gets the width */
   .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-title,
-  .map-band[data-mode="ribbon"]:not([data-peek="yes"]) .map-countwrap > .map-sep { display: none; }
+  .map-band[data-mode="ribbon"]:not([data-peek="yes"]) :is(.map-countwrap, .map-stagel) > .map-sep { display: none; }
   /* phones: once there is something to count, the glyph names the map and the numbers get the width */
-  .map-band:not([data-state="empty"]) .map-title, .map-band:not([data-state="empty"]) .map-countwrap > .map-sep { display: none; }
+  .map-band:not([data-state="empty"]) .map-title, .map-band:not([data-state="empty"]) :is(.map-countwrap, .map-stagel) > .map-sep { display: none; }
   .map-hud-l { overflow: hidden; flex: 0 1 auto; }
   .map-table { inset: 44px 10px 10px; }
   .in-body { max-height: 38vh; }
   /* while files learn (before any answer) the 140 px map leaves room for every row: no row hides under the fold */
-  .st-bot:not([data-asked="1"]) > #in-intake-slot[data-busy="yes"]:has(> .in-panel:not([data-collapsed="yes"])) { max-height: 64%; }
+  .st-bot:not([data-asked="1"]) > #in-intake-slot[data-busy="yes"]:not([data-pcollapsed="yes"]) { max-height: 64%; }
+  /* while files learn (before any answer) the phone band grows to 160-184 px: its top lane holds a readable reading
+     card (12 px text) and chips, and the clusters keep their own strip under it */
+  .st-bot:not([data-asked="1"]) > #in-map-slot[data-busy="yes"][data-files="yes"]:not([data-mode="ribbon"]) { height: clamp(160px, 22vh, 184px); min-height: 160px; }
   .st-bot:not([data-asked="1"]) > #in-intake-slot[data-busy="yes"] .in-body { max-height: none; }
   .in-btn { min-height: 44px; }
   .in-btn-add { width: 44px; height: 44px; }

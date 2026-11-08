@@ -100,11 +100,15 @@ export function animate(el, keyframes, opts = {}) {
   let anim;
   const props = animatedProps(frames).filter((p) => p === 'transform' || p === 'opacity' || p === 'filter' || p === 'clip-path');
   const hadWill = el.style && el.style.willChange;
-  if (props.length && el.style && !hadWill && o.duration > 0) el.style.willChange = props.join(',');
+  // r5 (perf): will-change only for long transform/filter moves. Short fades and pops are composited by WAAPI anyway,
+  // and an inline will-change per streamed span meant a style recalc + a new layer each (Layerize/Commit dominated
+  // the long frames of an answer stream).
+  const wantWill = props.length && o.duration >= 400 && props.some((x) => x !== 'opacity');
+  if (wantWill && el.style && !hadWill) el.style.willChange = props.join(',');
   try { anim = el.animate(frames, o); } catch (err) {
     try { anim = el.animate(frames, { ...o, easing: 'ease-out' }); } catch { return done(); }
   }
-  const cleanup = () => { if (el.style && !hadWill) el.style.willChange = ''; };
+  const cleanup = () => { if (wantWill && el.style && !hadWill) el.style.willChange = ''; };
   const handle = wrap(anim, el, cleanup);
   if (signal) {
     if (signal.aborted) handle.finish();
@@ -155,7 +159,9 @@ export function flip(els, mutate, opts = {}) {
 
 const loopFns = new Set();
 let rafId = 0, lastT = 0, cursor = 0;
-const FRAME_BUDGET = 7;   // ms of loop work per frame; the rest continues next frame (no long animation frames)
+const FRAME_BUDGET = 6;   // ms of loop work per frame; the rest continues next frame (no long animation frames)
+// r5: after a long frame (dt > 34 ms: the CPU is behind) the next frame's budget halves, so the loop gives time back
+// to rendering instead of compounding the jank.
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 function frame(t) {
   rafId = 0;
@@ -167,6 +173,7 @@ function frame(t) {
   const fns = [...loopFns];
   const n = fns.length;
   const t0 = nowMs();
+  const budget = dt > 34 ? FRAME_BUDGET / 2 : FRAME_BUDGET;
   let cut = false;
   // Store writes made by loop callbacks (tweened counters, map state) notify subscribers once per frame.
   batch(() => {
@@ -174,7 +181,7 @@ function frame(t) {
       const fn = fns[(cursor + i) % n];
       if (!loopFns.has(fn)) continue;
       try { if (fn(t, dt) === false) loopFns.delete(fn); } catch (err) { console.error('[studio] loop fn failed', err); loopFns.delete(fn); }
-      if (i < n - 1 && nowMs() - t0 > FRAME_BUDGET) { cursor = (cursor + i + 1) % n; cut = true; return; }
+      if (i < n - 1 && nowMs() - t0 > budget) { cursor = (cursor + i + 1) % n; cut = true; return; }
     }
   });
   if (!cut) cursor = 0;
@@ -253,8 +260,24 @@ export function fmtNum(n) {
   if (nf === null) { try { nf = new Intl.NumberFormat(); } catch { nf = false; } }
   return nf ? nf.format(n) : String(n);
 }
+// r5 (perf): the first NumberFormat loads its locale data (~50 ms on a throttled CPU). That cost used to land inside the
+// first "files ready" update, mid-ingest; it is paid in an idle period right after boot instead.
+try {
+  const warm = () => { fmtNum(1234); try { new Date().toLocaleDateString(); } catch { /* ignore */ } };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(warm, { timeout: 2500 }); else setTimeout(warm, 1200);
+} catch { /* not a browser */ }
 
 const tickers = new WeakMap();
+// r5: elements whose interpolation ticks are skipped because they are outside the viewport (IntersectionObserver: no
+// layout reads on the loop)
+const offscreen = new WeakSet();
+let visIO = null;
+function watchVisible(el) {
+  if (typeof IntersectionObserver !== 'function' || !el || el._kbVis) return;
+  if (!visIO) visIO = new IntersectionObserver((es) => { for (const e of es) { if (e.isIntersecting) offscreen.delete(e.target); else offscreen.add(e.target); } });
+  el._kbVis = true;
+  visIO.observe(el);
+}
 /** Tabular number tween from el.dataset.value to `to`. Jumps under reduced(). */
 export function ticker(el, to, { ms = 600, format = fmtNum } = {}) {
   if (!el) return { cancel() {}, finish() {}, finished: Promise.resolve() };
@@ -265,7 +288,13 @@ export function ticker(el, to, { ms = 600, format = fmtNum } = {}) {
   el.dataset.value = String(target);
   // writes only when the shown text changes (a count-up repaints a few times, not every frame)
   // Off-DOM targets jump straight to the value (no per-frame work for something nobody can see).
-  const t = tween(start, target, el.isConnected ? ms : 0, (v) => { const s = format(Math.round(v)); if (el.textContent !== s) el.textContent = s; });
+  // r5: while the number is scrolled out of view (or its tab is hidden) the in-between values are not written at all;
+  // the final value always is.
+  watchVisible(el);
+  const t = tween(start, target, el.isConnected ? ms : 0, (v, k) => {
+    if (k < 1 && offscreen.has(el)) return;
+    const s = format(Math.round(v)); if (el.textContent !== s) el.textContent = s;
+  });
   tickers.set(el, t);
   t.finished.then(() => { if (tickers.get(el) === t) tickers.delete(el); });
   return t;
@@ -301,7 +330,8 @@ export function typeText(el, text, { cps = 1000 / 14, maxMs = 600 } = {}) {
   const total = Math.max(1, Math.min(natural, maxMs));
   el.classList.add('st-typing');
   el.textContent = '';
-  const t = tween(0, s.length, total, (v) => { el.textContent = s.slice(0, Math.round(v)); }, 'linear');
+  let shown = -1;
+  const t = tween(0, s.length, total, (v) => { const n = Math.round(v); if (n !== shown) { shown = n; el.textContent = s.slice(0, n); } }, 'linear');
   t.finished.then(() => { el.textContent = s; el.classList.remove('st-typing'); });
   return t;
 }
@@ -372,6 +402,7 @@ function setBusyAttr() {
 function start(job) {
   job.controller = new AbortController();
   running.add(job);
+  governor.watch();
   if (!current || job.priority > current.priority) current = job;
   setBusyAttr();
   emit('director', { name: job.name, state: 'start' });
@@ -383,6 +414,7 @@ function start(job) {
     running.delete(job);
     if (current === job) current = [...running].sort((a, b) => b.priority - a.priority)[0] || null;
     setBusyAttr();
+    if (!running.size) governor.release();
     emit('director', { name: job.name, state: 'end' });
     job.resolve();
     pump();
@@ -451,6 +483,50 @@ function insert(job) {
 }
 
 try { on('motion:skip', () => director.skip()); } catch { /* store unavailable */ }
+
+// ------------------------------------------------------------------ frame-budget governor (r7, D6)
+// While a signature runs, rAF deltas are sampled on the shared loop. Two consecutive frames over 24 ms (the device cannot
+// hold the signature at full detail) put the page into "lite" for the rest of the signature: <html data-lite> (CSS stops
+// the ambient loops: working rings, busy borders, the spine spinner) and 'motion:lite' {lite} is emitted so subscribers
+// can thin their own work. Released 6 s after the last signature ends; after it has tripped in two signatures it stays.
+// Measured (r7, 4x CPU, 3 runs each): ALSO flipping data-detail="low" mid-burst made D's map re-sync (its MutationObserver
+// on data-detail calls syncMap) in the middle of the shatter and cost more long frames than it saved, so data-detail
+// stays with fpsProbe. CONTRACT-GAP (D, ingest.js): subscribe to 'motion:lite' (or read motion.lite()) to halve particle
+// and strip counts of the next shatter without a full map re-sync.
+const LITE_MS = 24;
+export const governor = (() => {
+  let stopSample = null, over = 0, frames = 0, tripped = false, trips = 0, sticky = false, relTimer = 0;
+  const set = (on) => {
+    const r = root();
+    if (on) r.dataset.lite = ''; else delete r.dataset.lite;
+    try { emit('motion:lite', { lite: !!on }); } catch { /* ignore */ }
+  };
+  return {
+    /** Starts sampling (called when a signature starts). */
+    watch() {
+      clearTimeout(relTimer);
+      if (stopSample || sticky || reduced()) return;
+      over = 0; frames = 0;
+      stopSample = loop.add((t, dt) => {
+        if (++frames <= 2) return true;                 // the first frames after a start carry the setup cost
+        if (dt > LITE_MS) over++; else over = 0;
+        if (over >= 2 && !tripped) { tripped = true; trips++; if (trips >= 2) sticky = true; set(true); }
+        return !tripped;                                // once tripped, sampling stops until the next signature
+      });
+    },
+    /** Called when the last running signature ends. */
+    release() {
+      if (stopSample) { stopSample(); stopSample = null; }
+      clearTimeout(relTimer);
+      if (!tripped || sticky) return;
+      relTimer = setTimeout(() => { if (running.size) return; tripped = false; set(false); }, 6000);
+    },
+    /** true while the page runs at lite detail */
+    lite() { return tripped; },
+  };
+})();
+/** additive: true while the frame-budget governor holds the page at lite detail */
+export const lite = () => governor.lite();
 
 // ------------------------------------------------------------------ fps probe
 

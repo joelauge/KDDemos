@@ -1057,7 +1057,7 @@ export function mountBots(ctx) {
   // Read with a plain fetch so a missing token shows a hint here instead of flipping the whole panel's auth state.
   function questionsSection(b) {
     const body = h('div', { 'aria-live': 'polite', 'aria-busy': 'true' }, h('p', { class: 'inst-help' }, 'Loading what people ask…'));
-    const again = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-label': `Refresh top questions for ${b.name}` }, 'Refresh');
+    const again = h('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-label': `Refresh top questions for ${b.name}`, style: { minHeight: '44px', minWidth: '44px' } }, 'Refresh');
     const sec = h('section', { class: 'flow-sec', 'aria-labelledby': 'tq-h' },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
         h('h3', { id: 'tq-h', class: 'inst-sub', style: { marginRight: 'auto' } }, 'Top questions'), again),
@@ -1085,10 +1085,11 @@ export function mountBots(ctx) {
           return h('li', { class: 'kp-row', style: { gap: '2px', padding: '8px 10px', ...(off ? { opacity: '.85' } : {}) } },
             h('div', { style: { display: 'flex', gap: '8px', alignItems: 'baseline' } },
               h('span', { style: { flex: '1', minWidth: '0', overflowWrap: 'anywhere', color: 'var(--text)' } }, str(r.q, 300)),
-              h('span', { class: 'mono inst-help', 'aria-label': `asked ${n} time${n === 1 ? '' : 's'}` }, `×${n}`)),
+              // the count is read as words (a generic span takes no aria-label; the visible "×N" is hidden from AT)
+              h('span', { class: 'mono inst-help', style: { flex: 'none', whiteSpace: 'nowrap' } }, h('span', { 'aria-hidden': 'true' }, `×${n}`), h('span', { class: 'sr-only' }, `asked ${n} time${n === 1 ? '' : 's'}`))),
             showBars && !off ? bar(n, max, tone) : null,
             h('span', { class: 'inst-help' }, r.lastAt && parseTs(r.lastAt) ? `last asked ${ago(parseTs(r.lastAt))}` : '', tone !== 'gap' && r.outcome === 'refused' ? ' · not in its files' : '',
-              sim > 0 ? h('span', { title: 'Other wordings of the same question, counted together', style: { marginLeft: '4px' } }, ` · +${sim} similar`) : null,
+              sim > 0 ? h('span', { title: 'Other wordings of the same question, counted together', style: { marginLeft: '4px', whiteSpace: 'nowrap' } }, ` · ${str(r.similarLabel, 40) || `+${sim} similar`}`) : null,
               chGlyphs(r.channels)),
             // questions.mjs gapSuggestion: {kind: add_file|expand_file|off_topic, inDomain, status, text, nearest?:{file,title,similarity}}
             tone === 'gap' && r.suggestion && r.suggestion.text
@@ -1107,7 +1108,7 @@ export function mountBots(ctx) {
       if (!n) return null;
       const more = num(j.more && j.more.probes) || Math.max(0, n - rows.reduce((a, r) => a + (num(r.count) || 0), 0));
       return h('details', { style: { marginTop: '10px' } },
-        h('summary', { class: 'inst-help', style: { cursor: 'pointer' } }, `${plural(n, 'test probe')} from setup, not counted above`),
+        h('summary', { class: 'inst-help', style: { cursor: 'pointer', padding: '12px 0', minHeight: '44px', boxSizing: 'border-box' } }, `${plural(n, 'test probe')} from setup, not counted above`),
         h('ol', { style: { listStyle: 'none', margin: '6px 0 0', padding: '0', display: 'flex', flexDirection: 'column', gap: '4px' } },
           rows.map((r) => h('li', { class: 'inst-help', style: { display: 'flex', gap: '8px', alignItems: 'baseline' } },
             h('span', { class: 'badge', style: { fontSize: '11px' } }, r.origin === 'setup' ? 'setup' : r.origin === 'proof' ? 'proof run' : 'probe'),
@@ -1118,6 +1119,8 @@ export function mountBots(ctx) {
     const paint = (j) => {
       body.setAttribute('aria-busy', 'false');
       const total = num(j.total) || 0;
+      // questions.mjs scope.state 'missing': the bot's files are gone from the store, which is not "no questions yet"
+      if (j.missing || (j.scope && j.scope.state === 'missing')) return rc(body, h('p', { class: 'inst-help', role: 'status' }, str(j.error && j.error.message, 300) || "This bot's files are no longer in the store, so there are no question insights to show."));
       if (!total && !num(j.testTraffic)) return rc(body, h('p', { class: 'inst-help' }, 'No questions yet. Ask this bot something and it shows up here within a few seconds.'));
       const top = Array.isArray(j.top) ? j.top : [], gaps = Array.isArray(j.gaps) ? j.gaps : [];
       const sumOf = (rows) => rows.reduce((a, r) => a + (num(r.count) || 0), 0);
@@ -1146,7 +1149,8 @@ export function mountBots(ctx) {
         let j = null; try { j = await r.json(); } catch { /* not JSON */ }
         if (!r.ok) {
           body.setAttribute('aria-busy', 'false');
-          return rc(body, h('p', { class: 'inst-help' }, r.status === 401 || r.status === 403 ? 'Add the admin token above to see what people ask this bot.' : `Couldn't load question insights: ${errMsg(j, r.status)}`));
+          return rc(body, h('p', { class: 'inst-help' }, r.status === 401 || r.status === 403 ? 'Add the admin token above to see what people ask this bot.'
+            : r.status === 404 || r.status === 410 ? "This bot's files are no longer in the store, so there are no question insights to show." : `Couldn't load question insights: ${errMsg(j, r.status)}`));
         }
         paint(j || {});
       } catch { body.setAttribute('aria-busy', 'false'); rc(body, h('p', { class: 'inst-help' }, `KnowBot server unreachable at ${S.apiBase}`)); }

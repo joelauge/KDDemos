@@ -1,8 +1,8 @@
 // An OpenAI-compatible model stand-in (POST /v1/chat/completions, JSON and SSE; GET /v1/models) for Studio tests and
 // the local dev server (spec 7.2). Deterministic; never talks to the network.
 //
-//   select prompts  (system contains "You select lines")  -> the 1-2 line numbers sharing the most concepts with the
-//                    QUESTION (a second only when nearly as dense), or NONE when the overlap is under min(2, question terms)
+//   select prompts  (system contains "You select lines")  -> up to 3 line numbers, best (most similar) first: the best
+//                    line per clause of the QUESTION plus lines nearly as dense and similar, or NONE (fixer r7)
 //   summary prompts (system contains "summarize")          -> {"oneLine","topics"} from the first lines of the file
 //   question prompts (system contains "write test questions") -> a JSON list of heading questions
 //   setup prompts   (system contains "KnowBot Builder")    -> {"reply","patch","actions","chips"} built from the
@@ -25,6 +25,7 @@ const WANTS = [
   [/\bhow\s+far\b/i, /\d\s?(?:km|kilomet|mi(?:les?)?\b)/i],
   [/\bhow\s+(?:many|often|old)\b|\bwhat\s+time\b|\bwhen\b/i, /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|twelve|twenty|thirty|daily|weekly|monthly|yearly|every)\b/i],
 ];
+const QTY_WORDS = ['long', 'soon', 'far', 'many', 'often', 'old', 'duration'];
 const wantsOf = (q) => WANTS.find(([re]) => re.test(q))?.[1] || null;
 /** Adjacent content-word pairs, stemmed through the fake embedding's own bag ("test rides" -> "test ride"). */
 function pairsOf(text) {
@@ -39,52 +40,171 @@ const textOf = (c) => (Array.isArray(c) ? c.map((b) => b?.text || '').join('') :
 function selectReply(messages) {
   const u = textOf(lastUser(messages));
   const q = /QUESTION:\s*([\s\S]*)$/.exec(u)?.[1] || '';
-  const qb = bag(q);
+  const lines = [...u.matchAll(/^L(\d+)\s+(.*)$/gm)].map((m) => ({ n: Number(m[1]), text: m[2] }));
+  return selectLines(q, lines);
+}
+
+// fixer r7: a multi-part question ("How much is a spare battery and how long is it covered?") is read clause by clause,
+// like a reader would: each clause gets its own best line, so the answer is complete and can cite two files.
+const CLAUSE_SPLIT = /\s*[,;]?\s+\band\b\s+(?=(?:how|what|what's|whats|when|where|which|who|why|is|are|do|does|can|could|will|would|should|did)\b)|\?\s+(?=\S)|;\s+/i;
+const PRONOUN_RE = /\b(?:it|its|they|them|their|that|this|those|these|one)\b/i;
+/** The clauses of a question; a pronoun clause ("how long is it covered") borrows the first clause's subject words. */
+export function clausesOf(q) {
+  const parts = String(q || '').split(CLAUSE_SPLIT).map((x) => x.trim()).filter((x) => bag(x).size >= 1);
+  if (parts.length < 2) return [String(q || '')];
+  return parts.slice(0, 3).map((c, i) => (i > 0 && PRONOUN_RE.test(c) ? `${c} ${subjectWords(parts[0])}` : c));
+}
+// the head noun of the first clause's subject ("a spare E-City battery" -> "battery")
+// (or its whole named thing when that ends the phrase: "the Lumen Care Plan", but "battery" for "a spare E-City battery")
+const subjectWords = (c) => {
+  const head = [...bag(c).keys()].filter((w) => !/^(?:cost|duration|long|include|much|many|warranty|range|open)$/.test(w) && !w.startsWith('=')).slice(-1)[0] || '';
+  const named = String(c).trim().split(/\s+/).slice(1).filter((w) => /^[A-Z][A-Za-z0-9-]*[a-z0-9]/.test(w));
+  if (named.length && [...bag(named[named.length - 1]).keys()].includes(head)) return named.join(' ');
+  return head;
+};
+// verbs and filler a FAQ question wraps its topic in ("Do you help with …", "Can I get …"): not a different topic
+const CTX_GENERIC = new Set('help offer offers sell sells take get need use make provide give know find buy order book bring come way much long cost lot also really still ever any'.split(' '));
+const MAX_PICKS = 3;
+const numsOf = (t) => (String(t).match(/[$€£]?\d[\d,.]*%?/g) || []).map((x) => x.replace(/[.,]+$/, ''));
+
+/**
+ * The line numbers a careful reader would quote for `question`, best (highest line similarity) first, at most 3;
+ * 'NONE' when no line answers it. Pure, for tests.
+ * @param {string} question  @param {{n:number,text:string}[]} raw
+ */
+export function selectLines(question, raw) {
+  const q = String(question || '');
+  // an FAQ answer line inherits the question line just above it (within 3 lines): "A basic fit is free with every new
+  // bike." under "Do you help with bike fitting?" IS about bike fitting, the way a reader sees it
+  let ctxQ = null, ctxAge = 0;
+  const parsed = [];
+  for (const m of raw) {
+    const t = String(m.text || '');
+    if (/\?\s*$/.test(t)) { ctxQ = t; ctxAge = 0; parsed.push({ ...m, question: true }); continue; }
+    ctxAge++;
+    // the line right under the question, or a later one that carries on its topic (shares a word with it); a line from
+    // the next passage ("A spare E-City battery costs $649.") never inherits "Do you offer financing?"
+    const attached = ctxQ && (ctxAge === 1 || (ctxAge <= 3 && [...bag(t).keys()].some((w) => bag(ctxQ).has(w))));
+    if (!attached) ctxQ = null;
+    parsed.push({ ...m, ctx: attached ? ctxQ : null });
+  }
   // A question line ("Can I take a test ride?") is never an answer; among equal overlaps the shorter, denser line wins.
-  const lines = [...u.matchAll(/^L(\d+)\s+(.*)$/gm)].filter((m) => !/\?\s*$/.test(m[2])).map((m) => ({ n: Number(m[1]), len: m[2].length, text: m[2], b: bag(m[2]) }));
-  // A one-concept question ("When are you open?") needs one shared concept; longer ones need two. Like a real
-  // selector, a second line is only added when it is nearly as much about the question as the first (term density),
-  // so a spare-battery row never rides along on "How much is the E-City?".
-  // Like a real reader, a line that only shares terms found on most lines (the brand "Lumen", "costs" in a price list)
-  // is not about the question: "How much is the Lumen Care Plan?" against a price list without the plan is NONE.
+  // fixer r5: an FAQ line that opens with its own question ("Does servicing my bike elsewhere void the warranty? No, …")
+  // is scored on its answer part only: the interrogative sentence is never a claim.
+  const answerPart = (t) => String(t).replace(/^(?:[^.!?]*\?\s+)+/, '');
+  const qbAll = bag(q);
+  const sameQ = (t, qb) => { const qq = bag(t); const k = [...qb.keys()].filter((w) => qq.has(w)).length; return k >= Math.max(2, Math.ceil(0.6 * qb.size)); };
+  const seenText = new Set();
+  const lines = parsed.filter((m) => !m.question && answerPart(m.text).trim())
+    .map((m) => {
+      const ans = answerPart(m.text);
+      const qa = ans !== m.text;
+      const own = qa ? m.text.slice(0, m.text.length - ans.length) : null;
+      const text = qa && sameQ(own, qbAll) ? m.text : ans;
+      return { n: m.n, len: m.text.length, text, qa: qa && text === ans, b: bag(text), ctx: own || m.ctx, key: text.toLowerCase().replace(/[^a-z0-9$%]+/g, ' ').trim() };
+    })
+    // the same sentence from two atoms (a repeated policy line) is quoted once
+    .filter((l) => (seenText.has(l.key) ? false : seenText.add(l.key)));
+  if (!lines.length) return 'NONE';
   const df = new Map();
   for (const l of lines) for (const w of l.b.keys()) df.set(w, (df.get(w) || 0) + 1);
   const common = (w) => lines.length >= 3 && (df.get(w) || 0) >= 0.6 * lines.length;
-  const distinctive = [...qb.keys()].some((w) => df.has(w) && !common(w));
   // A named thing the question asks about ("Care Plan": capitalised, not the first word) that no candidate line
   // mentions, e.g. with the plans file switched off: a reader answers NONE rather than quoting a neighbouring price.
   const named = q.trim().split(/\s+/).slice(1).filter((w) => /^[A-Z][A-Za-z0-9-]*[a-z0-9]/.test(w)).flatMap((w) => [...bag(w).keys()]);
   if (named.some((w) => !df.has(w))) return 'NONE';
-  const need = Math.max(1, Math.min(2, qb.size));
-  // fixer r3: like a reader, prefer the line that answers the question's shape: a how-long / how-many / how-much question
-  // wants a line with a quantity ("Test rides last 30 minutes…", not "We will set the saddle height…"), a line that
-  // repeats an adjacent pair of the question's words ("warranty claim", "test ride") beats one that shares them apart,
-  // and a fragment (starts lowercase, under 4 words) is never the answer while a whole sentence shares as much.
-  const want = wantsOf(q);
-  const qPairs = pairsOf(q);
-  const scored = lines.map((l) => {
-    const shared = [...l.b.keys()].filter((w) => qb.has(w));
-    const hit = (distinctive && !shared.some((w) => !common(w))) ? 0 : shared.length;
-    const fragment = /^[a-z]/.test(l.text.trim()) || l.text.trim().split(/\s+/).length < 4;
-    const pair = [...pairsOf(l.text)].some((p) => qPairs.has(p));
-    // a reader prefers the affirmative statement ("Lumen frames carry a lifetime warranty") over a caveat that shares
-    // the same words ("The frame warranty is not transferable…") unless the question itself is negative
-    const negative = !NEG_RE.test(q) && NEG_RE.test(l.text);
-    const score = hit + (want && want.test(l.text) ? 0.75 : 0) + (pair ? 0.3 : 0) - (negative ? 0.4 : 0) - (fragment ? 1.5 : 0);
-    return { n: l.n, len: l.len, hit, score, pair, dens: hit / Math.sqrt(Math.max(1, l.b.size)) };
-  }).filter((x) => x.hit >= need).sort((a, b) => b.score - a.score || b.dens - a.dens || a.len - b.len || a.n - b.n);
-  if (!scored.length) return 'NONE';
-  const [top] = scored;
-  // fixer r2: a second line rides along only when it is itself about the question: its own (fake) vector similarity
-  // is within SECOND_MARGIN of the top line and above the floor, and it is not a generic intro ("This page explains
-  // exactly what is covered…"), which shares words with every question and answers none of them.
   const idf = idfOf(lines.map((l) => l.b));
-  const lsim = (n) => similarity(qb, lines.find((l) => l.n === n).b, idf).sim;
-  const topSim = lsim(top.n);
-  const text = (n) => lines.find((l) => l.n === n)?.text || '';
-  const second = scored.slice(1).find((x) => x.hit >= Math.max(need, top.hit - 1) && x.score >= top.score - 1 && x.dens >= 0.6 * top.dens
-    && !GENERIC_LINE_RE.test(text(x.n)) && lsim(x.n) >= topSim - SECOND_MARGIN && lsim(x.n) >= LINE_FLOOR);
-  return [top, ...(second ? [second] : [])].map((x) => `L${x.n}`).join(', ');
+  const lsimOf = new Map(lines.map((l) => [l.n, similarity(qbAll, l.b, idf).sim]));
+  const byN = new Map(lines.map((l) => [l.n, l]));
+
+  const clauses = clausesOf(q);
+  const picks = [], rank = new Map();
+  for (const [ci, clause] of clauses.entries()) {
+    const scored = scoreLines(clause, lines, { common, df, whole: q });
+    if (!scored.length) { if (ci === 0 && clauses.length === 1) return 'NONE'; continue; }
+    const [top] = scored;
+    const cb = bag(clause);
+    const csim = (n) => similarity(cb, byN.get(n).b, idf).sim;
+    const topSim = csim(top.n);
+    // a line that already answers an earlier clause answers this one too ("includes two tune-ups … costs $149")
+    if (!picks.includes(top.n)) { picks.push(top.n); rank.set(top.n, top.score - 1000 * ci); }
+    // fixer r2/r7: further lines ride along only when each is itself about the clause: nearly as dense and as similar
+    // as the top line and above the line floor, never a generic intro; a list question ("What does X include?") may
+    // take up to 3 lines, any other clause one more
+    const listy = /\b(?:include[sd]?|what(?:'s| is) in|what do (?:i|you) get|benefits?|perks?|which|covers?)\b/i.test(clause);
+    let extra = 0;
+    for (const x of scored.slice(1)) {
+      if (picks.length >= MAX_PICKS || extra >= (listy ? 2 : clauses.length > 1 ? 0 : 1)) break;
+      if (picks.includes(x.n) || x.otherNamed) continue;
+      const t = byN.get(x.n).text;
+      // a line that only repeats amounts already quoted ("A spare E-City battery costs $649." next to the $649 row) adds nothing
+      const nums = numsOf(t);
+      if (nums.length && nums.every((v) => picks.some((p) => numsOf(byN.get(p).text).includes(v)))) continue;
+      if (x.hit >= Math.max(x.need, top.hit - 1) && x.score >= top.score - 1 && x.dens >= 0.6 * top.dens && !GENERIC_LINE_RE.test(t)
+        && csim(x.n) >= topSim - (listy ? 1.5 : 1) * SECOND_MARGIN && csim(x.n) >= LINE_FLOOR) { picks.push(x.n); rank.set(x.n, Math.min(x.score, top.score - 0.001) - 1000 * ci); extra++; }
+    }
+  }
+  if (!picks.length) return 'NONE';
+  // best first: the answer leads with its strongest quote (the reader's score, then the line's similarity); a multi-part
+  // question is answered in the order its parts were asked
+  return picks.slice(0, MAX_PICKS).map((n, i) => ({ n, i, r: rank.get(n) ?? 0, s: lsimOf.get(n) })).sort((a, b) => b.r - a.r || b.s - a.s || a.i - b.i).map((x) => `L${x.n}`).join(', ');
+}
+
+/** Candidate lines for one clause, best first: [{n, hit, need, score, dens}] (only lines sharing enough concepts). */
+function scoreLines(q, lines, { common, whole }) {
+  const want = wantsOf(q);
+  // fixer r5: the quantity word of a how-long / how-far / how-many question ("long") is what the answer's SHAPE must
+  // be (a duration), not a concept to share
+  const qb = bag(q);
+  if (want) for (const w of QTY_WORDS) if (qb.size > 1) qb.delete(w);
+  // the visitor's own words, literally present in a line ("warranty" vs a line that only says "covered")
+  const qWords = (q.toLowerCase().match(/[a-z][a-z-]{3,}/g) || []).filter((w) => !/^(?:what|when|where|which|does|have|your|with|from|that|this|long|much|many|often|there|about|will|would|could|should)$/.test(w));
+  const distinctive = [...qb.keys()].some((w) => lines.some((l) => l.b.has(w)) && !common(w));
+  // a quantity question counts its wanted shape as one concept ("How long is the warranty?" = warranty + a duration)
+  const need = Math.max(1, Math.min(2, qb.size + (want ? 1 : 0)));
+  const qPairs = pairsOf(q);
+  const wholeBag = bag(whole);
+  const namedWords = new Set(q.trim().split(/\s+/).slice(1).filter((w) => /^[A-Z]/.test(w)).map((w) => w.replace(/[^A-Za-z0-9-]/g, '').toLowerCase()));
+  const namedPairs = pairsOf(q.trim().split(/\s+/).slice(1).filter((w) => /^[A-Z][A-Za-z0-9-]*[a-z0-9]/.test(w)).join(' '));
+  return lines.map((l) => {
+    // fixer r7: an answer under an FAQ question about something else ("Can you fit mudguards to my bike?") is about
+    // that thing, not about what was asked ("Do you do bike fitting?"): it is never the answer, however many words
+    // (fit, bike) it shares
+    let ctxPair = false;
+    if (l.ctx) {
+      const cb = bag(l.ctx);
+      ctxPair = [...pairsOf(l.ctx)].some((p) => qPairs.has(p));
+      const extra = [...cb.keys()].filter((w) => !w.startsWith('=') && !wholeBag.has(w) && !CTX_GENERIC.has(w) && !common(w));
+      const sharesQ = [...cb.keys()].some((w) => qb.has(w));
+      if (extra.length && !ctxPair && sharesQ) return null;
+    }
+    const lb = l.ctx ? new Map([...l.b, ...[...bag(l.ctx)].filter(([w]) => qb.has(w))]) : l.b;
+    const shared = [...lb.keys()].filter((w) => qb.has(w));
+    const shape = !!(want && want.test(l.text));
+    // fixer r7: the quantity belongs to what was asked when a question word sits just before it ("returned within 30
+    // days", "frames carry a lifetime warranty") rather than to another verb ("inspected in the workshop within 2 days")
+    let near = false;
+    if (shape) {
+      const m = want.exec(l.text);
+      const before = l.text.slice(0, m.index).toLowerCase().match(/[a-z0-9][a-z0-9'-]*/g) || [];
+      near = before.slice(-4).some((w) => [...bag(w).keys()].some((k) => qb.has(k)));
+    }
+    // fixer r7: a line naming the question's named thing ("Care Plan" in "What does the Lumen Care Plan include?") is on
+    // topic even when every line in the file is about it (its words are then "common")
+    const namedHit = namedPairs.size && [...pairsOf(l.text)].some((p) => namedPairs.has(p));
+    const hit = (distinctive && !namedHit && !shared.some((w) => !common(w))) || !shared.length ? 0 : shared.length + (shape ? 1 : 0);
+    const fragment = /^[a-z]/.test(l.text.trim()) || l.text.trim().split(/\s+/).length < 4;
+    const pair = ctxPair || [...pairsOf(l.text)].some((p) => qPairs.has(p));
+    // a reader prefers the affirmative statement over a caveat that shares the same words, unless the question is negative
+    const negative = !NEG_RE.test(q) && NEG_RE.test(l.text);
+    const intro = GENERIC_LINE_RE.test(l.text);
+    const lower = `${l.text} ${l.ctx || ''}`.toLowerCase();
+    const literal = qWords.filter((w) => lower.includes(w)).length;
+    const score = hit + (shape ? 0.75 : 0) + (near ? 0.5 : 0) + (pair ? 0.3 : 0) + (ctxPair ? 1 : 0) - (negative ? 0.4 : 0) - (fragment ? 1.5 : 0) - (intro ? 2 : 0) - (l.qa ? 0.25 : 0) + 0.3 * Math.min(2, literal);
+    // a line about another named thing ("Care Plus", "the Family Care Plan") never rides along as an extra
+    const otherNamed = namedPairs.size > 0 && (l.text.match(/(?<=[a-z0-9,;)]\s+)[A-Z][a-z][A-Za-z-]*/g) || []).some((w) => !namedWords.has(w.toLowerCase()));
+    return { n: l.n, len: l.len, hit, need, score: score - (otherNamed ? 0.6 : 0), pair, otherNamed, dens: hit / Math.sqrt(Math.max(1, l.b.size)) };
+  }).filter((x) => { if (process.env.DBGSEL && x) console.error('  ', q.slice(0, 30), x.n, x.hit, x.score.toFixed(2), x.dens.toFixed(2)); return x && x.hit >= need; }).sort((a, b) => b.score - a.score || b.dens - a.dens || a.len - b.len || a.n - b.n);
 }
 
 function summaryReply(messages) {

@@ -10,9 +10,9 @@ import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
-  splitSentences, citeQuotedLines, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk } from '../trials.mjs';
+  splitSentences, citeQuotedLines, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords } from '../trials.mjs';
 import { requireCitations } from '../../lib/knowbot.js';
-import { atomize, extractText } from './fake-knowdrive.mjs';
+import { atomize, extractText, startFakeKnowDrive as startKD } from './fake-knowdrive.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1: nothing here may reach a real store
@@ -354,7 +354,8 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const fr = failed.find((f) => f.id === bad.file.id);
     assert.equal(fr.stage, 'failed');
     assert.equal(fr.error.code, 'no_text');
-    assert.equal(fr.error.message, 'No readable text found. It looks like a scanned image.');
+    // r5: a plain-text file is never "a scanned image"
+    assert.equal(fr.error.message, 'This file has no readable text (it may be empty or corrupted).');
 
     // STALL → stalledFor after 45 s (injected clock)
     const t2 = await c.trial();
@@ -440,6 +441,20 @@ describe('KnowBot Studio server (trials.mjs)', () => {
   });
 
   // ---------------------------------------------------------------------------------------------- 9
+  test('r5: "How long is the warranty?" states the lifetime warranty, never boilerplate or an FAQ question', async () => {
+    const { t } = await sampleTrial();
+    const ev = await c.stream(t, '/ask', { question: 'How long is the warranty?' });
+    const final = ev.find((e) => e.event === 'final').data;
+    assert.equal(final.status, 'grounded');
+    const first = final.text.split('\n')[0];
+    assert.match(first, /lifetime/i, final.text);
+    assert.doesNotMatch(final.text, /We build bikes to be ridden hard|This page explains/, 'never the document intro');
+    for (const l of final.text.split('\n')) assert.doesNotMatch(l.replace(/\s*\[\d+\]\s*$/, ''), /\?\s*$/, `a question is never a claim: ${l}`);
+    // a matching FAQ pair still answers its own question
+    const faq = (await c.stream(t, '/ask', { question: 'Does servicing my bike elsewhere void the warranty?' })).find((e) => e.event === 'final').data;
+    assert.match(faq.text, /as long as the work is done properly/);
+  });
+
   test('9. ask refusal: exact NOT_IN_DATA, why with 5 candidates; "ignore your files…" is refused', async () => {
     const { t } = await sampleTrial();
     const ev = await c.stream(t, '/ask', { question: "What's the weather in Paris today?" });
@@ -589,7 +604,9 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.match(launch.reply, /only knows our sample files/);
     const ev = launch.ev.find((e) => e.event === 'chips').data.chips;
     assert.ok(ev.some((x) => x.label === 'Launch with samples anyway' && x.action?.type === 'show_launch' && x.action.force === true));
-    const forced = await turn({ chip: 'launch-anyway' });
+    // r5: free text equals chips: typing the chip's words proceeds exactly like clicking it (no "One step first" loop)
+    const forced = await turn({ message: 'launch with samples anyway' });
+    assert.doesNotMatch(forced.reply, /only knows our sample files|One (?:last thing|step first)/, forced.reply);
     assert.ok(forced.actions.some((a) => a.type === 'run_proof' && a.mini === true) || forced.actions.some((a) => a.type === 'show_launch'), 'forced launch: mini proof first, or the card');
     const done = await turn({ event: { type: 'proof_done', data: { score: { passed: 4, total: 4 } } } });
     assert.match(done.reply, /Proof Run passed/);
@@ -852,8 +869,16 @@ describe('KnowBot Studio server (trials.mjs)', () => {
   });
 
   test('r2/r4: "call it Spokes, friendly, for my bike shop": the business is Spokes, a greeting is proposed, no no-op rows', async () => {
+    // r5: "call it X" names the bot, never the business: the org comes from "for my <X>" only
     const p = parseIntent('call it Spokes, friendly, for my bike shop');
-    assert.deepEqual([p.patch.name, p.patch.org, p.patch.tone, p.business], ['Spokes', 'Spokes', 'friendly', 'bike shop']);
+    assert.deepEqual([p.patch.name, p.patch.org, p.patch.tone, p.business], ['Spokes', 'Bike shop', 'friendly', 'bike shop']);
+    const pp = parseIntent('call it Paddle Pal, friendly, a support bot for my kayak rental shop');
+    assert.equal(pp.patch.name, 'Paddle Pal');
+    assert.equal(pp.patch.org, 'Kayak rental shop', 'the bot name is never copied into org');
+    assert.equal(pp.patch.tone, 'friendly');
+    assert.match(pp.patch.purpose, /^Support bot for my kayak rental shop$/);
+    assert.doesNotMatch(pp.patch.purpose, /^[\s,;:-]/, 'no leading punctuation left from the name clause');
+    assert.doesNotMatch(pp.patch.purpose, /Paddle Pal/);
     assert.equal(parseIntent('a bot for my customers').patch.org, undefined, 'an audience is not an org');
     assert.equal(parseIntent('a bot for my dental clinic').patch.org, 'Dental clinic', 'no name: the business type is the org');
     const q = parseIntent('support bot for my bike shop called Spokes, friendly');
@@ -871,6 +896,35 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const chips = ev.find((e) => e.event === 'chips').data.chips.map((x) => x.label);
     assert.ok(!chips.includes('Run the Proof Run'), 'no Proof Run without files');
     assert.equal((await (await c.json(t, '')).json()).spec.org, 'Spokes');
+  });
+
+  test('r5: multi-field free text, greeting from the org, upload copy after naming', async () => {
+    const t = await c.trial();
+    const ev = await c.stream(t, '/setup', { message: 'call it Paddle Pal, friendly, a support bot for my kayak rental shop' });
+    const patch = ev.find((e) => e.event === 'patch').data;
+    const to = (f) => patch.diff.find((d) => d.field === f)?.to;
+    assert.equal(to('name'), 'Paddle Pal');
+    assert.equal(to('org'), 'Kayak rental shop');
+    assert.equal(to('purpose'), 'Support bot for my kayak rental shop');
+    assert.equal(to('greeting'), 'Hi! Ask me anything about the kayak rental shop.');
+    const reply = ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(reply, /^Done, meet \*\*Paddle Pal\*\*: a friendly support bot for your kayak rental shop\./, reply);
+    const q = await c.stream(t, '/setup', { event: { type: 'files_queued', data: { n: 1, bytes: 2048 } } });
+    const qr = q.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.doesNotMatch(qr, /suggest a name/, 'the bot is already named');
+    assert.match(qr, /draft starter questions for Paddle Pal/);
+    const t2 = await c.trial();
+    const q2 = await c.stream(t2, '/setup', { event: { type: 'files_queued', data: { n: 1, bytes: 2048 } } });
+    assert.match(q2.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), /suggest a name that fits/);
+  });
+
+  test('r5: failure copy by file type (scanned image only for PDF and images)', async () => {
+    const { mapError } = await import('../trials.mjs');
+    assert.equal(mapError('no text extracted', { ext: 'md', name: 'broken.md' }).message, 'This file has no readable text (it may be empty or corrupted).');
+    assert.equal(mapError('no text extracted', { mime: 'text/plain' }).message, 'This file has no readable text (it may be empty or corrupted).');
+    assert.equal(mapError('no text extracted', { ext: 'pdf' }).message, 'No readable text found. It looks like a scanned image.');
+    assert.equal(mapError('OCR found nothing', { mime: 'image/png' }).message, 'No readable text found. It looks like a scanned image.');
+    assert.equal(mapError('no text extracted').code, 'no_text');
   });
 
   test('r4: scope asks, custom tone and multi-intent turns are acted on or acknowledged', async () => {
@@ -938,7 +992,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     for (let i = 0; i < 40 && !(await (await c.json(t, '')).json()).files?.[0]?.summary; i++) await sleep(100);
     const at = await c.stream(t, '/setup', { event: { type: 'file_atomized', data: {} } });
     const ar = at.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
-    assert.match(ar, /Northwind Studio's employee handbook\. Call it \*\*Northwind Studio Guide\*\*\?/, ar);
+    assert.match(ar, /Looks like the Northwind Studio employee handbook\. Call it \*\*Northwind Studio Guide\*\*\?/, ar);
     const rd = await c.stream(t, '/setup', { event: { type: 'file_ready', data: {} } });
     const chips = rd.find((e) => e.event === 'chips').data.chips;
     assert.equal(chips[0].label, 'Call it Northwind Studio Guide', JSON.stringify(chips));
@@ -1137,6 +1191,38 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     }
   });
 
+  test('r6: starters never read "the its warranty" or "rental item 1"; topics drop verb bigrams; file copy pluralizes and names without a possessive', async () => {
+    assert.equal(starterGrammarOk('How long does the its warranty last?'), false);
+    assert.equal(starterGrammarOk('How much does the rental item 1 cost?'), false);
+    assert.equal(genericNumbered('rental item 2'), true);
+    assert.equal(genericNumbered('Lumen Aero'), false);
+    assert.equal(titleWords('bike shop'), 'Bike Shop');
+    assert.equal(titleWords('house of KDE'), 'House of KDE');
+    const body = 'The robot arm has a reach of 1.2 metres. The robot arm has six joints and the arm has a payload of 5 kg. Its warranty lasts 3 years. The warranty lasts 3 years from delivery and the warranty lasts longer with service.';
+    const topics = topicsOf([{ text: body, meta: { breadcrumb: '' } }, { text: body, meta: { breadcrumb: '' } }], { n: 3 });
+    assert.ok(!topics.some((x) => /\b(?:has|lasts)$/.test(x)), topics.join(' | '));
+    assert.ok(topics.includes('robot arm'), topics.join(' | '));
+    const doc = '# Robot Arm Manual\n\nThe robot arm has a reach of 1.2 metres and six joints.\n\nIts warranty lasts 3 years from delivery. The robot arm costs $4,900.\n\n| Item | Price |\n|---|---|\n| Rental item 1 | $40 |\n| Rental item 2 | $55 |\n';
+    const t = await c.trial();
+    await c.upload(t, 'arm.md', Buffer.from(doc));
+    await c.waitReady(t, 1);
+    const q = await (await c.json(t, '/questions')).json();
+    const all = [...q.starters, ...q.proof].map((x) => x.q);
+    assert.ok(!all.some((x) => /\bthe its\b|item \d/i.test(x)), all.join(' | '));
+    const at = (await c.stream(t, '/setup', { event: { type: 'file_atomized', data: {} } })).filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.doesNotMatch(at, /\b1 atoms\b|arm has|warranty lasts/, at);
+    const rd = (await c.stream(t, '/setup', { event: { type: 'file_ready', data: {} } })).filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.doesNotMatch(rd, /\b1 atoms\b|All 1 file|1 of 1 files/, rd);
+    assert.match(at, /Looks like a robot arm manual\./, at);
+    // a single topic word title ("Shipping Policy") is not an org: no "Shipping's policy", and the name is "Shipping Help"
+    const t2 = await c.trial();
+    await c.upload(t2, 'shipping.md', Buffer.from('# Shipping Policy\n\nOrders ship within 2 business days.\n'));
+    await c.waitReady(t2, 1);
+    const sh = (await c.stream(t2, '/setup', { event: { type: 'file_atomized', data: {} } })).filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.doesNotMatch(sh, /'s policy|\b1 atoms\b|Shipping Guide/, sh);
+    if (/Call it/.test(sh)) assert.match(sh, /Looks like a shipping policy\. Call it \*\*Shipping Help\*\*\?/, sh);
+  });
+
   test('r2: a Proof Run asked for while files learn is queued, a partial run never passes, and it starts when all are Ready', async () => {
     const S2 = await boot({ speed: 0.5 });
     const c2 = client(S2);
@@ -1192,13 +1278,19 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     // the restore key is not a bearer, is bound to its trial, and forged keys fail
     assert.equal((await S.api(`/api/studio/trials/${t.trialId}`, { headers: { authorization: `Bearer ${k}` } })).status, 401);
     const y = await c.trial();
-    assert.equal((await S.api(`/api/studio/trials/${y.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k }) })).status, 401);
-    assert.equal((await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k: `${k.split('.')[0]}.AAAAAAAAAAAAAAAAAAAAAAAA` }) })).status, 401);
-    assert.equal((await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k: t.token }) })).status, 401, 'a bearer is not a restore key');
+    // r5: a link that doesn't verify (or an unknown id) is 404 not_found, never the false "expired" claim
+    assert.equal((await S.api(`/api/studio/trials/${y.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k }) })).status, 404);
+    assert.equal((await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k: `${k.split('.')[0]}.AAAAAAAAAAAAAAAAAAAAAAAA` }) })).status, 404);
+    assert.equal((await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k: t.token }) })).status, 404, 'a bearer is not a restore key');
+    const unknown = await S.api('/api/studio/trials/tr_doesnotexist/restore', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k: 'bad' }) });
+    assert.equal(unknown.status, 404);
+    const uj = await unknown.json();
+    assert.equal(uj.error.code, 'not_found');
+    assert.doesNotMatch(uj.error.message, /expired|deleted/i);
     S.clock.skew = 8 * DAY;
     try {
       const ex = await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ k }) });
-      assert.equal(ex.status, 401);
+      assert.equal(ex.status, 410);
       assert.equal((await ex.json()).error.code, 'expired');
     } finally { S.clock.skew = 0; }
   });
@@ -1236,6 +1328,200 @@ describe('KnowBot Studio server (trials.mjs)', () => {
   });
 
   // ---------------------------------------------------------------------------------------------- 4.11
+  // ------------------------------------------------------------------------------------------- fixer r7
+  /** A sample trial of its own (the shared one is near its per-minute ask limit by now). */
+  async function freshSample() {
+    const t = await c.trial();
+    assert.equal((await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' })).status, 201);
+    await c.waitReady(t, 4);
+    return { t };
+  }
+  test('r7: Builder product intents: 15 phrasings route to developers, insights, inventory, refusal, language (pure table)', () => {
+    const files = [{ stage: 'ready' }];
+    const table = [
+      ['how do I use this from my own app?', 'open_developers'],
+      ['Is there an API?', 'open_developers'],
+      ['can I integrate it with our backend', 'open_developers'],
+      ['show me the developer docs', 'open_developers'],
+      ['what did people ask so far?', 'show_insights'],
+      ['which questions went unanswered?', 'show_insights'],
+      ['show me the question insights', 'show_insights'],
+      ['what is in my files?', 'show_inventory'],
+      ['what do my files cover?', 'show_inventory'],
+      ['what did it learn so far?', 'show_inventory'],
+      ['change the refusal message', 'explain_refusal'],
+      ['what does it say when it doesn\'t know?', 'explain_refusal'],
+      ['can it answer in French?', 'explain_language'],
+      ['what languages does it speak?', 'explain_language'],
+      ['set the greeting to "Welcome to Spokes!"', 'greeting'],
+    ];
+    for (const [q, want] of table) {
+      const p = parseIntent(q, { files, spec: {} });
+      assert.ok(p.intents.includes(want), `${q} -> ${p.intents.join(',')} (want ${want})`);
+      assert.ok(!p.actions.some((a) => a.type === 'ask_samplebot'), `${q} is a Builder question, never sent to the bot`);
+    }
+    // bot questions and bot descriptions stay what they were
+    assert.deepEqual(parseIntent('How long is the frame warranty?', { files, spec: {} }).intents, ['ask_question']);
+    assert.ok(!parseIntent('a bot for our developers', { files, spec: {} }).intents.includes('open_developers'));
+    assert.equal(parseIntent('rename it to Lumen Help').patch.name, 'Lumen Help');
+  });
+
+  test('r7: the Builder answers product questions with the right reply, card and chips (scripted)', async () => {
+    const { t } = await freshSample();
+    const turn = async (message) => {
+      const ev = await c.stream(t, '/setup', { message });
+      return { reply: ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), chips: ev.find((e) => e.event === 'chips').data.chips, card: ev.find((e) => e.event === 'card')?.data || null,
+        actions: ev.filter((e) => e.event === 'action').map((e) => e.data) };
+    };
+    const dev = await turn('how do I use this from my own app?');
+    assert.match(dev.reply, /chat API/);
+    assert.match(dev.reply, /OpenAI-compatible/);
+    assert.deepEqual(dev.chips.map((x) => x.label).slice(0, 2), ['Developers', 'Channels']);
+    assert.deepEqual(dev.chips[0].emit, { type: 'golive:open', detail: { tab: 'developers' } });
+    assert.ok(dev.chips.some((x) => x.action?.type === 'show_launch'));
+    assert.ok(!dev.actions.some((a) => a.type === 'ask_samplebot'));
+    const inv = await turn('what is in my files?');
+    assert.match(inv.reply, /knows 4 files, [\d,]+ atoms it can quote/);
+    for (const n of ['lumen-warranty-returns.md', 'lumen-store-faq.txt']) assert.match(inv.reply, new RegExp(n.replace(/\./g, '\\.')));
+    assert.ok(inv.chips.some((x) => x.action?.type === 'ask_samplebot' && x.action.question), 'one real starter to try');
+    const ref = await turn('change the refusal message');
+    assert.ok(ref.reply.includes(NOT_IN_DATA), ref.reply);
+    assert.match(ref.reply, /fixed on purpose/);
+    assert.ok(ref.chips.some((x) => x.label === 'Change greeting'));
+    assert.ok(ref.chips.some((x) => x.label === 'Ask something off-topic'));
+    const lang = await turn('can it answer in French?');
+    assert.match(lang.reply, /French/);
+    assert.ok(lang.chips.some((x) => x.action?.type === 'ask_samplebot' && /français|coûte/i.test(x.action.question)));
+    await c.stream(t, '/ask', { question: 'How much is a Full Overhaul?' });
+    const ins = await turn('what did people ask so far?');
+    assert.match(ins.reply, /\d+ questions? so far: \d+ answered from your files, \d+ refused/);
+    assert.equal(ins.card?.type, 'insights');
+    assert.ok(ins.card.data.top.some((x) => x.q === 'How much is a Full Overhaul?'));
+    assert.ok(!ins.card.data.top.some((x) => /weather in Paris/.test(x.q)), 'the Builder\'s own probes are not insights');
+  });
+
+  test('r7: composite edits confirm every clause in one sentence; "use your samples" says Loading once', async () => {
+    const { t } = await sampleTrial();
+    const ev = await c.stream(t, '/setup', { message: 'make answers shorter and only answer staff questions' });
+    const reply = ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(reply, /speaks to employees/, reply);
+    assert.match(reply, /answers are (?:already )?short/, reply);
+    assert.match(reply, /"staff questions" doesn't match a file, so .+ still searches all 4 files/, reply);
+    assert.doesNotMatch(reply, /Pick one to keep|Also:/, reply);
+    const t2 = await c.trial();
+    const typed = (await c.stream(t2, '/setup', { message: 'skip ahead, just use your samples' })).filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(typed, /^Loading Lumen Bikes' sample docs/);
+    assert.equal((await c.json(t2, '/samples', 'POST', { set: 'lumen-bikes' })).status, 201);
+    const draft = await c.stream(t2, '/setup', { event: { type: 'samples_attached', data: { set: 'lumen-bikes' } } });
+    const dr = draft.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.doesNotMatch(dr, /Loading/, `one Loading line, not two: ${dr}`);
+    assert.equal(draft.find((e) => e.event === 'card')?.data.type, 'config-diff');
+  });
+
+  test('r7: sample files never overwrite a name the person chose; the sample name is offered as a chip', async () => {
+    const t = await c.trial();
+    await c.stream(t, '/setup', { message: 'call it Spokes, for my bike shop' });
+    const r = await (await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' })).json();
+    assert.equal(r.spec.name, 'Spokes', 'the name the person set stays');
+    assert.equal(r.spec.org, 'Bike shop');
+    assert.equal(r.spec.length, 'short', 'fields still at their default take the sample draft');
+    const ev = await c.stream(t, '/setup', { event: { type: 'samples_attached', data: { set: 'lumen-bikes', prevName: 'Spokes' } } });
+    const reply = ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.match(reply, /kept what you set, the name \*\*Spokes\*\*/);
+    const card = ev.find((e) => e.event === 'card')?.data;
+    assert.ok(!card || !card.data.rows.some((x) => x.field === 'Name'), 'no Name row: nothing changed it');
+    const chips = ev.find((e) => e.event === 'chips').data.chips;
+    const offer = chips.find((x) => /^Rename to Lumen Help\?$/.test(x.label));
+    assert.ok(offer && offer.send === 'Call it Lumen Help', JSON.stringify(chips));
+    assert.equal((await (await c.json(t, '')).json()).spec.name, 'Spokes');
+    // an untouched trial still gets the whole draft
+    const u = await c.trial();
+    assert.equal((await (await c.json(u, '/samples', 'POST', { set: 'lumen-bikes' })).json()).spec.name, 'Lumen Help');
+  });
+
+  test('r7: multi-part questions quote one line per part, best first, citing two files (Studio and /v1)', async () => {
+    const { t } = await freshSample();
+    const sq = JSON.parse(await fsp.readFile(path.join(ROOT, 'studio/samples/lumen-bikes/questions.json'), 'utf8'));
+    assert.ok(sq.multiSource.length >= 3 && sq.multiSource.every((q) => sq.proof.includes(q) || sq.starters.includes(q)), 'three curated multi-source questions');
+    for (const q of sq.multiSource) {
+      const final = (await c.stream(t, '/ask', { question: q })).find((e) => e.event === 'final').data;
+      assert.equal(final.status, 'grounded', q);
+      assert.ok(new Set(final.citations.map((x) => x.file)).size >= 2, `${q}: [1][2] from two files: ${final.text}`);
+      assert.match(final.text, /\[1\][\s\S]*\[2\]/, final.text);
+      assert.equal(final.check.ok, true, `${q}: ${JSON.stringify(final.check)}`);
+    }
+    // the same two-file answer through the developer API (/v1/bots/:id/chat with the trial key)
+    const dk = await (await c.json(t, '/devkey')).json();
+    const api = await (await S.api(dk.endpoints.chat.replace(/^https?:\/\/[^/]+/, ''), { method: 'POST', headers: { authorization: `Bearer ${dk.key}`, 'content-type': 'application/json', 'x-forwarded-for': t.ip },
+      body: JSON.stringify({ question: sq.multiSource[0] }) })).json();
+    assert.ok(new Set((api.citations || []).map((x) => x.file || x.filename)).size >= 2, JSON.stringify(api));
+    // the strongest quote leads (the 30-day return rule, not the inspection line)
+    const ret = (await c.stream(t, '/ask', { question: 'How long do I have to return a bike?' })).find((e) => e.event === 'final').data;
+    assert.match(ret.text.split('\n')[0], /30 days/, ret.text);
+    // a list question quotes more than one line
+    const inc = (await c.stream(t, '/ask', { question: 'What does the Lumen Care Plan include?' })).find((e) => e.event === 'final').data;
+    assert.ok(inc.proof.quotedLines.length >= 2, inc.text);
+    assert.match(inc.text, /two tune-ups/);
+  });
+
+  test('r7: the line picker needs the head noun phrase: "bike fitting" never quotes mudguard fitting (pure + Studio)', async () => {
+    const { selectLines } = await import('./fake-llm.mjs');
+    const L = (arr) => arr.map((text, i) => ({ n: i + 1, text }));
+    const without = L(['Can you fit mudguards to my bike?', 'Mudguard fitting costs $20 plus the mudguards, and most bikes can take them.',
+      'Can I fit a child seat to my bike?', 'We fit rear child seats on bikes with a rack rated to 25 kg, and fitting is free when you buy the seat from us.',
+      'Do you sell bike lights?', 'Our USB-C front and rear light set costs $49, and dynamo lights can be fitted in the workshop.']);
+    assert.equal(selectLines('Do you do bike fitting?', without), 'NONE', 'a different FAQ question is a different topic');
+    const withFit = L(['Can you fit mudguards to my bike?', 'Mudguard fitting costs $20 plus the mudguards, and most bikes can take them.',
+      'Do you help with bike fitting?', 'A basic fit is free with every new bike.', 'A full fit session with saddle, bar and cleat set-up takes 90 minutes and is booked separately.']);
+    assert.match(selectLines('Do you do bike fitting?', withFit), /^L4\b/);
+    assert.doesNotMatch(selectLines('Do you do bike fitting?', withFit), /\bL2\b/);
+    // the same sentence from two passages is quoted once; a multi-part question takes one line per part, in order
+    assert.equal(selectLines('How much is a rental?', L(['Bike rentals cost $45 per day.', 'Bike rentals cost $45 per day.'])), 'L1');
+    const two = selectLines('How much is a spare E-City battery and how long is it covered?', L(['A spare E-City battery costs $649.', 'A battery damaged by a fall or a crash is not covered by the warranty.',
+      'E-bike batteries are covered for 2 years or 800 full charge cycles, whichever comes first.']));
+    assert.equal(two, 'L1, L3');
+    const { t } = await freshSample();
+    const fit = (await c.stream(t, '/ask', { question: 'Do you do bike fitting?' })).find((e) => e.event === 'final').data;
+    assert.doesNotMatch(fit.text, /Mudguard|child seat/i, fit.text);
+    if (fit.status === 'grounded') assert.match(fit.text, /fit/i);
+  });
+
+  test('r7: the fake chunker splits a 5 MB paragraph into ~1,200-char atoms and its stages scale with size', async () => {
+    const sentence = 'Late returns of a rental kayak are charged $35 per day after the due time. ';
+    const big = sentence.repeat(Math.ceil(5e6 / sentence.length));
+    const atoms = atomize(big);
+    assert.ok(atoms.length > 3000, `${atoms.length} atoms`);
+    assert.ok(atoms.every((a) => a.len <= 1200 && big.slice(a.offset, a.offset + a.len) === a.text), 'atoms are bounded and offsets exact');
+    assert.ok(atoms.every((a) => /\.$/.test(a.text)), 'cut at sentence ends');
+    // stage timing: a 2 MB file is still extracting when a small one is long done
+    const kd = await startKD({ speed: 1 });
+    try {
+      const small = kd.add({ path: 'a.txt', text: 'Short file. One fact.', pipeline: true });
+      const large = kd.add({ path: 'b.txt', text: sentence.repeat(30000), bytes: 2.3e6, pipeline: true });
+      await sleep(1500);
+      assert.notEqual(small.phase, 'pending');
+      assert.equal(large.phase, 'pending', 'a 2 MB file takes longer to extract');
+    } finally { await kd.close(); }
+  });
+
+  test('r7: a large own file (100+ atoms) always gets a validated starter that its bot answers', async () => {
+    const t = await c.trial();
+    const items = ['kayak', 'canoe', 'tent', 'wetsuit', 'dry bag', 'roof rack'];
+    const paras = [];
+    for (let i = 0; i < 1200; i++) {
+      const it = items[i % items.length];
+      paras.push([`Late returns of a rental ${it} are charged $${10 + (i % 5) * 5} per day after the due time.`,
+        `The deposit for a rental ${it} is $${50 + (i % 4) * 25}, refunded when the item is returned on time.`,
+        `Each rental ${it} is inspected when it comes back, and damage beyond normal wear is charged at repair cost.`][i % 3]);
+    }
+    assert.equal((await c.upload(t, 'rental-policy.txt', Buffer.from(paras.join('\n\n')))).status, 201);
+    await c.waitReady(t, 1, 30000);
+    const qv = await (await c.json(t, '/questions')).json();
+    assert.ok(qv.starters.length >= 1, JSON.stringify(qv));
+    const final = (await c.stream(t, '/ask', { question: qv.starters[0].q })).find((e) => e.event === 'final').data;
+    assert.equal(final.status, 'grounded', `${qv.starters[0].q}: ${final.text}`);
+  });
+
   test('4.11: no studio route ever creates buckets, bots or commits the registry', () => {
     assert.deepEqual(spies, { createBucket: 0, create: 0, commit: 0 });
     const writes = S.kd.calls.filter((x) => x.url === '/api/v1/ingest' && x.ingest?.path === 'knowbot/_config/instances.json').length;

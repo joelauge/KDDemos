@@ -66,7 +66,11 @@
 .co-rc-sub { font-size: 12.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .co-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: var(--line); }
-.co-stat { display: grid; gap: 2px; padding: 9px 10px; background: var(--panel-2); min-width: 0; }
+/* fixer r5 (D7): label / value rows pinned to the top of every cell, so all four values share one baseline even when a
+   unit ("of 100 MB") wraps below its number */
+.co-stat { display: grid; grid-template-rows: auto auto 1fr; align-content: start; gap: 2px; padding: 9px 10px; background: var(--panel-2); min-width: 0; }
+.co-stat dd { align-self: start; }
+.co-num { line-height: 1.15; }
 .co-stat dt { font: 500 10.5px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
 .co-stat dd { margin: 0; display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; min-width: 0; }
 .co-num { font-size: 18px; font-weight: 500; color: var(--strong); letter-spacing: -.02em; min-width: 2ch; }
@@ -119,6 +123,8 @@
 /* plan column */
 .co-plan { padding: 18px 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
 .co-plan-brand { display: inline-flex; align-items: center; gap: 7px; font: 700 12.5px/1 var(--display); color: var(--muted); letter-spacing: .01em; }
+.co-plan-logo { display: inline-flex; color: var(--strong); }
+.co-plan-logo svg { display: block; width: 20px; height: 14px; }
 .co-price { display: flex; align-items: baseline; gap: 4px; margin: 0; }
 .co-price-amt { font: 700 32px/1 var(--display); color: var(--strong); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .co-price-per { font: 500 14px/1 var(--font); color: var(--dim); }
@@ -204,9 +210,16 @@
 .co-launch.is-stage .co-price-amt { font-size: 40px; }
 /* fixer r2 (D8): one CTA in the receipt panel, the sticky footer (price + Launch); the plan column's own CTA is hidden */
 .co-launch.is-stage .co-plan > .co-cta { display: none; }
-.co-stage-foot { display: flex; align-items: center; gap: 12px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+.co-stage-foot { display: grid; gap: 4px; padding: 10px 14px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 96%, transparent); }
-.co-stage-foot .co-cta { flex: 1; min-width: 0; }
+.co-stage-foot-bar { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.co-stage-foot-bar .co-cta { flex: 1; min-width: 0; }
+/* fixer r5 (D8): the escape hatch sits directly under the primary CTA it escapes from */
+.co-sublinks.is-foot { font-size: 12.5px; }
+.co-sublinks.is-foot .co-link { min-height: 32px; display: inline-flex; align-items: center; }
+/* fixer r5 (D6): the text-free surface that flies between the Builder stub and the docked receipt panel */
+.co-stage-proxy { position: fixed; z-index: 41; pointer-events: none; transform-origin: 0 0; border-radius: 14px; background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: 0 24px 60px -30px rgb(2 6 23 / .45); will-change: transform, opacity; }
 .co-stage-foot-price { display: grid; margin: 0; font-size: 12px; color: var(--dim); line-height: 1.2; white-space: nowrap; }
 .co-stage-foot-price b { font: 700 20px/1 var(--display); color: var(--strong); letter-spacing: -.02em; }
 .co-stage-foot-price small { font-size: 11px; }
@@ -380,7 +393,7 @@
 
 @media (max-width: 899px) {
   .co-btn { min-height: 44px; }
-  .co-btn.is-small { min-height: 40px; }
+  .co-btn.is-small { min-height: 44px; }
   .co-cite { min-width: 28px; height: 26px; }
   .co-link { min-height: 32px; }
   .co-success-actions .co-btn { flex: 1 1 auto; }
@@ -489,7 +502,9 @@
 .co-stub:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .co-stub:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .co-stub-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--good); box-shadow: 0 0 0 3px var(--good-soft); }
-.co-stub-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 13px/1.3 var(--font); font-variant-numeric: tabular-nums; }
+.co-stub-text { flex: 1; min-width: 0; display: flex; align-items: baseline; white-space: nowrap; font: 600 13px/1.3 var(--font); font-variant-numeric: tabular-nums; }
+.co-stub-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.co-stub-meta { flex: none; white-space: pre; }
 .co-stub-go-t { white-space: nowrap; }
 .co-layer.is-side .co-sr-qa, .co-layer.is-side .co-sr-quick { margin-right: -44px; }
 .co-stub-go { display: inline-flex; align-items: center; gap: 4px; flex: none; font-weight: 600; color: var(--accent-2); }
@@ -512,16 +527,139 @@
 .co-foot-incl { display: flex; align-items: flex-start; gap: 6px; color: var(--text); }
 .co-foot-incl > span { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 6px; background: var(--good-soft); color: var(--good); }
 
-/* Desktop checkout: a 440 px right sheet over the SampleBot pane; the bot thread stays visible and unblurred */
-.co-layer.is-side { place-items: stretch end; padding: 0; }
+/* Desktop checkout (fixer r5): a 400-440 px sheet docked LEFT over the Builder column; the SampleBot pane and its last
+   cited answer stay visible and unblurred on the right */
+.co-layer.is-side { place-items: stretch start; padding: 0; }
 .co-layer.is-side .co-scrim { background: rgb(2 6 23 / .14); -webkit-backdrop-filter: none; backdrop-filter: none; }
 :root[data-theme="dark"] .co-layer.is-side .co-scrim { background: rgb(0 0 0 / .22); }
-.co-layer.is-side .co-sheet { width: min(440px, 100vw); height: 100dvh; max-height: none; grid-template-columns: minmax(0, 1fr); align-content: start; align-items: start;
-  border-radius: 20px 0 0 20px; border-right: 0; box-shadow: -30px 0 60px -30px rgb(2 6 23 / .45); }
+.co-layer.is-side .co-sheet { width: min(var(--co-side-w, 420px), 100vw); height: 100dvh; max-height: none; grid-template-columns: minmax(0, 1fr); align-content: start; align-items: start;
+  overflow: auto; overscroll-behavior: contain;
+  border-radius: 0 20px 20px 0; border-left: 0; box-shadow: 30px 0 60px -30px rgb(2 6 23 / .45); }
+.co-sr-embed { display: grid; gap: 8px; padding: 0 20px 24px; }
+.co-sr-embed .co-embed { width: 100%; }
 .co-layer.is-side .co-sr-receipt { padding: 20px 64px 14px 20px; gap: 10px; border-right: 0; border-bottom: 1px dashed var(--line-2); }
 .co-layer.is-side .co-pay { padding: 18px 20px 22px; }
 .co-layer.is-side .co-sheet-title { font-size: 22px; }
 @media (max-width: 899px) {
   .co-sr-line .co-ava { width: 28px !important; height: 28px !important; font-size: 11px !important; }
   .co-oneline-name { font-size: 14px; }
+}
+
+/* fixer r5 (D9/D10): touch targets. Standalone links and the small chips get a >= 44 px hit area on phones and coarse
+   pointers; tiny inline chips grow an invisible hit box (::after) so the text layout does not move. */
+@media (max-width: 899px), (pointer: coarse) {
+  .co-sublinks .co-link, .co-sum-links .co-link, .co-sum-full, .co-back, .co-stage-head .co-stage-x { min-height: 44px; display: inline-flex; align-items: center; }
+  .co-stage-head .co-stage-x { min-width: 44px; }
+  .co-sum-edit { width: 44px; height: 44px; margin: -9px -9px -9px -5px; }
+  .co-stub { min-height: 52px; }
+  .co-cite { position: relative; }
+  .co-cite::after { content: ""; position: absolute; inset: -13px -12px; }
+  .co-foot .co-link, .co-sr-quick .co-link, .co-sum-channels { display: inline-block; padding: 10px 0; margin: -10px 0; }
+}
+
+/* ------------------------------------------------------------------ fixer r6 (D7/D8/D9/D10) */
+/* icon-only Copy, pinned to the corner of an endpoint or a code block: 44 x 44 on touch, 36 x 36 with a fine pointer */
+.co-copy-icon { display: inline-grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border-radius: 10px; border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 94%, transparent); color: var(--muted); cursor: pointer;
+  transition: color var(--dur-1), border-color var(--dur-1), background-color var(--dur-1); }
+.co-copy-icon:hover { color: var(--strong); background: var(--panel); border-color: color-mix(in srgb, var(--accent) 50%, var(--line-2)); }
+.co-copy-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.co-copy-icon.is-done { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line-2)); }
+.co-copy-icon .co-copy-ico { display: inline-flex; }
+@media (min-width: 900px) and (pointer: fine) { .co-copy-icon { width: 36px; height: 36px; } }
+
+/* LaunchSummary header: name left, "Ready to launch" + the "Receipt & plan" text link right */
+.co-sum-headr { display: grid; justify-items: end; align-content: start; gap: 2px; flex: none; margin-left: auto; }
+.co-sum-headr .co-rc-badge { margin-top: 2px; }
+.co-sum-view { display: inline-flex; align-items: center; min-height: 28px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.co-sum-links .co-sum-view { margin-left: 0; }
+@container (max-width: 400px) { .co-sum-headr .co-rc-badge { display: none; } }
+.co-pill.is-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); background: var(--warn-soft); font-family: var(--font); }
+
+/* the folded stub: name on top (never truncated beside its stats), the checks under it; no price */
+.co-stub-text { display: grid; gap: 2px; align-items: start; white-space: normal; }
+.co-stub-name { min-width: 0; font: 600 13.5px/1.3 var(--font); color: var(--strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.co-stub-meta { min-width: 0; font: 500 11.5px/1.3 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* LaunchStage: a right-side sheet (max 560 px) over the live bot, which stays visible behind a light dim */
+.co-stage-layer.is-right .co-stage-backdrop { background: rgb(2 6 23 / .3); cursor: pointer; }
+:root[data-theme="dark"] .co-stage-layer.is-right .co-stage-backdrop { background: rgb(0 0 0 / .45); }
+.co-stage-layer.is-right .co-stage { width: min(560px, 100%); justify-self: end; border-left: 1px solid var(--line); box-shadow: -28px 0 60px -30px rgb(2 6 23 / .5); }
+/* the price is the hero once, in the sticky bar; the plan column's copy of it is hidden on the stage */
+.co-launch.is-stage .co-plan > .co-price { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.co-stage-foot-price b { font: 700 28px/1 var(--display); letter-spacing: -.03em; }
+.co-stage-foot-per { font: 500 13px/1 var(--font); color: var(--dim); margin-left: 2px; }
+.co-stage-foot-price small { margin-top: 3px; }
+
+/* EmbedPreview: the chat panel sits in flow and the page grows with it; the launcher always has 8 px of clearance */
+.co-embed-page { height: auto; min-height: 236px; display: flex; flex-direction: column; padding: 12px 12px 46px; }
+.co-embed-panel { position: relative; right: auto; bottom: auto; align-self: flex-end; margin-top: 10px; }
+.co-embed .co-em.is-ans { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; }
+
+/* Checkout: a sample-only bot is told before paying; "Add my files first" sits right above the CTA */
+.co-addfirst { display: flex; align-items: flex-start; gap: 6px; margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.co-addfirst > span:first-child { display: inline-flex; margin-top: 2px; color: var(--warn); flex: none; }
+
+/* Phones: checkout is an 85%-height bottom sheet; the live bot's last cited answer peeks above it */
+@media (max-width: 899px) {
+  .co-layer.is-bottom { display: flex; flex-direction: column; justify-content: flex-end; }
+  .co-layer.is-bottom .co-sheet { height: 85dvh; max-height: 85dvh; border-radius: 22px 22px 0 0; border: 1px solid var(--line); border-bottom: 0;
+    box-shadow: 0 -24px 60px -24px rgb(2 6 23 / .55); }
+  .co-layer.is-bottom .co-sr-qa { display: none; }
+  .co-layer.is-bottom .co-x { top: 10px; right: 10px; }
+  .co-peek { position: fixed; z-index: 1; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 10px); display: grid; gap: 4px; max-height: calc(15dvh - 18px);
+    padding: 8px 12px; border-radius: 14px; overflow: hidden; cursor: pointer; text-align: left;
+    background: var(--panel); border: 1px solid var(--line); box-shadow: 0 12px 30px -16px rgb(2 6 23 / .5); }
+  .co-peek-head { display: flex; align-items: center; gap: 8px; min-width: 0; font: 600 12.5px/1.2 var(--font); color: var(--strong); }
+  .co-peek-head .co-ava { width: 22px !important; height: 22px !important; font-size: 9px !important; border-radius: 7px; }
+  .co-peek-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .co-peek-on { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; font: 500 11px/1 var(--font); color: var(--dim); white-space: nowrap; }
+  .co-peek-on .co-dot { width: 6px; height: 6px; }
+  .co-peek-a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 12.5px; line-height: 1.45; color: var(--text); }
+  .co-peek-cite { display: inline-grid; place-items: center; min-width: 16px; height: 15px; padding: 0 4px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-2); font: 600 10px/1 var(--mono); vertical-align: 1px; }
+}
+@media (max-width: 899px) and (max-height: 600px) { .co-peek { display: none; } .co-layer.is-bottom .co-sheet { height: 92dvh; max-height: 92dvh; } }
+
+/* Header pill during activation. CONTRACT-GAP (B): B's #st-price has no pending state; E sets :root[data-co-act].
+   Phones keep the "Activating…" words beside the spinner (an unlabeled spinner reads as broken); once the poll ends
+   pending, the spinner pill becomes a static "Setup pending" outline pill (the Builder card has Check again). */
+@media (max-width: 899px) {
+  html:root #st-price[data-level="activating"] { gap: 6px; padding: 0 12px; }
+  html:root #st-price[data-level="activating"] .st-act-l { position: static; width: auto; height: auto; overflow: visible; clip: auto; font-size: 12.5px; }
+}
+:root[data-co-act="pending"] #st-pricewrap > #st-price, :root[data-co-act="pending"] #st-pricewrap > .st-tip { display: none !important; }
+:root[data-co-act="pending"] #st-pricewrap::before { content: "Setup pending"; display: inline-flex; align-items: center; height: 36px; padding: 0 14px 0 27px; border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--warn) 45%, var(--line-2)); color: var(--strong); font: 600 13px/1 var(--font); white-space: nowrap;
+  background: radial-gradient(circle at 14px 50%, var(--warn) 0 3.5px, transparent 4.5px) no-repeat, color-mix(in srgb, var(--warn) 7%, transparent); }
+@media (max-width: 899px) { :root[data-co-act="pending"] #st-pricewrap::before { height: 40px; padding: 0 12px 0 25px; font-size: 12.5px; background-position: 0 0, 0 0; } }
+
+/* touch: the header text link and the folded stub keep >= 44 px targets */
+@media (max-width: 899px), (pointer: coarse) {
+  .co-sum-view { min-height: 44px; margin: -8px 0; }
+  .co-addfirst .co-link { display: inline-block; padding: 10px 0; margin: -10px 0; }
+}
+
+/* ------------------------------------------------------------------ fixer r7 (D8/D9/D10) */
+/* Desktop checkout docks on the RIGHT, the same edge as the receipt panel it continues; the brand, header and Builder
+   stay put on the left. */
+.co-layer.is-side { place-items: stretch end; }
+.co-layer.is-side .co-sheet { justify-self: end; border-radius: 20px 0 0 20px; border-left: 1px solid var(--line); border-right: 0; box-shadow: -30px 0 60px -30px rgb(2 6 23 / .45); }
+/* The receipt panel is a non-modal side panel: the covered live bot is not dimmed (a transparent click-to-close veil) */
+.co-stage-layer.is-right .co-stage-backdrop, :root[data-theme="dark"] .co-stage-layer.is-right .co-stage-backdrop { background: transparent; cursor: default; }
+.co-stage-h { margin: 0; outline: none; border-radius: 6px; }
+.co-stage-h:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Activation: a quiet clock beside the status line */
+.co-act-clock { font: 500 12.5px/1 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.co-act-meter[hidden], .co-act-skel[hidden] { display: none; }
+.co-act[data-state="slow"] .co-act-ico { background: var(--warn-soft); color: var(--warn); }
+.co-act-meter i { transition-duration: .95s; }
+@media (max-width: 899px), (pointer: coarse) {
+  .co-x { width: 44px; height: 44px; }
+  .co-act-actions .co-btn { min-height: 44px; }
+}
+.co-layer.is-side .co-sheet { margin-top: var(--co-side-top, 0px); height: calc(100dvh - var(--co-side-top, 0px)); border-radius: 18px 0 0 0; }
+.co-thumb { margin: 0; }
+.co-thumb-cap { display: block; }
+@media (max-width: 899px), (pointer: coarse) {
+  .co-foot .co-link, .co-addfirst .co-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0; margin: -13px 0; vertical-align: middle; }
 }

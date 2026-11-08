@@ -136,6 +136,10 @@ button:disabled { cursor: default; }
 .st-iconbtn:active { transform: scale(.94); }
 .st-iconbtn[aria-pressed="true"] { color: var(--accent-2); background: var(--accent-soft); }
 .st-iconbtn-sm { width: 30px; height: 30px; border-radius: 8px; }
+/* r6: the motion toggle is a labelled switch ("Motion on"), not an ambiguous glyph */
+.st-iconbtn.st-motion-btn { display: inline-flex; align-items: center; gap: 6px; width: auto; padding: 0 10px 0 8px; font: 500 12.5px/1 var(--font, inherit); white-space: nowrap; }
+.st-motion-state { min-width: 2.1em; padding: 3px 6px; border-radius: 999px; background: var(--raise); color: var(--strong); font-size: 11px; font-weight: 600; text-align: center; }
+.st-motion-btn[aria-checked="false"] .st-motion-state { background: var(--accent-soft); color: var(--accent-2); }
 
 /* PriceButton ladder: ghost → outline → solid (SPEC 6.1) */
 .st-tipwrap { position: relative; display: inline-flex; }
@@ -237,6 +241,14 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
   opacity: .15; animation: st-breathe 1.2s var(--ease-in-out, ease-in-out) infinite alternate; will-change: opacity;
 }
 @keyframes st-breathe { to { opacity: .9; } }
+/* r7 (D6): frame-budget governor (motion.js). The map canvas gets its own compositor layer so its redraw never re-rasters
+   the rows around it; in lite detail the ambient loops stop (still state, same information) so the signature gets the frames. */
+#in-map-slot .map-canvas { will-change: transform; }
+:root[data-lite] .st-working::after { animation: none; opacity: .6; will-change: auto; }
+:root[data-lite] .st-composer.is-busy { animation: none; border-color: var(--accent); background: var(--panel); }
+:root[data-lite] .st-node[data-state="active"] .st-node-dot::before { animation: none; }
+:root[data-lite] .st-typing-dots i { animation-duration: 1800ms; }
+[data-signature] .st-chip, [data-signature] .st-card { transition-property: transform, opacity, border-color, background-color; }
 [data-signature] .st-ambient, [data-signature] .st-node[data-state="active"] .st-node-dot::before, [data-signature] .st-working::after { animation-play-state: paused; }
 :root[data-motion="reduce"] .st-node[data-state="active"] .st-node-dot::before,
 :root[data-motion="reduce"] .st-working::after, :root[data-motion="reduce"] .st-ambient { animation: none; }
@@ -273,18 +285,18 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
    CONTRACT-GAP (D): bandMode() ribbons at 2 answers and the intake collapses to the Sources chip only when every file is
    Ready; the critic asks for both on the FIRST answer. Until ingest.js does that, this grid gives the thread its room. */
 .st-bot[data-asked="1"] > #sb-thread-slot { flex: 1 1 auto; min-height: min(55%, calc(100% - 250px)); }
-.st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])):not(:has(.map-band[data-table="on"])) {
+.st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not([data-kb-pin]):not([data-kb-table]) {
   height: clamp(88px, 13%, 120px) !important; min-height: 56px !important; flex: 0 1 auto !important;
 }
-.st-bot[data-asked="1"] > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) {
+.st-bot[data-asked="1"] > #in-intake-slot[data-kb-open] {
   min-height: 48px !important; max-height: 22%; flex: 0 1 auto !important;
 }
-.st-bot[data-asked="1"] > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) > .in-panel { max-height: 100%; overflow: auto; overscroll-behavior: contain; }
+.st-bot[data-asked="1"] > #in-intake-slot[data-kb-open] > .in-panel { max-height: 100%; overflow: auto; overscroll-behavior: contain; }
 @media (max-width: 899px) {
-  .st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])):not(:has(.map-band[data-table="on"])) { height: 72px !important; min-height: 56px !important; }
+  .st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not([data-kb-pin]):not([data-kb-table]) { height: 72px !important; min-height: 56px !important; }
   /* the 72 px strip keeps the HUD and the dots; the legend would collide with the HUD (it returns in the full band) */
-  .st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not(:has(.map-pin[aria-pressed="true"])) .map-legend { display: none; }
-  .st-bot[data-asked="1"] > #in-intake-slot:has(> .in-panel:not([data-collapsed="yes"])) { max-height: 18%; }
+  .st-bot[data-asked="1"] > #in-map-slot:not([data-mode="ribbon"]):not([data-kb-pin]) .map-legend { display: none; }
+  .st-bot[data-asked="1"] > #in-intake-slot[data-kb-open] { max-height: 18%; }
 }
 .st-bot > #in-drop-slot > * { pointer-events: auto; }
 #sb-drawer-slot { grid-area: 1 / 1 / 2 / -1; position: relative; z-index: 30; min-width: 0; min-height: 0; pointer-events: none; }
@@ -326,6 +338,21 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
   font: 500 12px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--accent-2); white-space: nowrap;
 }
 .st-main[data-drawer="open"] .st-bothead-id { min-width: 12ch; flex: 1 1 auto; }
+/* r7 (D7): phones <= 420 px: the readiness banner becomes the same compact pill (icon-free "1/2 files"; the sentence
+   stays in the title and in the banner's live text for screen readers), the bot name keeps 10+ characters */
+@media (max-width: 420px) {
+  .st-bothead-banner[data-narrow] { flex: 0 0 auto; justify-content: flex-end; }
+  .st-bothead-banner[data-narrow] > #st-bot-banner { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .st-bothead-banner[data-narrow][data-compact]::before {
+    content: attr(data-compact); display: inline-flex; align-items: center; height: 26px; padding: 0 9px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+    font: 500 12px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--accent-2); white-space: nowrap;
+  }
+  .st-bothead-banner[data-narrow="warn"][data-compact]::before { border-color: color-mix(in srgb, var(--warn) 34%, var(--line)); background: var(--warn-soft); color: var(--strong); }
+  .st-bothead-id { min-width: 11ch; flex: 1 1 auto; }
+  .st-header-left .st-botchip { min-width: 124px; }
+  .st-botchip-edit { display: none; }
+}
 .st-version { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 12px; cursor: pointer; }
 .st-version:hover { color: var(--strong); border-color: var(--line-2); }
 .st-seg { display: inline-flex; padding: 2px; border-radius: 10px; background: var(--raise); border: 1px solid var(--line); }
@@ -353,11 +380,14 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-log:focus-visible, #sb-thread-slot:focus-visible { outline: var(--st-focus); outline-offset: -2px; }
 .st-msg { max-width: 72ch; contain: layout paint; border-radius: 12px; }
 /* perf r4: older Builder turns skip rendering work while off screen (their last size is remembered) */
+/* r6 (D7): only messages far above the view (40+ back) skip rendering; nearer ones kept 80-100 px placeholder gaps when
+   a chip row collapsed while they were skipped (the remembered size was the old, taller one). */
 .st-msg.is-old { content-visibility: auto; contain-intrinsic-size: auto 96px; }
 .st-log > * { overflow-anchor: auto; }
 /* retired chip rows that still have messages below them: inert, quiet, same height (nothing jumps) */
 .st-chips.is-stale { opacity: .42; filter: saturate(.3); pointer-events: none; transition: opacity var(--dur-3) var(--ease-out); }
 .st-chips.is-stale .st-chip.is-chosen { opacity: 1; }
+.st-chip.is-gone { visibility: hidden; }   /* an asked chip keeps its slot: the row never reflows (r5, CLS) */
 .st-msg-a { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; align-items: start; }
 .st-msg-a > .st-glyph { margin-top: 1px; }
 .st-msg-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -418,8 +448,17 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-chip-primary:hover { background: var(--btn-hover); border-color: transparent; }
 .st-chip-probe { border-style: dashed; color: var(--st-refusal); }
 .st-chip-probe .st-chip-ico { color: var(--st-shield); }
-.st-chips.has-choice .st-chip:not(.is-chosen) { opacity: .55; }
+/* r7 (D7/D9): a used row keeps only the chosen chip, at full contrast with a check (it stays operable: re-opening a sheet
+   is a fair second tap); the other options leave with the click (input-driven, no layout shift counted) */
+.st-chips.has-choice .st-chip:not(.is-chosen) { display: none; }
 .st-chips.has-choice .st-chip.is-chosen { border-color: var(--accent); }
+.st-chips.has-choice .st-chip.is-chosen::after {
+  content: ''; flex: none; width: 13px; height: 13px; margin-left: 1px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+/* r7 (D7): an emptied chip row takes no height at all (no blank gap under a progress turn) */
+.st-chips:empty { display: none; }
 
 /* composer */
 .st-composer-wrap { flex: none; padding: 10px var(--st-gutter) calc(14px + var(--kb-inset)); border-top: 1px solid var(--line); background: var(--panel); }
@@ -707,6 +746,12 @@ textarea.st-text { resize: vertical; }
      fit above the tab bar, down to 375 x 667 (the old 55% minimum pushed the composer under the tabs) */
   .st-bot[data-asked="1"] > #sb-thread-slot { flex: 1 1 0; min-height: 96px; }
   .st-bot > #sb-composer-slot { padding-bottom: 0; }
+  /* r7 (D10 blocker): the pane is one flex column that always ends above the tab bar. The header, suggestions and the
+     composer never shrink; the map and the file list give up height first and the list scrolls inside,
+     so the bot composer stays reachable with any number of file rows or errors. */
+  .st-bot > #in-intake-slot:not(:empty) { flex: 0 1 auto !important; min-height: 56px; overflow: auto; overscroll-behavior: contain; }
+  .st-bot > #in-map-slot { flex-shrink: 1 !important; min-height: 56px; }
+  .st-bot > #st-bot-header, .st-bot > #sb-suggest-slot, .st-bot > #sb-composer-slot { flex-shrink: 0 !important; }
   #sb-drawer-slot { grid-area: 1 / 1 / 2 / 2; }
 
   .st-tabs { display: block; position: relative; z-index: 30; border-top: 1px solid var(--line); background: var(--panel); padding-bottom: env(safe-area-inset-bottom); }
@@ -785,7 +830,9 @@ textarea.st-text { resize: vertical; }
 /* Files are ready but nothing has been asked: the empty thread says what to do instead of showing a blank band.
    app.js sets data-prompt on the slot (no :has() here: a :has() over the bot pane re-matched on every DOM change and
    cost long frames under CPU throttle). */
-#sb-thread-slot[data-prompt="1"] { display: grid; place-items: center; }
+/* r5 (CLS): the prompt sits at the BOTTOM of the thread, just above the suggestions it points at. When the intake
+   collapses to its Sources chip the thread grows upward; bottom-aligned content stays where it is (centred, it jumped). */
+#sb-thread-slot[data-prompt="1"] { display: grid; place-items: end center; padding-bottom: 14px; }
 #sb-thread-slot[data-prompt="1"] > * { grid-area: 1 / 1; }
 #sb-thread-slot[data-prompt="1"]::before {
   content: 'Ask your first question: tap a suggestion below, or type your own.'; grid-area: 1 / 1;
@@ -835,9 +882,11 @@ textarea.st-text { resize: vertical; }
   :root[data-net="reconnecting"] .st-botchip .st-avatar::after { background: var(--accent); }
 }
 
-/* D10: the peek bar has its own slot: it sits over the 32 px spine row (never over the map HUD) */
+/* r7 (D7/D10): the peek bar lives IN the tab bar: for the 4 s it shows it sits over the two tabs (it is itself the way
+   to the Builder tab), so it never covers the bot header, the Bot/Proof toggle, the spine, the thread or the composer,
+   and nothing in the panes moves (no layout shift) */
 @media (max-width: 899px) {
-  .st-peek { top: var(--st-header-h); left: 0; right: 0; height: var(--st-spine-h); min-height: 0; padding: 0 12px; border-radius: 0; box-shadow: 0 6px 12px -10px rgb(2 6 23 / .4); font-size: 12.5px; }
+  .st-tabs > .st-peek { position: absolute; top: 6px; left: 8px; right: 8px; bottom: auto; z-index: 2; width: auto; margin: 0; height: 44px; min-height: 44px; padding: 0 12px; border-radius: 12px; box-shadow: 0 6px 16px -10px rgb(2 6 23 / .45); font-size: 12.5px; }
 }
 
 /* D7: mono metadata reads as whole tokens (ProofDrawer docked squeezes these) */
@@ -847,7 +896,8 @@ textarea.st-text { resize: vertical; }
 
 /* D9: "Files on the map" scroller: a 44 px hit area on touch without changing the layout */
 @media (pointer: coarse), (max-width: 899px) {
-  .map-chips { padding-top: 11px; padding-bottom: 11px; margin-top: -11px; margin-bottom: -11px; }
+  /* r6: id-scoped so ingest.css (loaded after) cannot reset it; 18 px row + 2 x 13 px = 44 px of hit area */
+  #in-map-slot .map-chips { padding-top: 13px; padding-bottom: 13px; margin-top: -13px; margin-bottom: -13px; min-height: 44px; box-sizing: border-box; align-items: center; }
 }
 
 /* D1: landing. Before any file exists the map band is a short idle field of atoms (static dots in the file hues), the
@@ -856,13 +906,12 @@ textarea.st-text { resize: vertical; }
 :root:not([data-built]):not([data-returning]):not([data-intent]) .st-bot > #in-map-slot { height: 128px !important; min-height: 128px !important; }
 :root:not([data-built]):not([data-returning]):not([data-intent]) #in-map-slot .map-empty { display: none; }
 :root:not([data-built]):not([data-returning]):not([data-intent]) #in-map-slot .map-band[data-state="empty"] .map-stage {
+  /* r6 (D1): an empty map is a clean, faint grid (no atom-looking dots: on the map one dot is one atom) */
   background:
-    radial-gradient(circle, color-mix(in srgb, var(--f0) 55%, transparent) 1.3px, transparent 1.8px) 0 0 / 23px 19px,
-    radial-gradient(circle, color-mix(in srgb, var(--f1) 50%, transparent) 1.2px, transparent 1.7px) 9px 7px / 31px 23px,
-    radial-gradient(circle, color-mix(in srgb, var(--f2) 45%, transparent) 1.1px, transparent 1.6px) 4px 13px / 37px 29px,
-    radial-gradient(circle, color-mix(in srgb, var(--f3) 45%, transparent) 1.2px, transparent 1.7px) 17px 3px / 43px 31px;
-  -webkit-mask-image: radial-gradient(60% 75% at 50% 50%, #000, transparent 90%); mask-image: radial-gradient(60% 75% at 50% 50%, #000, transparent 90%);
-  opacity: .8;
+    linear-gradient(color-mix(in srgb, var(--line) 70%, transparent) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 70%, transparent) 1px, transparent 1px) 0 0 / 28px 28px;
+  -webkit-mask-image: radial-gradient(65% 80% at 50% 50%, #000, transparent 92%); mask-image: radial-gradient(65% 80% at 50% 50%, #000, transparent 92%);
+  opacity: .7;
 }
 @media (max-width: 899px) {
   :root:not([data-built]):not([data-returning]):not([data-intent]) .st-bot > #in-map-slot { height: 112px !important; min-height: 112px !important; }
@@ -957,4 +1006,149 @@ textarea.st-text { resize: vertical; }
   .st-pill-live { padding: 0 9px; }
   .st-botchip { min-width: 0; }
   .st-header-left .st-botchip { min-width: 88px; }
+}
+
+/* ================================================================== r5 fixes (owner B) */
+
+/* D1: the map hero is the quiet alternative (outline), the Builder's chip stays the one solid primary */
+.st-hero-go {
+  height: 40px; padding: 0 16px; gap: 8px; border-radius: 12px;
+  color: var(--accent-2); font: 600 14px/1 var(--font); letter-spacing: 0;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1.5px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 8px 22px -16px rgb(15 23 42 / .35);
+}
+.st-hero-go:hover { background: var(--accent-soft); color: var(--accent-2); border-color: var(--accent); box-shadow: 0 10px 24px -16px rgb(15 23 42 / .4); }
+.st-hero-sub { background: var(--accent-soft); color: var(--accent-2); }
+@media (max-width: 899px) { .st-hero-go { min-height: 44px; } }
+
+/* D7: the insights stats line wraps (never clipped mid-word); the setup-probe note is a footnote line */
+.st-insights .st-card-meta { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.45; min-width: 0; }
+.st-insights .st-ins-foot { display: block; margin-top: 2px; font-size: 11px; color: var(--dim); }
+
+/* D8: the proof strip's result phrase is never cut (italic descenders included) */
+.st-prun { height: auto; min-height: 30px; padding-block: 3px; }
+.st-prun-q { line-height: 1.5; padding: 1px 3px 1px 0; }
+.st-prun-q[data-expect="ok"] { color: var(--good); font-style: normal; font-weight: 600; }
+.st-prun-q[data-expect="fail"] { color: var(--warn); font-style: normal; }
+
+/* D6/D10: toasts are their own view-transition layer (never scaled with the page snapshot); the receipt morph on a
+   phone uses the 300-400 ms token */
+.st-toasts { view-transition-name: st-toasts; }
+::view-transition-group(st-toasts) { animation-duration: 0s; }
+@media (max-width: 899px) {
+  :root::view-transition-group(launch-receipt) { animation-duration: 320ms; }
+  :root::view-transition-group(bot-identity), :root::view-transition-group(bot-identity-head) { animation-duration: 320ms; }
+}
+
+
+/* D10: phones say "Offline" in words in the header (the amber dot alone was not enough); reconnecting stays the dot */
+@media (max-width: 899px) {
+  :root[data-net="offline"] .st-header-right .st-pill-net { display: inline-flex !important; }
+  :root[data-net="offline"] .st-botchip .st-avatar::after { display: none; }
+}
+
+/* D10: Activating on a phone is the spinner alone (its words stay the button's accessible name) so the bot name keeps
+   its room */
+@media (max-width: 899px) {
+  .st-price[data-level="activating"] { min-width: 44px; padding: 0 14px; justify-content: center; }
+  .st-price[data-level="activating"] .st-act-l { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+
+/* D10: the last chip row of the Builder log always clears the composer (and the home indicator) */
+@media (max-width: 899px) {
+  .st-log { padding-bottom: calc(28px + env(safe-area-inset-bottom)); scroll-padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
+}
+
+/* D7: an empty card holder never takes room */
+.st-card-holder:empty, .st-msg-cards:empty { display: none; }
+.st-msg-cards:not(:has(> :not(:empty))) { display: none; }
+
+/* D7: on a phone the readiness banner gets only the room the name and the v2 / Bot|Proof controls leave; when that is
+   a sliver it is not drawn at all (it used to show as a stray green pill edge behind the version chip) */
+@media (max-width: 899px) {
+  .st-bothead-banner { container-type: inline-size; overflow: hidden; }
+  @container (max-width: 96px) { #st-bot-banner, .st-prun { display: none !important; } }
+}
+@media (max-width: 899px) {
+  /* offline on a phone: the word, no icon, and the BotChip drops its pencil so the bot name keeps its room */
+  :root[data-net="offline"] .st-header-right .st-pill-net > .st-ico, :root[data-net="offline"] .st-header-right .st-pill-net > svg { display: none; }
+  :root[data-net="offline"] .st-header-right .st-pill-net { padding: 0 8px; }
+  :root[data-net="offline"] .st-botchip-edit { display: none; }
+  :root[data-net="offline"] .st-header-left .st-botchip { min-width: 96px; }
+}
+
+/* ================================================================== r6 fixes (owner B) */
+
+/* D1: the first turn previews the three steps (desktop); it collapses when the first file lands */
+.st-next { list-style: none; margin: 14px 0 0; padding: 12px 14px; display: grid; gap: 10px; border-radius: 12px; border: 1px dashed var(--line-2); background: color-mix(in srgb, var(--panel-2) 70%, transparent); counter-reset: none; }
+.st-next li { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; font-size: 13px; line-height: 1.4; color: var(--muted); }
+.st-next li > b { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-2); font: 600 11.5px/1 var(--mono); }
+.st-next li > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.st-next strong { color: var(--strong); font-weight: 600; }
+@media (max-width: 899px), (max-height: 640px) { .st-next { display: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduce"]) .st-next li { animation: st-next-in var(--dur-3, 320ms) var(--ease-out, ease-out) both; }
+  :root:not([data-motion="reduce"]) .st-next li:nth-child(2) { animation-delay: 90ms; }
+  :root:not([data-motion="reduce"]) .st-next li:nth-child(3) { animation-delay: 180ms; }
+}
+@keyframes st-next-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* D1: the map's sample entry is a quiet text link on phones only (desktop: the Builder chip is the one primary) */
+@media (min-width: 900px) { .st-hero { display: none !important; } }
+.st-hero-go.st-hero-link {
+  height: auto; min-height: 44px; padding: 0 12px; border: 0; box-shadow: none; background: transparent;
+  color: var(--accent-2); font: 500 14px/1.2 var(--font); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px;
+}
+.st-hero-go.st-hero-link:hover { background: transparent; box-shadow: none; transform: none; text-decoration-thickness: 2px; }
+
+/* D7: retired chip rows leave the log (inline `hidden` wins over every display rule) */
+.st-chips[hidden] { display: none !important; }
+
+/* D6 perf (r6): on desktop each pane is sized by the grid alone, so a change inside one (a Builder line, a file row, a
+   streamed answer) never re-lays out the other pane or the page: size containment on both panes */
+@media (min-width: 900px) {
+  .st-setup { contain: strict; }
+  .st-bot { contain: size layout style; }
+}
+
+/* D1 (r6): before any file exists the map shows no atom-like dots (on the map one dot is one atom): the idle canvas is
+   hidden under the clean grid until the first file lands. CONTRACT-GAP (D, ingest.js): the idle dot field and the
+   "· empty" label could be dropped at the source. */
+:root:not([data-built]):not([data-returning]):not([data-intent]) #in-map-slot .map-band[data-state="empty"] .map-canvas { visibility: hidden; }
+/* D1 (r6): the example answer's avatar is the bot's own monogram, not a blank square. CONTRACT-GAP (C, samplebot.js):
+   .sb-ghost-av could render the real avatar; B paints the monogram meanwhile. */
+.sb-ghost-av { display: inline-grid; place-items: center; color: #fff; font: 700 11px/1 var(--display); letter-spacing: .02em; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .15); }
+.sb-ghost-av::before { content: "SB"; }
+:root[data-theme="dark"] .sb-ghost-av { color: #0b1020; }
+
+/* D7 (r6): desktop toasts hug the SampleBot pane's right edge at the top of the thread (never over the chips) */
+@media (min-width: 900px) { .st-toasts { align-items: flex-end; } }
+
+/* ================================================================== r7 fixes (owner B) */
+/* D1: before the first answer the desktop header shows the price, the theme and one ⋯ overflow (motion, palette, spec) */
+@media (min-width: 900px) {
+  :root[data-early] .st-header-right #st-motion, :root[data-early] .st-header-right #st-kbd { display: none !important; }
+  :root[data-early] .st-header-right #st-more { display: inline-grid; }
+}
+/* D1: landing (no file yet) on desktop: the empty map band collapses to its 52 px title row (no blurred empty field),
+   and the example answer sits in the optical centre of the pane under the drop target, not at the top of a dotted void */
+@media (min-width: 900px) {
+  :root:not([data-built]):not([data-returning]):not([data-intent]) .st-bot > #in-map-slot { height: 52px !important; min-height: 52px !important; overflow: hidden; }
+  :root:not([data-built]):not([data-returning]):not([data-intent]) .st-bot > #sb-thread-slot:not(:empty) { display: flex; flex-direction: column; justify-content: center; padding-bottom: 6vh; }
+}
+/* D2: the spec drawer lists the bot's auto starters under the pinned ones (one tap to pin) */
+.st-starters-auto { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.st-starters-auto:empty { display: none; }
+.st-starter-auto { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 4px 4px 10px; border-radius: 10px; border: 1px dashed var(--line-2); color: var(--text); font-size: 13.5px; }
+.st-starter-auto .st-starter-q { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.st-starter-auto .st-tag { margin-left: 0; flex: none; }
+.st-starter-auto .st-btn { flex: none; }
+@media (max-width: 899px) { .st-starter-auto { min-height: 48px; } .st-starter-auto .st-btn { min-height: 44px; } }
+/* D11: "What people ask" on a narrow card: the question wraps in full on its own line, its bar / tag and count under it
+   (nothing is ellipsized, so every asked question can be read) */
+@container (max-width: 520px) {
+  .st-ins-row, .st-ins-gaps .st-ins-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; column-gap: 8px; }
+  .st-ins-row > .st-ins-q { grid-column: 1 / -1; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.4; }
+  .st-ins-row > .st-ins-bar { align-self: center; }
+  .st-ins-gaps .st-ins-row > .st-ins-tag { justify-self: start; }
 }

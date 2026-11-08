@@ -87,6 +87,12 @@ const sha1 = (s) => createHash('sha1').update(String(s)).digest('hex');
 const normText = (s) => oneLine(String(s ?? '').toLowerCase().replace(/[*_`#>|]+/g, ' '));
 const pct = (x) => (x == null ? null : Math.round(Number(x) * 100));
 const plural = (n, w, p = `${w}s`) => `${n} ${n === 1 ? w : p}`;
+/** fixer r6: "1,234 atoms" / "1 atom" with thousands separators. */
+const atomsN = (n) => `${Number(n || 0).toLocaleString('en-US')} ${Number(n) === 1 ? 'atom' : 'atoms'}`;
+/** fixer r6: org-derived names read as names ("bike shop" -> "Bike Shop"); acronyms and inner capitals are kept. */
+export function titleWords(x) {
+  return String(x || '').trim().split(/\s+/).filter(Boolean).map((w, i) => (i > 0 && /^(?:of|and|the|for|a|an|in|on|at|to|&)$/i.test(w) ? w.toLowerCase() : /[A-Z]/.test(w.slice(1)) || /^[A-Z0-9]/.test(w) ? w : w[0].toUpperCase() + w.slice(1))).join(' ');
+}
 const fmtMB = (bytes) => { const mb = bytes / 1048576; return mb >= 10 ? mb.toFixed(0) : mb >= 0.1 ? mb.toFixed(1) : mb.toFixed(2); };
 
 /** Display title for a file: its first heading (from the hit's breadcrumb) or a cleaned file name. */
@@ -145,10 +151,18 @@ const ERROR_COPY = [
   [/too large|size/i, 'too_large', 'This file is too large to process.'],
   [/timeout|timed out/i, 'timeout', 'Processing timed out. Try again.'],
 ];
-export function mapError(raw) {
+/** fixer r5: "scanned image" is only said of files that can be one (PDF, images); a text file with no text is empty or corrupted. */
+const SCAN_CAPABLE_RE = /^(?:pdf|png|jpe?g|gif|webp|tiff?|bmp|heic)$|^application\/pdf$|^image\//i;
+export function mapError(raw, { mime = null, ext = null, name = null } = {}) {
   const s = typeof raw === 'string' ? raw : raw?.message || raw?.error || JSON.stringify(raw ?? '');
   const hit = ERROR_COPY.find(([re]) => re.test(s));
-  return { code: hit?.[1] || 'upstream', message: hit?.[2] || 'Processing failed on our side. Try again.', raw: clip(s, 200) };
+  let message = hit?.[2] || 'Processing failed on our side. Try again.';
+  if (hit?.[1] === 'no_text') {
+    const e = String(ext || (name ? String(name).split('.').pop() : '') || '').toLowerCase();
+    const scan = (e && SCAN_CAPABLE_RE.test(e)) || (mime && SCAN_CAPABLE_RE.test(String(mime)));
+    if (!scan && (e || mime)) message = 'This file has no readable text (it may be empty or corrupted).';
+  }
+  return { code: hit?.[1] || 'upstream', message, raw: clip(s, 200) };
 }
 
 /** Studio stage from a raw knowDrive row (spec 4.6). */
@@ -362,7 +376,7 @@ export function parseIntent(message, ctx = {}) {
   const files = ctx.files || [];
   const anyReady = files.some((f) => f.stage === 'ready');
   let m;
-  if ((m = /\b(?:call|name)\s+it\s+["“']?([^"”'.,!?\n]{2,40})/i.exec(msg)) || (m = /\b(?:called|named)\s+["“']?([^"”'.,!?\n]{2,40})/i.exec(msg)) || (m = /\bname:\s*["“']?([^"”'\n]{2,40})/i.exec(msg))) {
+  if ((m = /\b(?:call|name)\s+it\s+["“']?([^"”'.,!?\n]{2,40})/i.exec(msg)) || (m = /\brename\s+(?:it\s+|the bot\s+)?(?:to|as)\s+["“']?([^"”'.,!?\n]{2,40})/i.exec(msg)) || (m = /\b(?:called|named)\s+["“']?([^"”'.,!?\n]{2,40})/i.exec(msg)) || (m = /\bname:\s*["“']?([^"”'\n]{2,40})/i.exec(msg))) {
     const name = m[1].trim().replace(/\s+(?:and|with|for|that|which)\b.*$/i, '').trim();
     if (name.length >= 2) { patch.name = name.slice(0, 40); intents.push('name'); }
   }
@@ -381,7 +395,11 @@ export function parseIntent(message, ctx = {}) {
     if (org.length >= 2 && !/^(?:customers?|clients?|employees?|staff|team|students?|users?|visitors?|website|site|business|company|files?|docs?|self)$/i.test(org)) {
       business = org.toLowerCase();
       // fixer r4: "my bike shop called Spokes": the business is Spokes; "bike shop" is what kind of business it is
-      const brand = patch.name ? patch.name.replace(/\s+(?:help|helper|bot|assistant|guide|answers|support|desk|ai|chat|faq)$/i, '').trim() : '';
+      // fixer r5: only when the name clause names the BUSINESS ("my bike shop called Spokes"); "call it Paddle Pal" names
+      // the bot, so "for my kayak rental shop" stays the org and the bot name is never copied into it.
+      const orgRe = org.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&');
+      const namesBusiness = new RegExp('\\b(?:my|our)\\s+(?:own\\s+)?' + orgRe + '\\s*,?\\s*(?:called|named)\\b', 'i').test(msg);
+      const brand = patch.name && namesBusiness ? patch.name.replace(/\s+(?:help|helper|bot|assistant|guide|answers|support|desk|ai|chat|faq)$/i, '').trim() : '';
       if (brand && BUSINESS_NOUN_RE.test(org)) patch.org = brand.slice(0, 60);
       else patch.org = (org[0].toUpperCase() + org.slice(1)).slice(0, 60);
       intents.push('org');
@@ -410,7 +428,8 @@ export function parseIntent(message, ctx = {}) {
   else if (/\bstudents?\b/i.test(msg)) { patch.audience = 'students'; intents.push('audience'); }
   if (/\b(support|help ?desk|hr|policy|policies|docs|documentation|faq|onboarding|handbook)\b/i.test(msg) && /\b(bot|assistant|agent|helper)\b/i.test(msg)) {
     let p = msg.replace(/\b(?:call|name)\s+it\s+["“']?[^"”'.,!?\n]{2,40}["”']?/i, '').replace(/\b(?:called|named)\s+["“']?[^"”'.,!?\n]{2,40}["”']?/i, '')
-      .replace(/\b(friendly|casual|warm|formal|professional|neutral|short(er)?|concise|brief)\b/gi, '').replace(/^\s*(?:i\s+(?:want|need)\s+)?(?:a|an)\s+/i, '')
+      .replace(/\b(friendly|casual|warm|formal|professional|neutral|short(er)?|concise|brief)\b/gi, '').replace(/^[\s,;:.!-]+/, '')
+      .replace(/^\s*(?:it'?s\s+|it\s+is\s+|make\s+it\s+)?(?:i\s+(?:want|need)\s+)?(?:a|an)\s+/i, '')
       .replace(/[\s,;:.!-]+$/g, '').replace(/\s*,\s*(?=,|$)/g, '').replace(/\s{2,}/g, ' ').trim();
     if (p.length >= 4) { patch.purpose = (p[0].toUpperCase() + p.slice(1)).slice(0, 200); intents.push('purpose'); }
   }
@@ -441,11 +460,26 @@ export function parseIntent(message, ctx = {}) {
     if (phrase && !/^(?:upload|make|call|name|test|run|launch|sample|use the sample)/i.test(phrase)) { scope = phrase.slice(0, 120); intents.push('set_scope'); }
   }
   if (!scope && /\b(?:use|search|enable|turn on|answer from)\s+(?:all|every)\s+(?:of\s+)?(?:my\s+|the\s+)?(?:files|docs|sources)\b|\banswer about everything\b/i.test(msg)) { scope = '*'; intents.push('set_scope'); }
+  // fixer r7 (D2): Builder questions about the product itself, never routed to the bot as a question for its files
+  if (DEV_INTENT_RE.test(msg)) intents.push('open_developers');
+  if (INSIGHTS_INTENT_RE.test(msg)) intents.push('show_insights');
+  if (INVENTORY_INTENT_RE.test(msg)) intents.push('show_inventory');
+  if (REFUSAL_INTENT_RE.test(msg)) intents.push('explain_refusal');
+  if (LANGUAGE_INTENT_RE.test(msg)) intents.push('explain_language');
+  // greeting: "set the greeting to 'Welcome to Spokes!'" patches it; "change the greeting" asks what it should say
+  if ((m = /\b(?:greeting|welcome message|first message|opening line)\s*(?:to|:|=|as|should (?:say|be)|says?)\s*["“']?([^"”'\n]{3,160}?)["”']?\s*[.!]?\s*$/i.exec(msg))) { patch.greeting = m[1].trim(); intents.push('greeting'); }
+  else if (/\b(?:greeting|welcome message|first message|opening line)\b/i.test(msg)) intents.push('ask_greeting');
   const isQuestion = /\?\s*$/.test(msg);
   const meta = intents.filter((x) => !['ack'].includes(x));
   if (isQuestion && anyReady && !meta.length && !Object.keys(patch).length) { actions.push({ type: 'ask_samplebot', question: clip(msg, 500) }); intents.push('ask_question'); }
   return { patch, actions, intents, scope, customTone, business };
 }
+// fixer r7 (D2): Builder intents about the product (developer API, insights, inventory, the refusal line, languages)
+export const DEV_INTENT_RE = /\b(?:(?:my|our)\s+own\s+(?:app|site|website|code|product|system|software|platform|interface|ui|frontend|backend|stack)|(?:from|in|into|inside|with)\s+(?:my|our)\s+(?:app|code|backend|server|frontend|product|software|platform|system|website|interface|ui)|integrat(?:e|ion|ions|ing)|developer (?:api|docs?|tab|access|mode|portal|keys?)|\bapis?\b|sdks?|webhooks?|programmatic(?:ally)?|endpoints?|curl|openai[- ]compatible|rest api|json api|api keys?)\b/i;
+export const INSIGHTS_INTENT_RE = /\b(?:what (?:did|have|do|are|were) (?:people|visitors|users|customers|they|folks|i|we) (?:ask(?:ed|ing)?|been asking)|(?:questions?|things) (?:people|visitors|users|customers) (?:ask|asked)|questions? (?:so far|asked so far)|asked so far|(?:question )?insights?|analytics|most (?:asked|common|popular) questions?|top questions?|(?:show|see) (?:me )?(?:the )?(?:questions|stats|statistics)|what (?:gaps|questions) (?:are there|did it miss|went unanswered)|unanswered|(?:which|what) questions? (?:did it|could it|couldn'?t it|has it|did my bot) (?:miss|refuse|answer)|what (?:couldn'?t|could not|didn'?t) it answer)\b/i;
+export const INVENTORY_INTENT_RE = /\b(?:what(?:'s| is| do i have) in (?:my|the|our|its|your) (?:files?|docs?|documents?|sources?|knowledge|data)|what do(?:es)? (?:my|the|our|its) (?:files?|docs?|documents?|sources?) (?:cover|say|contain|include|have)|what (?:does|did) (?:it|my bot|the bot|\w+ help) (?:learn|know)(?: so far)?|what (?:does|did) it learn|what (?:files|docs|documents) (?:do i|did i|does it|have i)|(?:list|show) (?:me )?(?:my|the|all) (?:files|docs|documents|sources)|which (?:files|docs|documents) (?:does it|do i|did i|are)|what (?:topics|subjects) (?:does it|do my files|can it))\b/i;
+export const REFUSAL_INTENT_RE = /\b(?:refusal(?: message| line| text)?|(?:change|edit|customi[sz]e|rewrite|reword|set) (?:the |its |my )?(?:refusal|fallback|"?i don'?t know"?|not found|no answer)(?: message| line| text| reply)?|when it (?:doesn'?t|does not|can'?t|cannot|won'?t) (?:know|answer|find)|(?:fallback|no[- ]answer|not[- ]found|i don'?t know) (?:message|answer|reply|line|text)|what (?:does|will) it say when)\b/i;
+export const LANGUAGE_INTENT_RE = /\b(?:answer|answers|reply|replies|respond|responds|speak|speaks|talk|chat|work|works|understand|understands|support|supports|handle|handles|in)\b[^.?!]{0,30}\b(?:french|spanish|german|italian|portuguese|dutch|chinese|mandarin|japanese|korean|arabic|hindi|polish|swedish|turkish|russian|other languages|another language|many languages|multiple languages)\b|\b(?:what|which|how many) languages?\b|\bmultilingual\b|\btranslat(?:e|es|ed|ion|ions|ing)\b|\blanguages? (?:does it|can it|it) (?:speak|support|answer)\b/i;
 const BUSINESS_NOUN_RE = /\b(?:shop|store|business|company|startup|caf[eé]|coffee shop|restaurant|bar|pub|bakery|clinic|practice|surgery|studio|salon|spa|gym|agency|firm|hotel|hostel|b&b|school|academy|nursery|garage|workshop|brand|boutique|bookshop|pharmacy|dealership|brewery|winery|farm|charity|nonprofit|non-profit|club|team|venue|library|museum|co-?op|marketplace|platform|app|saas)$/i;
 function specificWords(msg) {
   return (String(msg).toLowerCase().replace(/['’]/g, '').match(/[a-z0-9]+/g) || []).filter((w) => !LAUNCH_GENERIC.has(w) && w.length > 1);
@@ -510,11 +544,31 @@ export const GENERIC_LINE_RE = /\b(?:this|the following|our)\s+(?:page|policy|do
  */
 export function keepRelevantLines(question, picks, lineText, atomSim, margin = LINE_MARGIN, { isIntro = () => false } = {}) {
   if (!Array.isArray(picks) || picks.length < 2) return picks || [];
-  const q = lineTerms(question);
-  const scored = picks.map((n) => ({ n, s: lineScore(question, lineText(n), atomSim(n), q) }));
+  // fixer r7: a multi-part question ("How much is a spare battery and how long is it covered?") is scored per clause:
+  // each line against the clause it answers best, and every clause keeps its own best line, so a complete two-part
+  // answer is never trimmed back to one part
+  const clauses = questionClauses(question);
+  const parts = clauses.length > 1 ? clauses : [question];
+  const terms = parts.map((c) => lineTerms(c));
+  const scored = picks.map((n) => {
+    const per = parts.map((c, i) => lineScore(c, lineText(n), atomSim(n), terms[i]));
+    return { n, per, s: Math.max(...per) };
+  });
   const best = Math.max(...scored.map((x) => x.s));
-  const top = scored.find((x) => x.s === best);
-  return scored.filter((x) => x === top || (x.s >= best - margin && !GENERIC_LINE_RE.test(lineText(x.n) || '') && !isIntro(x.n))).map((x) => x.n);
+  const tops = new Set(parts.map((_, i) => scored.reduce((a, b) => (b.per[i] > a.per[i] ? b : a))));
+  const good = (x) => !GENERIC_LINE_RE.test(lineText(x.n) || '') && !isIntro(x.n) && !/\?\s*$/.test(lineText(x.n) || '');
+  // fixer r5: an interrogative line ("Does servicing my bike elsewhere void the warranty?") never rides along as a claim
+  return scored.filter((x) => (x.s === best && x === scored.find((y) => y.s === best)) || (tops.has(x) && good(x) && parts.length > 1) || (x.s >= best - margin && good(x))).map((x) => x.n);
+}
+// fixer r7: the clauses of a multi-part question; a pronoun clause ("how long is it covered") borrows the head noun of
+// the first clause ("battery"). One clause = [question].
+const CLAUSE_SPLIT_RE = /\s*[,;]?\s+\band\b\s+(?=(?:how|what|what's|whats|when|where|which|who|why|is|are|do|does|can|could|will|would|should|did)\b)|\?\s+(?=\S)|;\s+/i;
+export function questionClauses(question) {
+  const q = String(question || '').trim();
+  const parts = q.split(CLAUSE_SPLIT_RE).map((x) => x.trim()).filter((x) => lineTerms(x).size >= 1);
+  if (parts.length < 2) return [q];
+  const head = [...lineTerms(parts[0])].filter((w) => !/^(?:cost|much|many|long|include|warranty|year)$/.test(w)).pop() || '';
+  return parts.slice(0, 3).map((c, i) => (i > 0 && head && /\b(?:it|its|they|them|their|that|this|those|these|one)\b/i.test(c) ? `${c} ${head}` : c));
 }
 
 // ------------------------------------------------------------------------------------------- sentences (fixer r3)
@@ -586,6 +640,10 @@ export function answerCheck(question, quotedTexts, expected = null) {
 }
 
 // ------------------------------------------------------------------------------------------- topics (fixer r3)
+/** fixer r6: a bigram ending in a verb or auxiliary ("arm has", "warranty lasts") is a clause fragment, not a topic. */
+const TOPIC_VERB = new Set(('has have had is are was were be been being does did can will lasts last costs cost includes include covers cover takes take '
+  + 'gets get ships ship offers offer provides provide requires require needs means applies apply runs comes goes makes allows lets uses keeps starts ends '
+  + 'opens closes returns pays charges holds contains comprises features supports works helps fits weighs measures stays remains becomes says').split(' '));
 const TOPIC_STOP = new Set(('a an the and or but of to in on at for from by with about as is are was were be been do does did can could will would '
   + 'should i me my we our you your it its this that these those there what which who when where why how all any each every other some such '
   + 'than then so just also more most very not no yes if up out into over under per via full new same own day days year years section part').split(' '));
@@ -663,6 +721,7 @@ export function topicsOf(atoms, { n = 3, skipTitle = true, bigrams = true } = {}
           const [x, y] = [ws[i - 1], ws[i]];
           if (TOPIC_STOP.has(x) || TOPIC_STOP.has(y) || x.length < 3 || y.length < 3 || /(?:ly|ing)$/.test(x) || /ly$/.test(y)) continue;
           if (/[^s]s$/.test(x) && /s$/.test(y)) continue; // fixer r4: "suits riders", "covers frames": a verb and its object
+          if (TOPIC_VERB.has(y) || TOPIC_VERB.has(x) || /^\d/.test(y)) continue; // fixer r6: "arm has", "warranty lasts", "covers frames"
           const k = `${x} ${y}`; bi.set(k, (bi.get(k) || 0) + 1);
         }
       }
@@ -693,7 +752,7 @@ export function sectionLine(atoms, fallbackTitle = '') {
   return lineText[0].toUpperCase() + lineText.slice(1);
 }
 const PASSIVE_OK = /^(?:covered|warrantied|guaranteed|insured|valid|paid|held|kept|stored)$/i;
-const NOT_NOUN = new Set('is are was were be been being can could will would should must may might have has had do does did get gets got use used make made need needs take takes give gives go goes see let up out off very only also just not no there here it this that they we you he she'.split(' '));
+const NOT_NOUN = new Set('is are was were be been being can could will would should must may might have has had do does did get gets got use used make made need needs take takes give gives go goes see let up out off very only also just not no there here it this that they we you he she its their his her my our your these those them him'.split(' '));
 /** A starter's subject must read as a noun phrase ("Laptops", "the hotel", "Carbon forks"), never a clause fragment. */
 export function nounPhraseOk(subj) {
   const ws = String(subj || '').trim().split(/\s+/);
@@ -711,10 +770,21 @@ export function docNounOf(name) {
   return `the ${k}`;
 }
 
+/** fixer r6: "the rental item 1", "option 2": a generic noun plus a number is a placeholder, not something a customer asks about. */
+export function genericNumbered(q) {
+  return /\b(?:items?|products?|options?|things?|rows?|entry|entries|lines?|units?|articles?|elements?|parts?|pieces?|types?|categor(?:y|ies)|no\.?|numbers?|examples?|samples?|services?|packages?|tiers?|levels?|records?|cases?)\s*#?\d+[a-z]?\b/i.test(String(q || ''));
+}
+/** fixer r6: near-identical starters ("... item 1 ..." / "... item 2 ...") share one skeleton; keep the first. */
+export function starterSkeleton(q) {
+  return String(q || '').toLowerCase().replace(/\d+(?:[.,]\d+)*/g, '#').replace(/[^a-z#]+/g, ' ').trim();
+}
 /** A generated starter reads as a real question: no passive "How long is X <verb>ed?" unless X is covered/valid. */
 export function starterGrammarOk(q) {
   const s = String(q || '').trim();
   if (!/^[A-Z].{6,140}\?$/.test(s) || /\b(?:the|a|an) (?:the|a|an)\b/i.test(s) || /\b(\w+) \1\b/i.test(s)) return false;
+  // fixer r6: "How long does the its warranty last?": an article before a possessive or demonstrative never reads
+  if (/\b(?:the|a|an) (?:its|their|his|her|my|our|your|this|these|those)\b/i.test(s)) return false;
+  if (genericNumbered(s)) return false;
   const m = /^How long (?:is|are) (.+?) (\w+ed|valid)\?$/i.exec(s);
   if (m && !PASSIVE_OK.test(m[2])) return false;
   if (/^How long (?:is|are) (?:the |a |an )?[\w' -]+ (?:used|replaced|required|needed|made|given|done|taken)\?$/i.test(s)) return false;
@@ -899,16 +969,18 @@ export function createStudio(o = {}) {
     const payload = b64u(JSON.stringify({ t: trialId, e: Number(expiresAt) }));
     return `${payload}.${restoreSig(payload)}`;
   }
+  // fixer r5: an unknown id or a key that doesn't verify is 404 not_found ("we couldn't find that bot link"), never the
+  // false "expired" claim; only a genuine key past its trial's expiry is 410 expired.
   function verifyRestore(key, trialId) {
     const [payload, sig] = String(key || '').split('.');
-    const bad = () => fail(401, 'unauthorized', 'This link is not valid. Start a new bot, or open it on the device where you made it.');
+    const bad = () => fail(404, 'not_found', "We couldn't find that bot link. Open your saved bot, or start a new one.");
     if (!payload || !sig || !/^[\w-]{10,400}$/.test(payload) || !/^[\w-]{10,40}$/.test(sig)) bad();
     const a = Buffer.from(sig), b = Buffer.from(restoreSig(payload));
     if (a.length !== b.length || !timingSafeEqual(a, b)) bad();
     let data;
     try { data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { bad(); }
     if (data.t !== trialId) bad();
-    if (!(Number(data.e) > now())) fail(401, 'expired', 'This trial expired and its files were deleted.');
+    if (!(Number(data.e) > now())) fail(410, 'expired', 'This trial expired and its files were deleted.');
     return data;
   }
   const bearer = (req) => { const a = String(req.headers.authorization || ''); return a.startsWith('Bearer ') ? a.slice(7).trim() : ''; };
@@ -978,11 +1050,20 @@ export function createStudio(o = {}) {
     T.specTimer = setTimeout(() => { flushSpec(T); }, 2000);
     T.specTimer.unref?.();
   }
+  // fixer r7 (D2): who set each identity field. A field the person set (typed in the Builder or edited in the spec) is
+  // never overwritten by a sample set's draft; the draft only fills fields that still hold their default.
+  const PROVENANCE_FIELDS = ['name', 'org', 'tone', 'length', 'greeting', 'purpose', 'audience'];
   function applyPatch(T, patch, by = 'user') {
     const r = validatePatch(patch, T.spec, { floorMin: floorDefault });
     if (r.email !== undefined) T.email = r.email;
     const prev = T.spec;
     T.spec = r.next;
+    if (by !== 'samples') {
+      const set = r.diff.filter((d) => PROVENANCE_FIELDS.includes(d.field)).map((d) => d.field);
+      // asking for a value that is already set ("make it friendly" while friendly) also makes it the person's choice
+      for (const k of Object.keys(patch)) if (PROVENANCE_FIELDS.includes(k) && !set.includes(k)) set.push(k);
+      if (set.length) { T.flags.userSet = { ...(T.flags.userSet || {}), ...Object.fromEntries(set.map((k) => [k, by])) }; saveSpecSoon(T); }
+    }
     if (r.diff.length || r.email !== undefined) saveSpecSoon(T);
     if (r.diff.some((d) => d.field === 'sources' || d.field === 'floor')) T.questionsCache = null;
     return { ...r, prev, by };
@@ -1000,7 +1081,7 @@ export function createStudio(o = {}) {
     let error = null;
     if (stage === 'failed') {
       const raw = r.last_error ?? r.status_details ?? r.error ?? (fileStage(r) === 'ready' ? 'no text: 0 atoms' : 'failed');
-      error = (fileStage(r) === 'ready' && !(r.atom_count > 0)) ? { code: 'no_text', message: `${name} finished but had no readable text (0 atoms).`, raw: '0 atoms' } : mapError(raw);
+      error = (fileStage(r) === 'ready' && !(r.atom_count > 0)) ? { code: 'no_text', message: `${name} finished but had no readable text (0 atoms).`, raw: '0 atoms' } : mapError(raw, { ext, name, mime: r.mime_type || MIME_OF[ext] || null });
     }
     const t = now();
     const stamps = T.stageAt.get(r.id) || {};
@@ -1261,9 +1342,30 @@ export function createStudio(o = {}) {
       const v = vector.find((x) => x.atomId && x.atomId === h.atomId) || vector.find((x) => x.fileId === h.fileId && x.seq != null && x.seq === h.seq) || vector.find((x) => key200(x) === key200(h));
       if (v) { v.rrf = h.rrf; v.hybridRank = h.hybridRank; h.joined = v; }
     }
-    const hybridOnly = hyb.filter((h) => !h.joined);
-    const top = vector.length ? Math.max(...vector.map((h) => h.similarity ?? 0)) : 0;
-    return { vector, hybridOnly, top, files };
+    let hybridOnly = hyb.filter((h) => !h.joined);
+    let merged = vector;
+    // fixer r7: a multi-part question is also searched clause by clause (query decomposition), and each clause's two
+    // best atoms are kept first, so "How much is an E-bike Service and how long are batteries covered?" reaches both
+    // the service list and the warranty page instead of filling every slot from one of them
+    const clauses = hybrid ? questionClauses(query) : [query];
+    if (clauses.length > 1) {
+      const per = await Promise.all(clauses.map((c) => rawSearch(c, 'vector', 6, filter, signal).catch(() => [])));
+      const keyOf = (h) => h.atomId || `${h.fileId}|${h.seq}|${sha1(normText(h.text).slice(0, 200))}`;
+      const byKey = new Map(vector.map((h) => [keyOf(h), h]));
+      const lists = per.map((raw) => raw.map((d) => normHit(d, 'vector')).filter(ok).filter((h) => h.text).map((h) => {
+        const k = keyOf(h), cur = byKey.get(k);
+        if (cur) { if ((h.similarity ?? 0) > (cur.similarity ?? 0)) cur.similarity = h.similarity; return cur; }
+        byKey.set(k, h); return h;
+      }).sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0)));
+      const first = [];
+      for (let r = 0; r < 2; r++) for (const l of lists) if (l[r] && !first.includes(l[r])) first.push(l[r]);
+      const rest = [...byKey.values()].filter((h) => !first.includes(h)).sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
+      merged = [...first, ...rest];
+      const inV = new Set(merged);
+      hybridOnly = hybridOnly.filter((h) => !inV.has(h));
+    }
+    const top = merged.length ? Math.max(...merged.map((h) => h.similarity ?? 0)) : 0;
+    return { vector: merged, hybridOnly, top, files };
   }
 
   // ------------------------------------------------------------------------- summaries + questions
@@ -1358,9 +1460,11 @@ export function createStudio(o = {}) {
    * (its line score at or above the floor, and a duration / amount when the question asks for one), so a starter never
    * leads to a grounded-but-wrong answer.
    */
-  async function validateQ(T, q, files, fileId, { strict = false } = {}) {
+  async function validateQ(T, q, files, fileId, { strict = false, relaxed = false } = {}) {
     const r = await retrieve(T, q, { files, hybrid: false, vectorK: 5 });
     const best = r.vector[0];
+    if (relaxed) return best && (best.similarity ?? 0) >= T.spec.floor && (!fileId || best.fileId === fileId)
+      ? { q, fileId: best.fileId, file: files.find((x) => x.id === best.fileId)?.name || '', top: best.similarity, atomKey: best.atomId || `${best.fileId}|${sha1(normText(best.text).slice(0, 200))}` } : null;
     if (!best || (best.similarity ?? 0) < T.spec.floor + 0.02) return null;
     if (fileId && best.fileId !== fileId) return null;
     // a heading question ("What does the handbook say about travel policy?") is answered by its section: its top hit
@@ -1370,10 +1474,19 @@ export function createStudio(o = {}) {
       const crumbs = String(best.crumb || '').split(' > ').map((c) => cleanTopic(c).toLowerCase()).filter(Boolean);
       if (!crumbs.includes(about.toLowerCase())) return null;
     } else if (strict) {
-      const lines = String(best.text).split('\n').flatMap((l) => splitSentences(l.replace(/^\s*(?:[-*•]|\d+[.)])\s+|^#+\s+/, ''))).filter((l) => l.split(/\s+/).length >= 4 && !/\?\s*$/.test(l));
+      // fixer r7: the answering line must be among the passages an ask would keep (top 6 at the floor, this file) and
+      // must cover what the question is about ("late returns"), not just share one word with it ("returned")
       const qt = lineTerms(q);
-      const ranked = lines.map((l) => ({ l, s: lineScore(q, l, best.similarity, qt) })).sort((a, b) => b.s - a.s);
-      if (!ranked.length || ranked[0].s < T.spec.floor || !answerCheck(q, [ranked[0].l]).ok) return null;
+      const core = [...qt].filter((t) => !/^(?:cost|much|many|long|price|fee|charge|how|what|when|where|which|who|why|does|do|is|are)$/.test(t));
+      const ok = r.vector.slice(0, 6).filter((h) => (h.similarity ?? 0) >= T.spec.floor && (!fileId || h.fileId === fileId)).some((h) => {
+        const lines = String(h.text).split('\n').flatMap((l) => splitSentences(l.replace(/^\s*(?:[-*•]|\d+[.)])\s+|^#+\s+/, ''))).filter((l) => l.split(/\s+/).length >= 4 && !/\?\s*$/.test(l));
+        const ranked = lines.map((l) => ({ l, s: lineScore(q, l, h.similarity, qt) })).sort((a, b) => b.s - a.s);
+        const r0 = ranked[0];
+        if (!r0 || r0.s < T.spec.floor || !answerCheck(q, [r0.l]).ok) return false;
+        const lt = lineTerms(r0.l);
+        return !core.length || core.filter((t) => lt.has(t)).length >= Math.ceil(core.length * 0.67);
+      });
+      if (!ok) return null;
     }
     const f = files.find((x) => x.id === best.fileId);
     return { q, fileId: best.fileId, file: f?.name || '', top: best.similarity, atomKey: best.atomId || `${best.fileId}|${sha1(normText(best.text).slice(0, 200))}` };
@@ -1394,6 +1507,8 @@ export function createStudio(o = {}) {
         const body = sent.trim().slice(art ? art.length + 1 : 0);
         const m = /^([A-Za-z][\w-]*(?: [\w-]+){0,4}?) (costs?|includes?|lasts?|takes?|covers?|is open|ships?) /.exec(body);
         if (!m || (!art && !/^[A-Z]/.test(m[1])) || m[1].split(/\s+/).length > 5 || /^(?:It|This|That|They|We|You|There|If|When)$/.test(m[1]) || !nounPhraseOk(m[1])) continue;
+        // fixer r6: "Its warranty lasts 2 years" never becomes "the its warranty"; a generic numbered entity is skipped
+        if (/^(?:its|their|his|her|my|our|your|this|these|those)\b/i.test(m[1]) || genericNumbered(m[1])) continue;
         const proper = /^[A-Z][a-z]+\s+[A-Z]|^[A-Z]{2,}|^[A-Z][a-z]*\d/.test(m[1]);
         const subj = proper ? m[1] : m[1][0].toLowerCase() + m[1].slice(1);
         const plural = /^(?:cost|include|last|take|cover|ship)$/.test(m[2]) && !proper;
@@ -1410,7 +1525,7 @@ export function createStudio(o = {}) {
       const rows = String(a.text).split('\n').filter((l) => /^\s*\|/.test(l));
       // only a priced table ("Price", "Cost", "Fee" header or a money cell) asks "How much is …?"
       const priced = rows.length > 2 && (/\b(?:price|cost|fee|rate|amount)\b/i.test(rows[0]) || rows.slice(2).some((r) => /[$€£]\s?\d/.test(r)));
-      if (priced) for (const r of rows.slice(2, 6)) { const cell = r.replace(/^\s*\|/, '').split('|')[0].trim(); if (cell && !/^-+$/.test(cell) && nounPhraseOk(cell)) out.push(`How much is the ${cell}?`); }
+      if (priced) for (const r of rows.slice(2, 6)) { const cell = r.replace(/^\s*\|/, '').split('|')[0].trim(); if (cell && !/^-+$/.test(cell) && nounPhraseOk(cell) && !genericNumbered(cell)) out.push(`How much is the ${cell}?`); }
     }
     // fixer r3: heading questions read naturally ("What does the handbook say about travel policy?"), never
     // "How does section 4 work?"; headings are cleaned of numbering first
@@ -1423,7 +1538,9 @@ export function createStudio(o = {}) {
       const lower = /^[A-Z][a-z]/.test(t) && !/^[A-Z][a-z]+\s+[A-Z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t; // keep proper names
       out.push(`What does ${noun} say about ${lower}?`);
     }
-    return [...new Set(out)].slice(0, 24);
+    // fixer r6: every candidate passes the grammar gate, and "item 1" / "item 2" twins keep only the first
+    const skel = new Set();
+    return [...new Set(out)].filter((q) => starterGrammarOk(q) && !skel.has(starterSkeleton(q)) && skel.add(starterSkeleton(q))).slice(0, 24);
   }
   /** "E-bike batteries are covered for 2 years" → "How long are e-bike batteries covered?" (pure; validated by the caller). */
   function factQuestions(atoms) {
@@ -1432,8 +1549,15 @@ export function createStudio(o = {}) {
     const lc = (x) => (/^[A-Z][a-z]+\s+[A-Z]|^[A-Z]{2,}|^[A-Z][a-z]*\d/.test(x) ? x : x[0].toLowerCase() + x.slice(1));
     for (const a of atoms) {
       for (const raw of String(a.text).split('\n').flatMap(splitSentences)) {
-        const sent = raw.replace(/^[-*•]\s+|^#+\s+/, '').trim();
+        // fixer r7: a numbered label ("Policy 12: …", "Rule 4b: …") is not part of the sentence's subject
+        const sent = raw.replace(/^[-*•]\s+|^#+\s+/, '').replace(/^[A-Z][A-Za-z ]{0,30}\s\d+[a-z]?[:.)]\s+(?=[A-Z])/, '').trim();
         if (sent.length < 18 || sent.length > 220 || /\?$/.test(sent) || /^\|/.test(sent)) continue;
+        // fixer r7: "Late returns of a rental kayak are charged $35 per day" -> "How much do late returns cost?"
+        const ch = /^(?:The |A |An )?([A-Z][\w'’-]*(?: [\w'’-]+){0,6}?) (is|are) (?:charged|billed) (?:at |an extra |a fee of )?[$€£]\s?\d/.exec(sent);
+        if (ch) {
+          const head = ch[1].replace(/\s+(?:of|for|on|at|in|after|from|with)\s+.*$/i, '');
+          if (head.split(/\s+/).length <= 4 && nounPhraseOk(head) && !genericNumbered(head)) { const h = lc(head); out.push(`How much ${ch[2] === 'are' ? 'do' : 'does'} ${/^[A-Z]/.test(h) || ch[2] === 'are' ? '' : 'the '}${h} cost?`); continue; }
+        }
         const hasMoney = /[$€£]\s?\d|\d+(?:\.\d+)?\s?%/.test(sent);
         const dur = /\b(?:\d+|one|two|three|four|five|six|seven|ten|thirty)\s+(?:business\s+|working\s+|calendar\s+)?(?:days?|weeks?|months?|years?|hours?|minutes?)\b|\blifetime\b/i.test(sent);
         if (!hasMoney && !dur && !POLICY.test(sent)) continue;
@@ -1442,6 +1566,7 @@ export function createStudio(o = {}) {
         if (has && nounPhraseOk(has[1])) { out.push(`${/[$€£]/.test(has[2]) ? 'How much is' : 'What is'} the ${has[1]}?`); continue; }
         const m = /^(?:(?:The|A|An|Our|Your|All|Every) (?=[A-Za-z]))?((?<=^(?:The|A|An|Our|Your|All|Every) )[A-Za-z][\w'’-]*(?: [\w'’-]+){0,4}?|[A-Z][\w'’-]*(?: [\w'’-]+){0,4}?) (is|are|can be|must be|will be|carry|carries|cost|costs|take|takes|last|lasts|get|gets|receive|receives|include|includes) (.+)$/.exec(sent);
         if (!m || /^(?:It|This|That|They|We|You|There|If|When|Please|Here)$/.test(m[1].split(' ')[0])) continue;
+        if (/^(?:Its|Their|His|Her|My|These|Those)$/i.test(m[1].split(' ')[0]) || genericNumbered(m[1])) continue; // fixer r6
         if (!nounPhraseOk(m[1])) continue; // fixer r3: "Up to 5 unused days" / "Outside core hours you" are not subjects
         const subj = lc(m[1]);
         const plural = /s$/.test(subj.split(' ').pop()) && !/(?:ss|us)$/.test(subj);
@@ -1504,10 +1629,28 @@ export function createStudio(o = {}) {
         tried.add(q);
         if (tried.size > 60) break;
         const v = await validateQ(T, q, files, f.id, { strict: true });
-        if (v && !out.some((x) => x.atomKey === v.atomKey)) out.push(v); // one question per passage: no two starters with the same answer
+        if (v && !out.some((x) => x.atomKey === v.atomKey || starterSkeleton(x.q) === starterSkeleton(v.q))) out.push(v); // one question per passage: no two starters with the same answer
         if (out.length >= 4) break;
       }
       if (tried.size > 60) break;
+    }
+    // fixer r7: a large file always gets at least one starter. One more pass relaxes the floor margin and the line check
+    // (still a passage in this file at the floor), then a question about one of its topics.
+    if (!out.length && Number(f.atoms || atoms.length) >= 100) {
+      for (const q of [...tried].slice(0, 20)) {
+        const v = await validateQ(T, q, files, f.id, { relaxed: true });
+        if (v) { out.push(v); break; }
+      }
+      if (!out.length) {
+        const noun = docNounOf(f?.name);
+        const topics = [...(f.summary?.topics || T.summaries.get(f.id)?.topics || []), ...topicsOf(atoms, { n: 3 })];
+        for (const t of [...new Set(topics.map((x) => cleanTopic(String(x))).filter(Boolean))].slice(0, 4)) {
+          const q = `What does ${noun} say about ${/^[A-Z][a-z]+\s+[A-Z]/.test(t) ? t : t.toLowerCase()}?`;
+          if (!starterGrammarOk(q)) continue;
+          const v = await validateQ(T, q, files, f.id, { relaxed: true });
+          if (v) { out.push(v); break; }
+        }
+      }
     }
     return out;
   }
@@ -1531,8 +1674,12 @@ export function createStudio(o = {}) {
       // a sample question is only offered once the file that answers it is Ready: its top hit must be in that file, not a
       // neighbouring line that merely scores above the floor ("How much is the Care Plan?" against the price list)
       const atHome = (q, v) => homeOk(byFile, q, v, files);
-      for (const q of sq.starters) { const v = await validateQ(T, q, files); if (v && ready.some((f) => f.id === v.fileId) && atHome(q, v)) starters.push(v); }
-      for (const q of sq.proof) { const v = await validateQ(T, q, files); if (v && ready.some((f) => f.id === v.fileId) && atHome(q, v)) proof.push(v); }
+      // fixer r7: a multi-source question ("How much is a spare E-City battery and how long is it covered?") is only
+      // offered once every sample file is Ready, so its [1][2] answer is never half-answered mid-ingest
+      const samplesReady = files.filter((f) => f.sample && f.enabled).every((f) => f.stage === 'ready');
+      const offerable = (q) => samplesReady || questionClauses(q).length < 2;
+      for (const q of sq.starters) { if (!offerable(q)) continue; const v = await validateQ(T, q, files); if (v && ready.some((f) => f.id === v.fileId) && atHome(q, v)) starters.push(v); }
+      for (const q of sq.proof) { if (!offerable(q)) continue; const v = await validateQ(T, q, files); if (v && ready.some((f) => f.id === v.fileId) && atHome(q, v)) proof.push(v); }
       // fixer r1: 3 starters from the FIRST ready file(s), several per file from different atoms, the rest as more finish
       for (const f of ready.filter((x) => x.sample)) {
         if (starters.length >= 3) break;
@@ -1787,12 +1934,27 @@ export function createStudio(o = {}) {
       event: body.event && typeof body.event === 'object' && typeof body.event.type === 'string' ? { type: body.event.type, data: body.event.data && typeof body.event.data === 'object' ? body.event.data : {} } : null,
       context: body.context && typeof body.context === 'object' ? body.context : {},
     };
+    // fixer r5: free text equals chips (chat-first principle 6): a typed message that matches a chip on offer runs that chip
+    if (input.message && !input.chip && !input.event) {
+      const hit = chipFromText(T, input.message);
+      if (hit) {
+        if (hit.send && hit.send !== input.message) input.message = clip(hit.send, 1000);
+        else if (!hit.send && CHIP_SENDS[hit.id] != null) { input.chip = hit.id; input.message = null; }
+        else if (!hit.send && hit.action) input.chipAction = hit;
+      }
+    }
+    // fixer r7: the inventory and insights replies name a real question per file: warm the question cache first
+    if (input.message && (INVENTORY_INTENT_RE.test(input.message) || INSIGHTS_INTENT_RE.test(input.message))) { try { await withTimeout(questionsFor(T), 4000); } catch {} }
     if (input.event?.type === 'proof_done') {
       try { const qv = await questionsFor(T); input.context = { ...input.context, expectedTotal: (qv.proof?.length || 0) + (qv.probes?.length || 0) }; } catch {}
     }
     let out, engine = 'scripted';
     try {
-      if (builderEngine() === 'llm' && (input.message || input.chip)) {
+      if (input.chipAction) out = { reply: chipActionReply(input.chipAction), actions: [{ ...input.chipAction.action }], chips: stepChips(T, files) };
+      // fixer r7: product questions (developer API, insights, inventory, refusal line, languages) get the scripted
+      // answer with real numbers and the right chips, whichever engine is on
+      else if (builderEngine() === 'llm' && (input.message || input.chip) && !String(CHIP_SENDS[input.chip] || '').startsWith('__')
+        && !(input.message && [DEV_INTENT_RE, INSIGHTS_INTENT_RE, INVENTORY_INTENT_RE, REFUSAL_INTENT_RE, LANGUAGE_INTENT_RE].some((re) => re.test(input.message)))) {
         try { out = await withTimeout(llmTurn(T, files, input), setupTimeoutMs); engine = 'llm'; }
         catch (e) { log(`[studio] Builder LLM fell back to scripted: ${e.message}`); out = null; }
       }
@@ -1820,9 +1982,37 @@ export function createStudio(o = {}) {
     if (out.card) emit('card', out.card);
     for (const a of out.actions || []) emit('action', a);
     const chips = normalizeChips(out.chips, T, files);
+    T.lastChips = chips;
     emit('chips', { chips });
     emit('done', { turnId: `turn_${T.setupTurns}_${randB32(6)}`, engine, ms: Math.round(performance.now() - t0), step: stepOf(T, files) });
     try { res.end(); } catch {}
+  }
+  /** fixer r5: the chip a typed message stands for: one on offer last turn (label or send, case- and punctuation-blind,
+   *  fuzzy on words), or a known phrasing of a launch chip. */
+  const chipNorm = (t) => String(t || '').toLowerCase().replace(/[·$\d/]+mo\b/g, ' ').replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  function chipFromText(T, text) {
+    const t = chipNorm(text);
+    if (!t || t.length > 80) return null;
+    const offered = Array.isArray(T.lastChips) ? T.lastChips : [];
+    for (const c of offered) if (t === chipNorm(c.label) || (c.send && t === chipNorm(c.send))) return c;
+    const tw = new Set(t.split(' '));
+    for (const c of offered) {
+      const lw = chipNorm(c.label).split(' ').filter((w) => w.length > 2);
+      if (lw.length >= 2 && lw.every((w) => tw.has(w)) && tw.size <= lw.length + 3) return c;
+    }
+    if (/\blaunch\b.*\b(?:samples?|anyway)\b|\banyway\b.*\blaunch\b|\b(?:go live|launch)\s+(?:as is|now anyway)\b/.test(t)) {
+      return offered.find((c) => c.id === 'launch-anyway') || { id: 'launch-anyway', label: 'Launch with samples anyway' };
+    }
+    return null;
+  }
+  function chipActionReply(c) {
+    const type = c.action?.type;
+    if (type === 'request_upload') return 'Sure: pick your files on the right.';
+    if (type === 'attach_samples') return 'Loading the sample files now.';
+    if (type === 'run_proof') return 'Running it now.';
+    if (type === 'open_spec') return 'Here is the bot spec.';
+    if (type === 'ask_samplebot') return 'Asking it now.';
+    return `On it: ${clip(c.label || 'done', 40)}.`;
   }
   function chunkWords(text) {
     const words = String(text).match(/\S+\s*|\s+/g) || [];
@@ -1860,12 +2050,14 @@ export function createStudio(o = {}) {
     let list = (Array.isArray(chips) ? chips : []).filter((c) => c && typeof c.label === 'string' && c.label.trim()).map((c, i) => ({
       id: String(c.id || `c${i}`).slice(0, 60), label: clip(oneLine(c.label), 60), kind: ['primary', 'default', 'probe'].includes(c.kind) ? c.kind : 'default',
       ...(c.send ? { send: clip(String(c.send), 500) } : {}), ...(c.action && ACTION_TYPES.has(c.action.type) ? { action: c.action } : {}),
+      ...(c.emit && EMIT_TYPES.has(c.emit.type) ? { emit: { type: c.emit.type, detail: { ...(c.emit.detail || {}) } } } : {}),
     }));
     const seen = new Set();
     list = list.filter((c) => (seen.has(c.label) ? false : seen.add(c.label)));
     if (list.length < 2) for (const c of stepChips(T, files)) if (list.length < 3 && !list.some((x) => x.label === c.label)) list.push(c);
     return list.slice(0, 4);
   }
+  const EMIT_TYPES = new Set(['golive:open']); // fixer r7: client store events a chip may emit (studio/app.js onChip)
   const ACTION_TYPES = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples']);
   const botName = (T) => T.spec.name || 'Your bot';
   /** Enabled files still learning (not Ready, not Failed): a Proof Run waits for them. */
@@ -1935,7 +2127,7 @@ export function createStudio(o = {}) {
     let msg = input.message || '';
     if (!msg && input.chip) msg = CHIP_SENDS[input.chip] ?? input.chip.replace(/[-_]+/g, ' ');
     if (msg === '__launch_force') { T.flags.launchForce = true; saveSpecSoon(T); return launchFlow(T, files, { force: true }); }
-    const renameBase = T.spec.org || String(T.flags.namingProposal || '').replace(/\s+Guide$/, '') || 'Help';
+    const renameBase = titleWords(T.spec.org) || String(T.flags.namingProposal || '').replace(/\s+(?:Guide|Help)$/, '') || 'Help';
     if (msg === '__rename' || /^\s*rename(?: it)?\s*[.!]?\s*$/i.test(msg)) return { reply: 'What should I call it? Type a name, for example "call it Lumen Answers".', chips: [C('name-a', `${renameBase} Assistant`, { send: `Call it ${renameBase} Assistant` }), C('name-b', `Ask ${renameBase === 'Help' ? 'Us' : renameBase}`, { send: `Call it Ask ${renameBase === 'Help' ? 'Us' : renameBase}` }), C('keep-name', `Keep ${name}`, { send: 'Keep the name' })] };
     if (!msg.trim()) return { reply: '', chips: stepChips(T, files) };
     const p = parseIntent(msg, { files, spec: T.spec });
@@ -1944,7 +2136,9 @@ export function createStudio(o = {}) {
     const patch = { ...p.patch };
     // fixer r4: naming the bot (or who it's for) with no greeting yet proposes one in the same ConfigDiff
     if ((patch.name || patch.org) && !T.spec.greeting && !patch.greeting && !has('attach_samples')) {
-      const who = patch.org || T.spec.org || patch.name;
+      // fixer r5: the greeting names who it's for ("the kayak rental shop"), never the bot's own name when an org is known
+      const generic = patch.org && p.business && patch.org.toLowerCase() === p.business;
+      const who = generic ? `the ${p.business}` : patch.org || T.spec.org || patch.name;
       if (who && who !== 'SampleBot') patch.greeting = `Hi! Ask me anything about ${who}.`.slice(0, 160);
     }
     // fixer r4: "only answer about X" limits the searched files (spec.sources) to those whose name or topics match
@@ -1964,6 +2158,19 @@ export function createStudio(o = {}) {
     const diff = preview?.diff || [];
     const step = stepOf(T, files);
     if (has('show_launch')) return { ...launchFlow(T, files), patch };
+    // fixer r7 (D2): questions about the Builder's own product are answered here, never sent to the bot
+    const done = diff.length && confirmChanges(diff) ? `Done: ${lowerFirst(confirmChanges(diff))} ` : '';
+    if (has('explain_refusal')) return { ...refusalReply(T, files), reply: withNotes(`${done}${refusalReply(T, files).reply}`), patch };
+    if (has('open_developers') && !scope) return { ...developersReply(T, msg), reply: withNotes(`${done}${developersReply(T, msg).reply}`), patch };
+    if (has('show_insights')) { const r = insightsReply(T, files); return { ...r, reply: withNotes(`${done}${r.reply}`), patch }; }
+    if (has('show_inventory') && !scope) { const r = inventoryReply(T, files); return { ...r, reply: withNotes(`${done}${r.reply}`), patch }; }
+    if (has('explain_language')) { const r = languageReply(T, files); return { ...r, reply: withNotes(`${done}${r.reply}`), patch }; }
+    if (has('ask_greeting') && !patch.greeting) {
+      const org = T.spec.org && BUSINESS_NOUN_RE.test(T.spec.org) && /^[A-Z][a-z]*(?: [a-z][\w'-]*)+$/.test(T.spec.org) ? `the ${T.spec.org.toLowerCase()}` : T.spec.org;
+      const who = org || (T.spec.name !== 'SampleBot' ? T.spec.name : '') || 'us';
+      return { reply: withNotes(`${done}${T.spec.greeting ? `Right now it opens with "${T.spec.greeting}" ` : ''}What should it say first? Type it, for example: set the greeting to "Welcome! Ask me anything about ${who}."`), patch,
+        chips: [C('greet-a', `Welcome! Ask me about ${clip(who, 24)}`, { send: `Set the greeting to "Welcome! Ask me anything about ${who}."` }), C('greet-b', 'Hi! How can I help?', { send: 'Set the greeting to "Hi! How can I help today?"' }), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })] };
+    }
     if (has('explain_canonical')) return { reply: `${name} never guesses and never searches the internet. It answers only from your files, and when they don't cover a question it says exactly: "${kbLib.NOT_IN_DATA}" To answer more, add a file that covers it.`, patch,
       chips: [C('add-cover', 'Add a file that covers it', { kind: 'primary', action: { type: 'request_upload' } }), C('show-refusal', 'Show me a refusal', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } })] };
     if (has('explain_canonical_bot')) return { reply: `It only answers from the files you give it. It quotes them word for word with [n] citations, and if the answer isn't there it says exactly: "${kbLib.NOT_IN_DATA}" No guessing, ever.`,
@@ -1975,7 +2182,11 @@ export function createStudio(o = {}) {
     if (has('explain_plan')) return { reply: `KnowDrive is $${PRICE}/month: your KnowBot hosted with a share link, an embed widget for any site, 100 MB of storage, citations on every answer and canonical refusals, and question insights so you can see what people ask. Your files carry over. Cancel anytime.`,
       chips: [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
     if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
-    if (has('attach_samples')) return { reply: withNotes(`Loading Lumen Bikes' sample files now. Watch them learn on the right.${diff.length ? ` Also done: ${diff.map((d) => describeChange(d)).filter(Boolean).join(', ')}.` : ''}`), actions: [{ type: 'attach_samples' }], patch, chips: [C('what-atom', "What's an atom?", { send: "What's an atom?" }), C('upload', 'Upload my files too', { action: { type: 'request_upload' } })] };
+    if (has('attach_samples')) {
+      // fixer r7: this is the one "Loading…" line; the samples_attached turn that follows only adds the draft card
+      T.flags.samplesAckTurn = T.setupTurns;
+      return { reply: withNotes(`${diff.length ? `${confirmChanges(diff)} ` : ''}Loading Lumen Bikes' sample docs (warranty, service plans, store FAQ, price list). Watch them learn on the right.`), actions: [{ type: 'attach_samples' }], patch, chips: [C('what-atom', "What's an atom?", { send: "What's an atom?" }), C('upload', 'Upload my files too', { action: { type: 'request_upload' } })] };
+    }
     if (has('run_proof') && !diff.length) {
       if (!ready.length) return { reply: `${name} needs at least one ready file before a Proof Run.`, chips: stepChips(T, files) };
       if (learningOf(files).length) {
@@ -1990,11 +2201,16 @@ export function createStudio(o = {}) {
     if (scope) {
       // CONTRACT-GAP: the 'patch' frame carries a raw `sources` diff row (id → false map); B should render the readable
       // config-diff card sent with this turn (Searching n → k files, per-file On/Off) and skip the raw sources row.
-      const others = diff.filter((d) => d.field !== 'sources').map((d) => describeChange(d)).filter(Boolean);
-      const also = others.length ? ` Also: ${others.join(', ')}.` : '';
-      if (!files.length) return { reply: withNotes(`Add files first, then I can limit ${name} to "${clip(p.scope, 40)}".${also}`), patch, chips: stepChips(T, files) };
+      // fixer r7 (D2): every clause is confirmed in one sentence first ("Shorter answers, and it now speaks to employees."),
+      // including the ones that were already set, then what the scope phrase did
+      const otherDiff = diff.filter((d) => d.field !== 'sources');
+      const already = Object.keys(patch).filter((k) => k !== 'sources' && k !== 'greeting' && !diff.some((d) => d.field === k)).map((k) => alreadyNote(k, T.spec[k])).filter(Boolean);
+      const conf = confirmChanges(otherDiff, already);
+      const lead = conf ? `${conf} ` : '';
+      const also = '';
+      if (!files.length) return { reply: withNotes(`${lead}Add files first, then I can limit ${name} to "${clip(p.scope, 40)}".`), patch, chips: stepChips(T, files) };
       if (scope.none) {
-        return { reply: withNotes(`None of your files match "${clip(p.scope, 40)}", so ${name} still searches all ${plural(files.length, 'file')}. Pick one to keep:${also}`), patch,
+        return { reply: withNotes(`${lead}"${clip(p.scope, 40)}" doesn't match a file, so ${name} still searches all ${plural(files.length, 'file')}. To limit it, pick a file:`), patch,
           chips: [...files.slice(0, 3).map((f, i) => C(`only-${i}`, `Only ${clip(f.name, 34)}`, { send: `use only ${f.name}` })), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })] };
       }
       const rows = [{ field: 'Searching', from: plural(scope.before, 'file'), to: plural(scope.on.length, 'file') },
@@ -2005,11 +2221,11 @@ export function createStudio(o = {}) {
       else if (files.some((f) => f.stage === 'ready')) chips.push(C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }));
       if (scope.on.length < files.length) chips.push(C('all-files', 'Use all files again', { send: 'use all my files' }));
       chips.push(C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } }));
-      const reply = scope.all
+      const reply = lead + (scope.all
         ? `${name} now searches all ${plural(files.length, 'file')} again.${also}`
         : rows.length === 1
           ? `${name} already answers only from ${fileNames(scope.on)}.${also}`
-          : `Done: ${name} now answers only from ${fileNames(scope.on)}. Anything outside ${scope.on.length === 1 ? 'it' : 'them'} gets the refusal line, never a guess.${also}`;
+          : `${lead ? '' : 'Done: '}${name} now answers only from ${fileNames(scope.on)}. Anything outside ${scope.on.length === 1 ? 'it' : 'them'} gets the refusal line, never a guess.${also}`);
       return { reply: withNotes(reply), patch, actions: acts.filter((a) => a.type !== 'show_launch'), chips, ...(rows.length > 1 ? { card: { type: 'config-diff', data: { by: 'setup', rows } } } : {}) };
     }
     if (diff.length) {
@@ -2024,6 +2240,7 @@ export function createStudio(o = {}) {
         return { reply: withNotes(`Done, meet **${nm}**: ${desc}. Now give it something to know: drop files on the right, or use my samples.`), patch,
           chips: [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
       }
+      const alreadySet = Object.keys(patch).filter((k) => k !== 'greeting' && !diff.some((d) => d.field === k)).map((k) => alreadyNote(k, T.spec[k])).filter(Boolean);
       const words = diff.map((d) => describeChange(d)).filter(Boolean);
       const toneNote = diff.some((d) => d.field === 'tone' || d.field === 'length') ? ' Tone and length change the wording around the quotes, never the facts.' : '';
       const strictNote = diff.some((d) => d.field === 'floor') ? ' Higher = refuses more, never guesses.' : '';
@@ -2032,7 +2249,7 @@ export function createStudio(o = {}) {
       if (lastQ && preview?.material) chips.push(C('reask', `Re-ask "${clip(lastQ, 36)}" to compare`, { kind: 'primary', action: { type: 'ask_samplebot', question: lastQ, label: 'Re-ask' } }));
       chips.push(C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } }));
       if (ready.length) chips.push(C('proof', 'Run the Proof Run', { action: { type: 'run_proof', mini: false } })); else chips.push(C('add-files', 'Add more files', { action: { type: 'request_upload' } }));
-      return { reply: withNotes(`Done: ${words.join(', ')}.${toneNote}${strictNote}`), patch, actions: acts.filter((a) => a.type !== 'show_launch'), chips };
+      return { reply: withNotes(`Done: ${lowerFirst(confirmChanges(diff, alreadySet)).replace(/\.$/, '') || words.join(', ')}.${toneNote}${strictNote}`), patch, actions: acts.filter((a) => a.type !== 'show_launch'), chips };
     }
     if (Object.keys(patch).length && !diff.length && preview) {
       // fixer r4: the visitor asked for what is already set: say so in words (never a no-op diff row)
@@ -2059,7 +2276,117 @@ export function createStudio(o = {}) {
     if (/\bkeep the name\b/i.test(msg)) { T.flags.namingDeclined = true; saveSpecSoon(T); return { reply: `Okay, it stays ${name} for now. Rename it anytime: type "call it …".`, chips: stepChips(T, files) }; }
     if (/\bkeep testing\b|\bno thanks\b|\bnot now\b/i.test(msg)) return { reply: `Sure. ${name} is saved for ${ttlDays} days, so take your time.`, chips: stepChips(T, files) };
     if (notes.length) return { reply: notes.join(' '), chips: stepChips(T, files) };
-    return { reply: `I can name your bot, change its tone, limit it to some files or test it. Try "make it more formal", "only answer about returns" or "call it ${T.spec.org ? `${T.spec.org} Help` : 'Spokes'}".`, chips: stepChips(T, files) };
+    return { reply: `I can name your bot, change its tone, limit it to some files or test it. Try "make it more formal", "only answer about returns" or "call it ${T.spec.org ? `${titleWords(T.spec.org)} Help` : 'Spokes'}".`, chips: stepChips(T, files) };
+  }
+  const lowerFirst = (t) => (/^[A-Z][a-z]/.test(t) && !/^(?:I|KnowBot)\b/.test(t) ? t[0].toLowerCase() + t.slice(1) : t);
+  function alreadyNote(k, v) {
+    if (k === 'tone') return `the tone is already ${v}`;
+    if (k === 'length') return v === 'short' ? 'answers are already short' : 'answers already include detail';
+    if (k === 'name') return `it's already called ${v}`;
+    if (k === 'audience') return `it already speaks to ${v}`;
+    if (k === 'floor') return `strictness is already ${fmtFloor(v)}`;
+    return null;
+  }
+  /** fixer r7 (D2): one sentence confirming every applied change ("Shorter answers, and it now speaks to employees."). */
+  function confirmChanges(diff, already = []) {
+    const parts = diff.map((d) => {
+      switch (d.field) {
+        case 'length': return d.to === 'short' ? 'answers are shorter' : 'answers include more detail';
+        case 'tone': return `the tone is ${d.to}`;
+        case 'audience': return `it now speaks to ${d.to}`;
+        case 'name': return `it's called ${d.to}`;
+        case 'org': return `it's for ${d.to}`;
+        case 'floor': return `strictness ${fmtFloor(d.to)}`;
+        case 'greeting': return `it now opens with "${clip(String(d.to || ''), 60)}"`;
+        case 'purpose': return 'a new purpose';
+        case 'sources': case 'avatar': case 'starters': return null;
+        default: return `${d.field} updated`;
+      }
+    }).filter(Boolean).concat(already);
+    if (!parts.length) return '';
+    const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+    return `${list[0].toUpperCase()}${list.slice(1)}.`;
+  }
+  function refusalReply(T, files) {
+    const name = botName(T);
+    const ready = files.some((f) => f.stage === 'ready');
+    return { reply: `The refusal line is fixed on purpose. When your files don't cover a question, ${name} says exactly: "${kbLib.NOT_IN_DATA}" Fixed wording means it can't be talked into guessing, and every visitor gets the same honest answer. What you can change is everything around it: the greeting, the tone and which files it answers from.`,
+      chips: [...(ready ? [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } })] : []),
+        C('greeting', 'Change greeting', { kind: ready ? 'default' : 'primary', send: 'Change the greeting' }),
+        T.spec.tone === 'formal' ? C('shorter', 'Make answers shorter', { send: 'Make answers shorter' }) : C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
+  }
+  function developersReply(T, msg) {
+    const name = botName(T);
+    const site = /\b(?:site|website|web ?page|widget|embed|wordpress|shopify|squarespace|wix|webflow)\b/i.test(msg) && !/\b(?:api|sdk|code|backend|server|endpoint|curl|app)\b/i.test(msg);
+    const golive = (tab, label, kind = 'default') => C(`golive-${tab}`, label, { kind, emit: { type: 'golive:open', detail: { tab } } });
+    // CONTRACT-GAP: studio/app.js dispatchAction (owner B) has no 'open_golive' action, so the Builder can't open the
+    // Go live sheet by itself yet; these chips carry {emit:{type:'golive:open'}} (handled by onChip) and the reply asks
+    // for one tap. When B adds `case 'open_golive': openGoLive(a.tab, a.channel)`, return actions:[{type:'open_golive', tab}].
+    if (site) return { reply: `On your own site, ${name} is one line of embed code: a chat bubble or a full page, with the same cited answers. The snippet is ready in Channels → Text chatbot, and you can try the widget before you launch.`,
+      chips: [golive('channels', 'Channels', 'primary'), golive('developers', 'Developers'), C('launch', `Launch · $${PRICE}/mo`, { action: { type: 'show_launch' } })] };
+    return { reply: `${name} has a chat API for your own app: POST a question, get back the answer with its citations, or the exact refusal. It's OpenAI-compatible, so any OpenAI SDK works by changing the base URL. Your trial key and copy-paste snippets (curl, JavaScript, Python) are in Developers.`,
+      chips: [golive('developers', 'Developers', 'primary'), golive('channels', 'Channels'), C('launch', `Launch · $${PRICE}/mo`, { action: { type: 'show_launch' } })] };
+  }
+  /** The same numbers the insights card shows, without the Builder's own probes. */
+  function insightsData(T) {
+    const probe = (q) => PROBES.includes(q) || PROBE_BACKUPS.includes(q);
+    const raw = localInsights(T, 5);
+    const excluded = T.asked.filter((a) => probe(a.q)).length;
+    const top = raw.top.filter((t) => !probe(t.q));
+    const gaps = raw.gaps.filter((g) => !probe(g.q));
+    const refused = T.asked.filter((a) => !probe(a.q) && a.outcome === 'refused').length;
+    const total = raw.total - excluded;
+    return { total, answered: total - refused, refused, top, gaps, excluded, source: 'session' };
+  }
+  function insightsReply(T, files) {
+    const name = botName(T);
+    const d = insightsData(T);
+    const ready = files.filter((f) => f.stage === 'ready');
+    const starter = T.questionsCache?.value?.starters?.[0]?.q;
+    if (!d.total) {
+      return { reply: `Nobody has asked ${name} anything yet${d.excluded ? ` (the ${plural(d.excluded, 'off-topic test')} I ran don't count)` : ''}. Ask a few questions on the right and I'll show what people ask most and which questions your files don't cover yet. After launch, every visitor's question lands here too.`,
+        chips: ready.length ? [...(starter ? [C('ask-starter', `Ask: "${clip(starter, 36)}"`, { kind: 'primary', action: { type: 'ask_samplebot', question: starter, label: null } })] : []), C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } })]
+          : stepChips(T, files) };
+    }
+    const gap = d.gaps[0];
+    const lead = `${plural(d.total, 'question')} so far: ${d.answered} answered from your files, ${d.refused} refused.`;
+    const tail = gap ? ` The top gap is "${clip(gap.q, 70)}": add a file that covers it and ${name} answers it next time.` : ' Every one was answered from your files.';
+    return { reply: `${lead}${tail}`, card: { type: 'insights', data: d },
+      chips: [gap ? C('add-gap', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }) : C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('launch', `Launch · $${PRICE}/mo`, { action: { type: 'show_launch' } })] };
+  }
+  function inventoryReply(T, files) {
+    const name = botName(T);
+    if (!files.length) return { reply: `${name} has no files yet. Drop yours on the right, or use the Lumen Bikes samples to see how it works.`, chips: stepChips(T, files) };
+    const qv = T.questionsCache?.value;
+    const qs = [...(qv?.starters || []), ...(qv?.proof || [])];
+    const atoms = files.reduce((n, f) => n + (f.stage === 'ready' ? f.atoms || 0 : 0), 0);
+    const ready = files.filter((f) => f.stage === 'ready');
+    const rows = files.slice(0, 6).map((f) => {
+      const topics = (f.summary?.topics || []).slice(0, 3);
+      const state = f.stage === 'ready' ? atomsN(f.atoms) : f.stage === 'failed' ? "couldn't be read" : `still learning (${f.stage})`;
+      return `• **${f.name}** · ${state}${f.enabled ? '' : ' · off'}${topics.length ? ` · ${topics.join(', ')}` : ''}`;
+    });
+    const more = files.length > 6 ? `\n• and ${plural(files.length - 6, 'more file')}` : '';
+    const chips = [];
+    const seen = new Set();
+    for (const f of ready) {
+      const q = qs.find((x) => x.fileId === f.id && !seen.has(x.q))?.q;
+      if (q && chips.length < 3) { seen.add(q); chips.push(C(`inv-${chips.length}`, `Ask: "${clip(q, 34)}"`, { kind: chips.length ? 'default' : 'primary', action: { type: 'ask_samplebot', question: q, label: null } })); }
+    }
+    if (chips.length < 2) chips.push(C('add-files', 'Add more files', { action: { type: 'request_upload' } }));
+    const head = `${name} knows ${plural(files.length, 'file')}${ready.length ? `, ${atomsN(atoms)} it can quote` : ''}${ready.length < files.length ? ` (${ready.length} ready so far)` : ''}:`;
+    return { reply: `${head}\n${rows.join('\n')}${more}${chips.some((c) => c.action?.type === 'ask_samplebot') ? '\nTap a question to try one.' : ''}`, chips };
+  }
+  function languageReply(T, files) {
+    const name = botName(T);
+    const ready = files.some((f) => f.stage === 'ready');
+    return { reply: `Ask ${name} in French, Spanish or another language and it searches your files the same way. The quotes stay word for word in your files' own language, with their citations, and the refusal line is the same fixed sentence. Want to see it?`,
+      chips: ready ? [C('ask-fr', 'Ask it in French', { kind: 'primary', action: { type: 'ask_samplebot', question: languageProbe(T, files), label: 'In French' } }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] : stepChips(T, files) };
+  }
+  function languageProbe(T, files) {
+    if (files.some((f) => f.sample && f.stage === 'ready')) return 'Combien coûte le Lumen E-City ?';
+    const q = T.questionsCache?.value?.starters?.[0]?.q;
+    return q ? `En français : ${q}` : 'Que contiennent vos fichiers ?';
   }
   /** fixer r4: which files a scope phrase ("warranties and returns", "the FAQ", "*") keeps on. */
   const SCOPE_STOP = new Set('the a an my our your this that file files doc docs document documents stuff things thing topic topics question questions about only just and or with from on of to for in sheet page pages section sections info information md txt pdf html htm csv docx pptx xlsx please'.split(' '));
@@ -2134,16 +2461,37 @@ export function createStudio(o = {}) {
       case 'boot':
         return { reply: "Hi, I'm the KnowBot Builder. I'll turn your files into a bot that answers **only** from them and shows its proof for every line. Takes about 2 minutes, no account needed. Start with your files or ours?",
           chips: [C('samples', 'Use sample files · 30s demo', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })] };
-      case 'samples_attached':
-        return { reply: "Loading Lumen Bikes' sample docs (warranty, service plans, store FAQ, price list). While they learn, I've drafted your bot:",
-          card: { type: 'config-diff', data: { by: 'setup', rows: [{ field: 'Name', from: d.prevName || 'SampleBot', to: T.spec.name }, { field: 'Tone', from: '—', to: T.spec.length === 'short' ? 'Friendly, concise' : 'Friendly' },
-            { field: 'Greeting', from: '—', to: `"${T.spec.greeting || 'Hi! Ask me anything about Lumen Bikes.'}"` }, { field: 'Refusal', from: '', to: 'fixed 🔒' }] } },
-          chips: [C('looks-good', 'Looks good', { kind: 'primary', send: 'Looks good' }), C('rename', 'Rename it', { send: 'Rename it' }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
+      case 'samples_attached': {
+        // fixer r7 (D2): only the fields the samples actually filled are shown as changes; what the person set stays
+        // theirs (a sample name is offered as a chip, never applied), and a typed "use your samples" already said
+        // "Loading…", so this turn is the draft card alone (one message, not two near-identical ones)
+        const draft = T.flags.sampleDraft || null;
+        const acked = T.flags.samplesAckTurn != null && T.setupTurns - T.flags.samplesAckTurn <= 2;
+        T.flags.samplesAckTurn = null;
+        const rows = [];
+        const changed = (f) => draft ? draft.diff.find((x) => x.field === f) : null;
+        if (!draft || changed('name')) rows.push({ field: 'Name', from: changed('name')?.from || d.prevName || 'SampleBot', to: T.spec.name });
+        if (!draft || changed('tone') || changed('length')) rows.push({ field: 'Tone', from: '—', to: `${titleWords(T.spec.tone || 'friendly')}${T.spec.length === 'short' ? ', concise' : ''}` });
+        if (!draft || changed('greeting')) rows.push({ field: 'Greeting', from: '—', to: `"${T.spec.greeting || 'Hi! Ask me anything about Lumen Bikes.'}"` });
+        rows.push({ field: 'Refusal', from: '', to: 'fixed 🔒' });
+        const keptNames = draft ? Object.keys(draft.kept || {}).filter((k) => k !== 'greeting') : [];
+        const keptList = keptNames.map((k) => (k === 'name' ? `the name **${draft.kept.name}**` : k === 'org' ? `who it's for (${draft.kept.org})` : `the ${k} (${draft.kept[k]})`));
+        const keptLine = keptList.length ? ` I kept what you set, ${keptList.length === 1 ? keptList[0] : `${keptList.slice(0, -1).join(', ')} and ${keptList[keptList.length - 1]}`}: the samples only change what it knows.` : '';
+        const lead = acked ? (keptLine ? keptLine.trim() : '') : `Loading Lumen Bikes' sample docs (warranty, service plans, store FAQ, price list).${keptLine}`;
+        const offer = draft?.offer?.name && T.spec.name !== draft.offer.name ? draft.offer.name : null;
+        const chips = offer
+          ? [C('looks-good', `Keep ${T.spec.name}`, { kind: 'primary', send: 'Keep the name' }), C('name-sample', `Rename to ${offer}?`, { send: `Call it ${offer}` }), C('formal', 'Make it more formal', { send: 'Make it more formal' })]
+          : [C('looks-good', 'Looks good', { kind: 'primary', send: 'Looks good' }), C('rename', 'Rename it', { send: 'Rename it' }), C('formal', 'Make it more formal', { send: 'Make it more formal' })];
+        const draftLine = rows.length > 1 ? `${lead ? `${lead} ` : ''}While they learn, ${rows.length > 1 && keptNames.length ? 'here is the rest of the draft' : "I've drafted your bot"}:` : lead;
+        return { reply: draftLine.trim(), ...(rows.length > 1 ? { card: { type: 'config-diff', data: { by: 'setup', rows } } } : {}), chips };
+      }
       case 'files_queued': {
         const n = Number(d.n ?? d.count ?? total) || total;
         const bytes = Number(d.bytes ?? 0) || files.reduce((s, f) => s + f.bytes, 0);
         const size = bytes < 10240 * 1.0 ? `${Math.max(1, Math.round(bytes / 1024))} KB of 100 MB` : `${fmtMB(bytes)} MB of 100`;
-        return { reply: n ? `Got ${plural(n, 'file')} (${size}). I'll read them first so I can suggest a name that fits.` : "Got your files. I'll read them first so I can suggest a name that fits.",
+        // fixer r5: only offer to suggest a name while the bot still has the default one
+        const then = T.spec.name && T.spec.name !== 'SampleBot' ? `and draft starter questions for ${T.spec.name}` : 'first so I can suggest a name that fits';
+        return { reply: n ? `Got ${plural(n, 'file')} (${size}). I'll read them ${then}.` : `Got your files. I'll read them ${then}.`,
           chips: [C('what-atom', "What's an atom?", { send: "What's an atom?" }), C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
       }
       case 'file_atomized': {
@@ -2154,7 +2502,9 @@ export function createStudio(o = {}) {
         const topics = (f?.summary?.topics?.length ? f.summary.topics : Array.isArray(d.topics) && d.topics.length ? d.topics : preview ? heuristicSummary(f, preview).topics : []).slice(0, 3);
         const atoms = f?.atoms || Number(d.atoms) || 0;
         const naming = !sampleOnly(files) && T.spec.name === 'SampleBot' ? nameProposal(T, files) : null;
-        let reply = f && atoms ? `**${f.name}**: ${atoms} atoms so far.${topics.length === 3 ? ` It covers ${topics[0]}, ${topics[1]} and ${topics[2]}.` : topics.length ? ` It covers ${topics.join(' and ')}.` : ''}` : 'Your first file is breaking into atoms now.';
+        // CONTRACT-GAP: studio/app.js (polish, ~L981) rewrites "**x**: N atoms so far." to "**x** is ready: N atoms." without
+        // pluralizing, and its all-ready line (~L2975) says "All 1 file ready" when one of two files failed; owner of app.js to fix.
+        let reply = f && atoms ? `**${f.name}**: ${atomsN(atoms)} so far.${topics.length === 3 ? ` It covers ${topics[0]}, ${topics[1]} and ${topics[2]}.` : topics.length ? ` It covers ${topics.join(' and ')}.` : ''}` : 'Your first file is breaking into atoms now.';
         if (naming) {
           T.flags.namingProposal = naming.name; saveSpecSoon(T);
           reply += `\n\n${naming.why} Call it **${naming.name}**?`;
@@ -2170,16 +2520,16 @@ export function createStudio(o = {}) {
           if (starter) chips.push(C('ask-starter', `Ask: "${clip(starter, 40)}"`, { kind: 'primary', action: { type: 'ask_samplebot', question: starter, label: null } }));
           chips.push(C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }));
           if (ready.length < total) chips.push(C('wait', 'Wait for all files', { send: 'Keep testing' }));
-          return { reply: `Your bot can already answer: ${ready.length} of ${total} files ready. Tap a question on the right and watch where the answer comes from.`, chips };
+          return { reply: `Your bot can already answer: ${total === 1 ? 'your file is ready' : `${ready.length} of ${total} files ready`}. Tap a question on the right and watch where the answer comes from.`, chips };
         }
         if (ready.length === total && total && !T.flags.allReadySaid) {
           T.flags.allReadySaid = true;
           const atoms = ready.reduce((s, f) => s + f.atoms, 0);
-          return { reply: `All ${plural(total, 'file')} ready: ${atoms.toLocaleString('en-US')} atoms your bot can quote.`, chips: stepChips(T, files) };
+          return { reply: total === 1 ? `Your file is ready: ${atomsN(atoms)} your bot can quote.` : `All ${plural(total, 'file')} ready: ${atomsN(atoms)} your bot can quote.`, chips: stepChips(T, files) };
         }
         const names = (Array.isArray(d.files) ? d.files : [d]).map((x) => files.find((f) => f.id === (x.fileId || x.id || x.localId) || f.name === x.name)).filter(Boolean);
-        const nm = names.length ? names.map((f) => `${f.name} (${f.atoms} atoms)`).join(', ') : null;
-        return { reply: nm ? `Ready: ${nm}. ${ready.length} of ${total} files done.` : `${ready.length} of ${total} files ready.`, chips: stepChips(T, files) };
+        const nm = names.length ? names.map((f) => `${f.name} (${atomsN(f.atoms)})`).join(', ') : null;
+        return { reply: nm ? `Ready: ${nm}. ${ready.length} of ${plural(total, 'file')} done.` : `${ready.length} of ${plural(total, 'file')} ready.`, chips: stepChips(T, files) };
       }
       case 'file_failed': {
         const f = files.find((x) => x.id === d.fileId || x.id === d.id || x.name === d.name);
@@ -2250,7 +2600,7 @@ export function createStudio(o = {}) {
       case 'returned': {
         const atoms = files.reduce((s, f) => s + (f.atoms || 0), 0);
         const tests = T.proofDone ? `, ${T.proofDone.passed}/${T.proofDone.total} tests passed` : '';
-        return { reply: files.length ? `Welcome back. ${name} is where you left it (${plural(files.length, 'file')}, ${atoms.toLocaleString('en-US')} atoms${tests}).` : `Welcome back. ${name} is saved: add files whenever you're ready.`, chips: stepChips(T, files) };
+        return { reply: files.length ? `Welcome back. ${name} is where you left it (${plural(files.length, 'file')}, ${atomsN(atoms)}${tests}).` : `Welcome back. ${name} is saved: add files whenever you're ready.`, chips: stepChips(T, files) };
       }
       case 'spec_edit': {
         const lastQ = lastQuestion(T);
@@ -2284,6 +2634,7 @@ export function createStudio(o = {}) {
     const BAD = /^(?:my|our|the|a|an|your|this|shop|store|company|business|team|office|internal|draft|new|notes?|untitled|document|doc|file|copy|final|general|misc|info|information|about|welcome|home|faq|help|support|questions?|answers?|price|prices|list|guide|policy|handbook)$/i;
     const okOrg = (o) => !!o && /^[A-Z0-9]/.test(o) && o.split(/\s+/).length <= 4 && !o.split(/\s+/).every((w) => BAD.test(w));
     const counts = new Map();
+    const allSeen = new Set();
     let topic = null;
     const add = (o, w, tp) => { counts.set(o, (counts.get(o) || 0) + w); if (tp && !topic) topic = tp; };
     for (const f of files) {
@@ -2305,12 +2656,21 @@ export function createStudio(o = {}) {
         }
       }
       for (const [w, n] of seen) if (n >= 2) add(w, Math.min(0.5, 0.15 * n));
+      for (const w of seen.keys()) allSeen.add(w);
     }
     const org = [...counts].sort((x, y) => y[1] - x[1])[0]?.[0];
     if (!org) return null;
     if (topic && (topic.split(/\s+/).length > 4 || BAD.test(topic) && !/^(?:handbook|policy|guide|price list)$/.test(topic))) topic = null;
-    const why = topic ? `Your files look like ${org}'s ${topic}.` : `Your files are about ${org}.`;
-    return { org, topic, why, name: clip(/\b(?:guide|help|helper|assistant|answers)$/i.test(org) ? org : `${org} Guide`, 40) };
+    // fixer r6: no possessive ("Shipping's policy", "Lumen Bikes's"). A real name (several words, or a capitalized word
+    // the body itself uses mid-sentence) reads "the Northwind Studio employee handbook"; a single topic word the title
+    // happened to start with ("Shipping Policy") reads "a shipping policy" and the bot is "Shipping Help".
+    const lowerInBody = files.some((f) => (T.atomPreview.get(f.id) || []).some((a) => String(a.text || '').includes(org.toLowerCase())));
+    const proper = allSeen.has(org) || /\B[A-Z]|\d/.test(org) || (org.split(/\s+/).length > 1 && !lowerInBody);
+    const nice = titleWords(org);
+    const an = (w) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
+    const why = topic ? (proper ? `Looks like the ${org} ${topic}.` : `Looks like ${an(org)} ${org.toLowerCase()} ${topic}.`) : (proper ? `Your files are about ${org}.` : `Your files are about ${org.toLowerCase()}.`);
+    const name = /\b(?:guide|help|helper|assistant|answers)$/i.test(nice) ? nice : proper ? `${nice} Guide` : `${nice} Help`;
+    return { org, topic, why, name: clip(name, 40) };
   }
 
   /** Server-side rules applied to every turn, whichever engine wrote it (4.9). */
@@ -2405,6 +2765,26 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     } catch { return []; }
   }
   const SAMPLE_SPEC = { 'lumen-bikes': { name: 'Lumen Help', org: 'Lumen Bikes', tone: 'friendly', length: 'short', greeting: 'Hi! Ask me anything about Lumen Bikes.' } };
+  /** The sample set's draft minus every field the person already set; a name they chose is offered back as a chip. */
+  function sampleDraft(T, set) {
+    const all = { ...(SAMPLE_SPEC[set] || {}) };
+    const mine = T.flags.userSet || {};
+    const patch = {}, kept = {};
+    for (const [k, v] of Object.entries(all)) {
+      if (mine[k] && JSON.stringify(T.spec[k]) !== JSON.stringify(v)) kept[k] = T.spec[k];
+      else patch[k] = v;
+    }
+    // a greeting the person never touched still names their business, not Lumen Bikes, when they named it
+    if ((kept.name || kept.org) && !mine.greeting && T.spec.greeting) { delete patch.greeting; kept.greeting = T.spec.greeting; }
+    return { patch, kept, offer: kept.name && all.name ? { name: all.name } : null };
+  }
+  function applySampleDraft(T, set) {
+    const { patch, kept, offer } = sampleDraft(T, set);
+    let diff = [];
+    try { diff = applyPatch(T, patch, 'samples').diff; } catch (e) { log(`[studio] sample spec patch: ${e.message}`); }
+    T.flags.sampleDraft = { set, diff: diff.filter((d) => PROVENANCE_FIELDS.includes(d.field)).map((d) => ({ field: d.field, from: d.from, to: d.to })), kept, offer };
+    saveSpecSoon(T);
+  }
   async function attachSamples(T, set) {
     const info = sampleSets().find((s) => s.id === set);
     if (!info) fail(404, 'not_found', `No sample set "${set}".`);
@@ -2413,7 +2793,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const prevName = T.spec.name;
       if (!(T.flags.sharedSet === set && T.flags.sharedAt)) { T.flags.sharedSet = set; T.flags.sharedAt = now(); }
       if (T.spec.sampleSet !== set) {
-        try { applyPatch(T, { ...(SAMPLE_SPEC[set] || {}) }, 'samples'); } catch (e) { log(`[studio] sample spec patch: ${e.message}`); }
+        applySampleDraft(T, set);
         T.spec = { ...T.spec, sampleSet: set };
       }
       saveSpecSoon(T);
@@ -2434,14 +2814,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         await uploadInto(T, { name, bytes, mime: MIME_OF[extOf(name)], extraTags: [`sample:${set}`] });
       }
     }
-    const patch = { ...(SAMPLE_SPEC[set] || {}) };
     if (T.spec.sampleSet !== set) {
-      try {
-        const r = applyPatch(T, patch, 'samples');
-        T.spec = { ...T.spec, sampleSet: set };
-        saveSpecSoon(T);
-        void r;
-      } catch (e) { log(`[studio] sample spec patch: ${e.message}`); }
+      applySampleDraft(T, set);
+      T.spec = { ...T.spec, sampleSet: set };
+      saveSpecSoon(T);
     }
     kickPoller(T);
     const files = await filesOf(T, { maxAgeMs: 0 });
@@ -2547,7 +2923,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       for (const st of STAGE_ORDER) if (tl[st] != null && elapsed >= tl[st]) stageAt[st] = T.flags.sharedAt + Math.round(tl[st] / REPLAY_SPEED);
       return { id: r.id, key: null, name, bytes: Number(r.bytes || 0), mime: r.mime_type || MIME_OF[ext] || 'text/plain', kind: KIND_OF.get(ext) || 'txt', stage, kdStage: fileStage(r),
         chunks: ['chunked', 'atomized', 'vectorizing', 'ready'].includes(stage) ? (r.chunk_count ?? null) : null, atoms, vectorized, pages: null, sample: true, replay: true,
-        enabled: T.spec.sources?.[r.id] !== false, error: stage === 'failed' ? mapError(r.last_error || 'failed') : null, summary: T.summaries.get(r.id) || null, stageAt,
+        enabled: T.spec.sources?.[r.id] !== false, error: stage === 'failed' ? mapError(r.last_error || 'failed', { ext, name }) : null, summary: T.summaries.get(r.id) || null, stageAt,
         createdAt: new Date(T.flags.sharedAt).toISOString(), updatedAt: new Date(now()).toISOString() };
     });
   }
@@ -2802,7 +3178,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       // exchange a restore key (from an emailed or copied link) for the trial bearer; no Authorization header needed
       allow('POST');
       limitOrThrow(`restore ${ip(req)}`, limits.restoreMin ?? 30, 60000, 'link openings');
-      if (!TRIAL_ID_RE.test(id)) fail(404, 'not_found', 'No such trial.');
+      // CONTRACT-GAP: B (studio/app.js boot) still maps 401/404 to status 'expired'; it should show "We couldn't find that
+      // bot link" + "Open my saved bot" (when localStorage holds a live trial) + "Start a new bot" for 404 not_found, and
+      // the expired screen only for 410 expired.
+      if (!TRIAL_ID_RE.test(id)) fail(404, 'not_found', "We couldn't find that bot link. Open your saved bot, or start a new one.");
       const body = await readBody(req);
       const data = verifyRestore(body.k ?? body.key ?? url.searchParams.get('k'), id);
       const T = trialFor(id);

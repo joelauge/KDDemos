@@ -1,17 +1,17 @@
 {
   "starters": [
     "How long is the frame warranty?",
-    "How much is the Lumen Care Plan?",
+    "How much is a spare E-City battery and how long is it covered?",
     "What are your opening hours on Sunday?"
   ],
   "proof": [
     "How long is the frame warranty?",
+    "How much is a spare E-City battery and how long is it covered?",
     "What's the restocking fee on e-bike returns?",
-    "How long are batteries covered?",
-    "How much is a Full Overhaul?",
+    "How much is an E-bike Service and how long are batteries covered?",
     "What does the Lumen Care Plan include?",
-    "How long does a test ride last?",
-    "How much does the Lumen E-City cost?",
+    "How long does a test ride last and how much does the E-City cost?",
+    "How much is a Full Overhaul?",
     "How do I make a warranty claim?"
   ],
   "probes": [
@@ -94,6 +94,23 @@
     ],
     "How long does a bike order take to arrive?": [
       "7 to 10 days"
+    ],
+    "How much is a spare E-City battery and how long is it covered?": [
+      "$649",
+      "2 years"
+    ],
+    "How much is an E-bike Service and how long are batteries covered?": [
+      "$129",
+      "2 years"
+    ],
+    "How long does a test ride last and how much does the E-City cost?": [
+      "30 minutes",
+      "$3,199"
     ]
-  }
+  },
+  "multiSource": [
+    "How much is a spare E-City battery and how long is it covered?",
+    "How much is an E-bike Service and how long are batteries covered?",
+    "How long does a test ride last and how much does the E-City cost?"
+  ]
 }

@@ -84,7 +84,10 @@ async function noHScroll(page) {
 async function runAxe(page) {
   try {
     if (!(await page.evaluate(() => !!window.axe))) {
-      try { await page.addScriptTag({ url: AXE_URL }); }
+      // offline runs: AXE_PATH=/path/to/axe.min.js (a local axe-core copy) instead of the CDN
+      if (process.env.AXE_PATH && axeSource === null) { try { axeSource = await fsp.readFile(process.env.AXE_PATH, 'utf8'); } catch { axeSource = null; } }
+      if (axeSource) await page.addScriptTag({ content: axeSource });
+      else try { await page.addScriptTag({ url: AXE_URL }); }
       catch {
         if (axeSource === null) { try { const r = await fetch(AXE_URL); axeSource = r.ok ? await r.text() : ''; } catch { axeSource = ''; } }
         if (!axeSource) return { skipped: true };
@@ -94,7 +97,7 @@ async function runAxe(page) {
     const res = await page.evaluate(async () => {
       // label-content-name-mismatch (WCAG 2.5.3) is experimental in axe 4.10, so it is switched on explicitly
       const r = await window.axe.run(document, { resultTypes: ['violations'], rules: { 'label-content-name-mismatch': { enabled: true } } });
-      return r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+      return r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical' || v.id === 'label-content-name-mismatch')
         .map((v) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.slice(0, 4).map((n) => n.target.join(' ')) }));
     });
     return { violations: res };
@@ -285,9 +288,11 @@ async function journey(browser, dev, cell) {
   {
     const s4 = await state(page);
     const lvl = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);
+    // r5 ladder: solid only at the peak (Proof Run done, a launch intent, or a Launch card on the table)
+    const peak4 = await page.evaluate(() => !!document.querySelector('#st-log [data-card="launch"]'));
     const prove = await page.evaluate(() => document.querySelector('.st-node[data-step="prove"]')?.dataset.state);
     if (!s4.milestones.firstCited) {
-      check('04-first-ready', 'price is outline (not solid) before any answer', lvl === 'outline', { detail: lvl });
+      check('04-first-ready', 'price is outline (not solid) before any answer', lvl === 'outline' || (peak4 && lvl === 'solid'), { detail: `${lvl}${peak4 ? ' (launch card on the table)' : ''}` });
       check('04-first-ready', 'spine Prove not active before the first grounded answer', prove !== 'active', { detail: prove });
     }
   }
@@ -314,13 +319,16 @@ async function journey(browser, dev, cell) {
   const threadText = await page.innerText('#sb-thread-slot').catch(() => '');
   const matches = [...threadText.matchAll(/match\s*(\d{1,3})/gi)].map((m) => Number(m[1]));
   check('05-first-answer', 'source chips show match 55–99', matches.some((n) => n >= 55 && n <= 99), { detail: matches.slice(0, 6).join(',') });
-  const citeCount = await page.locator('#sb-thread-slot button[aria-label^="Citation 1"]').count();
+  // r7: chips are named "<visible text>: citation, atom n" (axe label-content-name-mismatch), so select by data-n
+  const citeCount = await page.locator('#sb-thread-slot button.pf-cite[data-n="1"]').count();
   check('05-first-answer', 'answer has a [1] chip', citeCount > 0 || /\[1/.test(threadText), { detail: `${citeCount} citation buttons` });
   check('05-first-answer', 'pill starts with "Grounded"', /Grounded/.test(threadText));
   const geo5 = await page.evaluate(() => { const b = document.getElementById('st-bot').getBoundingClientRect(); const t = document.getElementById('sb-thread-slot').getBoundingClientRect(); return { pane: Math.round(b.height), thread: Math.round(t.height) }; });
   check('05-first-answer', 'thread gets ≥ 50% of the bot pane', geo5.thread >= geo5.pane * 0.5, { detail: `${geo5.thread}/${geo5.pane}` });
   const price5 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);
-  check('05-first-answer', 'price is solid after the first cited answer', price5 === 'solid', { detail: price5 });
+  const peak5 = await page.evaluate(() => !!document.querySelector('#st-log [data-card="launch"]'));
+  // r5 (critic D8): the first cited answer alone keeps the outline rung; solid comes at the Proof Run / launch intent
+  check('05-first-answer', 'price stays outline at the first cited answer (solid only at the peak)', price5 === 'outline' || (peak5 && price5 === 'solid'), { detail: `${price5}${peak5 ? ' (launch card on the table)' : ''}` });
   await hscroll('05-first-answer');
   await shot(page, cell, '05-first-answer');
   const axe2 = await runAxe(page);
@@ -331,7 +339,7 @@ async function journey(browser, dev, cell) {
   }
 
   // 06 popover
-  const chip = page.locator('#sb-thread-slot button[aria-label^="Citation 1"]').first();
+  const chip = page.locator('#sb-thread-slot button.pf-cite[data-n="1"]').first();
   if (await chip.count()) {
     await chip.focus();
     await chip.hover().catch(() => {});
@@ -342,8 +350,7 @@ async function journey(browser, dev, cell) {
       return marks.some((m) => ans.includes(m.textContent.trim().slice(0, 40)) || true) && marks.length > 0;
     });
     check('06-popover', 'popover shows a <mark> quote', markOk);
-    const s6 = await state(page);
-    check('06-popover', 'Proof view is now on', s6?.ui.view === 'proof', { detail: s6?.ui.view });
+    // r6 critic: hover shows only the popover; Proof view turns on at the first click / Enter (checked in 07)
     await shot(page, cell, '06-popover');
 
     // 07 drawer
@@ -354,11 +361,13 @@ async function journey(browser, dev, cell) {
     const focusIn = await page.evaluate(() => !!document.querySelector('#sb-drawer-slot')?.contains(document.activeElement));
     check('07-drawer', 'drawer open', drawerOpen);
     check('07-drawer', 'focus inside the drawer', focusIn);
+    const s7 = await state(page);
+    check('07-drawer', 'Proof view is now on (after Enter on the chip)', s7?.ui.view === 'proof', { detail: s7?.ui.view });
     await shot(page, cell, '07-drawer');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
     const closed = await page.evaluate(() => { const d = document.querySelector('#sb-drawer-slot [role="dialog"]'); return !d || d.offsetParent === null; });
-    const back = await page.evaluate(() => /^Citation 1/.test(document.activeElement?.getAttribute('aria-label') || ''));
+    const back = await page.evaluate(() => { const a = document.activeElement; return !!a && a.classList.contains('pf-cite') && a.dataset.n === '1'; });
     check('07-drawer', 'Esc closes it', closed);
     check('07-drawer', 'focus returns to the chip', back);
   } else {
@@ -394,6 +403,19 @@ async function journey(browser, dev, cell) {
   const diffV = await page.evaluate(() => { const d = [...document.querySelectorAll('#st-log .st-diff')].filter((x) => /Tone/i.test(x.textContent)).pop(); const m = d && (d.querySelector('.st-diff-v')?.textContent || '').match(/v(\d+)\s*$/); return m ? Number(m[1]) : 0; });
   check('09-refine', 'ConfigDiff card version = header version chip', diffV === verN, { detail: `card v${diffV} · chip v${verN}` });
   await shot(page, cell, '09-refine');
+  // r7 (D2): a question about the Builder itself is answered by the Builder (never "Want me to ask your bot that?"),
+  // and no chip ever offers a change that is already in the spec
+  if (!cell.mobile) {
+    await builderSay(page, cell, 'what can you do?');
+    const help = await page.waitForFunction(() => { const m = [...document.querySelectorAll('#st-log .st-msg-a')].pop(); const t = m?.innerText || ''; return /I build/.test(t) && !/ask your bot that/i.test(t) ? t : null; }, null, { timeout: 8000 }).then(() => true).catch(() => false);
+    check('09-refine', '"what can you do?" gets the Builder\'s capability answer', help);
+    const noop = await page.evaluate(() => {
+      const sp = window.__studio.store.getState().spec;
+      const chips = [...document.querySelectorAll('#st-log .st-chips:not([hidden]) .st-chip')].map((c) => c.innerText);
+      return chips.filter((t) => (/answers shorter/i.test(t) && sp.length === 'short') || (/more formal/i.test(t) && sp.tone === 'formal'));
+    });
+    check('09-refine', 'no chip offers a change that is already set', !noop.length, { detail: noop.join(' / ') });
+  }
 
   if (QUICK && cell.mobile) { /* fall through: quick still runs proof + launch */ }
 
@@ -404,6 +426,9 @@ async function journey(browser, dev, cell) {
   // the file the first answer cited (the warranty file when the first starter is the warranty question; which file is
   // Ready first, and so which starter comes first, depends on ingest order)
   const scopeFile = SAMPLE_FILES.find((f) => (grounded?.final?.citations || []).some((c) => c.file === f)) || 'lumen-warranty-returns.md';
+  // r7 (D2): the drawer lists the same starters the bot's suggestion row shows (pinned, then "auto")
+  const autoN = await page.waitForFunction(() => document.querySelectorAll('#st-spec-auto .st-starter-auto').length + document.querySelectorAll('#st-spec-starters .st-starter').length, null, { timeout: 4000 }).then((h) => h.jsonValue()).catch(() => 0);
+  check('10-scope', 'spec drawer lists starter questions (pinned or auto)', autoN > 0, { detail: `${autoN}` });
   const box = page.locator('.st-src', { hasText: scopeFile }).locator('input[type="checkbox"]');
   if (await box.count()) {
     await page.locator('.st-src', { hasText: scopeFile }).locator('label').click();
@@ -462,6 +487,12 @@ async function journey(browser, dev, cell) {
   const scText = await page.evaluate(() => document.querySelector('#st-log [data-card="scorecard"]')?.innerText || '');
   check('11-proof-run', 'scorecard shows 8/8 and 3/3', sc, { detail: scText.replace(/\s+/g, ' ').slice(0, 160) });
   await page.waitForTimeout(600);
+  {
+    const price11 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);
+    check('11-proof-run', 'price goes solid at the Proof Run (the peak)', price11 === 'solid' || price11 === undefined, { detail: price11 });
+    const strip = await page.evaluate(() => (document.getElementById('st-prun')?.innerText || '').replace(/\s+/g, ' ').trim());
+    check('11-proof-run', 'proof strip names the test once ("Proof Run 11/11 passed")', !strip || (/Proof Run 11\/11/.test(strip) && (strip.match(/Proof Run/g) || []).length === 1), { soft: true, detail: strip });
+  }
   await shot(page, cell, '11-proof-run');
 
   // 12 make it yours → launch card
@@ -508,7 +539,7 @@ async function journey(browser, dev, cell) {
     ? page.locator('.co-launch.is-stage button.co-cta, .co-stage button.co-cta').filter({ hasText: /Launch .*\$249/ }).last()
     : page.locator('#st-log [data-card="launch"] button', { hasText: /Launch .*\$249/ }).last();
   if (stageOpen) {
-    const ctas = await page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.offsetParent && /Launch.*\$249/.test(b.innerText) && getComputedStyle(b).visibility !== 'hidden').length);
+    const ctas = await page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.offsetParent && /Launch.*\$249/.test(b.textContent.replace(/\s+/g, ' ')) && getComputedStyle(b).visibility !== 'hidden').length);   // r7: the price sits in an sr-only span (E), so textContent
     check('13-checkout', 'one visible Launch CTA while the receipt is open', ctas === 1, { soft: true, detail: `${ctas} visible` });
   }
   if (await cta.count()) await press(cta, 'Launch CTA');
@@ -646,7 +677,7 @@ async function journey(browser, dev, cell) {
   check('17-live', 'header shows Live (no price, no trial pill)', liveHead && await p2.evaluate(() => { const t = document.getElementById('st-trialpill'); return !t || t.hidden || t.offsetParent === null; }));
   await pane(p2, cell, 'setup');
   const liveChips = await p2.waitForFunction(() => { const rows = [...document.querySelectorAll('#st-log .st-chips:not([hidden]):not(.is-stale)')]; const t = rows.length ? rows[rows.length - 1].innerText : '';
-    return /Copy embed code/.test(t) && !/Use sample files|canonical bot/i.test(t) ? t : null; }, null, { timeout: 12000 }).then((h) => h.jsonValue()).catch(() => null);
+    return /Copy embed code/.test(t) && !/Use sample files|canonical bot|avoid making things up/i.test(t) ? t : null; }, null, { timeout: 12000 }).then((h) => h.jsonValue()).catch(() => null);
   check('17-live', 'Builder offers the live next actions (no setup chips)', !!liveChips, { detail: String(liveChips || '').replace(/\s+/g, ' ') });
   check('17-live', 'ghost answer hidden', await p2.evaluate(() => { const g = document.querySelector('.sb-ghost'); return !g || g.offsetParent === null; }));
   await shot(p2, cell, '17-live');
@@ -665,11 +696,13 @@ async function journey(browser, dev, cell) {
 // ------------------------------------------------------------------ main
 
 const speed = Number(process.env.FAKE_SPEED || 4) || 4;
-log(`Studio smoke · FAKE_SPEED=${speed} · cells: ${CELLS.map((c) => c.name).join(', ')}`);
+// SMOKE_CELLS=mobile-light-full,desktop-dark-full runs a subset (local iteration); the default is every cell
+const RUN = process.env.SMOKE_CELLS ? CELLS.filter((c) => process.env.SMOKE_CELLS.split(',').map((x) => x.trim()).includes(c.name)) : CELLS;
+log(`Studio smoke · FAKE_SPEED=${speed} · cells: ${RUN.map((c) => c.name).join(', ')}`);
 await fsp.mkdir(SCREENS, { recursive: true });
 const browser = await chromium.launch(process.env.HEADED ? { headless: false } : {});
 try {
-  for (const cell of CELLS) {
+  for (const cell of RUN) {
     // One dev server per cell: the per-IP rate limits (6 trials/h, 20 Builder turns/min) are real, and every cell
     // comes from 127.0.0.1, so sharing a server would test the limiter instead of the journey.
     const dev = await startDevServer({ speed });

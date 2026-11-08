@@ -7,7 +7,7 @@
 //
 // Recognition: Google Cloud Speech-to-Text when GOOGLE_STT_* (plus TWILIO_ACCOUNT_SID, to fetch the recording) is set,
 // else Twilio's built-in speech recognition. Synthesis: Google Cloud Text-to-Speech when GOOGLE_TTS_* is set, else <Say>.
-// The answer is spoken with attribution ("According to Returns policy, …"); a refusal is the canonical sentence.
+// The answer is spoken with attribution ("According to the Returns Policy, you can …"); a refusal is the canonical sentence.
 // Needs TWILIO_AUTH_TOKEN (signature-checked); without it the route answers 503.
 import { ChannelError, notConfigured, parseForm, twilioValid, sendXml, xml, formatSpoken } from './util.mjs';
 import { googleConfig, transcribe, synthesize } from './google.mjs';

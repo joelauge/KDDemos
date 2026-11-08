@@ -355,6 +355,108 @@ describe('questions: writer and insights (fake knowDrive)', () => {
     _resetQuestions();
   });
 
+  test('paraphrases group after a restart (read back from knowDrive), on overlapping cited files, under the most frequent wording', async () => {
+    _resetQuestions(); configureQuestions({ debounceMs: 5 });
+    const base = { kd: kdc(), scopeTags: ['trial:tr_paraphrase0000'], root: 'knowbot/trials/tr_paraphrase0000/', channel: 'studio' };
+    let i = 0;
+    const ask = (question, files, outcome = 'answered') => logQuestion({ ...base, question, outcome, citations: files.map((file, n) => ({ n: n + 1, file })), callerKey: `r${i++}` });
+    await ask('How much is the Lumen Care Plan?', ['lumen-service-plans.html']);
+    await ask('How much is the Lumen Care Plan?', ['lumen-service-plans.html']);
+    // the paraphrase's answer also cited the price list: the cited files overlap (1 of 2), which is enough evidence
+    await ask('What does the service plan cost?', ['lumen-service-plans.html', 'pricing.md']);
+    await ask('How much is the Premium Plan?', ['pricing.md']);
+    await flushQuestions(); await kd.settle();
+    _resetQuestions(); // a server restart: nothing in memory, everything read back from knowDrive
+    const r = await questionInsights({ kd: kdc(), scopeTags: ['trial:tr_paraphrase0000'], suggest: false });
+    assert.equal(r.source, 'knowdrive');
+    const care = r.top.find((t) => /Care Plan/.test(t.q));
+    assert.ok(care, JSON.stringify(r.top));
+    assert.deepEqual([care.q, care.count, care.similar, care.similarLabel], ['How much is the Lumen Care Plan?', 3, 1, '+1 similar']);
+    assert.ok(!r.top.some((t) => t.q === 'What does the service plan cost?'), 'listed once, under the most frequent phrasing');
+    assert.ok(r.top.some((t) => t.q === 'How much is the Premium Plan?' && t.count === 1), 'a different named product stays apart');
+    assert.equal(r.scope.state, 'active');
+    _resetQuestions();
+  });
+
+  test('different questions about one topic never group: yes/no vs open, and a narrower question stays apart (critic r7)', async () => {
+    _resetQuestions(); configureQuestions({ debounceMs: 5 });
+    const base = { kd: kdc(), scopeTags: ['trial:tr_formcheck00000'], root: 'knowbot/trials/tr_formcheck00000/', channel: 'studio' };
+    let i = 0;
+    const cite = [{ n: 1, file: 'lumen-warranty-returns.md', atomId: 'at_frame_warranty' }];
+    const ask = (question) => logQuestion({ ...base, question, outcome: 'answered', citations: cite, callerKey: `f${i++}` });
+    await ask('Is the frame warranty transferable?');
+    await ask('What is the warranty?');
+    await ask('What is the warranty on the frame?');
+    await ask('Is the frame warranty transferable to a new owner?');
+    await ask('What is the warranty?');
+    await flushQuestions(); await kd.settle();
+    for (const live of [false, true]) {
+      if (live) _resetQuestions(); // read back from knowDrive, with similarity grouping
+      const r = await questionInsights({ kd: kdc(), scopeTags: ['trial:tr_formcheck00000'], suggest: false });
+      const rows = Object.fromEntries(r.top.map((t) => [t.q, t.count]));
+      assert.equal(rows['What is the warranty?'], 2, JSON.stringify(r.top));
+      assert.equal(rows['What is the warranty on the frame?'], 1, 'a narrower question is its own row');
+      assert.equal(rows['Is the frame warranty transferable?'], 1, 'a yes/no question never groups with an open one');
+      assert.equal(rows['Is the frame warranty transferable to a new owner?'], 1);
+      assert.equal(r.top.reduce((n, t) => n + t.count, 0) + r.more.top, 5);
+    }
+    const { questionForm, compatibleQuestions, normalizeQuestion: norm } = await import('../questions.mjs');
+    assert.equal(norm('What is the warranty?'), 'what is the warranty', 'a trailing "ty" inside a word is not "thank you"');
+    assert.equal(norm('Is it safe, ty'), 'is it safe');
+    assert.deepEqual(['Is the frame warranty transferable?', 'What is the warranty?', 'Tell me about returns'].map(questionForm), ['yn', 'wh', 'other']);
+    assert.equal(compatibleQuestions('Do you ship to Brazil?', 'Can you ship to brazil'), true);
+    assert.equal(compatibleQuestions('How long does a test ride last?', 'How long does a test ride usually last?'), true, 'filler words never make a question narrower');
+    assert.equal(compatibleQuestions('What is the warranty?', 'What is the warranty on the frame?'), false);
+    _resetQuestions();
+  });
+
+  test('a group is labelled with its most common wording', async () => {
+    _resetQuestions();
+    const base = { kd: null, scopeTags: ['bot:label'] };
+    let i = 0;
+    const ask = (question) => logQuestion({ ...base, question, outcome: 'answered', channel: 'web', citations: [{ file: 'plans.md', atomId: 'at_care' }], callerKey: `l${i++}` });
+    await ask('What does the service plan cost?');
+    for (let n = 0; n < 3; n++) await ask('How much is the Lumen Care Plan?');
+    await ask('What does the service plan cost?');
+    const r = await questionInsights({ kd: null, scopeTags: ['bot:label'] });
+    assert.deepEqual([r.top[0].q, r.top[0].count, r.top[0].similarLabel], ['How much is the Lumen Care Plan?', 5, '+1 similar']);
+    _resetQuestions();
+  });
+
+  test('paraphrases group on shared cited atoms; with no shared evidence, similar words alone never merge', async () => {
+    _resetQuestions();
+    const base = { kd: null, scopeTags: ['bot:atoms'] };
+    let i = 0;
+    const ask = (question, cites) => logQuestion({ ...base, question, outcome: 'answered', channel: 'web', citations: cites, callerKey: `a${i++}` });
+    await ask('How much is the Lumen Care Plan?', [{ file: 'plans.md', atomId: 'at_care_price' }]);
+    await ask('What does the service plan cost?', [{ file: 'faq.md', atomId: 'at_care_price' }]); // other file, same atom
+    await ask('How much does the delivery plan cost?', [{ file: 'shipping.md', atomId: 'at_ship' }]); // nothing shared
+    const r = await questionInsights({ kd: null, scopeTags: ['bot:atoms'] });
+    assert.equal(r.top[0].count, 2);
+    assert.equal(r.top[0].similarLabel, '+1 similar');
+    assert.ok(r.top.some((t) => t.q === 'How much does the delivery plan cost?' && t.count === 1));
+    _resetQuestions();
+  });
+
+  test('a gone trial is "missing" (410), never "no questions yet"; a live trial with no questions is "empty"', async () => {
+    _resetQuestions();
+    const gone = await questionInsights({ kd: kdc(), scopeTags: ['trial:tr_gone000000000'] });
+    assert.deepEqual([gone.total, gone.scope.state, gone.missing, gone.error.status, gone.error.code], [0, 'missing', true, 410, 'scope_gone']);
+    await assert.rejects(questionInsights({ kd: kdc(), scopeTags: ['trial:tr_gone000000000'], onMissing: 'throw' }), (e) => e.status === 410 && e.code === 'scope_gone' && e.name === 'InsightsScopeError');
+    // the trial still has its files: nothing asked yet is "empty", not "missing"
+    const fd = new FormData();
+    fd.append('tags', 'knowbot,kind:trial,trial:tr_here000000000'); fd.append('mime_type', 'text/markdown');
+    fd.append('file', new Blob(['# Spec'], { type: 'text/markdown' }), 'knowbot/trials/tr_here000000000/_spec.json');
+    assert.ok((await fetch(`${kd.url}/api/v1/ingest`, { method: 'POST', headers: { authorization: 'Bearer fake-key', 'x-vector-store-id': 'vs_fake' }, body: fd })).ok);
+    const empty = await questionInsights({ kd: kdc(), scopeTags: ['trial:tr_here000000000'] });
+    assert.deepEqual([empty.total, empty.scope.state, empty.missing, empty.error], [0, 'empty', undefined, undefined]);
+    // a dead knowDrive is never reported as a gone trial
+    const dead = await questionInsights({ kd: { baseUrl: 'http://127.0.0.1:9', apiKey: 'k', store: 'vs_fake' }, scopeTags: ['trial:tr_gone000000000'] }).catch((e) => ({ threw: e.message }));
+    assert.ok(dead.threw || dead.scope.state !== 'missing');
+    // without knowDrive (memory only) nothing can be called missing
+    assert.equal((await questionInsights({ kd: null, scopeTags: ['trial:tr_gone000000000'] })).scope.state, 'empty');
+  });
+
   test('insights include questions still waiting to be written, and work without knowDrive', async () => {
     _resetQuestions(); configureQuestions({ debounceMs: 60000 });
     await logQuestion({ kd: kdc(), scopeTags: ['bot:pending'], question: 'Is there parking?', outcome: 'refused', channel: 'web', callerKey: 'p' });

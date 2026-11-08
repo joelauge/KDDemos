@@ -474,3 +474,70 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .gl-ref-err .gl-ref-r.is-head > :nth-child(3), .gl-ref-err .gl-ref-r.is-head > :nth-child(4) { display: none; }
   .gl-tw-btn { min-height: 44px; }
 }
+
+/* fixer r5 (D9/D10): touch targets on phones and coarse pointers; the inline chips grow an invisible hit box */
+@media (max-width: 899px), (pointer: coarse) {
+  .gl-wcite, .gl-proofchip { position: relative; }
+  .gl-wcite::after { content: ""; position: absolute; inset: -14px -13px; }
+  .gl-proofchip { min-height: 32px; }
+  .gl-proofchip::after { content: ""; position: absolute; inset: -6px -2px; }
+}
+
+/* ------------------------------------------------------------------ fixer r6 (D7/D9/D10/D11) */
+/* D7: only the selected card (aria-pressed) or keyboard focus draws a ring; touch never keeps a hover outline */
+@media (hover: none) {
+  .gl-chcard:hover { transform: none; border-color: var(--line); box-shadow: var(--st-shadow-1); }
+  .gl-chcard.is-on:hover { border-color: var(--gl-ring); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gl-ring) 18%, transparent), var(--st-shadow-2); }
+}
+.gl-chcard:focus:not(:focus-visible) { outline: none; }
+
+/* D10/D11: Copy is a 44 x 44 icon pinned top-right of every endpoint, webhook URL and code block */
+.gl-ep { grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; }
+.gl-ep > .gl-method { margin-top: 1px; }
+.gl-ep > .co-copy-icon { margin: -4px -4px 0 0; }
+.gl-url { align-items: center; }
+.gl-code-tools .co-copy-icon { width: 36px; height: 36px; }
+@media (max-width: 899px) {
+  .gl-ep { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .gl-ep > .co-btn { grid-column: auto; }
+  .gl-code-tools .co-copy-icon { width: 44px; height: 44px; }
+}
+@media (max-width: 479px) {
+  /* tabs scroll (with their edge fade) on the left, Stream + Copy stay on the same row at the right */
+  .gl-code-bar { flex-wrap: nowrap; }
+  .gl-code-bar > .gl-code-tabs { flex: 1 1 auto; flex-basis: auto; min-width: 0; }
+  .gl-code-bar > .gl-code-tools { flex: none; flex-basis: auto; border-top: 0; padding-top: 0; gap: 2px; }
+  .gl-code-bar > .gl-code-tools .gl-sw { padding: 0 4px; }
+}
+
+/* D10: horizontally scrollable code shows an edge fade where more is hidden */
+.gl-prebox { position: relative; min-width: 0; }
+.gl-prebox.is-fade-r > .gl-pre { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); }
+.gl-prebox.is-fade-l > .gl-pre { -webkit-mask-image: linear-gradient(90deg, transparent, #000 32px); mask-image: linear-gradient(90deg, transparent, #000 32px); }
+.gl-prebox.is-fade-l.is-fade-r > .gl-pre { -webkit-mask-image: linear-gradient(90deg, transparent, #000 32px, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(90deg, transparent, #000 32px, #000 calc(100% - 40px), transparent); }
+
+/* D11: one status line for Run it live (200 OK · POST path · ms); the canonical base and its alias */
+.gl-out-bar code { min-width: 0; overflow-wrap: normal; }
+.gl-out-bar .gl-out-ms { margin-left: 0; }
+.gl-out-sep { color: var(--dim); }
+.gl-ep-alias { display: block; margin-top: 4px; color: var(--dim); }
+
+/* D9: a mic that cannot be used is aria-disabled and reads as off (muted, no hover lift) */
+.gl-mic.is-off { cursor: not-allowed; filter: grayscale(.85); opacity: .55; box-shadow: none; }
+.gl-mic.is-off:hover, .gl-mic.is-off:active { transform: none; }
+.gl-mic.is-off + .gl-mic-label, .gl-mic-wrap:has(.gl-mic.is-off) .gl-mic-label { color: var(--muted); }
+.is-degraded .gl-mic.is-off { filter: grayscale(.85); opacity: .55; }
+
+/* D9/D10: touch targets */
+@media (max-width: 899px), (pointer: coarse) {
+  .gl-speclink { min-height: 44px; }
+  .gl-json summary { min-height: 44px; display: flex; align-items: center; }
+}
+.gl-out-bar[role="status"] { flex-wrap: nowrap; align-items: baseline; }
+.gl-out-bar[role="status"] > .gl-status { flex: none; }
+.gl-out-line { flex: 1 1 auto; min-width: 0; line-height: 1.6; }
+.gl-out-line code { font-size: 12px; color: var(--strong); }
+.gl-reqline { flex-wrap: nowrap; align-items: baseline; }
+.gl-reqline > .gl-status { flex: none; }
+.gl-reqline .gl-out-line { color: var(--dim); }
+.gl-reqline .gl-out-line code { font-size: 11.5px; color: var(--text); }

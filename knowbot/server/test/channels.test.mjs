@@ -129,40 +129,45 @@ describe('channels: per-medium formatting', () => {
     assert.equal((s.match(/\[1\]/g) || []).length, 1, s);
     const mixed = formatSms({ ...r, answer: '- Frames carry a lifetime warranty. [1]\n- Paint is covered for two years. [1]\n- Returns take 30 days. [2]' }, null);
     assert.equal(mixed, 'Frames carry a lifetime warranty. Paint is covered for two years [1]. Returns take 30 days [2].');
-    const quoteHeavy = formatSms({ ...r, answer: '- You can return any unused item within 30 days of delivery for a full refund. [1]' }, 'https://x/api/p/abc');
-    assert.equal(quoteHeavy, 'You can return any unused item within 30 days of delivery for a full refund [1]. Proof: https://x/api/p/abc', 'answer + proof link only, never citation excerpts');
+    const quoteHeavy = formatSms({ ...r, answer: '- You can return any unused item within 30 days of delivery for a full refund. [1]' }, 'https://x/p/abc');
+    assert.equal(quoteHeavy, 'You can return any unused item within 30 days of delivery for a full refund [1]. Proof: https://x/p/abc', 'answer + proof link only, never citation excerpts');
     assert.equal(formatSms({ refused: true }, 'x'), NOT_IN_DATA);
     assert.equal(UTIL_REFUSAL, NOT_IN_DATA, 'the channels use the canonical refusal byte for byte');
   });
   test('voice speaks with attribution and no markers', () => {
     const s = formatSpoken(r);
-    assert.equal(s, 'According to Returns Policy, you can return any unused item within 30 days of delivery for a full refund. And Refunds, refunds go back to the original payment method within 5 business days.');
+    assert.equal(s, 'According to the Returns Policy, you can return any unused item within 30 days of delivery for a full refund. And according to the Refunds file, refunds go back to the original payment method within 5 business days.');
     // a name keeps its casing after the attribution (never "According to …, lumen Care Plan")
     const named = formatSpoken({ refused: false, answer: 'x', citations: [{ n: 1, file: 'lumen-care-plan.md', title: 'lumen care plan' }], proof: { quoted: [{ n: 1, text: 'Lumen Care Plan covers accidental damage for 2 years.' }] } });
-    assert.equal(named, 'According to Lumen Care Plan, Lumen Care Plan covers accidental damage for 2 years.');
+    assert.equal(named, 'According to the Lumen Care Plan, Lumen Care Plan covers accidental damage for 2 years.');
     assert.ok(!/\[\d\]/.test(s));
     assert.equal(formatSpoken({ refused: true }), NOT_IN_DATA);
   });
   test('voice: a name that starts with an ordinary opener keeps its capital; title words count as names', () => {
     const care = formatSpoken({ refused: false, answer: 'x', citations: [{ n: 1, file: 'care.md', title: 'Lumen Care Plan' }], proof: { quoted: [{ n: 1, text: 'The Lumen Care Plan costs $129 a year.' }] } });
-    assert.equal(care, 'According to Lumen Care Plan, The Lumen Care Plan costs $129 a year.');
+    assert.equal(care, 'According to the Lumen Care Plan, the Lumen Care Plan costs $129 a year.');
     const plain = formatSpoken({ refused: false, answer: 'x', citations: [{ n: 1, file: 'returns.md', title: 'Returns' }], proof: { quoted: [{ n: 1, text: 'The return window is 30 days.' }] } });
-    assert.equal(plain, 'According to Returns, the return window is 30 days.');
+    assert.equal(plain, 'According to the Returns file, the return window is 30 days.');
   });
   test('voice keeps proper nouns capitalised after the attribution', () => {
     // the golive critic's case: never "According to …, lumen frames carry …"
     const lumen = { refused: false, answer: 'Lumen frames carry a lifetime warranty for the original owner. [1]', citations: [{ n: 1, file: 'lumen-warranty-returns.md', title: 'Lumen Bikes Warranty and Returns Policy' }],
       proof: { quoted: [{ n: 1, text: 'Lumen frames carry a lifetime warranty for the original owner.' }] } };
-    assert.equal(formatSpoken(lumen), 'According to Lumen Bikes Warranty and Returns Policy, Lumen frames carry a lifetime warranty for the original owner.');
+    assert.equal(formatSpoken(lumen), 'According to the Lumen Bikes Warranty and Returns Policy, Lumen frames carry a lifetime warranty for the original owner.');
     // a common opener that the bot's own material uses as a name keeps its capital ("our Standard plan …")
     const plan = { refused: false, answer: 'Standard covers one bike. You can upgrade to our Standard plus tier later. [1]', citations: [{ n: 1, file: 'plans.md', title: 'Plans' }],
       proof: { quoted: [{ n: 1, text: 'Standard covers one bike.' }] } };
-    assert.equal(formatSpoken(plan), 'According to Plans, Standard covers one bike.');
+    assert.equal(formatSpoken(plan), 'According to the Plans, Standard covers one bike.');
     // the bot's name / org tokens keep their capital too; ordinary openers still read naturally
     const named = { refused: false, answer: 'x', citations: [{ n: 1, file: 'faq.md', title: 'FAQ' }], proof: { quoted: [{ n: 1, text: 'Free returns are included.' }] } };
-    assert.equal(formatSpoken(named), 'According to FAQ, free returns are included.');
-    assert.equal(formatSpoken(named, 450, { names: ['Free Wheel Co'] }), 'According to FAQ, Free returns are included.');
-    assert.equal(formatSpoken(named, 450, { names: ['Your Bike Shop'] }), 'According to FAQ, free returns are included.', 'pronouns in a name never count');
+    assert.equal(formatSpoken(named), 'According to the FAQ, free returns are included.');
+    assert.equal(formatSpoken(named, 450, { names: ['Free Wheel Co'] }), 'According to the FAQ, Free returns are included.');
+    assert.equal(formatSpoken(named, 450, { names: ['Your Bike Shop'] }), 'According to the FAQ, free returns are included.', 'pronouns in a name never count');
+    // the voice critic's case: an article before the title, and an ordinary first word lower-cased ("E-bike" → "e-bike")
+    const ebike = { refused: false, answer: 'x', citations: [{ n: 1, file: 'lumen-warranty-returns.md', title: 'Lumen Bikes Warranty and Returns Policy' }], proof: { quoted: [{ n: 1, text: 'E-bike batteries are covered for two years.' }] } };
+    assert.equal(formatSpoken(ebike), 'According to the Lumen Bikes Warranty and Returns Policy, e-bike batteries are covered for two years.');
+    const acro = { refused: false, answer: 'x', citations: [{ n: 1, file: 'shipping.md', title: 'Shipping' }], proof: { quoted: [{ n: 1, text: 'UPS delivers within 3 days.' }] } };
+    assert.equal(formatSpoken(acro), 'According to the Shipping file, UPS delivers within 3 days.', 'acronyms keep their capitals');
   });
   test('WhatsApp and e-mail carry footnotes and a source list', () => {
     const w = formatWhatsApp(r, 'https://p');
@@ -201,7 +206,12 @@ describe('channels: webhooks against fake providers', () => {
 
   test('status: every channel configured, webhook URLs carry the bot id, no secrets', async () => {
     const j = await (await S.api('/v1/channels/front-desk')).json();
-    assert.equal(j.channels.sms.webhook, `${PUBLIC}/v1/channels/front-desk/sms`);
+    // one canonical base for every URL handed out (/v1 and /api/v1 are aliases), whichever alias the caller used
+    assert.equal(j.channels.sms.webhook, `${PUBLIC}/api/v1/channels/front-desk/sms`);
+    assert.equal(j.channels.chat.endpoint, `${PUBLIC}/api/v1/bots/front-desk/chat`);
+    const viaApi = await (await S.api('/api/v1/channels/front-desk')).json();
+    assert.deepEqual(viaApi.channels, j.channels);
+    for (const c of Object.values(j.channels)) for (const u of [c.webhook, c.endpoint].filter(Boolean)) assert.ok(u.startsWith(`${PUBLIC}/api/v1/`), u);
     assert.equal(j.channels.whatsapp.provider, 'meta');
     assert.equal(j.channels.voice.speech.recognition, 'google');
     assert.equal(j.channels.voiceBot.google, true);
@@ -220,9 +230,9 @@ describe('channels: webhooks against fake providers', () => {
     assert.match(xml, /^<\?xml version="1.0" encoding="UTF-8"\?>\n<Response><Message>/);
     const msg = messageOf(xml);
     assert.ok(msg.length <= 320);
-    assert.match(msg, /30 days[^.]*\[1\]\. Proof: https:\/\/kb\.example\.test\/api\/p\/[A-Za-z0-9_-]+$/);
+    assert.match(msg, /30 days[^.]*\[1\]\. Proof: https:\/\/kb\.example\.test\/p\/[A-Za-z0-9_-]+$/);
     assert.ok(!msg.includes('…'));
-    const id = /\/api\/p\/([A-Za-z0-9_-]+)$/.exec(msg)[1];
+    const id = /\/p\/([A-Za-z0-9_-]+)$/.exec(msg)[1];
     const proof = await (await S.api(`/p/${id}`)).text();
     assert.ok(proof.includes('within 30 days') && proof.includes('returns-policy.md'));
     const ref = messageOf(await (await S.twilio(p, { From: '+14155550100', Body: OFF })).text());
@@ -232,8 +242,8 @@ describe('channels: webhooks against fake providers', () => {
   test('Voice (Google STT + TTS): greeting records, the recording is transcribed by Google, the answer is played', async () => {
     const p = '/v1/channels/front-desk/voice';
     const first = await (await S.twilio(p, { CallSid: 'CA1', From: PHONE })).text();
-    assert.match(first, /<Play>https:\/\/kb\.example\.test\/v1\/channels\/front-desk\/voice\/audio\/[A-Za-z0-9_-]+\.mp3<\/Play>/);
-    assert.match(first, /<Record action="https:\/\/kb\.example\.test\/v1\/channels\/front-desk\/voice\/recording\?empty=0"/);
+    assert.match(first, /<Play>https:\/\/kb\.example\.test\/api\/v1\/channels\/front-desk\/voice\/audio\/[A-Za-z0-9_-]+\.mp3<\/Play>/);
+    assert.match(first, /<Record action="https:\/\/kb\.example\.test\/api\/v1\/channels\/front-desk\/voice\/recording\?empty=0"/);
     const params = { CallSid: 'CA1', From: PHONE, RecordingUrl: `${F.url}/twilio/2010-04-01/Accounts/AC1/Recordings/RE1`, RecordingSid: 'RE1' };
     const rp = '/v1/channels/front-desk/voice/recording?empty=0';
     const xml = await (await S.twilio(rp, params)).text();
@@ -241,7 +251,7 @@ describe('channels: webhooks against fake providers', () => {
     assert.equal(stt.json.config.encoding, 'LINEAR16');
     assert.equal(stt.json.config.sampleRateHertz, 8000);
     const tts = F.calls.filter((c) => c.path === '/google/tts/v1/text:synthesize').map((c) => c.json.input.text);
-    assert.ok(tts.some((t) => /^According to Returns Policy, you can return any unused item within 30 days/.test(t)), tts.join(' | '));
+    assert.ok(tts.some((t) => /^According to the Returns Policy, you can return any unused item within 30 days/.test(t)), tts.join(' | '));
     const audioUrl = /<Play>([^<]+)<\/Play>/.exec(xml)[1].replace(PUBLIC, S.base);
     const a = await fetch(audioUrl);
     assert.equal(a.status, 200);
@@ -326,7 +336,7 @@ describe('channels: webhooks against fake providers', () => {
     assert.equal(j.transcript, Q);
     assert.equal(j.refused, false);
     assert.match(j.answer, /\[1\]/);
-    assert.match(j.spoken, /^According to Returns Policy/);
+    assert.match(j.spoken, /^According to the Returns Policy/);
     assert.equal(j.mime, 'audio/mpeg');
     assert.match(Buffer.from(j.audio, 'base64').toString(), /^ID3-fake-mp3:According to/);
     assert.deepEqual(j.speech, { recognition: 'google', synthesis: 'google' });
@@ -355,10 +365,10 @@ describe('channels: Twilio speech fallback and missing configuration', () => {
   test('Voice without Google: <Gather input="speech"> loop with <Say>, attribution, reprompt, then goodbye', async () => {
     const p = '/v1/channels/front-desk/voice';
     const first = await (await S.twilio(p, { CallSid: 'CA2', From: PHONE })).text();
-    assert.match(first, /<Gather input="speech" action="https:\/\/kb\.example\.test\/v1\/channels\/front-desk\/voice\/answer\?empty=0" method="POST" speechTimeout="auto"/);
+    assert.match(first, /<Gather input="speech" action="https:\/\/kb\.example\.test\/api\/v1\/channels\/front-desk\/voice\/answer\?empty=0" method="POST" speechTimeout="auto"/);
     assert.match(first, /<Say voice="[^"]+" language="en-US">Hi, you&apos;ve reached Front Desk\./);
     const ans = await (await S.twilio(`${p}/answer?empty=0`, { CallSid: 'CA2', From: PHONE, SpeechResult: Q, Confidence: '0.92' })).text();
-    assert.match(ans, /<Say[^>]*>According to Returns Policy, you can return any unused item within 30 days/);
+    assert.match(ans, /<Say[^>]*>According to the Returns Policy, you can return any unused item within 30 days/);
     assert.match(ans, /Anything else\?<\/Say><\/Gather>/);
     const ref = await (await S.twilio(`${p}/answer?empty=0`, { CallSid: 'CA2', From: '+14155550111', SpeechResult: OFF })).text();
     assert.ok(ref.includes(NOT_IN_DATA.replace(/'/g, '&apos;')));
@@ -375,7 +385,7 @@ describe('channels: Twilio speech fallback and missing configuration', () => {
     const caller = '+14155550177';
     const before = (await questionsInsightsFor(S)).total;
     const ans = await (await S.twilio(p, { CallSid: 'CA9', From: caller, SpeechResult: Q, Confidence: '0.9' })).text();
-    assert.match(ans, /<Say[^>]*>According to Returns Policy, you can return any unused item within 30 days/);
+    assert.match(ans, /<Say[^>]*>According to the Returns Policy, you can return any unused item within 30 days/);
     assert.ok(!/you&apos;ve reached/.test(ans), 'not the greeting');
     // Twilio retries the same webhook: still one logged question
     await S.twilio(p, { CallSid: 'CA9', From: caller, SpeechResult: Q, Confidence: '0.9' });

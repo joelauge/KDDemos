@@ -13,7 +13,8 @@
 //   content GET  /api/v1/vector_stores/:s/path/content/<path>  (404 until written)
 //
 // Pipeline (times divided by `speed`): pending -(600)-> text_extracted -(600)-> chunked (atom_count 0)
-//   -(400)-> chunked (atom_count = N) -(4 x 400)-> atoms_vectorized N/4 .. N -> completed.
+//   -(400)-> chunked (atom_count = N) -(4 x 400)-> atoms_vectorized N/4 .. N -> completed. (Small files; fixer r7: the
+//   stages grow with bytes and atoms, and blocks over MAX_ATOM chars are split at line/sentence boundaries.)
 //   A file containing FAIL_NO_TEXT ends status:'error', last_error:'no text layer found'.
 //   A file containing STALL stays text_extracted forever.
 // Search deliberately IGNORES `filter` and always adds one production hit tagged knowbot:ugm, so the caller's own
@@ -39,7 +40,7 @@ export function stemWord(w) {
 // ("annual" ~ "per year", "how much" ~ "costs", "fix" ~ "repair"). Applied after stemming, to queries and atoms alike.
 const CONCEPTS = Object.freeze({
   annual: 'year', annually: 'year', yearly: 'year', yr: 'year',
-  much: 'cost', price: 'cost', pric: 'cost', priced: 'cost', pricing: 'cost', charge: 'cost', pay: 'cost', expensive: 'cost', cheap: 'cost',
+  much: 'cost', price: 'cost', pric: 'cost', priced: 'cost', pricing: 'cost', charge: 'cost', charg: 'cost', billed: 'cost', fee: 'cost', pay: 'cost', expensive: 'cost', cheap: 'cost',
   fix: 'repair', mend: 'repair', servic: 'service', servicing: 'service', maintenance: 'service', maintain: 'service', tuneup: 'tune-up',
   guarantee: 'warranty', guaranteed: 'warranty', cover: 'warranty', coverage: 'warranty',
   hour: 'open', opening: 'open', close: 'open', closing: 'open',
@@ -47,8 +48,19 @@ const CONCEPTS = Object.freeze({
   rental: 'rent', rented: 'rent', hire: 'rent', bicycle: 'bike', ebike: 'e-bike', membership: 'plan', subscription: 'plan', last: 'long', duration: 'long',
   location: 'address', located: 'address', far: 'range',
 });
+let CONCEPT_TARGETS_ = null;
+const CONCEPT_TARGETS = { has: (w) => (CONCEPT_TARGETS_ ||= new Set(Object.values(CONCEPTS))).has(w) };
+// fixer r5: like an embedding, "how long" and a stated duration ("lifetime", "for 2 years", "30 days") are one concept;
+// the bare word "long" ("ridden hard for a long time", "as long as") is not a duration.
+const DURATION_RE = /\b(?:lifetime|for\s+life|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fourteen|thirty|ninety)[\s-]+(?:business\s+|working\s+|calendar\s+)?(?:days?|weeks?|months?|years?|hours?|minutes?))\b/gi;
 export function bag(text) {
   const m = new Map();
+  const src = String(text || '');
+  const dur = (src.match(DURATION_RE) || []).length + (/\bhow\s+long\b/i.test(src) ? 1 : 0);
+  if (dur) m.set('duration', dur);
+  // fixer r7: like an embedding, a stated amount ("is $100") sits near "how much" even when no cost word is used
+  const money = !/\b(?:costs?|price[sd]?|pricing|charges?|fees?|pay|paid)\b/i.test(src) && /[$€£]\s?\d/.test(src);
+  text = src.replace(/\bhow\s+long\b/gi, 'how');
   // fixer r3: "paid time off" / "PTO" and "vacation" are one concept, the way an embedding places them
   for (const raw0 of String(text || '').toLowerCase().replace(/[’']/g, "'").replace(/\b(?:paid\s+)?time\s+off\b|\bpto\b|\bvacations?\b|\bannual\s+leave\b/g, 'vacation').match(/[a-z0-9][a-z0-9'-]*/g) || []) {
     const raw = raw0.replace(/-+$/, '').replace(/'s$/, '');
@@ -58,8 +70,11 @@ export function bag(text) {
       const st = stemWord(w0);
       const w = CONCEPTS[w0] || CONCEPTS[st] || st;
       m.set(w, (m.get(w) || 0) + 1);
+      // fixer r5: a concept named literally ("warranty") sits a little closer than a paraphrase of it ("covered")
+      if (w === st && CONCEPT_TARGETS.has(w)) m.set(`=${w}`, (m.get(`=${w}`) || 0) + 1);
     }
   }
+  if (money && !m.has('cost')) m.set('cost', 1);
   return m;
 }
 /**
@@ -91,7 +106,7 @@ function trigrams(text) {
   t = new Set();
   const s = ` ${key.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
   for (let i = 0; i + 3 <= s.length; i++) t.add(s.slice(i, i + 3));
-  if (trigramCache.size > 5000) trigramCache.clear();
+  if (trigramCache.size > 30000) trigramCache.clear();
   trigramCache.set(key, t);
   return t;
 }
@@ -155,9 +170,36 @@ export function atomize(text) {
     const h = /^(#{1,6})\s+(.+)$/.exec(t);
     if (h && !t.includes('\n')) { crumbs.length = h[1].length - 1; crumbs[h[1].length - 1] = h[2].trim(); continue; }
     const kind = /^\s*\|.*\|\s*$/m.test(t) && t.split('\n').every((l) => /^\s*\|/.test(l)) ? 'table' : /^\s*[-*]\s/.test(t) ? 'list' : 'paragraph';
-    atoms.push({ seq: atoms.length, text: t, offset: s + lead, len: t.length, kind, breadcrumb: crumbs.filter(Boolean).join(' > ') });
+    const breadcrumb = crumbs.filter(Boolean).join(' > ');
+    // fixer r7: like the real chunker, a block is never one giant atom: anything over MAX_ATOM chars is cut at line or
+    // sentence boundaries (a single 5 MB paragraph becomes thousands of ~1,200-character atoms, offsets exact)
+    for (const [o, len] of splitBlock(t)) atoms.push({ seq: atoms.length, text: t.slice(o, o + len), offset: s + lead + o, len, kind, breadcrumb });
   }
   return atoms;
+}
+export const MAX_ATOM = 1200;
+/** [offset, len] pieces of a block, each at most MAX_ATOM chars, cut after a newline or a sentence end when possible. */
+function splitBlock(t) {
+  if (t.length <= MAX_ATOM) return [[0, t.length]];
+  const out = [];
+  let i = 0;
+  while (i < t.length) {
+    while (i < t.length && /\s/.test(t[i])) i++;
+    if (i >= t.length) break;
+    let end = Math.min(t.length, i + MAX_ATOM);
+    if (end < t.length) {
+      const win = t.slice(i, end);
+      const nl = win.lastIndexOf('\n');
+      let cut = nl > MAX_ATOM * 0.4 ? nl : -1;
+      if (cut < 0) { const re = /[.!?]["”')\]]?\s+(?=[A-Z0-9"“(])/g; for (let m; (m = re.exec(win));) if (m.index > MAX_ATOM * 0.3) cut = m.index + m[0].trimEnd().length; }
+      if (cut < 0) { const sp = win.lastIndexOf(' '); cut = sp > MAX_ATOM * 0.5 ? sp : win.length; }
+      end = i + cut;
+    }
+    const piece = t.slice(i, end).replace(/\s+$/, '');
+    if (piece) out.push([i, piece.length]);
+    i = end;
+  }
+  return out;
 }
 
 const FIXTURE_UGM = Object.freeze({
@@ -203,21 +245,27 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     // partial-readiness state stays visible at FAKE_SPEED=4.
     const q = Math.min(queued, 6);
     const pairGap = 1400 + Math.max(0, Number(queueStaggerMs) || 0) * speed;
-    later(600 + Math.floor(q / 2) * pairGap + (q % 2) * 400, () => {
+    // fixer r7: stage times grow with the file like the real pipeline (extraction with bytes, chunking and vectorizing
+    // with atoms), so a 5 MB file takes ~25 s at speed 1 rather than 4 s; small files keep the documented timings
+    const mb = (f.bytes || 0) / 1048576;
+    const tExtract = 600 + Math.round(1500 * mb), tChunk = 600 + Math.round(800 * mb), tAtoms = 400 + Math.round(atoms.length * 0.2);
+    const vSteps = Math.max(4, Math.min(12, Math.ceil(atoms.length / 400)));
+    const tVec = Math.max(400, Math.round((1600 + atoms.length * 2.5) / vSteps));
+    later(tExtract + Math.floor(q / 2) * pairGap + (q % 2) * 400, () => {
       if (!files.has(id)) return;
       if (failNoText) { Object.assign(f, { status: 'error', phase: 'error', last_error: 'no text layer found' }); touch(); return; }
       f.phase = 'text_extracted'; touch();
       if (f.text.includes('STALL')) return;
-      later(600, () => {
+      later(tChunk, () => {
         if (!files.has(id)) return;
         Object.assign(f, { phase: 'chunked', chunk_count: Math.max(1, Math.ceil(atoms.length / 3)), atom_count: 0 }); touch();
-        later(400, () => {
+        later(tAtoms, () => {
           if (!files.has(id)) return;
           f.atom_count = atoms.length; touch();
-          const step = (i) => later(400, () => {
+          const step = (i) => later(tVec, () => {
             if (!files.has(id)) return;
-            f.atoms_vectorized = Math.min(atoms.length, Math.ceil((atoms.length * i) / 4)); touch();
-            if (i < 4) step(i + 1);
+            f.atoms_vectorized = Math.min(atoms.length, Math.ceil((atoms.length * i) / vSteps)); touch();
+            if (i < vSteps) step(i + 1);
             else later(200, () => { if (files.has(id)) { Object.assign(f, { phase: 'completed', status: 'processed' }); touch(); } });
           });
           step(1);
@@ -260,13 +308,14 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
       // fixer r2: unrelated text spreads out like a real embedding (0.41–0.62) instead of a flat 0.55–0.58 wall:
       // character-trigram overlap with the question (shared word stems, spelling) plus a per-atom hash jitter.
       // Atoms sharing a concept word keep their 0.55+ score; everything stays well under the 0.64 close-miss band.
-      const h = parseInt(createHash('sha1').update(`${query}|${f.id}|${a.seq}`).digest('hex').slice(0, 6), 16) / 0xffffff;
-      const offSim = 0.41 + Math.min(0.21, 0.3 * trigramOverlap(query, a.text) + 0.16 * h ** 4);
+      // fixer r7: the jitter and trigram terms are only computed for the atoms that need them (large files stay fast)
+      const hj = () => parseInt(createHash('sha1').update(`${query}|${f.id}|${a.seq}`).digest('hex').slice(0, 6), 16) / 0xffffff;
       // fixer r4: weak matches (a shared everyday word: "today", "files") no longer pile up at 0.58–0.62 either. Below
       // 0.63 the score gets a deterministic per-atom term (trigram overlap + hash), so refusal charts show a real spread.
       // A shared-word match keeps the documented 0.55 floor; it spreads within 0.55–0.625 (under the 0.64 close-miss band).
-      let s = cos > 0 ? sim : offSim;
-      if (cos > 0 && s < 0.63) s = Math.max(0.55, Math.min(0.625, s - 0.08 + 0.05 * trigramOverlap(query, a.text) + 0.13 * h ** 4));
+      let s = sim;
+      if (!(cos > 0)) s = 0.41 + Math.min(0.21, 0.3 * trigramOverlap(query, a.text) + 0.16 * hj() ** 4);
+      else if (s < 0.63) s = Math.max(0.55, Math.min(0.625, s - 0.08 + 0.05 * trigramOverlap(query, a.text) + 0.13 * hj() ** 4));
       scored.push({ f, a, sim: Math.min(0.95, s), cos });
     }
     scored.sort((x, y) => y.sim - x.sim || x.f.id.localeCompare(y.f.id) || x.a.seq - y.a.seq);

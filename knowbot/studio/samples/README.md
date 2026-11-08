@@ -14,7 +14,7 @@ addresses use the reserved `.example` domain.
 | `lumen-service-plans.html` | An HTML `<table>` plus prose (HTML extraction, table rows as derived lines) |
 | `lumen-store-faq.txt` | Plain-text question and answer pairs |
 | `lumen-price-list-2026.md` | A Markdown price table (table-derived lines, `Header: value` quotes) |
-| `questions.json` | Curated starters, Proof Run questions and off-topic probes. All are re-validated at runtime against the floor |
+| `questions.json` | Curated starters, Proof Run questions and off-topic probes. All are re-validated at runtime against the floor. `multiSource` lists the three two-part questions whose answers quote two files ([1] and [2]); they are offered only once every sample file is Ready |
 
 The facts the Studio tests rely on are written verbatim in the files (spec section 5.1); edit them with care.
 
