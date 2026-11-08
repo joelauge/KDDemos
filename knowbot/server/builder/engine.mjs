@@ -66,7 +66,7 @@ export function summarizeState(state = {}) {
   const answers = (Array.isArray(state.answers) ? state.answers : []).slice(-3).map((a) => ({ question_untrusted: dataText(a.question, 120), status: a.status || null }));
   return {
     step: state.step || null,
-    bot: { name: spec.name || null, org: spec.org || '', purpose: spec.purpose || '', audience: spec.audience || null, tone: spec.tone || null, length: spec.length || null, greeting: spec.greeting || '', strictness: spec.floor ?? null, version: spec.version ?? null, sample_files: !!spec.sampleSet },
+    bot: { name: spec.name || null, org: spec.org || '', purpose: spec.purpose || '', audience: spec.audience || null, tone: spec.tone || null, length: spec.length || null, greeting: spec.greeting || '', answer_surfaces: Array.isArray(spec.surfaces) && spec.surfaces.length ? spec.surfaces : ['webchat'], strictness: spec.floor ?? null, version: spec.version ?? null, sample_files: !!spec.sampleSet },
     files, files_total: Array.isArray(state.files) ? state.files.length : 0, ready_files: readyFiles(state).length,
     space: { used_mb: Math.round(q.used / 1048576 * 10) / 10, total_mb: Math.round(q.total / 1048576) },
     last_answers: answers, grounded_answers: Number(state.grounded) || 0, refusals: Number(state.refusals) || 0,
@@ -188,7 +188,7 @@ function describe(results, state) {
     }
     if (name === 'update_bot') {
       const p = r.res.patch || {};
-      const bits = [p.name && `name ${p.name}`, p.tone && `tone ${p.tone}`, p.purpose && `purpose “${p.purpose}”`, p.org && `for ${p.org}`, p.audience && `for ${p.audience}`, p.length && `${p.length} answers`, p.greeting && "a new greeting", p.sources && 'answers only from the files you named'].filter(Boolean);
+      const bits = [p.name && `name ${p.name}`, p.tone && `tone ${p.tone}`, p.purpose && `purpose “${p.purpose}”`, p.org && `for ${p.org}`, p.audience && `for ${p.audience}`, p.length && `${p.length} answers`, p.greeting && "a new greeting", p.sources && 'answers only from the files you named', p.surfaces && `answers on ${p.surfaces.map((x) => SURFACE_WORD[x] || x).join(', ')}`].filter(Boolean);
       parts.push(`Saved: ${bits.join(' · ')}.`);
     } else if (name === 'import_website') parts.push(`Opening the website import for ${r.res.data?.host || 'that site'}. Confirm you own or manage it and I'll read its pages.`);
     else if (name === 'attach_samples') parts.push('Loading the sample files now. Watch them learn on the right.');

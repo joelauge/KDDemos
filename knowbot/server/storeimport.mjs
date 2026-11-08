@@ -50,7 +50,7 @@ import net from 'node:net';
 import dns from 'node:dns';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
-import { findSources, classifyUrl, normalizeUrl, urlKey, anchorsOf, canonicalOf, decodeEntities, KIND_RANK, KINDS } from './sitefinder.mjs';
+import { findSources, classifyUrl, normalizeUrl, urlKey, anchorsOf, canonicalOf, decodeEntities, robotsCrawlDelay, KIND_RANK, KINDS } from './sitefinder.mjs';
 
 export { decodeEntities };
 export const USER_AGENT = 'KnowBotStudio/1.0 (+https://knowbot.knowdrive.ai)';
@@ -348,7 +348,11 @@ export function createStoreFetcher(o = {}) {
         catch (e) { if (['aborted', 'blocked_host'].includes(e.code)) throw e; if (e.code === 'timeout') throw e; return { groups: [], sitemaps: [] }; }
         if (r.status >= 500) return { groups: [{ agents: ['*'], rules: [{ allow: false, path: '/' }] }], sitemaps: [], unavailable: true };
         if (r.status >= 400 || r.status < 200) return { groups: [], sitemaps: [] };
-        return parseRobots(r.body.toString('utf8'));
+        const parsed = parseRobots(r.body.toString('utf8'));
+        // Crawl-delay is honoured from the first request on (the strictest one seen becomes the pacing floor)
+        const cd = Math.min(30, robotsCrawlDelay(parsed, UA_TOKEN)) * 1000;
+        if (cd > 0) { stats.crawlDelayMs = Math.max(stats.crawlDelayMs, cd); floor = Math.max(floor, cd); pace = Math.max(pace, floor); stats.pace = pace; }
+        return parsed;
       })());
     }
     return robotsCache.get(origin);
@@ -438,7 +442,7 @@ export function createStoreFetcher(o = {}) {
     /** Allow `host` for .pdf paths only (an asset CDN such as cdn.shopify.com). */
     allowPdfHost(host) { pdfHosts.add(String(host).toLowerCase()); },
     /** robots.txt Crawl-delay (seconds, capped at 30): becomes the pacing floor. */
-    setCrawlDelay(sec) { const ms = Math.min(30, Math.max(0, Number(sec) || 0)) * 1000; stats.crawlDelayMs = ms; floor = Math.max(cfg.paceMs, ms); pace = Math.max(pace, floor); stats.pace = pace; },
+    setCrawlDelay(sec) { const ms = Math.min(30, Math.max(0, Number(sec) || 0)) * 1000; stats.crawlDelayMs = Math.max(stats.crawlDelayMs, ms); floor = Math.max(floor, ms); pace = Math.max(pace, floor); stats.pace = pace; },
     get pace() { return pace; },
     /** True when `url` is http(s) on this store's site (or an allowed CDN host). */
     hostOkFor(url) { try { const x = new URL(url); return (x.protocol === 'http:' || x.protocol === 'https:') && hostOk(x.hostname); } catch { return false; } },
@@ -908,7 +912,13 @@ function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batch
     stats, files: out,
     add(doc) { q = q.then(() => addNow(doc)); return q; },
     /** Hand over every pending batch (between reading phases: help pages go up before the products are read). */
-    flushAll() { q = q.then(async () => { for (const k of [...batches.keys()]) await flush(k); }); return q; },
+    flushAll() {
+      q = q.then(async () => {
+        if (!warm) { warm = true; const h = held; held = []; for (const x of h) await write(x); } // what is held goes now
+        for (const k of [...batches.keys()]) await flush(k);
+      });
+      return q;
+    },
     async finish() {
       await q;
       warm = true;
@@ -1384,6 +1394,7 @@ export async function importStore(input, o = {}) {
     await readPages(ctx, plan.sources.filter((s) => s.kind === 'page'), caps.maxOtherPages);
     const files = await writer.finish();
     f.flushProgress();
+    if (o.signal?.aborted) throw err('aborted');
 
     report.written = { ...writer.stats.written };
     report.bytes = writer.stats.used;

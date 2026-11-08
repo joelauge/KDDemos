@@ -84,6 +84,7 @@ export function insightKey(q) {
   return t.split(' ').map((w) => (w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w)).filter((w) => !/^(?:the|a|an|your|you|do|does|can|i|we|please)$/.test(w)).join(' ');
 }
 const PRICE = 249;
+const PRICE_YEAR = 2499;   // per answer surface, like PRICE (studio/surfaces.js)
 const REPLAY_TARGET_MS = 25000; // the sample demo promises ~30 s
 /**
  * fixer r8 (D4): every trial replays the recorded timeline scaled so its last file is ready at the configured duration
@@ -368,14 +369,18 @@ const isDerivedLine = (t) => /;\s/.test(t) && (String(t).match(/[^;:]{1,60}:\s[^
 
 // ------------------------------------------------------------------------------------------- spec
 const TONES = ['friendly', 'neutral', 'formal'], LENGTHS = ['short', 'normal'], AUDIENCES = ['customers', 'employees', 'students'];
-const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email']);
+const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces']);
+// answer surfaces: where the bot answers (studio/surfaces.js SURFACE_IDS, same order). Not material: the answers and the
+// bot version never change with them; each one is its own plan line at launch (shown only after testing).
+export const SURFACE_IDS = ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice'];
+const SURFACE_LABEL = { webchat: 'Website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', phone: 'Phone', webvoice: 'Web voice assistant' };
 const READ_ONLY_KEYS = new Set(['instructions', 'version', 'sampleSet']);
 const MATERIAL = ['tone', 'length', 'sources', 'floor', 'purpose', 'audience', 'name'];
 const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
 
 export function defaultSpec(floor = 0.7) {
   return { name: 'SampleBot', avatar: { initials: 'SB', hue: 0 }, org: '', purpose: '', audience: 'customers', tone: 'friendly', length: 'normal',
-    greeting: '', instructions: composeInstructions({ name: 'SampleBot', audience: 'customers', tone: 'friendly', length: 'normal' }), starters: [], floor, sources: {}, sampleSet: null, version: 1 };
+    greeting: '', instructions: composeInstructions({ name: 'SampleBot', audience: 'customers', tone: 'friendly', length: 'normal' }), starters: [], floor, sources: {}, surfaces: ['webchat'], sampleSet: null, version: 1 };
 }
 
 export function composeInstructions(s) {
@@ -453,6 +458,14 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
         next.avatar = { initials, hue };
         break;
       }
+      case 'surfaces': {
+        const v = patch.surfaces;
+        if (!Array.isArray(v) || v.length < 1 || v.length > 12) bad('surfaces', `must be a list of 1 to ${SURFACE_IDS.length} of ${SURFACE_IDS.join(', ')}`);
+        const want = new Set();
+        for (const x of v) { if (typeof x !== 'string' || !SURFACE_IDS.includes(x)) bad('surfaces', `unknown surface ${JSON.stringify(String(x)).slice(0, 40)}: use ${SURFACE_IDS.join(', ')}`); want.add(x); }
+        next.surfaces = SURFACE_IDS.filter((id) => want.has(id));
+        break;
+      }
       case 'email': {
         const e = String(patch.email ?? '').trim();
         if (e && (e.length > 254 || !EMAIL_RE.test(e))) bad('email', 'is not a valid email address');
@@ -463,8 +476,8 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
     }
   }
   const diff = [];
-  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar']) {
-    if (JSON.stringify(spec[k]) !== JSON.stringify(next[k])) diff.push({ field: k, from: spec[k], to: next[k] });
+  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar', 'surfaces']) {
+    if (JSON.stringify(spec[k] ?? (k === 'surfaces' ? ['webchat'] : undefined)) !== JSON.stringify(next[k] ?? (k === 'surfaces' ? ['webchat'] : undefined))) diff.push({ field: k, from: spec[k], to: next[k] });
   }
   const material = diff.some((d) => MATERIAL.includes(d.field));
   next.instructions = composeInstructions(next);
@@ -575,6 +588,13 @@ export function parseIntent(message, ctx = {}) {
     if (phrase && !/^(?:upload|make|call|name|test|run|launch|sample|use the sample)/i.test(phrase)) { scope = phrase.slice(0, 120); intents.push('set_scope'); }
   }
   if (!scope && /\b(?:use|search|enable|turn on|answer from)\s+(?:all|every)\s+(?:of\s+)?(?:my\s+|the\s+)?(?:files|docs|sources)\b|\banswer about everything\b/i.test(msg)) { scope = '*'; intents.push('set_scope'); }
+  // answer surfaces ("add WhatsApp", "just web chat", "drop SMS"): where the bot answers, never which files it searches
+  const surf = surfacesIntentOf(msg, spec.surfaces);
+  if (surf) {
+    intents.push('surfaces');
+    if (surf.surfaces) patch.surfaces = surf.surfaces; else intents.push('surfaces_empty');
+    if (scope && scope !== '*') { scope = null; intents.splice(intents.indexOf('set_scope'), 1); }
+  }
   // fixer r7 (D2): Builder questions about the product itself, never routed to the bot as a question for its files
   if (DEV_INTENT_RE.test(msg)) intents.push('open_developers');
   if (INSIGHTS_INTENT_RE.test(msg)) intents.push('show_insights');
@@ -588,6 +608,46 @@ export function parseIntent(message, ctx = {}) {
   const meta = intents.filter((x) => !['ack'].includes(x));
   if (isQuestion && anyReady && !meta.length && !Object.keys(patch).length) { actions.push({ type: 'ask_samplebot', question: clip(msg, 500) }); intents.push('ask_question'); }
   return { patch, actions, intents, scope, customTone, business };
+}
+// answer surfaces named in a Builder message (order matters: web voice before phone, web chat before plain "chat")
+const SURFACE_WORDS = [
+  ['webvoice', /\b(?:web\s*voice(?:\s+assistant)?|voice\s+(?:assistant|bot|chat(?:bot)?|agent)|browser\s+voice|talk(?:ing)? to it (?:on|in) (?:my|the|our) (?:website|site|browser))\b/i],
+  ['webchat', /\b(?:web\s*chat|website\s*chat|site\s+chat|chat\s+widget|web\s+widget|website\s+widget|live\s+chat|chat\s+on\s+(?:my|our|the)\s+(?:website|site))\b/i],
+  ['sms', /\b(?:sms|text\s+messag(?:e|es|ing)|texting|by\s+text)\b/i],
+  ['whatsapp', /\bwhats\s?app\b/i],
+  ['email', /\b(?:e-?mails?|by\s+mail|inbox)\b/i],
+  ['phone', /\b(?:(?:tele)?phone(?!\s*(?:number|no\.?|#))(?:\s+(?:calls?|line))?|phone\s*calls?|voice\s+calls?|calls?\s+(?:in|from\s+customers)|hotline)\b/i],
+];
+/**
+ * A request to change where the bot answers (pure): { surfaces: [...] } (canonical order), { surfaces: null } when it would
+ * leave none, or null when the message is not about surfaces. Needs a surface word plus a verb ("add", "also", "just",
+ * "only", "remove", "drop", "answer on/by/over/via") or the word surface/channel; questions need a verb.
+ */
+export function surfacesIntentOf(msg, current) {
+  const s = String(msg || '').replace(/\S+@\S+/g, ' ');
+  if (!s.trim()) return null;
+  const cur = Array.isArray(current) && current.length ? SURFACE_IDS.filter((id) => current.includes(id)) : ['webchat'];
+  const all = /\b(?:all|every|each)\s+(?:of\s+)?(?:the\s+)?(?:six\s+|6\s+)?(?:answer\s+)?(?:surfaces|channels)\b|\b(?:all|every) (?:six|6)\b|\beverywhere\b/i.test(s);
+  let rest = s;
+  const named = [];
+  for (const [id, re] of SURFACE_WORDS) {
+    const g = new RegExp(re.source, 'gi');
+    if (g.test(rest)) { named.push(id); rest = rest.replace(new RegExp(re.source, 'gi'), ' '); }
+  }
+  if (!named.length && !all) return null;
+  const remove = /\b(?:remove|drop|delete|without|stop|turn\s+off|disable|exclude|cancel|take\s+(?:off|out)|get\s+rid\s+of|no\s+(?:more\s+)?(?=\w)|don'?t\s+(?:need|want))\b/i.test(s);
+  const only = /\b(?:just|only)\b/i.test(s);
+  const add = /\b(?:add|also|plus|include|enable|turn\s+on|switch\s+on|as\s+well|too|and\s+(?:on|by|over|via))\b/i.test(s);
+  const answer = /\b(?:answers?|answering|reply|replies|respond|work|works|live|available|surfaces?|channels?)\b[^.?!]{0,24}\b(?:on|by|over|via|in|through)\b|\b(?:surfaces?|channels?)\b|\bwhere (?:should|does|will) it answer\b/i.test(s);
+  const question = /\?\s*$/.test(s) && !/^\s*(?:can|could|would|will)\s+you\s+(?:add|remove|drop|include|enable)\b/i.test(s);
+  if (question && !(add || remove || only)) return null;
+  if (!(add || remove || only || answer)) return null;
+  if (all && !remove) return { surfaces: [...SURFACE_IDS] };
+  let next;
+  if (remove) next = cur.filter((id) => !named.includes(id));
+  else if (only) next = SURFACE_IDS.filter((id) => named.includes(id));
+  else next = SURFACE_IDS.filter((id) => cur.includes(id) || named.includes(id));
+  return { surfaces: next.length ? next : null, named };
 }
 // fixer r7 (D2): Builder intents about the product (developer API, insights, inventory, the refusal line, languages)
 export const DEV_INTENT_RE = /\b(?:(?:my|our)\s+own\s+(?:app|site|website|code|product|system|software|platform|interface|ui|frontend|backend|stack)|(?:from|in|into|inside|with)\s+(?:my|our)\s+(?:app|code|backend|server|frontend|product|software|platform|system|website|interface|ui)|integrat(?:e|ion|ions|ing)|developer (?:api|docs?|tab|access|mode|portal|keys?)|\bapis?\b|sdks?|webhooks?|programmatic(?:ally)?|endpoints?|curl|openai[- ]compatible|rest api|json api|api keys?)\b/i;
@@ -2657,6 +2717,10 @@ export function createStudio(o = {}) {
     return 'purpose';
   }
   const C = (id, label, extra = {}) => ({ id, label, kind: 'default', ...extra });
+  /** owner rule: the price (one plan line per answer surface) shows only once the visitor has tested the bot. */
+  const testedBot = (T) => !!(T.grounded > 0 || T.proofDone || T.flags?.launchShown || T.converted);
+  const surfaceCount = (T) => (Array.isArray(T.spec?.surfaces) && T.spec.surfaces.length ? T.spec.surfaces.length : 1);
+  const launchLabel = (T) => (testedBot(T) ? `Launch · $${(PRICE * surfaceCount(T)).toLocaleString('en-US')}/mo` : 'Launch');
   function stepChips(T, files) {
     const step = stepOf(T, files);
     const ready = files.filter((f) => f.stage === 'ready');
@@ -2664,7 +2728,7 @@ export function createStudio(o = {}) {
     if (!files.length) return [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })];
     if (step === 'purpose' || step === 'sources') return [C('samples', 'Use sample files', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })];
     if (step === 'learn' && !ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
-    if (step === 'launch') return [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('what-get', 'What do I get?', { send: 'What do I get?' })];
+    if (step === 'launch') return [C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('what-get', 'What do I get?', { send: 'What do I get?' })];
     if (!ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
     return [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }), C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('shorter', 'Make answers shorter', { send: 'Make answers shorter' })];
   }
@@ -2738,7 +2802,7 @@ export function createStudio(o = {}) {
     }
     T.flags.launchShown = true; saveSpecSoon(T);
     return { reply: `${botName(T)} is built and saved. Launch it to get a hosted link and embed code in under a minute.`, actions: [{ type: 'show_launch', ...(force ? { force: true } : {}) }],
-      chips: [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch', ...(force ? { force: true } : {}) } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('what-get', 'What do I get?', { send: 'What do I get?' })] };
+      chips: [C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch', ...(force ? { force: true } : {}) } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('what-get', 'What do I get?', { send: 'What do I get?' })] };
   }
 
   const CHIP_SENDS = {
@@ -2786,6 +2850,14 @@ export function createStudio(o = {}) {
     const diff = preview?.diff || [];
     const step = stepOf(T, files);
     if (has('show_launch')) return { ...launchFlow(T, files), patch };
+    // answer surfaces: said back in plain words; the price is never volunteered here (it shows at launch, after testing)
+    if (has('surfaces') && diff.every((d) => d.field === 'surfaces' || d.field === 'greeting')) {
+      const now = surfacesWords(patch.surfaces || T.spec.surfaces);
+      const chips = [C('open-spec', 'Change in bot spec', { action: { type: 'open_spec' } }), ...stepChips(T, files).filter((c) => c.id !== 'open-spec')].slice(0, 3);
+      if (has('surfaces_empty')) return { reply: withNotes(`${name} needs at least one place to answer, so it stays on ${surfacesWords(T.spec.surfaces)}. Say "just SMS" or "add WhatsApp" to switch.`), chips };
+      const changed = diff.some((d) => d.field === 'surfaces');
+      return { reply: withNotes(changed ? `Done: ${name} will answer on ${now}. Every one of them answers from the same sources you give it, with the same citations and the same refusal line. Change it anytime here or in the bot spec.` : `${name} already answers on ${now}.`), patch, chips };
+    }
     // fixer r7 (D2): questions about the Builder's own product are answered here, never sent to the bot
     const done = diff.length && confirmChanges(diff) ? `Done: ${lowerFirst(confirmChanges(diff))} ` : '';
     if (has('explain_refusal')) return { ...refusalReply(T, files), reply: withNotes(`${done}${refusalReply(T, files).reply}`), patch };
@@ -2807,8 +2879,8 @@ export function createStudio(o = {}) {
       chips: ready.length ? [C('ask-starter', 'Ask a question', { kind: 'primary', action: { type: 'ask_samplebot', question: ready.length ? (T.questionsCache?.value?.starters?.[0]?.q || null) : null } }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] : [C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
     if (has('explain_types')) return { reply: 'PDF, Word (DOCX), PowerPoint (PPTX), Excel (XLSX), HTML, Markdown, plain text and CSV, images (PNG, JPG, WEBP, GIF) and audio (MP3, WAV, M4A, OGG). Up to 95 MB per file and 100 MB in total.',
       chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
-    if (has('explain_plan')) return { reply: `KnowDrive is $${PRICE}/month or $2,499/year for up to 100 MB, with the first 30 days free (card required): your KnowBot hosted with a share link, an embed widget for any site, 100 MB of storage, citations on every answer and canonical refusals, and question insights so you can see what people ask. Your files carry over. Cancel anytime. More than 100 MB? Email sales@recoursellm.com.`,
-      chips: [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
+    if (has('explain_plan')) return { reply: `Each answer surface is $${PRICE}/month or $2,499/year for up to 100 MB, with the first 30 days free (card required): your KnowBot hosted with a share link, an embed widget for any site, 100 MB of storage, citations on every answer and canonical refusals, and question insights so you can see what people ask. ${surfaceCount(T) > 1 ? `${name} is set to answer on ${surfacesWords(T.spec.surfaces)}, so that is ${surfaceCount(T)} plan lines; you can remove any of them at checkout. ` : ''}Your files carry over. Cancel anytime. More than 100 MB? Email sales@recoursellm.com.`,
+      chips: [C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
     if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
     if (has('import_store')) {
       const a = acts.find((x) => x.type === 'import_store') || { type: 'import_store' };
@@ -2924,7 +2996,14 @@ export function createStudio(o = {}) {
     if (k === 'name') return `it's already called ${v}`;
     if (k === 'audience') return `it already speaks to ${v}`;
     if (k === 'floor') return `strictness is already ${fmtFloor(v)}`;
+    if (k === 'surfaces') return `it already answers on ${surfacesWords(v)}`;
     return null;
+  }
+  /** "Website chat, SMS and WhatsApp" (an old trial without spec.surfaces answers on website chat). */
+  function surfacesWords(list) {
+    const ids = Array.isArray(list) && list.length ? SURFACE_IDS.filter((id) => list.includes(id)) : ['webchat'];
+    const n = ids.map((id) => SURFACE_LABEL[id]);
+    return n.length <= 1 ? n.join('') : `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`;
   }
   /** fixer r7 (D2): one sentence confirming every applied change ("Shorter answers, and it now speaks to employees."). */
   function confirmChanges(diff, already = []) {
@@ -2938,6 +3017,7 @@ export function createStudio(o = {}) {
         case 'floor': return `strictness ${fmtFloor(d.to)}`;
         case 'greeting': return `it now opens with "${clip(String(d.to || ''), 60)}"`;
         case 'purpose': return 'a new purpose';
+        case 'surfaces': return `it answers on ${surfacesWords(d.to)}`;
         case 'sources': case 'avatar': case 'starters': return null;
         default: return `${d.field} updated`;
       }
@@ -2962,9 +3042,9 @@ export function createStudio(o = {}) {
     // Go live sheet by itself yet; these chips carry {emit:{type:'golive:open'}} (handled by onChip) and the reply asks
     // for one tap. When B adds `case 'open_golive': openGoLive(a.tab, a.channel)`, return actions:[{type:'open_golive', tab}].
     if (site) return { reply: `On your own site, ${name} is one line of embed code: a chat bubble or a full page, with the same cited answers. The snippet is ready in Channels → Text chatbot, and you can try the widget before you launch.`,
-      chips: [golive('channels', 'Channels', 'primary'), golive('developers', 'Developers'), C('launch', `Launch · $${PRICE}/mo`, { action: { type: 'show_launch' } })] };
+      chips: [golive('channels', 'Channels', 'primary'), golive('developers', 'Developers'), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
     return { reply: `${name} has a chat API for your own app: POST a question, get back the answer with its citations, or the exact refusal. It's OpenAI-compatible, so any OpenAI SDK works by changing the base URL. Your trial key and copy-paste snippets (curl, JavaScript, Python) are in Developers.`,
-      chips: [golive('developers', 'Developers', 'primary'), golive('channels', 'Channels'), C('launch', `Launch · $${PRICE}/mo`, { action: { type: 'show_launch' } })] };
+      chips: [golive('developers', 'Developers', 'primary'), golive('channels', 'Channels'), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
   }
   /** The same numbers the insights card shows, without the Builder's own probes. */
   function insightsData(T) {
@@ -2994,7 +3074,7 @@ export function createStudio(o = {}) {
     const offLine = off ? ` ${off === 1 ? `"${clip(d.offTopic[0].q, 50)}" was off-topic, and refusing it was right.` : `${off} were off-topic, and refusing them was right.`}` : '';
     const tail = gap ? ` The top gap is "${clip(gap.q, 70)}": add a file that covers it and ${name} answers it next time.${offLine}` : d.refused ? offLine || ' No content gaps so far.' : ' Every one was answered from your files.';
     return { reply: `${lead}${tail}`, card: { type: 'insights', data: d },
-      chips: [gap ? C('add-gap', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }) : C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('launch', `Launch · $${PRICE}/mo`, { action: { type: 'show_launch' } })] };
+      chips: [gap ? C('add-gap', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }) : C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
   }
   function inventoryReply(T, files) {
     const name = botName(T);
@@ -3086,6 +3166,7 @@ export function createStudio(o = {}) {
       case 'purpose': return `purpose: ${clip(v(d.to), 60)}`;
       case 'floor': return `strictness is ${fmtFloor(d.to)}`;
       case 'greeting': return 'greeting updated';
+      case 'surfaces': return `it answers on ${surfacesWords(d.to)}`;
       default: return `${d.field} updated`;
     }
   }
@@ -3262,7 +3343,7 @@ export function createStudio(o = {}) {
         return { ...l, reply: `${head}\n\n${l.reply}` };
       }
       case 'launch_intent': return launchFlow(T, files, { force: !!d.force });
-      case 'checkout_dismissed': return { reply: `No problem, ${name} is saved for ${ttlDays} days. Launch whenever you're ready.`, chips: [C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } })] };
+      case 'checkout_dismissed': return { reply: `No problem, ${name} is saved for ${ttlDays} days. Launch whenever you're ready.`, chips: [C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch' } })] };
       case 'returned': {
         const atoms = files.reduce((s, f) => s + (f.atoms || 0), 0);
         const tests = T.proofDone ? `, ${T.proofDone.passed}/${T.proofDone.total} tests passed` : '';
@@ -3387,7 +3468,7 @@ export function createStudio(o = {}) {
     // once the Proof Run passed, "Run the Proof Run" is stale: offer the launch instead
     if (proofPassed(T)) {
       out.chips = out.chips.filter((c) => !(c.action?.type === 'run_proof' || c.id === 'proof' || /^run (?:the )?proof run$/i.test(c.label || '')));
-      if (!out.chips.some((c) => c.action?.type === 'show_launch')) out.chips.push(C('launch', `Launch · $${PRICE}/mo`, { kind: out.chips.some((c) => c.kind === 'primary') ? 'default' : 'primary', action: { type: 'show_launch' } }));
+      if (!out.chips.some((c) => c.action?.type === 'show_launch')) out.chips.push(C('launch', launchLabel(T), { kind: out.chips.some((c) => c.kind === 'primary') ? 'default' : 'primary', action: { type: 'show_launch' } }));
     }
     return out;
   }
@@ -3851,7 +3932,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (a === 'config' && !id) {
       allow('GET');
       return sendJson(res, 200, {
-        price: { amount: PRICE, currency: 'USD', interval: 'month', answersIncluded: env.KNOWBOT_STUDIO_ANSWERS_INCLUDED || null, annualLine: env.KNOWBOT_STUDIO_ANNUAL_LINE || 'or $2,499/year · up to 100 MB · first 30 days free, card required', guaranteeLine: env.KNOWBOT_STUDIO_GUARANTEE_LINE || null, enterpriseEmail: env.KNOWBOT_ENTERPRISE_EMAIL || 'sales@recoursellm.com' },
+        price: { amount: PRICE, yearAmount: PRICE_YEAR, perSurface: true, currency: 'USD', interval: 'month', answersIncluded: env.KNOWBOT_STUDIO_ANSWERS_INCLUDED || null, annualLine: env.KNOWBOT_STUDIO_ANNUAL_LINE || 'or $2,499/year · up to 100 MB · first 30 days free, card required', guaranteeLine: env.KNOWBOT_STUDIO_GUARANTEE_LINE || null, enterpriseEmail: env.KNOWBOT_ENTERPRISE_EMAIL || 'sales@recoursellm.com' },
         quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES, ttlDays }, types: TYPES,
         builder: { engine: builderEngine(), provider: studioProvider && builderEngine() === 'llm' ? studioProvider : null },
         samples: sampleSets().map(({ names, ...s }) => s), sampleMode, anchors: ANCHORS, contact, floor: floorDefault,
@@ -4112,11 +4193,22 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const email = String(body.email ?? T.email ?? '').trim();
       if (email && (email.length > 254 || !EMAIL_RE.test(email))) fail(400, 'bad_request', "That email address doesn't look right.", { field: 'email' });
       if (email) T.email = email;
+      // answer surfaces: the visitor may have removed some on the checkout sheet; each one is its own plan line
+      if (body.surfaces != null) {
+        const r = validatePatch({ surfaces: body.surfaces }, T.spec, { floorMin: floorDefault });
+        if (r.diff.length) { T.spec = r.next; saveSpecSoon(T); }
+      }
+      const interval = body.interval == null || body.interval === 'month' ? 'month' : body.interval === 'year' ? 'year' : fail(400, 'bad_request', 'interval: must be month or year', { field: 'interval' });
+      const surfaces = Array.isArray(T.spec.surfaces) && T.spec.surfaces.length ? T.spec.surfaces : ['webchat'];
+      const each = interval === 'year' ? PRICE_YEAR : PRICE;
       const u = new URL(checkoutBase);
       u.searchParams.set('trial', T.id);
       u.searchParams.set('bot', botName(T));
       if (email) u.searchParams.set('email', email);
       u.searchParams.set('price', String(PRICE));
+      u.searchParams.set('surfaces', surfaces.join(','));
+      u.searchParams.set('interval', interval);
+      u.searchParams.set('total', String(each * surfaces.length));
       u.searchParams.set('return', `${originOf(req)}/studio/?t=${T.id}&launched=1`);
       T.checkoutStartedAt = new Date(now()).toISOString();
       await flushSpec(T);

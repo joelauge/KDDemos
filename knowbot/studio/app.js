@@ -3477,11 +3477,9 @@ function storeKindFromRow(r) {
   return 'pages';
 }
 async function refreshStoreGroups() {
-  (window.__sgDebug ||= []).push(["refresh", Date.now()]);
   let r;
   try { r = await api.listFiles(); } catch { return; }
   storeRowKind.clear();
-  window.__sgDebug.push(["rows", (r?.files || []).length]);
   for (const row of r?.files || []) if (row && row.id && (row.origin === 'store' || (row.tags || []).includes?.('src:store'))) storeRowKind.set(row.id, storeKindFromRow(row));
   paintStoreGroups();
 }
@@ -3525,13 +3523,17 @@ function groupStoreRows() {
   for (const head of list.querySelectorAll(':scope > li.st-sg')) if (!live.has(head.dataset.sgroup)) head.remove();
 }
 {
-  // D re-renders rows in place and adds new ones to .in-rows: a light observer folds them as they land
+  // D re-renders rows in place and adds new ones to .in-rows (whose panel can be rebuilt): one observer on the slot
+  // folds them as they land; only child-list changes of the rows list itself count (row text updates are ignored)
   let mo = null;
   const watch = () => {
-    const list = document.querySelector('#in-intake-slot .in-rows');
-    if (!list || mo) return !!list;
-    mo = new MutationObserver((recs) => { if (storeRowKind.size && recs.some((r) => [...r.addedNodes].some((n) => n.nodeType === 1 && !n.classList.contains('st-sg')))) paintStoreGroups(); });
-    mo.observe(list, { childList: true });
+    const slot = document.getElementById('in-intake-slot');
+    if (!slot || mo) return !!slot;
+    mo = new MutationObserver((recs) => {
+      if (!storeRowKind.size) return;
+      for (const r of recs) if (r.target.classList?.contains('in-rows') || [...r.addedNodes].some((n) => n.nodeType === 1 && n.querySelector?.('.in-rows'))) { paintStoreGroups(); return; }
+    });
+    mo.observe(slot, { childList: true, subtree: true });
     return true;
   };
   trialP.then(() => { refreshStoreGroups(); if (!watch()) { let tries = 0; const t = setInterval(() => { if (watch() || ++tries > 40) clearInterval(t); }, 250); } });

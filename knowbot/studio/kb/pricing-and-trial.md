@@ -12,6 +12,8 @@ Source: /studio/
 
 To launch your KnowBot, you start a KnowDrive account at $249 per month, or $2,499 per year. The first 30 days are free. A credit card is required at signup. You can cancel anytime.
 
+That price is for one answer surface, such as the website chat. Each answer surface you launch is priced the same way (see Answer surfaces below).
+
 A plan covers a deployment of up to 100 MB of files.
 
 ## How launching works
@@ -30,12 +32,20 @@ The Launch card lists what comes with launching: your KnowBot hosted with a shar
 
 Source: /studio/
 
-KnowBot has two ways to pay for the same plan, each covering a deployment of up to 100 MB of files:
+KnowBot has two ways to pay for each answer surface, each covering a deployment of up to 100 MB of files:
 
 - Monthly: $249 per month.
 - Yearly: $2,499 per year.
 
 Both start with 30 days free, and a credit card is required at signup. There are no other plans, discounts or coupons to quote.
+
+## Answer surfaces
+
+Source: /studio/
+
+An answer surface is a place where your bot answers people. There are six: website chat, SMS, WhatsApp, email, phone, and the web voice assistant. All of them answer from the same sources you built the bot with, with the same citations and the same refusal sentence.
+
+Each answer surface is $249 per month, or $2,499 per year. Every surface you launch is its own line on the plan, and each one starts with the first 30 days free. You choose your surfaces when you launch, and you can remove a surface at checkout before you pay. Building and testing on any surface is free.
 
 ## More than 100 MB, or larger deployments
 

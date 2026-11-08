@@ -15,6 +15,8 @@ export const TONES = ['friendly', 'neutral', 'formal'];
 export const LENGTHS = ['short', 'normal'];
 export const AUDIENCES = ['customers', 'employees', 'students'];
 export const CHANNELS = ['sms', 'telephone', 'whatsapp', 'email', 'text', 'voice'];
+// answer surfaces (spec.surfaces; studio/surfaces.js): where the launched bot answers, each its own plan line at launch
+export const SURFACES = ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice'];
 /** The client actions (studio/app.js dispatchAction) a tool may return. Anything else is dropped. */
 export const CLIENT_ACTIONS = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples', 'import_store']);
 /** Actions the model may never cause directly: they are offered as buttons only (a human click runs them). */
@@ -79,6 +81,11 @@ function mirrorValidate(patch, spec) {
       case 'tone': if (!TONES.includes(patch.tone)) bad('tone', `must be one of ${TONES.join(', ')}`); next.tone = patch.tone; break;
       case 'length': if (!LENGTHS.includes(patch.length)) bad('length', `must be one of ${LENGTHS.join(', ')}`); next.length = patch.length; break;
       case 'audience': if (!AUDIENCES.includes(patch.audience)) bad('audience', `must be one of ${AUDIENCES.join(', ')}`); next.audience = patch.audience; break;
+      case 'surfaces': {
+        if (!Array.isArray(patch.surfaces) || !patch.surfaces.length || patch.surfaces.some((x) => !SURFACES.includes(x))) bad('surfaces', `must be 1 to 6 of ${SURFACES.join(', ')}`);
+        next.surfaces = SURFACES.filter((x) => patch.surfaces.includes(x));
+        break;
+      }
       case 'sources': {
         if (!isObj(patch.sources)) bad('sources', 'must be a map of file id to true/false');
         for (const [id, on] of Object.entries(patch.sources)) if (!/^[\w.:@-]{1,120}$/.test(id) || typeof on !== 'boolean') bad('sources', 'must map file ids to true or false');
@@ -90,7 +97,7 @@ function mirrorValidate(patch, spec) {
     }
   }
   const diff = [];
-  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'sources']) if (JSON.stringify(spec[k]) !== JSON.stringify(next[k])) diff.push({ field: k, from: spec[k], to: next[k] });
+  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'sources', 'surfaces']) if (JSON.stringify(spec[k]) !== JSON.stringify(next[k])) diff.push({ field: k, from: spec[k], to: next[k] });
   return { next, diff };
 }
 
@@ -125,6 +132,7 @@ export const TOOL_DEFS = [
       greeting: { type: 'string', description: 'First message the bot shows, up to 160 characters.' },
       length: { type: 'string', enum: LENGTHS },
       scope_files: { type: 'array', items: { type: 'string' }, description: 'File names (or ids) the bot may answer from; every other file is switched off.' },
+      surfaces: { type: 'array', items: { type: 'string', enum: SURFACES }, description: 'The complete list of answer surfaces the bot will answer on after launch (webchat = website chat, webvoice = web voice assistant). Send the full new list: "add WhatsApp" = current list + whatsapp.' },
     }, additionalProperties: false } },
   { name: 'ask_bot', description: "Ask the visitor's bot a test question, as if the visitor typed it on the right. run=true asks it now; run=false only offers it as a button. Needs at least one ready file.",
     input_schema: { type: 'object', properties: { question: { type: 'string' }, run: { type: 'boolean' } }, required: ['question'], additionalProperties: false } },
@@ -201,6 +209,7 @@ export function createBuilderTools(o = {}) {
       const spec = state?.spec || {};
       const patch = {};
       for (const k of ['name', 'tone', 'purpose', 'org', 'audience', 'greeting', 'length']) if (input[k] != null) patch[k] = typeof input[k] === 'string' ? oneLine(input[k]) : input[k];
+      if (Array.isArray(input.surfaces)) patch.surfaces = [...new Set(input.surfaces.map((x) => String(x)))];
       if (Array.isArray(input.scope_files)) {
         const files = filesOf(state);
         if (!files.length) return fail('there are no files to choose from yet');
