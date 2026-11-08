@@ -7,3 +7,7 @@ Booking is powered by a Google Calendar appointment schedule (auto-creates the e
 ## Deploy
 
 Static site, no build step. Pushes to `main` deploy automatically via GitHub Pages. `CNAME` pins the custom domain — don't delete it.
+
+## Demos
+
+- [`voice-agent/`](voice-agent/) — call a phone number and get answers in an ElevenLabs voice, drawn only from a KnowDrive store (Twilio + ElevenLabs). Node server, not served by Pages.
