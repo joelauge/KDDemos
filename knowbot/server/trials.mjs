@@ -886,8 +886,10 @@ export function createStudio(o = {}) {
   }
   async function ingest({ storePath, tags, mime, bytes, signal }) {
     const fd = new FormData();
+    // knowDrive /ingest is a batch endpoint: every text part after mime_type counts as a file part (a `path` part
+    // would be stored as its own file), and mime_type must precede the file parts. The store path rides on the
+    // file part's filename instead.
     fd.append('tags', tags.join(','));
-    fd.append('path', storePath);
     if (mime) fd.append('mime_type', mime);
     fd.append('file', new Blob([bytes], { type: mime || 'application/octet-stream' }), storePath);
     let res;
