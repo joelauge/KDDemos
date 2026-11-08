@@ -33,18 +33,39 @@ describe('studio/kb docs', () => {
     assert.ok(pricing);
     assert.match(pricing.text, /free and needs no account/);
     assert.match(pricing.text, /\$249 per month/);
+    assert.match(pricing.text, /\$2,499 per year/);
     assert.match(pricing.text, /first 30 days are free/);
     assert.match(pricing.text, /credit card is required at signup/);
     assert.match(pricing.text, /cancel anytime/);
-    for (const d of docs) for (const m of d.text.match(/[$€£]\s?\d[\d,.]*/g) || []) assert.equal(m, '$249', `${d.name} quotes another price: ${m}`);
+    assert.match(pricing.text, /up to 100 MB/);
+    assert.match(pricing.text, /enterprise[^.]*sales@recoursellm\.com/i);
+    // owner allow-list: $249 is only ever monthly, $2,499 only ever yearly; any other amount fails
+    const allowed = { '$249': /^\$249 per month/, '$2,499': /^\$2,499 per year/ };
+    for (const d of docs) {
+      for (const m of d.text.matchAll(/[$€£]\s?\d[\d,.]*/g)) {
+        const amt = m[0].replace(/[.,]$/, '');
+        assert.ok(Object.hasOwn(allowed, amt), `${d.name} quotes another price: ${m[0]}`);
+        assert.match(d.text.slice(m.index), allowed[amt], `${d.name}: ${amt} must be quoted as ${allowed[amt]}`);
+      }
+      for (const m of d.text.matchAll(/\b\d+\s?days?\b[^.]{0,20}\bfree\b|\bfree\b[^.]{0,20}\b\d+\s?days?\b/gi)) assert.match(m[0], /\b30\b/, `${d.name} names another free period: ${m[0]}`);
+      for (const m of d.text.matchAll(/[\w.+-]+@[\w-]+\.[\w.]+/g)) assert.equal(m[0].replace(/\.$/, ''), 'sales@recoursellm.com', `${d.name} names another contact address`);
+    }
     assert.ok(!docs.some((d) => /\bdiscount(?:s|ed)? (?:of|available)|coupon code|% off\b/i.test(d.text)), 'no discounts');
   });
   test('the refusal sentence is quoted byte-exact', () => {
     const proof = docs.find((d) => d.name === 'proof-and-citations.md');
     assert.ok(proof.text.includes("I can't seem to find an answer to that in any of my current data sources."));
   });
-  test('no training claim is made (the code does not support one)', () => {
-    for (const d of docs) assert.ok(!/\b(?:never|not|no)\b[^.]{0,40}\btrain/i.test(d.text), `${d.name} claims something about training`);
+  test('training: only the owner\'s exact no-training statement, in privacy-and-data.md', () => {
+    const SENTENCE = "KnowBot does not train AI models on your files or on your customers' questions.";
+    const privacy = docs.find((d) => d.name === 'privacy-and-data.md');
+    assert.ok(privacy.text.includes(SENTENCE), 'the owner no-training sentence is quoted exactly');
+    for (const d of docs.filter((x) => x !== privacy)) assert.ok(!/\btrain(?:s|ed|ing)?\b/i.test(d.text), `${d.name} makes its own training claim`);
+  });
+  test('Start over is only described once the Studio actually has the button', () => {
+    const app = readFileSync(path.resolve(__dirname, '..', '..', 'studio', 'app.js'), 'utf8');
+    const hasButton = /['"`]Start over['"`]/.test(app);
+    for (const d of docs) if (/\bstart over\b/i.test(d.text)) assert.ok(hasButton, `${d.name} mentions Start over, but studio/app.js has no Start over button`);
   });
 });
 
@@ -194,12 +215,19 @@ describe('createBuilderKb.search', () => {
   test('returns cited sources from the kb only, with similarity = 1 - distance/2 and the page path', async () => {
     const r = await kb.search('How much does it cost to launch my bot?');
     assert.ok(r.sources.length > 0, 'found something');
-    assert.equal(r.sources[0].name, 'pricing-and-trial.md');
-    const price = r.sources.slice(0, 3).find((s) => /\$249/.test(s.text));
-    assert.ok(price, 'the price section is in the top 3');
+    // the FAQ repeats the owner's price line, so either doc may rank first
+    assert.ok(['pricing-and-trial.md', 'faq.md'].includes(r.sources[0].name), r.sources[0].name);
+    const price = r.sources.slice(0, 3).find((s) => /\$249 per month/.test(s.text));
+    assert.ok(price, 'an atom quoting the owner price line is in the top 3');
     assert.equal(price.page, '/studio/');
-    assert.equal(price.title, 'Pricing and trial');
-    assert.ok(['The price to launch', 'No other prices'].includes(price.section), price.section);
+    if (price.name === 'pricing-and-trial.md') {
+      assert.equal(price.title, 'Pricing and trial');
+      assert.ok(['The price to launch', 'Plans'].includes(price.section), price.section);
+    } else {
+      assert.equal(price.name, 'faq.md');
+      assert.equal(price.title, 'Frequently asked questions');
+    }
+    assert.ok(r.sources.slice(0, 6).some((s) => s.name === 'pricing-and-trial.md' && /\$249 per month/.test(s.text)), 'the pricing doc price line is still cited');
     assert.deepEqual(r.sources.map((s) => s.n), r.sources.map((_, i) => i + 1));
     for (const s of r.sources) {
       assert.ok(s.path.startsWith(KB_PREFIX), s.path);

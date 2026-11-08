@@ -87,6 +87,7 @@ test('preparse: URL -> import_website, multi-field -> update_bot, chip text -> c
   assert.equal(p2.command, true);
   const p3 = preparse('launch with samples anyway', stateWith());
   assert.deepEqual(p3.chip.action, { type: 'show_launch', force: true });
+  assert.equal(p3.chip.synthetic, true);
   const offered = [{ id: 'golive-developers', label: 'Open Developers', emit: { type: 'golive:open', detail: { tab: 'developers' } } }];
   assert.equal(preparse('open developers', stateWith({ lastChips: offered })).chip.id, 'golive-developers');
   assert.equal(chipFor('Launch · $249/mo', [{ id: 'launch', label: 'Launch · $249/mo', action: { type: 'show_launch' } }]).id, 'launch');
@@ -98,6 +99,41 @@ test('preparse: URL -> import_website, multi-field -> update_bot, chip text -> c
   assert.deepEqual(preparse('use the sample files', stateWith()).toolCalls, [{ name: 'attach_samples', input: {} }]);
   // a question about tone is not a settings change
   assert.equal(preparse('is it friendly?', stateWith()).toolCalls.length, 0);
+});
+test('parseFields / preparse: questions about using or naming the bot never rename it', () => {
+  for (const q of ['can customers call it on the phone?', 'Can I name it after my shop?', 'can customers call it on the phone', 'could people call it from WhatsApp?', 'call it on the weekend']) {
+    assert.equal(parseFields(q).name, undefined, q);
+    assert.ok(!preparse(q, readyState()).toolCalls.some((c) => c.name === 'update_bot' && c.input.name), q);
+  }
+  // a request to the Builder still names it
+  assert.equal(preparse('can you call it Paddle Pal?', stateWith()).toolCalls[0].input.name, 'Paddle Pal');
+  assert.equal(parseFields('call it Paddle Pal, friendly, a support bot for my kayak rental shop').name, 'Paddle Pal');
+});
+test('isProductQuestion: generic money/policy words about the visitor\'s own files go to their bot, not the KnowBot guide', () => {
+  const lumen = readyState({ files: [
+    { id: 's1', name: 'lumen-service-plans.html', stage: 'ready', atoms: 22, summary: { oneLine: 'Service plans and the Lumen Care Plan', topics: ['service', 'care plan', 'overhaul'] } },
+    { id: 's2', name: 'lumen-price-list-2026.md', stage: 'ready', atoms: 38, summary: { oneLine: 'Prices for Lumen e-bikes, batteries and accessories', topics: ['prices', 'batteries', 'e-bikes'] } },
+    { id: 's3', name: 'Returns Policy.pdf', stage: 'ready', atoms: 14, summary: { oneLine: 'Returns within 30 days with receipt', topics: ['returns', 'refunds'] } },
+  ] });
+  for (const q of ['how much is a full overhaul?', 'how much is a spare E-City battery?', 'what does the refund policy say?', 'what does the Lumen Care Plan include?']) {
+    assert.equal(isProductQuestion(q, lumen), false, q);
+    const p = preparse(q, lumen);
+    assert.equal(p.productQuestion, false, q);
+    assert.deepEqual(p.toolCalls, [{ name: 'ask_bot', input: { question: q, run: false } }], q);
+  }
+  for (const q of ['How much does KnowBot cost?', 'what does the launch plan cost?', 'Is there a free trial?', 'how much do you guys charge?', 'Can I cancel my subscription anytime?', 'how much does it cost?']) assert.equal(isProductQuestion(q, lumen), true, q);
+  // no files: a money question can only be about KnowBot
+  assert.equal(isProductQuestion('how much is it?', stateWith()), true);
+  assert.equal(isProductQuestion('可以上传PDF吗？', stateWith()), false); // not recognised up front, but logged once kb_search answers (below)
+});
+test('engine: a product question asked in any script is logged once kb_search returned results', async () => {
+  const complete = fakeComplete([toolUse('kb_search', { query: 'file types PDF' }), text('Yes: a trial holds up to 100 MB of files [1].')]);
+  const logged = [];
+  const out = await createBuilderEngine({ complete, kb: KB, logQuestion: (q) => logged.push(q) }).turn(stateWith(), { message: '可以上传PDF吗？' });
+  assert.equal(out.engine, 'agent');
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].channel, 'builder');
+  assert.equal(logged[0].question, '可以上传PDF吗？');
 });
 
 // ------------------------------------------------------------------------------------------------ tool validation + preconditions
@@ -326,7 +362,7 @@ test('engine: a product question with no cited answer says it does not know and 
   assert.equal(logged[0].channel, 'builder');
 });
 test('engine: citation numbers that point nowhere are removed; markers are renumbered by first use', async () => {
-  const complete = fakeComplete([toolUse('kb_search', { query: 'channels sms whatsapp' }), text('Your bot can answer on SMS and WhatsApp [2] and a voice chatbot [9].')]);
+  const complete = fakeComplete([toolUse('kb_search', { query: 'channels sms whatsapp' }), text('Your bot can answer on SMS and WhatsApp [1] and a voice chatbot [9].')]);
   const out = await createBuilderEngine({ complete, kb: KB }).turn(readyState(), { message: 'Which channels does it support?' });
   assert.ok(out.citations.length >= 1);
   assert.doesNotMatch(out.reply, /\[9\]/);
@@ -340,6 +376,27 @@ test('engine: without a model, a product question gets a cited KB quote (librari
   assert.match(out.reply, /\[1\]/);
   assert.equal(out.citations[0].n, 1);
 });
+test('engine: an off-topic top KB hit is never presented as the answer', async () => {
+  // the model correctly says it does not know: its text stays, plus a person; the irrelevant passage is not quoted
+  const offTopic = { search: async () => ({ sources: [{ title: 'Website import', section: 'Limits', text: 'A website import reads up to 50 pages and 20 MB.', similarity: 0.71 }] }) };
+  for (const q of ['do you have SOC 2?', 'what languages does the bot speak?', 'can I white-label the widget?']) {
+    const complete = fakeComplete([toolUse('kb_search', { query: q }), text("I don't know that one from the KnowBot guide.")]);
+    const logged = [];
+    const out = await createBuilderEngine({ complete, kb: offTopic, logQuestion: (x) => logged.push(x) }).turn(readyState(), { message: q });
+    assert.doesNotMatch(out.reply, /website import|50 pages|\[1\]/i, q);
+    assert.match(out.reply, /don't know/, q);
+    assert.match(out.reply, /hello@knowdrive\.ai/, q);
+    assert.deepEqual(out.citations, [], q);
+    assert.equal(logged[0].outcome, 'refused', q);
+    // the fallback (no model) does not quote it either: no lexical overlap
+    const fb = await createBuilderEngine({ kb: offTopic }).turn(readyState(), { message: q });
+    assert.doesNotMatch(fb.reply, /website import|50 pages/i, q);
+  }
+  // a weak top hit (below the KB floor) is not quoted even when it shares words
+  const weak = { search: async () => ({ sources: [{ title: 'Pricing', section: 'Trial', text: 'The first 30 days are free.', similarity: 0.5 }] }) };
+  const w = await createBuilderEngine({ kb: weak }).turn(stateWith(), { message: 'Is there a free trial?' });
+  assert.match(w.reply, /won't guess/);
+});
 test('engine: a needless KB search on a command does not turn the reply into "I don\'t know"', async () => {
   const complete = fakeComplete([toolUse('kb_search', { query: 'tone' }), text('Done: SampleBot now sounds formal.')]);
   const out = await createBuilderEngine({ complete, kb: KB }).turn(readyState(), { message: 'Make it more formal' });
@@ -348,9 +405,37 @@ test('engine: a needless KB search on a command does not turn the reply into "I 
 });
 test('engine: typed chip labels run the chip (the visitor\'s own click), never a model decision', async () => {
   const complete = fakeComplete([]);
-  const out = await createBuilderEngine({ complete }).turn(readyState(), { message: 'Launch with samples anyway' });
+  // the chip is on screen (the server's own record of what it offered): typing its label is the same as tapping it
+  const onScreen = [{ id: 'launch-anyway', label: 'Launch with samples anyway', action: { type: 'show_launch', force: true } }];
+  const out = await createBuilderEngine({ complete }).turn(readyState({ lastChips: onScreen }), { message: 'Launch with samples anyway' });
   assert.deepEqual(out.actions, [{ type: 'show_launch', force: true }]);
   assert.equal(complete.calls.length, 0);
+  // not on screen: the typed text only gets the button, the launch card never opens by itself
+  const typed = await createBuilderEngine({ complete }).turn(readyState(), { message: 'Launch with samples anyway' });
+  assert.deepEqual(typed.actions, []);
+  assert.ok(typed.chips.some((c) => c.action?.type === 'show_launch' && c.action.force === true));
+  assert.equal(complete.calls.length, 0);
+});
+test('chipFor / engine: questions about launching never become the launch-anyway command', async () => {
+  for (const q of ['Can I launch with samples?', 'What happens if I launch with the sample files anyway?', 'should I launch now anyway?', 'can I launch with samples anyway', 'what if I launch anyway']) {
+    assert.equal(chipFor(q, []), null, q);
+  }
+  for (const t of ['launch with samples anyway', 'Launch anyway', 'ok launch with the sample files anyway', 'go live as is']) assert.equal(chipFor(t, [])?.id, 'launch-anyway', t);
+  const complete = fakeComplete([toolUse('kb_search', { query: 'sample files at launch' }), text('They are removed at launch [1].')]);
+  const kb = { search: async () => ({ sources: [{ title: 'Pricing and trial', section: 'What launching includes', text: 'If the bot only has sample files, they are removed at launch.', similarity: 0.9 }] }) };
+  const logged = [];
+  const out = await createBuilderEngine({ complete, kb, logQuestion: (q) => logged.push(q) }).turn(readyState({ spec: { ...spec0(), sampleSet: 'lumen-bikes' } }), { message: 'What happens if I launch with the sample files anyway?' });
+  assert.deepEqual(out.actions, []);
+  assert.ok(complete.calls.length >= 1);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].channel, 'builder');
+});
+test('engine: an offer-only action from a chip runs only when that chip was really offered', async () => {
+  const fake = { id: 'rm', label: 'Remove the samples', action: { type: 'remove_samples' } };
+  const out = await createBuilderEngine({}).turn(readyState({ lastChips: [fake] }), { message: 'Remove the samples' });
+  assert.deepEqual(out.actions, [{ type: 'remove_samples' }]);
+  const none = await createBuilderEngine({}).turn(readyState(), { message: 'Remove the samples' });
+  assert.ok(!none.actions.some((a) => a.type === 'remove_samples'));
 });
 
 // ------------------------------------------------------------------------------------------------ gating units
@@ -365,6 +450,32 @@ test('gateReply: claims need ok tools; cited numbers must be in the cited passag
   assert.equal(gateReply('Your files cover warranties and service plans, including prices.').text, 'Your files cover warranties and service plans, including prices.');
   assert.equal(gateReply('Launching KnowBot is free for a month.').text, '');
   assert.equal(gateReply('Feel free to add more files.').text, 'Feel free to add more files.');
+});
+test('gateReply: money is matched as a unit; uncited sentences never carry money', () => {
+  const pricing = 'To launch your KnowBot, you start a KnowDrive account at $249 per month, or $2,499 per year. The first 30 days are free. A credit card is required at signup. A plan covers a deployment of up to 100 MB of files.';
+  const cited = new Map([[1, { text: pricing }], [2, { text: 'Deployments above 100 MB are handled as an enterprise plan. Contact enterprise sales at sales@recoursellm.com to discuss it.' }]]);
+  const stateText = JSON.stringify({ space: { used_mb: 0.2, total_mb: 100 }, files: [{ atoms: 612 }], ready_files: 2 });
+  // invented prices: a bare number that happens to be in the passage ("30 days", "100 MB") is not a price
+  assert.equal(gateReply('KnowBot costs $30 per month [1].', { cited, stateText }).text, '');
+  assert.equal(gateReply('It is $100 a month [1].', { cited, stateText }).text, '');
+  assert.equal(gateReply('The price is $10 per month.', { cited, stateText }).text, '');
+  assert.equal(gateReply('Plans start at $61 a month.', { cited, stateText }).text, '');
+  // the right currency, number and period survive; a wrong period does not
+  assert.equal(gateReply('Launching is $249 per month [1].', { cited, stateText }).text, 'Launching is $249 per month [1].');
+  assert.equal(gateReply('The yearly plan is $2,499 per year [1].', { cited, stateText }).text, 'The yearly plan is $2,499 per year [1].');
+  assert.equal(gateReply('It is $249/mo or $2,499/yr [1].', { cited, stateText }).text, 'It is $249/mo or $2,499/yr [1].');
+  assert.equal(gateReply('It is $249 per year [1].', { cited, stateText }).text, '');
+  assert.equal(gateReply('It is €249 per month [1].', { cited, stateText }).text, '');
+  assert.equal(gateReply('Deployments above 100 MB are handled as an enterprise plan [2].', { cited, stateText }).text, 'Deployments above 100 MB are handled as an enterprise plan [1].');
+  assert.equal(gateReply('There is also an enterprise plan.', { cited, stateText }).text, '');
+  assert.equal(gateReply('The annual plan saves money.', { cited, stateText }).text, '');
+  // whole state numbers only: 10 is not "in" 100, 61 is not "in" 612
+  assert.equal(gateReply('You have used 10 MB.', { stateText }).text, '');
+  assert.equal(gateReply('Your space holds 100 MB.', { stateText }).text, 'Your space holds 100 MB.');
+});
+test('the system prompt never states a price itself', () => {
+  assert.doesNotMatch(systemPrompt({}), /\$\d/);
+  assert.match(systemPrompt({}), /only figures that appear in the kb_search results/);
 });
 test('summarizeState is compact and bounded', () => {
   const many = Array.from({ length: 40 }, (_, i) => ({ id: `f${i}`, name: `file-${i}.pdf`, stage: 'ready', atoms: 5, summary: { oneLine: 'x'.repeat(500) } }));
@@ -402,6 +513,7 @@ test('real @anthropic-ai/sdk against fake-anthropic: wire shape, tool_result loo
     assert.equal(r1.body.temperature, undefined);
     assert.deepEqual(r1.body.output_config, { effort: 'low' });
     assert.ok(Array.isArray(r1.body.tools) && r1.body.tools.every((t) => t.name && t.input_schema));
+    assert.equal(r1.body.max_tokens, 4096);
     const tr = r2.body.messages.at(-1).content[0];
     assert.equal(tr.type, 'tool_result');
     assert.equal(tr.tool_use_id, r2.body.messages.at(-2).content[0].id);
@@ -414,4 +526,81 @@ test('real @anthropic-ai/sdk against fake-anthropic: wire shape, tool_result loo
     const err = await createBuilderEngine({ complete, scripted: scriptedStub('Scripted.') }).turn(readyState(), { message: 'hello' });
     assert.equal(err.engine, 'scripted-fallback');
   } finally { await fake.close(); }
+});
+
+// ------------------------------------------------------------------------------------------------ deadline, budget, fallback
+test('engine: a slow KB that ignores the signal cannot hold the turn past the timeout, and nothing rejects unhandled', async () => {
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const slowKb = { search: () => new Promise((r) => setTimeout(() => r({ sources: [] }), 400)) };
+    const t0 = Date.now();
+    const out = await createBuilderEngine({ kb: slowKb, timeoutMs: 100, complete: fakeComplete([text('hi')]) }).turn(stateWith(), { message: 'How much does KnowBot cost?' });
+    assert.ok(Date.now() - t0 < 350, `took ${Date.now() - t0} ms`);
+    assert.equal(out.engine, 'scripted-fallback');
+    assert.equal(out.fallbackReason, 'timeout');
+    assert.match(out.reply, /won't guess/);
+    // a model tool call against the same slow KB is bounded too
+    const t1 = Date.now();
+    const m = await createBuilderEngine({ kb: slowKb, timeoutMs: 100, complete: fakeComplete([toolUse('kb_search', { query: 'opening hours' }), text('ok')]) }).turn(stateWith(), { message: 'hello there' });
+    assert.ok(Date.now() - t1 < 350);
+    assert.equal(m.fallbackReason, 'timeout');
+    await new Promise((r) => setTimeout(r, 450));
+    assert.deepEqual(unhandled, []);
+  } finally { process.off('unhandledRejection', onUnhandled); }
+});
+test('engine: an outer abort after the turn returned is harmless (no unhandled rejection, listener removed)', async () => {
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const ac = new AbortController();
+    let listeners = 0;
+    const sig = ac.signal;
+    const add = sig.addEventListener.bind(sig), rm = sig.removeEventListener.bind(sig);
+    sig.addEventListener = (...a) => { listeners++; return add(...a); };
+    sig.removeEventListener = (...a) => { listeners--; return rm(...a); };
+    const out = await createBuilderEngine({ timeoutMs: 5000 }).turn(stateWith(), { message: 'call it Bob' }, { signal: sig });
+    assert.equal(out.fallbackReason, 'no_model');
+    assert.equal(listeners, 0);
+    const out2 = await createBuilderEngine({ timeoutMs: 5000, complete: fakeComplete([text('Hello.')]) }).turn(stateWith(), { message: 'hello there' }, { signal: sig });
+    assert.equal(out2.engine, 'agent');
+    assert.equal(listeners, 0);
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(unhandled, []);
+  } finally { process.off('unhandledRejection', onUnhandled); }
+});
+test('engine: pre-parser tool calls count toward maxToolCalls', async () => {
+  // URL + fields = 2 pre calls: with a budget of 2 the model gets tool_choice none straight away
+  const complete = fakeComplete([text('Saved, and the import is ready to confirm.')]);
+  const out = await createBuilderEngine({ complete, kb: KB, maxToolCalls: 2 }).turn(stateWith(), { message: 'call it Kai, friendly, our site is acme.com' });
+  assert.equal(out.toolCalls.filter((c) => c.source === 'pre').length, 2);
+  assert.deepEqual(complete.calls[0].tool_choice, { type: 'none' });
+  assert.ok(out.toolCalls.length <= 2);
+  // with the default budget of 3 the model may make one more call
+  const c3 = fakeComplete([toolUse('offer_choices', { chips: [{ label: 'Confirm' }] }), text('Tap below.')]);
+  const o3 = await createBuilderEngine({ complete: c3, kb: KB }).turn(stateWith(), { message: 'call it Kai, friendly, our site is acme.com' });
+  assert.deepEqual(c3.calls[0].tool_choice, { type: 'auto' });
+  assert.deepEqual(c3.calls[1].tool_choice, { type: 'none' });
+  assert.equal(o3.toolCalls.length, 3);
+});
+test('engine: the fallback keeps the model\'s validated actions and patches, and counts fallback reasons', async () => {
+  const logs = [];
+  const complete = fakeComplete([toolUse('update_bot', { tone: 'formal' }), toolUse('run_proof', {}), new Error('boom')]);
+  const e = createBuilderEngine({ complete, scripted: async () => ({ reply: 'Scripted.' }), log: (l) => logs.push(l) });
+  const out = await e.turn(readyState(), { message: 'make it formal and test it' });
+  assert.equal(out.engine, 'scripted-fallback');
+  assert.equal(out.patch.tone, 'formal');
+  assert.deepEqual(out.actions.map((a) => a.type), ['run_proof']);
+  assert.ok(logs.some((l) => /fallback reason="error: api" .*rate=1\/1/.test(l)), logs.join('\n'));
+  assert.deepEqual(e.stats().reasons, { 'error: api': 1 });
+  assert.equal(e.stats().turns, 1);
+});
+test('normalizeWebsiteUrl: host:port, cluster names and wildcard-DNS hosts', () => {
+  assert.equal(normalizeWebsiteUrl('acme.com:8080').error, 'only standard web ports work');
+  assert.equal(normalizeWebsiteUrl('acme.com:8080/shop').error, 'only standard web ports work');
+  assert.equal(normalizeWebsiteUrl('acme.com:443/shop').ok, true);
+  for (const h of ['kubernetes.default.svc', 'api.default.svc.cluster.local', '169.254.169.254.nip.io', '10.0.0.1.sslip.io', '127.0.0.1.xip.io', 'app.localtest.me']) assert.equal(normalizeWebsiteUrl(h).ok, false, h);
 });

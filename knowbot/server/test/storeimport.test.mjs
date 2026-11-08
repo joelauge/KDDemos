@@ -46,7 +46,9 @@ async function site(routes, { host = '127.0.0.1', baseHeaders = {} } = {}) {
 const html = (title, main, extra = '') => `<!doctype html><html><head><title>${title}</title>${extra}</head><body><header><nav>Home Shop Cart</nav></header><main>${main}</main><footer>© Footer text</footer></body></html>`;
 const sitemap = (urls) => `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${u}</loc></url>`).join('')}</urlset>`;
 const sitemapIndex = (urls) => `<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<sitemap><loc>${u}</loc></sitemap>`).join('')}</sitemapindex>`;
-const fileText = (r, re) => r.files.filter((f) => re.test(f.name)).map((f) => f.bytes.toString('utf8')).join('\n');
+// file names are for people ("Lumen Bikes · Products 1.md"); tests match their slug form ("lumen-bikes-products-1-md")
+const slugOf = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+const fileText = (r, re) => r.files.filter((f) => re.test(slugOf(f.name))).map((f) => f.bytes.toString('utf8')).join('\n');
 async function run(url, opts = {}) {
   const events = [];
   try {
@@ -94,13 +96,18 @@ describe('Shopify', () => {
     assert.equal(s.hits(/products\.json\?limit=250&page=3/), 0, 'stops after a short page');
     assert.equal(s.hits(/sitemap_products|sitemap_blogs/), 0, 'API products: product and blog sitemaps skipped');
     const names = r.files.map((f) => f.name).sort();
-    assert.deepEqual(names, ['127-0-0-1-about-us.md', '127-0-0-1-faq.md', '127-0-0-1-products-1.md', '127-0-0-1-products-2.md', '127-0-0-1-refund-policy.md', '127-0-0-1-shipping-policy.md'].sort().map((n) => n.replace('about-us', 'pages')).sort());
+    // fixer r8 (D4/D5): "<Store> · <Page title>.md", never a host slug
+    assert.deepEqual(names, ['Lumen Bikes · FAQ.md', 'Lumen Bikes · Help pages.md', 'Lumen Bikes · Products 1.md', 'Lumen Bikes · Products 2.md', 'Lumen Bikes · Refund policy.md', 'Lumen Bikes · Shipping policy.md'].sort());
+    assert.ok(names.every((n) => !/127|-md$/.test(n)), names.join(', '));
     const prod = fileText(r, /products-1/);
     assert.match(prod, /^# Products: Lumen Bikes \(part 1 of 2\)/);
     assert.match(prod, /\n## Trail Pro 1\n\nSource: http:\/\/127\.0\.0\.1:\d+\/products\/trail-pro-1\n- Trail Pro 1 price: 1,299\.00 USD \(was 1,499\.00 USD\)\n- Trail Pro 1 brand: Lumen\n- Trail Pro 1 type: Bikes\n- Trail Pro 1 SKU: TP-1\n- Trail Pro 1 availability: in stock\n- Trail Pro 1 tags: mtb, carbon\n\nA light carbon trail bike, number 1\./);
     assert.match(prod, /## Trail Pro 2\n[\s\S]*?- Trail Pro 2 price: 1,299\.00 USD to 1,349\.00 USD[\s\S]*?- Trail Pro 2 variants:\n {2}- Trail Pro 2 Small \/ Black: 1,299\.00 USD, SKU TP-2-S, in stock\n {2}- Trail Pro 2 Large \/ Black: 1,349\.00 USD, SKU TP-2-L, out of stock/);
+    // fixer r8 (D5): mixed stock never reads "in stock" at product level (it contradicted the Large / Black line)
+    assert.match(prod, /- Trail Pro 2 availability: only some options in stock \(Small \/ Black\)\n/);
+    assert.doesNotMatch(prod, /- Trail Pro 2 availability: in stock/);
     assert.ok(!/evilScript/.test(prod), 'scripts stripped');
-    assert.equal(r.files.find((f) => /products-1/.test(f.name)).docs, 200);
+    assert.equal(r.files.find((f) => /products-1/.test(slugOf(f.name))).docs, 200);
     const faq = fileText(r, /faq/);
     assert.match(faq, /## FAQ\n\nSource: http:\/\/127\.0\.0\.1:\d+\/pages\/faq\n\n### How long does shipping take\?\nTwo to five business days in the US\.\n\n### Do you ship to Canada\?\nYes, for a flat \$25\./);
     const refund = fileText(r, /refund-policy/);
@@ -137,8 +144,8 @@ describe('Shopify', () => {
     const total = b.r.files.reduce((n, f) => n + f.size, 0);
     assert.ok(total <= 12000, `total ${total} ≤ remaining quota`);
     assert.ok(b.r.capped.bytes.droppedProducts > 200);
-    assert.ok(b.r.files.some((f) => /refund-policy/.test(f.name)), 'policies are kept first');
-    assert.ok(b.r.files.some((f) => /faq/.test(f.name)), 'FAQ kept before products');
+    assert.ok(b.r.files.some((f) => /refund-policy/.test(slugOf(f.name))), 'policies are kept first');
+    assert.ok(b.r.files.some((f) => /faq/.test(slugOf(f.name))), 'FAQ kept before products');
 
     const c = await run(s.base, { remainingBytes: 0 });
     assert.equal(c.error.code, 'quota');
@@ -417,6 +424,19 @@ describe('SSRF safety', () => {
     const f = createStoreFetcher({ resolve, paceMs: 0 });
     await assert.rejects(f.fetch('http://evil.example/', { anyHost: true }), { code: 'blocked_host' });
   });
+  test('error copy: an unknown host reads "couldn\'t reach", a private host on port 80 "public web address"; the port copy is only for explicit ports', async () => {
+    // a dev-style allowlist (one fake port) must not turn every other failure into the port message (fixer r8, D10)
+    const dev = { allowAddresses: ['127.0.0.1'], allowPorts: [65000], paceMs: 0, resolve: async (h) => { if (h.endsWith('.invalid')) { const e = new Error('ENOTFOUND'); e.code = 'ENOTFOUND'; throw e; } return [{ address: '93.184.216.34', family: 4 }]; } };
+    const unknown = (await run('https://example.invalid', { net: dev })).error;
+    assert.equal(unknown.code, 'not_found');
+    assert.equal(unknown.message, "We couldn't reach example.invalid. Check the address.");
+    for (const u of ['http://169.254.169.254/latest/meta-data', 'http://10.0.0.5/', 'http://[::1]/']) {
+      const e = (await run(u, { net: dev })).error;
+      assert.equal(e.code, 'blocked_host', u);
+      assert.doesNotMatch(e.message, /\bports?\b/i, u);
+    }
+    assert.match((await run('http://fine.example:8080/', { net: dev })).error.message, /standard web ports/);
+  });
   test('redirect to 127.0.0.1 when only the store address is allowed is refused (checked on every hop)', async () => {
     const inner = await site({ '/': { body: 'internal admin' } });
     const store = await site({ '/': { status: 302, headers: { location: `${inner.base}/` }, body: '' } }, { host: '127.0.0.2' });
@@ -521,7 +541,7 @@ describe('Markdown builder', () => {
     docs[0].text = htmlToText('<p># forged</p><h2>Real</h2><p>ok</p>', { main: false, minLevel: 4 });
     const { files, capped } = buildMarkdownFiles(docs, { slug: 's.example', storeName: 'S', base: 'https://s.example', date: new Date('2026-11-08T00:00:00Z'), perFileProducts: 2 });
     assert.equal(capped, null);
-    assert.deepEqual(files.map((f) => f.name), ['s-example-refund-policy.md', 's-example-refund-policy-2.md', 's-example-faq.md', 's-example-pages.md', 's-example-products-1.md', 's-example-products-2.md', 's-example-products-3.md']);
+    assert.deepEqual(files.map((f) => f.name), ['S · Refund policy.md', 'S · Refund Policy 2.md', 'S · FAQ.md', 'S · Help pages.md', 'S · Products 1.md', 'S · Products 2.md', 'S · Products 3.md']);
     assert.deepEqual(files.map((f) => f.docs), [1, 1, 1, 1, 2, 2, 1]);
     const p1 = files[4].bytes.toString();
     assert.match(p1, /^# Products: S \(part 1 of 3\)\n\nImported from https:\/\/s\.example on 2026-11-08\./);

@@ -26,7 +26,7 @@ const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 // ------------------------------------------------------------------------------------------------ URL validation
-const BLOCKED_SUFFIX = /(?:^|\.)(?:localhost|local|localdomain|internal|intranet|lan|home|corp|private|test|example|invalid|onion|arpa|home\.arpa)$/i;
+const BLOCKED_SUFFIX = /(?:^|\.)(?:localhost|local|localdomain|internal|intranet|lan|home|corp|private|test|example|invalid|onion|arpa|home\.arpa|svc|cluster\.local|nip\.io|sslip\.io|xip\.io|localtest\.me|lvh\.me)$/i;
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 /**
  * Normalize and validate a website address a visitor typed or pasted ("acme.com/shop", "https://www.acme.co.uk").
@@ -38,7 +38,10 @@ export function normalizeWebsiteUrl(raw) {
   if (!s) return { ok: false, error: 'no web address given' };
   if (s.length > 2048) return { ok: false, error: 'that web address is too long' };
   if (/\s/.test(s)) return { ok: false, error: 'a web address has no spaces' };
-  if (/^[a-z][a-z0-9+.-]*:/i.test(s) && !/^https?:\/\//i.test(s)) return { ok: false, error: 'only http and https web addresses work' };
+  // "acme.com:8080/shop" is a host and a port, not a scheme
+  if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d+(?:[/?#]|$)/i.test(s)) {
+    if (!/:(?:80|443)(?:[/?#]|$)/.test(s)) return { ok: false, error: 'only standard web ports work' };
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(s) && !/^https?:\/\//i.test(s)) return { ok: false, error: 'only http and https web addresses work' };
   if (!/^https?:\/\//i.test(s)) s = `https://${s.replace(/^\/+/, '')}`;
   let u;
   try { u = new URL(s); } catch { return { ok: false, error: 'that does not look like a web address' }; }

@@ -291,8 +291,14 @@ export function createStoreFetcher(o = {}) {
     if (u.username || u.password) throw err('blocked_host', 'Links with credentials are not followed.');
     const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
     if (!net.isIP(h) && (BAD_HOST_RE.test(h) || !h.includes('.'))) throw err('blocked_host');
-    if (!portOk(u)) throw err('blocked_host', 'Only standard web ports (80 and 443) can be read.');
+    // fixer r8 (D10): only an explicit non-standard port gets the port copy here; an implicit 80/443 is checked after
+    // DNS and address blocking (resolveChecked), so an unknown host reads "couldn't reach" and a private one "public
+    // web address", never a misleading port message
+    if (u.port && !portOk(u)) throw err('blocked_host', 'Only standard web ports (80 and 443) can be read.');
     if (!anyHost && !hostOk(h)) throw err('blocked_host', `${h} is not part of this store.`, { offSite: true });
+  }
+  function checkPortAfterResolve(u) {
+    if (!portOk(u)) throw err('blocked_host', 'Only standard web ports (80 and 443) can be read.');
   }
   async function resolveChecked(hostname) {
     const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
@@ -301,10 +307,10 @@ export function createStoreFetcher(o = {}) {
         let addrs;
         if (net.isIP(h)) addrs = [{ address: h, family: net.isIP(h) }];
         else {
-          try { addrs = await cfg.resolve(h); } catch { throw err('not_found'); }
+          try { addrs = await cfg.resolve(h); } catch { throw err('not_found', `We couldn't reach ${h}. Check the address.`); }
           addrs = (Array.isArray(addrs) ? addrs : [addrs]).map((a) => (typeof a === 'string' ? { address: a, family: net.isIP(a) } : a));
         }
-        if (!addrs.length) throw err('not_found');
+        if (!addrs.length) throw err('not_found', `We couldn't reach ${h}. Check the address.`);
         for (const a of addrs) if (isBlockedAddress(a.address) && !allowAddr.has(normIp(a.address))) throw err('blocked_host', undefined, { address: a.address });
         return addrs[0].address;
       })());
@@ -383,8 +389,9 @@ export function createStoreFetcher(o = {}) {
         checkAbort();
         if (pastDeadline()) throw err('timeout', 'Time budget used up.', { budget: true });
         checkUrl(u, anyHost);
-        if (!skipRobots && !(await robotsAllowed(u))) throw err('robots', `robots.txt asks us not to read ${u.pathname}.`, { path: u.pathname });
         const address = await resolveChecked(u.hostname);
+        checkPortAfterResolve(u);
+        if (!skipRobots && !(await robotsAllowed(u))) throw err('robots', `robots.txt asks us not to read ${u.pathname}.`, { path: u.pathname });
         const r = await schedule(() => rawRequest(u, address, { method, headers, body, maxBytes }));
         stats.bytes += r.body.length;
         if (r.status >= 300 && r.status < 400 && r.headers.location) {
@@ -436,7 +443,7 @@ export function createStoreFetcher(o = {}) {
 }
 function netError(e, u) {
   const c = e && e.code;
-  if (c === 'ENOTFOUND' || c === 'EAI_AGAIN') return err('not_found');
+  if (c === 'ENOTFOUND' || c === 'EAI_AGAIN') return err('not_found', `We couldn't reach ${u.hostname}. Check the address.`);
   if (c === 'ECONNREFUSED' || c === 'ECONNRESET' || c === 'EHOSTUNREACH' || c === 'ENETUNREACH' || c === 'EPIPE') return err('unreachable', `${u.host} didn't answer.`);
   if (/CERT|SSL|TLS|SELF_SIGNED/i.test(String(c || e?.message))) return err('unreachable', `${u.host} has a certificate problem.`);
   return err('unreachable', `${u.host} didn't answer.`);
@@ -565,8 +572,18 @@ export function productDoc(p) {
   if (p.brand) fact('brand', oneLine(p.brand));
   if (p.type) fact('type', oneLine(p.type));
   if (p.sku) fact('SKU', oneLine(p.sku));
-  if (p.availability) fact('availability', p.availability);
   const vs = (p.variants || []).filter((v) => v && v.title && !/^default( title)?$/i.test(v.title));
+  // fixer r8 (D5): a product-level "in stock" is never written when any option is out (it contradicted the variant
+  // lines): mixed stock names the options that are in stock; all out says so
+  const vIn = (v) => v.available === true || /^in ?stock$/i.test(String(v.available ?? '').trim());
+  const vOut = (v) => v.available === false || /^(?:out ?of ?stock|sold ?out)$/i.test(String(v.available ?? '').trim());
+  let availability = p.availability || null;
+  if (vs.length && vs.some(vOut)) {
+    const inStock = vs.filter(vIn).map((v) => oneLine(v.title));
+    availability = inStock.length ? `only some options in stock (${inStock.slice(0, 8).join(', ')}${inStock.length > 8 ? ' and more' : ''})`
+      : vs.every(vOut) ? 'out of stock' : null;
+  }
+  if (availability) fact('availability', availability);
   if (vs.length) {
     L.push(`- ${name} variants:`);
     for (const v of vs.slice(0, 60)) {
@@ -972,11 +989,14 @@ async function collectWoo(ctx) {
 const COLLECTORS = { shopify: collectShopify, magento: collectMagento, squarespace: collectSquarespace, woocommerce: collectWoo, generic: collectGeneric };
 
 // ------------------------------------------------------------------------------------------------ Markdown files
-const fileSlug = (s) => String(s || 'store').toLowerCase().replace(/^www\./, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'store';
+/** A file-name part: no path separators or control characters, single spaces, at most 60 characters. */
+const displayPart = (s) => String(s ?? '').replace(/[\0-\x1f\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 60).trim();
+/** "REFUND POLICY" / "refund policy" → "Refund policy" (titles already in mixed case are kept). */
+const sentenceCase = (s) => { const t = String(s || '').trim(); if (!t) return t; const lower = t === t.toUpperCase() || t === t.toLowerCase() ? t.toLowerCase() : t; return lower[0].toUpperCase() + lower.slice(1); };
 const mdLine = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/^#+\s*/, '').trim();
 /**
- * Turn documents into a few Markdown files: `<slug>-products-N.md` (one `## title` per product), `<slug>-faq.md`
- * (`## page` / `### question`), one `<slug>-<policy>.md` per policy and `<slug>-pages.md`. Every section carries a
+ * Turn documents into a few Markdown files: `<Store> · Products N.md` (one `## title` per product), `<Store> · FAQ.md`
+ * (`## page` / `### question`), one `<Store> · <Policy title>.md` per policy and `<Store> · Help pages.md`. Every section carries a
  * `Source: <url>` line (right under its heading, after a blank line) so citations can link where the answer came from. Byte budget priority: policies, FAQ, pages,
  * then products. → { files:[{name, bytes:Buffer, mime, docs, size}], capped:{...}|null }
  */
@@ -984,7 +1004,7 @@ export function buildMarkdownFiles(docs, o = {}) {
   const maxTotalBytes = Math.min(o.maxTotalBytes ?? LIMITS.maxTotalBytes, LIMITS.maxTotalBytes);
   const maxProducts = o.maxProducts ?? LIMITS.maxProducts, maxPages = o.maxPages ?? LIMITS.maxPages;
   const perFile = o.perFileProducts ?? 400, maxFileBytes = o.maxFileBytes ?? 2 * MB;
-  const slug = fileSlug(o.slug), store = mdLine(o.storeName) || o.slug || 'Store';
+  const store = mdLine(o.storeName) || o.slug || 'Store';
   const stamp = `Imported from ${o.base || 'the store website'} on ${(o.date || new Date()).toISOString().slice(0, 10)}. Each section names its source page.`;
   const capped = {};
   // de-duplicate
@@ -1004,7 +1024,15 @@ export function buildMarkdownFiles(docs, o = {}) {
   let used = 0, droppedSections = 0, droppedProducts = 0;
   const files = [];
   const taken = new Set();
-  const nameOf = (base) => { let n = `${slug}-${base}.md`, i = 2; while (taken.has(n)) n = `${slug}-${base}-${i++}.md`; taken.add(n); return n; };
+  // fixer r8 (D4/D5): files are named for people, "<Store> · <Page title>.md" ("Lumen Bikes · Refund policy.md"), so
+  // the file list and every citation label read as the store's own pages, never a host slug ("127-0-0-1-faq.md")
+  const label = displayPart(o.storeName) || displayPart(o.slug) || 'Store';
+  const nameOf = (title) => {
+    const t = displayPart(title) || 'Page';
+    let n = `${label} · ${t}.md`, i = 2;
+    while (taken.has(n.toLowerCase())) n = `${label} · ${t} ${i++}.md`;
+    taken.add(n.toLowerCase()); return n;
+  };
   // The heading stands alone (so every chunker keeps it as the section breadcrumb) and the Source line opens the section's
   // first paragraph (so the URL travels in the same atom as the first facts; trials.mjs looks it up for later atoms).
   const section = (d, level = 2) => `${'#'.repeat(level)} ${mdLine(d.title)}\n\nSource: ${d.url}\n${String(d.text).trim()}\n`;
@@ -1025,23 +1053,23 @@ export function buildMarkdownFiles(docs, o = {}) {
     const real = out.filter((f) => f.docs);
     real.forEach((f, i) => {
       const md = `${f.head.replace('{{N}}', real.length > 1 ? ` (part ${i + 1} of ${real.length})` : '')}\n${f.body.join('\n')}`;
-      const name = real.length > 1 || split !== Infinity ? nameOf(`${baseName}-${i + 1}`) : nameOf(baseName);
+      const name = real.length > 1 ? nameOf(`${baseName} ${i + 1}`) : nameOf(baseName);
       const bytes = Buffer.from(md, 'utf8');
       files.push({ name, bytes, mime: 'text/markdown', docs: f.docs, size: bytes.length });
     });
   }
   // policies: one file per policy (more than 12 → the rest share one file)
   const pol = policies.filter(keep);
-  pol.slice(0, 12).forEach((d) => emit(fileSlug(mdLine(d.title)).slice(0, 40) || 'policy', () => `# ${mdLine(d.title)}: ${store}{{N}}\n\n${stamp}\n`, [{ md: section(d) }]));
-  if (pol.length > 12) emit('policies', () => `# Policies: ${store}{{N}}\n\n${stamp}\n`, pol.slice(12).map((d) => ({ md: section(d) })));
+  pol.slice(0, 12).forEach((d) => emit(sentenceCase(mdLine(d.title)) || 'Policy', () => `# ${mdLine(d.title)}: ${store}{{N}}\n\n${stamp}\n`, [{ md: section(d) }]));
+  if (pol.length > 12) emit('Policies', () => `# Policies: ${store}{{N}}\n\n${stamp}\n`, pol.slice(12).map((d) => ({ md: section(d) })));
   // FAQ: grouped by source page
   const groups = new Map();
   for (const d of faqs.filter(keep)) { const k = d.url; if (!groups.has(k)) groups.set(k, { title: d.group || 'FAQ', url: d.url, items: [] }); groups.get(k).items.push(d); }
   const faqSecs = [...groups.values()].map((g) => ({ n: g.items.length, md: `## ${mdLine(g.title)}\n\nSource: ${g.url}\n\n${g.items.map((d) => `### ${mdLine(d.title)}\n${String(d.text).trim()}\n`).join('\n')}` }));
-  if (faqSecs.length) emit('faq', () => `# Frequently asked questions: ${store}{{N}}\n\n${stamp}\n`, faqSecs);
+  if (faqSecs.length) emit('FAQ', () => `# Frequently asked questions: ${store}{{N}}\n\n${stamp}\n`, faqSecs);
   const pgs = pages.filter(keep);
-  if (pgs.length) emit('pages', () => `# Help and about pages: ${store}{{N}}\n\n${stamp}\n`, pgs.map((d) => ({ md: section(d) })));
-  if (products.length) emit('products', () => `# Products: ${store}{{N}}\n\n${stamp} Prices and stock are as listed on the day of import.\n`, products.map((d) => ({ md: section(d), product: true })), { split: perFile });
+  if (pgs.length) emit('Help pages', () => `# Help and about pages: ${store}{{N}}\n\n${stamp}\n`, pgs.map((d) => ({ md: section(d) })));
+  if (products.length) emit('Products', () => `# Products: ${store}{{N}}\n\n${stamp} Prices and stock are as listed on the day of import.\n`, products.map((d) => ({ md: section(d), product: true })), { split: perFile });
   if (droppedSections) capped.bytes = { limit: maxTotalBytes, droppedSections, droppedProducts };
   return { files, capped: Object.keys(capped).length ? capped : null };
 }

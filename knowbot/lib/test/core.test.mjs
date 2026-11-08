@@ -669,3 +669,128 @@ test('answer selection: every Lumen Bikes sample question picks a line that answ
     assert.equal(fin.refused, true);
   }
 });
+
+/* ---------- answer selection, round 2: comparators, coverage gate, answer-first order, one fact once, one lead-in ---------- */
+
+// The Lumen samples as coarse local atoms (the same corpus the sample test above builds), plus a search over them.
+async function lumenCorpus(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kb-lumen2-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const f of fs.readdirSync(LUMEN).filter((x) => !x.endsWith('.json'))) {
+    const raw = fs.readFileSync(path.join(LUMEN, f), 'utf8');
+    fs.writeFileSync(path.join(dir, f.replace(/\.\w+$/, '.md')), f.endsWith('.html') ? htmlToText(raw, { main: true, minLevel: 2 }) : raw);
+  }
+  const r = new LocalRetriever({ corpusDir: dir, watch: false });
+  await r.ready;
+  const atom = (needle) => { const i = r.chunks.findIndex((x) => x.text.includes(needle)); const c = r.chunks[i];
+    return { file_id: `local:${c.filename}#${i}`, filename: c.filename, title: c.title, url: null, score: 0.2, text: c.text, ...(c.section ? { section: c.section } : {}) }; };
+  return { r, atom, search: async (q) => (await r.search(q, 6)).results };
+}
+// adversarial selectors: the model goes for whatever line matches `re` (a passing mention), or for word overlap
+const pickRe = (re) => (msgs) => msgs.at(-1).content.split('\n').filter((l) => /^L\d+ /.test(l) && re.test(l)).map((l) => l.match(/^L\d+/)[0]).slice(0, 2).join(', ');
+const SELECTORS = (re) => ({ passing: pickRe(re), overlap: overlapPicker, unusable: () => 'Sorry, I am not sure.', empty: () => '' });
+
+test('answer selection r2: "Which bikes cost under $1,000?" lists the price-list rows under $1,000, never financing lines that mention $1,000', async (t) => {
+  const { r, atom, search } = await lumenCorpus(t);
+  const q = 'Which bikes cost under $1,000?';
+  const c = rankLines(q, [{ text: 'x' }]).clauses[0];
+  assert.deepEqual([c.intents, c.cmp, [...c.terms.keys()]], [['price'], { op: '<', v: 1000 }, ['bike']], 'the threshold is a comparator, never a topic word');
+  const rows = atom('| Lumen Commuter 1 | city | $649 |');
+  const results = [...(await search(q)).slice(0, 2), rows, ...(await search(q)).slice(2, 5)];
+  for (const [name, sel] of Object.entries(SELECTORS(/financing|\$1,000/))) {
+    const { fin } = await answerFromSources({ question: q, results, voice: true, complete: async (m) => sel(m), search });
+    assert.equal(fin.refused, false, `${name}: ${fin.text}`);
+    assert.doesNotMatch(fin.text, /financing|delivered|shipped|Care Plan/i, `${name}: no passing mention of a price: ${fin.text}`);
+    const prices = quotesOf(fin.text).map((x) => parseFloat(/\$([\d,]+)/.exec(x)[1].replace(/,/g, '')));
+    assert.ok(prices.length >= 4 && prices.every((p) => p < 1000), `${name}: every quoted row is under $1,000: ${fin.text}`);
+    for (const m of ['Lumen Commuter 1', 'Lumen Kids 16', 'Lumen Balance 12']) assert.ok(fin.text.includes(m), `${name}: ${m}`);
+    assert.doesNotMatch(fin.text, /Commuter 3|E-City|helmet|U-lock/, `${name}: nothing over $1,000 and no accessories`);
+    assert.equal(fin.citations.length, 1);
+    assert.deepEqual(requireCitations(fin).text, fin.text);
+  }
+  // no price table among the sources: an honest refusal, never the financing or delivery lines
+  const bare = (await r.search(q, 6)).results.filter((x) => !x.text.includes('| $649 |'));
+  for (const [name, sel] of Object.entries(SELECTORS(/financing|\$1,000|delivered/))) {
+    const { fin } = await answerFromSources({ question: q, results: bare, voice: true, complete: async (m) => sel(m) });
+    assert.equal(fin.text, NOT_IN_DATA, `${name}: ${fin.text}`);
+  }
+  // a yes/no question that restates a threshold is not a comparator
+  assert.equal(rankLines('Do you deliver orders over $75 for free?', [{ text: 'x' }]).clauses[0].cmp, undefined);
+});
+
+test('answer selection r2: coverage gate: "financing or payment plans" quotes the financing line, never Care Plan trivia; a second query fills a miss', async (t) => {
+  const { atom, search } = await lumenCorpus(t);
+  const faq = atom('We offer financing: 0% financing'), plans = atom('Lumen Care Plan, our annual service plan'), plus = atom('free loan bike');
+  for (const q of ['Do you offer financing or payment plans?', 'Do you offer payment plans?', 'Do you offer financing?', 'Can I pay in instalments?']) {
+    for (const [name, sel] of Object.entries(SELECTORS(/Care Plan|Care Plus|loan/))) {
+      const { fin } = await answerFromSources({ question: q, results: [plans, plus, faq], voice: true, complete: async (m) => sel(m) });
+      assert.equal(fin.refused, false, `${name}: ${q}`);
+      assert.match(quotesOf(fin.text)[0], /0% financing/, `${name}: ${q} → ${fin.text}`);
+      assert.doesNotMatch(fin.text, /Care Plan|Care Plus|loan bike/, `${name}: ${q}`);
+    }
+  }
+  // only the service plans were retrieved: no quote covers "financing", so one more query runs on the uncovered words
+  const q = 'Do you offer financing or payment plans?';
+  const asked = [];
+  const { fin } = await answerFromSources({ question: q, results: [plans, plus], voice: true, complete: async (m) => pickRe(/Care Plan/)(m), search: async (x) => { asked.push(x); return [faq]; } });
+  assert.equal(asked.length, 1, 'one second query');
+  assert.match(asked[0], /financing/);
+  assert.match(fin.text, /“We offer financing: 0% financing for 12 months is available on bikes over \$1,000” \[1\]/);
+  assert.equal(fin.citations[0].filename, faq.filename);
+  // and when that query misses too, the answer is the refusal (never the Care Plan line)
+  const miss = await answerFromSources({ question: q, results: [plans, plus], voice: true, complete: async (m) => pickRe(/Care Plan/)(m), search: async () => [plans] });
+  assert.equal(miss.fin.text, NOT_IN_DATA);
+  assert.equal(miss.fin.uncovered, undefined, 'internal bookkeeping never leaks into the answer');
+});
+
+test('answer selection r2: the direct answer leads, caveats follow ("lifetime" before "not transferable"; the 30-day rule before the ridden-bike case)', async (t) => {
+  const { atom } = await lumenCorpus(t);
+  const frame = atom('Lumen frames carry a lifetime warranty'), ret = atom('Unridden bikes can be returned within 30 days');
+  const cases = [
+    ['How long is the frame warranty?', [frame], /not transferable/, /^Lumen frames carry a lifetime warranty for the original owner$/],
+    ['Can I return a bike?', [ret], /has been ridden|inspected/, /^Unridden bikes can be returned within 30 days with the receipt$/],
+  ];
+  for (const [q, results, bait, lead] of cases) for (const [name, sel] of Object.entries(SELECTORS(bait))) {
+    const { fin } = await answerFromSources({ question: q, results, voice: true, complete: async (m) => sel(m) });
+    assert.equal(fin.refused, false, `${name}: ${q}`);
+    assert.match(quotesOf(fin.text)[0], lead, `${name}: ${q} → ${fin.text}`);
+  }
+  // pure: a caveat never leads, even when it scores as high as the rule
+  const L = [{ text: 'The frame warranty is not transferable, and the new owner is not covered by the lifetime frame warranty.', section: 'Frame warranty' },
+    { text: 'Lumen frames carry a lifetime warranty for the original owner.', section: 'Frame warranty' }];
+  assert.deepEqual(answerFirst('How long is the frame warranty?', L, [1, 2]), [2, 1]);
+  // yes/no with no answer type: a model pick that already answers stands, in its order
+  const R = [{ text: 'Returns are accepted within 30 days of receipt.' }, { text: 'After 30 days a return is not accepted.' }];
+  assert.deepEqual(answerFirst('Can I return after 5 weeks?', R, [2, 1]), [2, 1]);
+});
+
+test('answer selection r2: one fact is quoted once; quotes from one place share one lead-in; openers never hedge', async (t) => {
+  const { atom } = await lumenCorpus(t);
+  const acc = atom('A spare E-City battery costs $649.');
+  // the sentence and the price-list row state the same $649: one quote
+  for (const [name, sel] of Object.entries(SELECTORS(/E-City battery/))) {
+    const { fin } = await answerFromSources({ question: 'How much is a spare E-City battery?', results: [acc], voice: true, complete: async (m) => sel(m) });
+    assert.equal(quotesOf(fin.text).filter((x) => /\$649/.test(x)).length, 1, `${name}: ${fin.text}`);
+  }
+  // opposite facts about the same number are both kept
+  const R = [{ n: 1, source: 0, text: 'Returns are accepted within 30 days of receipt.' }, { n: 2, source: 0, text: 'After 30 days a return is not accepted.' }];
+  const src = [{ file_id: 'r', filename: 'returns.md', title: 'Returns', text: R.map((x) => x.text).join('\n') }];
+  assert.equal(quotesOf(finalizeSelection('L1, L2', R, src, { question: 'What is the return window?', voice: true }).text).length, 2);
+  // several places: the two quotes under one heading of one file share a lead-in, the other place gets its own
+  const sources = [{ title: 'Lumen Bikes Price List 2026' }, { title: 'Lumen Bikes Price List 2026' }, { title: 'Lumen Bikes Warranty and Returns Policy' }];
+  const g = guideText([{ text: 'The Lumen Commuter 3 costs $1,149.', si: 0, n: 1, section: 'Lumen Commuter 3' },
+    { text: 'The Commuter 3 comes in three colours: harbour blue, sand and graphite.', si: 1, n: 1, section: 'Lumen Commuter 3' },
+    { text: 'Lumen frames carry a lifetime warranty for the original owner.', si: 2, n: 2, section: 'Frame warranty' }], sources, 'q');
+  assert.deepEqual(g.split('\n').slice(1, 4), ['- From “Lumen Bikes Price List 2026”, under “Lumen Commuter 3”: “The Lumen Commuter 3 costs $1,149” [1]',
+    '  - “The Commuter 3 comes in three colours: harbour blue, sand and graphite” [1]',
+    '- From “Lumen Bikes Warranty and Returns Policy”, under “Frame warranty”: “Lumen frames carry a lifetime warranty for the original owner” [2]']);
+  assert.equal(g.match(/Lumen Bikes Price List 2026/g).length, 1, 'the lead-in is said once');
+  assert.equal(requireCitations({ text: g, citations: [{ n: 1 }, { n: 2 }] }).text, g, 'the citation gate keeps every line');
+  // a grounded answer never opens with a hedge, for any question
+  for (let i = 0; i < 60; i++) for (const items of [[{ text: 'x y', si: 0, n: 1 }], [{ text: 'x y', si: 0, n: 1 }, { text: 'z w', si: 0, n: 1 }]]) {
+    const first = guideText(items, [{ title: 'T' }], `question ${i}?`).split('\n')[0];
+    const opener = /^(.+?[!.])\s/.exec(first)?.[1] || first;
+    assert.doesNotMatch(opener, /\bI think\b|\bmight\b|\bmaybe\b|\bprobably\b/i, opener);
+    assert.equal(isCourtesy(opener), true, opener);
+  }
+});

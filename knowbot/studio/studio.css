@@ -385,8 +385,14 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-msg.is-old { content-visibility: auto; contain-intrinsic-size: auto 96px; }
 .st-log > * { overflow-anchor: auto; }
 /* retired chip rows that still have messages below them: inert, quiet, same height (nothing jumps) */
-.st-chips.is-stale { opacity: .42; filter: saturate(.3); pointer-events: none; transition: opacity var(--dur-3) var(--ease-out); }
-.st-chips.is-stale .st-chip.is-chosen { opacity: 1; }
+/* r8 (D7/D2): visibly "used", never "disabled": ~70% opacity, neutral (a former primary loses its fill), no hover lift,
+   no pointer (the row is inert and out of the tab order), so nothing looks tappable that isn't */
+.st-chips.is-stale { opacity: .7; pointer-events: none; transition: opacity var(--dur-3) var(--ease-out); }
+.st-chips.is-stale .st-chip, .st-chips.is-stale .st-chip-primary {
+  cursor: default; color: var(--muted); background: transparent; border-color: var(--line); box-shadow: none; font-weight: 500; transform: none;
+}
+.st-chips.is-stale .st-chip-ico, .st-chips.is-stale .st-chip-primary .st-chip-ico { color: var(--muted); }
+.st-chips.is-stale .st-chip.is-chosen { color: var(--strong); border-color: var(--line-2); }
 .st-chip.is-gone { visibility: hidden; }   /* an asked chip keeps its slot: the row never reflows (r5, CLS) */
 .st-msg-a { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; align-items: start; }
 .st-msg-a > .st-glyph { margin-top: 1px; }
@@ -836,7 +842,9 @@ textarea.st-text { resize: vertical; }
 #sb-thread-slot[data-prompt="1"] > * { grid-area: 1 / 1; }
 #sb-thread-slot[data-prompt="1"]::before {
   content: 'Ask your first question: tap a suggestion below, or type your own.'; grid-area: 1 / 1;
-  max-width: 34ch; padding: 10px 16px; border-radius: 999px; text-align: center;
+  /* r8 (D7): a two-line pill with a 999px radius drew its dashed top edge as a clipped arc; a card radius and a little
+     room above keep the whole dashed outline inside the slot (which paints with containment) */
+  max-width: 34ch; margin: 8px 12px 0; padding: 10px 16px; border-radius: 16px; text-align: center; box-sizing: border-box;
   font: 500 13.5px/1.45 var(--font); color: var(--muted);
   background: color-mix(in srgb, var(--accent) 6%, var(--panel)); border: 1px dashed color-mix(in srgb, var(--accent) 30%, var(--line));
   animation: st-prompt-in var(--dur-4, 700ms) var(--ease-out) both;
@@ -942,7 +950,9 @@ textarea.st-text { resize: vertical; }
 :root:not([data-built]) .sb-ghost-chip { filter: none; background: var(--accent); color: #fff; position: relative; }
 :root:not([data-built]) .sb-ghost-chip::after {
   content: 'receipt'; position: absolute; left: calc(100% + 6px); top: 50%; transform: translateY(-50%); padding: 2px 6px; border-radius: 6px;
-  background: var(--strong); color: var(--panel); font: 500 10.5px/1.3 var(--mono); white-space: nowrap;
+  /* r8 (D1): the indigo-tint chip token (same as every citation chip), never a black debug-looking badge */
+  background: var(--accent-soft); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  font: 500 10.5px/1.3 var(--font); letter-spacing: .1px; white-space: nowrap;
 }
 
 /* D6: Proof Run on the stage: a runner strip in the bot header while the 8 + 3 run (app.js paintProofStrip) */
@@ -1199,3 +1209,13 @@ textarea.st-text { resize: vertical; }
   .st-si-row { flex-direction: column; }
   .st-si-row .st-btn { width: 100%; justify-content: center; }
 }
+
+/* r8 (D7): no stray list marker or pseudo-element beside the topic-tag row of the "Learned N files" card (the Builder
+   log hosts D's card; these rules only remove markers, never layout) */
+#st-log .in-card-files, #st-log .in-card-files > li { list-style: none; }
+#st-log .in-card-files > li::marker { content: none; }
+#st-log .in-topics::before, #st-log .in-topics::after, #st-log .in-topic::before { content: none; display: none; }
+#st-log .in-card-f > .in-card-fico { grid-row: 1; }
+/* r8 (D11): a question asked several ways is one insights row with a quiet "asked N ways" note */
+.st-ins-ways { flex: none; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-2); font: 500 10.5px/1.5 var(--font); white-space: nowrap; }
+.st-ins-off { margin-top: 6px; }

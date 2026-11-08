@@ -6,8 +6,9 @@
 //   a typed chip label ("launch with samples anyway", or any chip on screen) -> that chip (the visitor's own click)
 //   "use the sample files" / "upload my files" / "run the proof run" -> the matching tool
 //   a question about KnowBot itself (pricing, plans, channels…) -> kb_search{query} first, so the model cites
+//   a question the visitor's ready files cover ("how much is a full overhaul?") -> ask_bot{run:false} (a test-question button)
 //
-// preparse(message, state) -> { toolCalls:[{name,input}], chip|null, productQuestion, command }
+// preparse(message, state) -> { toolCalls:[{name,input}], chip|null, productQuestion, fileQuestion?, command }
 // `command` is true when the message is a pure command the pre-parser fully understood.
 
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -34,6 +35,7 @@ export function findUrl(msg) {
 // ------------------------------------------------------------------------------------------------ spec fields
 const BOT_NOUN = '(?:bot|chatbot|assistant|helper|agent|guide|help ?desk|desk|concierge|faq)';
 const STOP_TAIL = /\s+(?:and|with|that|which|so|please|to|who|because|but)\b.*$/i;
+const NOT_A_NAME = /^(?:on|in|at|after|by|from|with|to|into|onto|over|via|about|the|a|an|my|our|your|their|his|her|its|this|that|me|us|them)\b/i;
 const AUDIENCE_WORD = /^(?:customers?|clients?|shoppers?|employees?|staff|team|colleagues|students?|users?|visitors?|website|site|business|company|files?|docs?|self)$/i;
 
 /** Every spec field one message sets ("call it Paddle Pal, friendly, a support bot for my kayak rental shop"). */
@@ -48,7 +50,10 @@ export function parseFields(message) {
     || (m = new RegExp(`\\b(?:it|${BOT_NOUN})\\s+(?:is\\s+)?(?:called|named)\\s+["“']?([^"”',.!?;\\n]{2,40})`, 'i').exec(msg))
     || (m = /\bname:\s*["“']?([^"”',;\n]{2,40})/i.exec(msg))) {
     const name = m[1].replace(STOP_TAIL, '').replace(/\s+for\s+.*$/i, '').trim();
-    if (name.length >= 2 && !/^(?:something|anything|whatever|it|that|this)$/i.test(name)) out.name = name.slice(0, 40);
+    // "can customers call it on the phone?", "can I name it after my shop?": a preposition, article or possessive is
+    // never the start of a name, and "can/could <someone other than you> call it" asks about using the bot, not naming it
+    const asksAboutUse = /\b(?:can|could|will|would|do|does|should|may|might)\s+(?!you\b)[\w'’]+(?:\s+[\w'’]+){0,2}\s+(?:call|name)\s+(?:it|the bot|my bot)\b/i.test(msg.slice(0, m.index + m[0].length));
+    if (name.length >= 2 && !asksAboutUse && !NOT_A_NAME.test(name) && !/^(?:something|anything|whatever|it|that|this)$/i.test(name)) out.name = name.slice(0, 40);
   }
   // the name clause is cut out before anything else is read, so a name word is never a tone, purpose or org
   // (only "call it <name>" is cut: the regex may have read on past the name, e.g. "… Help and make answers shorter")
@@ -84,14 +89,23 @@ export function parseFields(message) {
 
 // ------------------------------------------------------------------------------------------------ chips and commands
 const norm = (t) => String(t || '').toLowerCase().replace(/[·$\d/]+mo\b/g, ' ').replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
-/** A typed message that is a chip on screen (label or send text), or a known launch-chip phrasing. */
+const QUESTION_WORD = /^(?:how|what|whats|what's|when|where|which|who|why|is|are|do|does|did|can|could|will|would|should|may|might|shall|if)\b/i;
+/** Typed phrasings of the "Launch with samples anyway" chip (whole message, after norm). */
+const LAUNCH_ANYWAY = /^(?:(?:ok(?:ay)?|yes|fine|just)\s+)?(?:launch|go live)\s+(?:with\s+(?:the\s+)?samples?(?:\s+files?)?\s+)?(?:anyway|anyways|as is)(?:\s+please)?$/;
+/**
+ * A typed message that is a chip on screen (label or send text), or the launch-anyway chip typed out.
+ * Only an exact label/send match counts. A synthetic launch-anyway chip (not on screen) is marked synthetic:true and is
+ * only ever offered as a button, never run (engine.mjs). Questions ("can I launch with samples?") never match it.
+ */
 export function chipFor(message, lastChips = []) {
-  const t = norm(message);
+  const raw = oneLine(message);
+  const t = norm(raw);
   if (!t || t.length > 80) return null;
   const offered = Array.isArray(lastChips) ? lastChips.filter((c) => c && c.label) : [];
   for (const c of offered) if (t === norm(c.label) || (c.send && t === norm(c.send))) return c;
-  if (/\blaunch\b.*\b(?:samples?|anyway)\b|\banyway\b.*\blaunch\b|\b(?:go live|launch)\s+(?:as is|now anyway)\b/.test(t)) {
-    return offered.find((c) => c.id === 'launch-anyway') || { id: 'launch-anyway', label: 'Launch with samples anyway', action: { type: 'show_launch', force: true } };
+  if (/[?？¿؟]/.test(raw) || QUESTION_WORD.test(t)) return null;
+  if (LAUNCH_ANYWAY.test(t)) {
+    return offered.find((c) => c.id === 'launch-anyway') || { id: 'launch-anyway', label: 'Launch with samples anyway', action: { type: 'show_launch', force: true }, synthetic: true };
   }
   return null;
 }
@@ -102,11 +116,34 @@ const COMMANDS = [
 ];
 
 // ------------------------------------------------------------------------------------------------ product questions
-const PRODUCT_TOPIC = /\b(?:price|prices|pricing|cost|costs|how much|pay|paying|paid|free|trial|cancel|cancell?ation|credit card|card|subscription|billing|bill|plan|plans|account|sign ?up|signup|refund|discount|coupon|knowbot|knowdrive|languages?|channels?|whatsapp|sms|telephone|phone calls?|voice|email|api|integrat\w*|embed|widget|privacy|private|my data|data (?:safe|stored|kept)|secure|security|gdpr|hipaa|soc ?2|limits?|how many files|file size|100 ?mb|what do i get|what'?s included|included|support team|contact|human|person)\b/i;
-const QUESTION_SHAPE = /\?\s*$|^(?:how|what|whats|what's|when|where|which|who|why|is|are|do|does|can|could|will|would|should|tell me|explain)\b/i;
-export function isProductQuestion(message) {
+// Topics only KnowBot has: a question naming one is about the product whatever else it says.
+const PRODUCT_STRONG = /\b(?:knowbot|knowdrive|studio|trial|subscription|sign ?up|signup|billing|credit card|whatsapp|sms|channels?|telephone|voice (?:bot|chatbot)|api|embed\w*|widget|gdpr|hipaa|soc ?2|my data|data (?:safe|stored|kept)|languages?|100 ?mb|file size|how many files|what do i get|what'?s included|support team|launch\w*|go(?:ing)? live)\b/i;
+// Generic words: also used for the visitor's own business ("how much is a full overhaul?", "what does the refund policy say?")
+const PRODUCT_GENERIC = /\b(?:price|prices|pricing|cost|costs|how much|pay|paying|paid|free|cancel|cancell?ation|card|bill|plan|plans|account|refunds?|discount|coupon|privacy|private|secure|security|limits?|included|contact|human|person|email|phone calls?|integrat\w*)\b/i;
+// Who the generic question is about: KnowBot itself (never the visitor's shop)
+const PRODUCT_SUBJECT = /\b(?:knowbot|knowdrive|studio|launch\w*|go(?:ing)? live|trial|subscription|you guys|your (?:service|product|platform|tool|app|company|team)|this (?:service|tool|app|platform)|to use (?:it|this|knowbot))\b/i;
+const WEAK_SUBJECT = /\b(?:plan|plans|account|it|this)\b/i;
+const QUESTION_SHAPE = /[?？¿؟]\s*$|^(?:how|what|whats|what's|when|where|which|who|why|is|are|do|does|can|could|will|would|should|tell me|explain)\b/i;
+const TOPIC_STOP = new Set('about after also and any are bike bikes does file files from have help into just more much plan plans some that their them then there they this what when where which with your yours sample samples policy'.split(' '));
+const wordsOf = (s) => (String(s || '').toLowerCase().match(/[a-z][a-z-]{3,}/g) || []).map((w) => w.replace(/ies$/, 'y').replace(/(?:es|s)$/, '')).filter((w) => w.length >= 4);
+/** True when the message shares a topic word with a ready file (name, one-line summary or topics). */
+export function overlapsFiles(message, state = {}) {
+  const files = (Array.isArray(state.files) ? state.files : []).filter((f) => f && f.stage === 'ready' && f.enabled !== false);
+  if (!files.length) return false;
+  const topic = new Set(files.flatMap((f) => wordsOf(`${String(f.name || '').replace(/\.[a-z0-9]+$/i, '').replace(/[-_]/g, ' ')} ${f.summary?.oneLine || ''} ${(f.summary?.topics || []).join(' ')}`)).filter((w) => !TOPIC_STOP.has(w)));
+  return wordsOf(message).some((w) => !TOPIC_STOP.has(w) && topic.has(w));
+}
+/**
+ * A question about KnowBot itself. A product-only topic always counts; a generic one (price, refund, plan…) counts only
+ * when it is about KnowBot, or when no ready file covers that topic (then it can only be about KnowBot).
+ */
+export function isProductQuestion(message, state = {}) {
   const m = oneLine(message);
-  return m.length >= 4 && m.length <= 300 && QUESTION_SHAPE.test(m) && PRODUCT_TOPIC.test(m);
+  if (m.length < 4 || m.length > 300 || !QUESTION_SHAPE.test(m)) return false;
+  if (PRODUCT_SUBJECT.test(m) && (PRODUCT_STRONG.test(m) || PRODUCT_GENERIC.test(m))) return true;
+  if (overlapsFiles(m, state)) return false;
+  if (PRODUCT_STRONG.test(m)) return true;
+  return PRODUCT_GENERIC.test(m) && (WEAK_SUBJECT.test(m) || !(Array.isArray(state.files) && state.files.length));
 }
 
 /** The full pre-pass. */
@@ -120,11 +157,16 @@ export function preparse(message, state = {}) {
   for (const [re, name] of COMMANDS) if (re.test(low)) { res.toolCalls.push({ name, input: {} }); res.command = true; return res; }
   const url = findUrl(msg);
   if (url) res.toolCalls.push({ name: 'import_website', input: { url } });
-  const isQ = /\?\s*$/.test(msg);
+  const isQ = /[?？¿؟]\s*$/.test(msg);
   const fields = parseFields(msg);
-  // a question ("is it friendly?") only sets fields when it names the bot ("can you call it X?")
-  if (Object.keys(fields).length && (!isQ || fields.name)) res.toolCalls.push({ name: 'update_bot', input: fields });
-  if (isProductQuestion(msg)) { res.productQuestion = true; res.toolCalls.push({ name: 'kb_search', input: { query: msg.slice(0, 300) } }); }
-  res.command = res.toolCalls.length > 0 && !res.productQuestion && !isQ;
+  // a question ("is it friendly?") only sets fields when it is a request to the Builder ("can you call it X?")
+  if (Object.keys(fields).length && (!isQ || (fields.name && /^(?:please\s+)?(?:can|could|would|will)\s+you\b/i.test(msg)))) res.toolCalls.push({ name: 'update_bot', input: fields });
+  if (isProductQuestion(msg, state)) { res.productQuestion = true; res.toolCalls.push({ name: 'kb_search', input: { query: msg.slice(0, 300) } }); }
+  else if (QUESTION_SHAPE.test(msg) && !url && !res.toolCalls.length && overlapsFiles(msg, state)) {
+    // a question their files cover: offer it as a test question for their bot (never a KnowBot fact)
+    res.fileQuestion = true;
+    res.toolCalls.push({ name: 'ask_bot', input: { question: msg.slice(0, 300), run: false } });
+  }
+  res.command = res.toolCalls.length > 0 && !res.productQuestion && !res.fileQuestion && !isQ;
   return res;
 }

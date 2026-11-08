@@ -3,8 +3,8 @@
 // not usable. Same result shape as kb.mjs search(): { sources:[{ n, name, title, section, page, text, similarity }], top }.
 //
 // The pricing passage is always present (owner rule 2: building and testing are free with no account; launching is a
-// KnowDrive account at $249/month, first 30 days free, credit card required at signup, cancel anytime). Only the
-// checkout URL is configurable.
+// KnowDrive account at $249/month or $2,499/year, first 30 days free, credit card required at signup, cancel anytime;
+// studio/kb/pricing-and-trial.md is the full source). Only the checkout URL is configurable.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,10 +13,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const LOCAL_KB_DIR = path.resolve(__dirname, '..', '..', 'studio', 'kb');
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
-export function pricingPassage({ price = 249, trialDays = 30, checkoutUrl = '' } = {}) {
+export function pricingPassage({ price = 249, yearly = 2499, trialDays = 30, checkoutUrl = '' } = {}) {
+  const money = (n) => `$${Number(n).toLocaleString('en-US')}`;
   return { name: 'pricing', title: 'KnowBot pricing', section: 'The price to launch', page: checkoutUrl || null,
-    text: `Building and testing a bot in KnowBot Studio is free and needs no account. To launch, you start a KnowDrive account at $${price} per month. `
-      + `The first ${trialDays} days are free. A credit card is required at signup. You can cancel anytime.` };
+    text: `Building and testing a bot in KnowBot Studio is free and needs no account. To launch, you start a KnowDrive account at ${money(price)} per month`
+      + `${yearly ? `, or ${money(yearly)} per year` : ''}. The first ${trialDays} days are free. A credit card is required at signup. You can cancel anytime.` };
 }
 
 /** Sections of studio/kb/*.md: [{ name, title, section, page, text }]. Missing folder -> []. */

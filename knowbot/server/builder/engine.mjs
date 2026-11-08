@@ -8,13 +8,16 @@
 //   1. Deterministic pre-parser (preparse.mjs): pasted URL -> import_website, multi-field "call it X, friendly, …" ->
 //      update_bot, typed chip labels -> that chip, product questions -> kb_search. Pre tool calls go through the same
 //      validated tool registry as the model's.
-//   2. The model (default claude-haiku-5-5) gets a compact state summary and may call at most maxToolCalls tools; after
-//      that the next request carries tool_choice:none so it must answer in text.
-//   3. The reply is gated: product facts survive only with a valid [n] citation whose numbers appear in the cited KB
-//      passage (requireCitations-style); a sentence claiming an action happened survives only when that tool returned
-//      ok; a product question with no cited sentence becomes "I don't know" plus a human contact.
-//   4. Timeout (7 s), API error, refusal, max_tokens or a malformed response -> the injected scripted(state, input)
-//      engine for this turn (the pre-parser's validated results are merged in).
+//   2. The model (default claude-haiku-5-5) gets a compact state summary. maxToolCalls (3) is one budget per message:
+//      the pre-parser's calls count toward it and the model gets the rest; after that the next request carries
+//      tool_choice:none so it must answer in text.
+//   3. The reply is gated: product facts survive only with a valid [n] citation; every money amount must appear with
+//      the same currency, number and period in the cited passage, other numbers as whole numbers; an uncited sentence
+//      never carries money. A sentence claiming an action happened survives only when that tool returned ok; a product
+//      question with no cited sentence keeps the model's non-fact text plus "I don't know" and a human contact.
+//   4. Timeout (7 s, which also bounds every tool call), API error, refusal, max_tokens or a malformed response -> the
+//      injected scripted(state, input) engine for this turn (every validated tool result, pre-parser's and model's, is
+//      merged in). Fallback reasons are counted (engine.stats()) and logged through o.log.
 // The model never executes destructive or paid steps: no tool exists for them, offer-only actions (show_launch,
 // remove_samples) can only come back as buttons, and unknown tool names are refused and recorded as blocked.
 import { createBuilderTools, CLIENT_ACTIONS, OFFER_ONLY_ACTIONS, readyFiles, quotaOf } from './tools.mjs';
@@ -27,7 +30,7 @@ const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const dataText = (s, n) => clip(oneLine(String(s ?? '').replace(/[<>]/g, ' ')), n);
 
 // ------------------------------------------------------------------------------------------------ system prompt
-export function systemPrompt({ contact = 'hello@knowdrive.ai', price = 249 } = {}) {
+export function systemPrompt({ contact = 'hello@knowdrive.ai' } = {}) {
   return `You are the KnowBot Builder inside KnowBot Studio: a friendly guide, like a kind librarian, who helps a visitor set up their own KnowBot. A KnowBot answers ONLY from the visitor's files or website, quotes them with [n] citations, never guesses and never uses the internet; when its files don't cover a question it says so with a fixed sentence.
 
 How you work
@@ -47,7 +50,7 @@ Safety
 
 Style
 - Warm, plain and concrete. 1 to 3 short sentences. No headings, no lists, no emoji. Use the bot's name. Use the middle dot · as a separator when listing settings.
-- The launch price is only ever stated with a [n] citation from kb_search (it is $${price}/month after a free first month; never any other figure).
+- Prices, trial length and plan details are only ever stated with a [n] citation, and you quote only figures that appear in the kb_search results.
 - Offer the obvious next steps as buttons with offer_choices when no other tool already offered them.`;
 }
 
@@ -82,8 +85,28 @@ const FACT_NUM = /[$€£]\s?\d[\d,.]*|\b\d[\d,.]*\s*(?:%|percent\b|per\s+(?:mon
 const PRODUCT_WORDS = /\b(?:price|pricing|priced|costs?|per month|a month|monthly|annual(?:ly)?|discount\w*|coupons?|promo|refunds?|credit card|card required|cancel(?:lation)? anytime|subscription|billing|billed|free trial|trial|no account|gdpr|hipaa|soc ?2|encrypt\w*|languages?|plans?)\b|\bfree\b(?!\s+to\b)/i;
 // a product word only needs a citation when the sentence is about KnowBot itself (not "your files cover service plans")
 const PRODUCT_SUBJECT = /\b(?:knowbot|knowdrive|studio|launch\w*|go(?:es|ing)? live|account|sign ?up|signup|trial|subscription|billing|billed|you(?:'ll| will)? pay|checkout|cancel)\b/i;
-const QUESTIONISH = /\?\s*$|^(?:how|what|whats|what's|when|where|which|who|why|is|are|do|does|can|could|will|would|should|tell me|explain)\b/i;
-const RISKY_WORDS = /\b(?:discount\w*|coupons?|promo(?:tion)?s?|lifetime|% off|percent off|money-?back|guarantee\w*|annual plan|yearly plan|enterprise plan|starter plan|pro plan|free forever|unlimited)\b/i;
+const QUESTIONISH = /[?？¿؟]\s*$|^(?:how|what|whats|what's|when|where|which|who|why|is|are|do|does|can|could|will|would|should|tell me|explain)\b/i;
+// words that are never safe without the same word in the cited passage (plan names and amounts are covered by the
+// money check below, so "The yearly plan is $2,499 per year [1]." passes when the passage says it)
+const RISKY_WORDS = /\b(?:discount\w*|coupons?|promo(?:tion)?s?|lifetime|% off|percent off|money-?back|guarantee\w*|starter plan|pro plan|free forever|unlimited)\b/i;
+// an uncited sentence may never name a plan or billing period of KnowBot's own
+const UNCITED_PLAN = /\b(?:annual(?:ly)?|yearly|enterprise|monthly)\s+(?:plan|plans|pricing|price|billing|tier|subscription)\b/i;
+// money as a unit: currency + amount + optional period ("$249 per month", "$2,499/yr", "249 dollars a month")
+const MONEY = /(?:([$€£])\s?(\d[\d,]*(?:\.\d+)?)|\b(\d[\d,]*(?:\.\d+)?)\s*(dollars?|usd|euros?|eur|pounds?|gbp)\b)(?:\s*(?:\/\s?|per\s+|a\s+|an\s+|each\s+|every\s+)?(months?|mo|monthly|years?|yr|annum|yearly|annually)\b)?/gi;
+const CUR = { $: '$', dollar: '$', dollars: '$', usd: '$', '€': '€', euro: '€', euros: '€', eur: '€', '£': '£', pound: '£', pounds: '£', gbp: '£' };
+/** Every money amount in a text: [{cur, num, unit:'month'|'year'|null, span}]. */
+export function moneyIn(text) {
+  const out = [];
+  for (const m of String(text || '').matchAll(MONEY)) {
+    const cur = CUR[(m[1] || m[4] || '').toLowerCase()] || '$';
+    const num = String(m[2] || m[3]).replace(/,/g, '').replace(/\.0+$/, '');
+    const u = (m[5] || '').toLowerCase();
+    const unit = !u ? null : /^(?:months?|mo|monthly)$/.test(u) ? 'month' : 'year';
+    out.push({ cur, num, unit, span: m[0] });
+  }
+  return out;
+}
+const numTokens = (text) => new Set((String(text || '').match(/\d[\d,]*(?:\.\d+)?/g) || []).map((n) => numKey(n)));
 /** A sentence claiming an action happened, and the tools that make the claim true. */
 const CLAIMS = [
   [/\b(?:i(?:'ve| have)?\s+)?(?:load(?:ed|ing)|attach(?:ed|ing)|add(?:ed|ing)|pull(?:ed|ing) in)\b[^.!?]*\bsamples?\b/i, ['attach_samples']],
@@ -114,26 +137,34 @@ const numKey = (s) => String(s).toLowerCase().replace(/[$€£\s,]/g, '').replac
  */
 export function gateReply(text, { cited = new Map(), okTools = new Set(), stateText = '' } = {}) {
   const kept = [], dropped = [];
+  const stateNums = numTokens(stateText);
   for (const s0 of sentencesOf(text)) {
-    let s = s0.replace(MARK, (all, n) => (cited.has(+n) ? all : '')).replace(/\s+([.,;:!?])/g, '$1').trim();
+    let s = s0.replace(MARK, (all, n) => (cited.has(+n) ? all : '')).replace(/\s{2,}/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
     if (!s) continue;
     const marks = [...s.matchAll(MARK)].map((m) => +m[1]);
     // an uncited sentence claiming an action happened needs that tool's ok (a cited sentence is a KB fact, not a claim)
     const claim = marks.length ? null : CLAIMS.find(([re]) => re.test(s));
     if (claim && !claim[1].some((t) => okTools.has(t))) { dropped.push(s0); continue; }
-    const facts = [...s.matchAll(FACT_NUM)].map((m) => m[0]);
+    const plain = s.replace(MARK, ' ');
+    const money = moneyIn(plain);
+    const rest = money.reduce((t, m) => t.replace(m.span, ' '), plain);
     if (marks.length) {
       const src = marks.map((n) => String(cited.get(n)?.text || '')).join(' ');
-      const srcNums = new Set((src.match(/\d[\d,.]*/g) || []).map(numKey));
-      const nums = (s.replace(MARK, ' ').match(/\d[\d,.]*/g) || []).map(numKey);
-      if (nums.some((n) => !srcNums.has(n))) { dropped.push(s0); continue; }
+      // every amount: same currency, same number and (when the sentence names one) the same period as the passage
+      const srcMoney = moneyIn(src);
+      if (money.some((m) => !srcMoney.some((x) => x.cur === m.cur && x.num === m.num && (m.unit == null || x.unit === m.unit)))) { dropped.push(s0); continue; }
+      const srcNums = numTokens(src);
+      if ([...numTokens(rest)].some((n) => !srcNums.has(n))) { dropped.push(s0); continue; }
       if (RISKY_WORDS.test(s) && !RISKY_WORDS.test(src)) { dropped.push(s0); continue; }
       kept.push(s);
       continue;
     }
-    // uncited: no product claims, no product-ish numbers unless the number is a fact of the visitor's own state
-    if ((PRODUCT_WORDS.test(s) && PRODUCT_SUBJECT.test(s)) || RISKY_WORDS.test(s)) { dropped.push(s0); continue; }
-    if (facts.some((f) => !stateText.includes(numKey(f)))) { dropped.push(s0); continue; }
+    // uncited: never an amount of money, no product claims, and other product-ish numbers only when they are whole
+    // numbers of the visitor's own state (not substrings of it: "10" is not in "100")
+    if (money.length) { dropped.push(s0); continue; }
+    if ((PRODUCT_WORDS.test(s) && PRODUCT_SUBJECT.test(s)) || RISKY_WORDS.test(s) || UNCITED_PLAN.test(s)) { dropped.push(s0); continue; }
+    const facts = [...rest.matchAll(FACT_NUM)].map((m) => m[0]);
+    if (facts.some((f) => !stateNums.has(numKey(f)))) { dropped.push(s0); continue; }
     kept.push(s);
   }
   // renumber by first appearance
@@ -157,7 +188,7 @@ function describe(results, state) {
     }
     if (name === 'update_bot') {
       const p = r.res.patch || {};
-      const bits = [p.name && `name ${p.name}`, p.tone && `tone ${p.tone}`, p.purpose && `purpose “${p.purpose}”`, p.org && `for ${p.org}`, p.audience && `for ${p.audience}`, p.length && `${p.length} answers`, p.greeting && `greeting “${p.greeting}”`, p.sources && 'answers only from the files you named'].filter(Boolean);
+      const bits = [p.name && `name ${p.name}`, p.tone && `tone ${p.tone}`, p.purpose && `purpose “${p.purpose}”`, p.org && `for ${p.org}`, p.audience && `for ${p.audience}`, p.length && `${p.length} answers`, p.greeting && "a new greeting", p.sources && 'answers only from the files you named'].filter(Boolean);
       parts.push(`Saved: ${bits.join(' · ')}.`);
     } else if (name === 'import_website') parts.push(`Opening the website import for ${r.res.data?.host || 'that site'}. Confirm you own or manage it and I'll read its pages.`);
     else if (name === 'attach_samples') parts.push('Loading the sample files now. Watch them learn on the right.');
@@ -168,18 +199,33 @@ function describe(results, state) {
   return parts.join(' ');
 }
 /** A cited librarian answer straight from the top KB passages (no model): “…” [1]. */
-function quoteAnswer(question, kbResults) {
-  const top = kbResults.filter((x) => x.n != null).slice(0, 2);
-  if (!top.length) return null;
-  const qw = new Set(oneLine(question).toLowerCase().match(/[a-z0-9$]{3,}/g) || []);
-  const best = (txt) => {
-    const ss = sentencesOf(txt);
-    const scored = ss.map((s, i) => ({ s, i, n: (s.toLowerCase().match(/[a-z0-9$]{3,}/g) || []).filter((w) => qw.has(w)).length })).sort((a, b) => b.n - a.n || a.i - b.i);
-    return scored.slice(0, 2).sort((a, b) => a.i - b.i).map((x) => x.s).join(' ');
-  };
+// words that carry no topic: a quote must share a real word with the question, not "knowbot" or "does"
+const QUOTE_STOP = new Set('the and for are was were with what when where which who why how does did can could will would should have has had you your yours our ours this that these those there their them they its about from into just also any some much many more most tell know want need like get got use used using bot bots knowbot knowdrive studio builder guide please thanks'.split(' '));
+const SYN = { cost: 'price', costs: 'price', pricing: 'price', prices: 'price', pay: 'price', fee: 'price', fees: 'price', charge: 'price', monthly: 'month', yearly: 'year', annual: 'year', annually: 'year', cancellation: 'cancel', signup: 'account', sign: 'account' };
+const qTerms = (s) => new Set((String(s || '').toLowerCase().match(/[a-z0-9$][a-z0-9$-]{2,}/g) || []).filter((w) => !QUOTE_STOP.has(w)).map((w) => { w = w.replace(/ies$/, 'y').replace(/(?:ing|es|s)$/, '') || w; return SYN[w] || w; }));
+/**
+ * A cited librarian answer straight from the top KB passage (no model): “…” [1]. Only when the passage is a strong
+ * match (similarity at or above the KB floor) AND the quoted sentences share real words with the question; otherwise
+ * null, and the caller says it doesn't know. Used only when the model produced no reply (fallback).
+ */
+function quoteAnswer(question, kbResults, { floor = 0.65 } = {}) {
+  const top = kbResults.filter((x) => x && x.n != null && x.text);
   const x = top[0];
-  return `Here's what the KnowBot guide says. In “${x.title}”: “${clip(best(x.text), 300)}” [${x.n}].`;
+  if (!x) return null;
+  if (x.similarity != null && Number(x.similarity) < floor) return null;
+  const qw = qTerms(question);
+  if (!qw.size) return null;
+  const head = qTerms(`${x.title || ''} ${x.section || ''}`);
+  const scored = sentencesOf(x.text).map((s, i) => { const t = qTerms(s); return { s, i, n: [...qw].filter((w) => t.has(w)).length }; });
+  const best = scored.filter((r) => r.n > 0).sort((a, b) => b.n - a.n || a.i - b.i).slice(0, 2);
+  const headHits = [...qw].filter((w) => head.has(w)).length;
+  // real lexical overlap: at least one quoted sentence shares a word, and with the heading at least half the question
+  const need = Math.max(1, Math.ceil(Math.min(qw.size, 4) / 2));
+  if (!best.length || best[0].n + headHits < need) return null;
+  const quote = best.sort((a, b) => a.i - b.i).map((r) => r.s).join(' ');
+  return `Here's what the KnowBot guide says. In “${x.title}”: “${clip(quote, 300)}” [${x.n}].`;
 }
+const SAYS_DONT_KNOW = /\b(?:(?:i|we)\s+(?:don'?t|do not)\s+(?:know|have)|not sure|can'?t (?:find|say|confirm)|couldn'?t find|no information|not (?:in|covered by) the (?:knowbot )?guide|won'?t guess)\b/i;
 
 // ------------------------------------------------------------------------------------------------ chips
 const CHIP = (id, label, extra = {}) => ({ id, label, kind: 'default', ...extra });
@@ -232,14 +278,22 @@ export function createBuilderEngine(o = {}) {
   const log = typeof o.log === 'function' ? o.log : () => {};
   const now = typeof o.now === 'function' ? o.now : Date.now;
   const timeoutMs = Number(o.timeoutMs ?? 7000);
+  // one budget for the whole message: the pre-parser's tool calls count toward it, the model gets what is left
   const maxToolCalls = Math.max(0, Number(o.maxToolCalls ?? 3));
   const model = o.model || DEFAULT_MODEL;
   const effort = o.effort === null ? null : (o.effort || 'low');
-  const maxTokens = Number(o.maxTokens) || 2048;
+  // Haiku 5.5 thinks adaptively by default; 4096 leaves room for that at effort "low" so a short reply never stops on
+  // max_tokens (a max_tokens stop is a fallback). Calibrate with the live eval: scripts/builder-eval.mjs --live.
+  const maxTokens = Number(o.maxTokens) || 4096;
+  const kbFloor = Number(o.kbFloor ?? 0.65);
   const contact = String(o.contact || 'hello@knowdrive.ai').replace(/^mailto:/i, '');
-  const SYSTEM = systemPrompt({ contact, price: o.price || 249 });
+  const SYSTEM = systemPrompt({ contact });
   const defaultChips = typeof o.defaultChips === 'function' ? o.defaultChips : builtinChips;
   const dontKnow = () => `I don't have that in the KnowBot guide, so I won't guess. A person on our team can help: ${contact}.`;
+
+  // how often turns fall back, by reason (also logged through o.log on every fallback so it can be graphed)
+  const stats = { turns: 0, agent: 0, fallback: 0, reasons: {} };
+  const reasonKey = (r) => String(r).replace(/^error: .*$/, (m) => (/unexpected stop_reason/.test(m) ? 'error: stop_reason' : /malformed|invalid tool output|no final reply/.test(m) ? `error: ${/malformed|invalid tool output|no final reply/.exec(m)[0]}` : 'error: api'));
 
   let turnLog = null; // per-turn override (turn(state, input, { logQuestion })) so the caller can scope the record
   function logQ(state, question, outcome, citations, topScore) {
@@ -252,6 +306,18 @@ export function createBuilderEngine(o = {}) {
   }
 
   async function turn(state = {}, input = {}, opts = {}) {
+    stats.turns++;
+    const out = await runTurn(state, input, opts, 0);
+    if (out.engine === 'scripted-fallback') {
+      stats.fallback++;
+      const k = reasonKey(out.fallbackReason);
+      stats.reasons[k] = (stats.reasons[k] || 0) + 1;
+      log(`[builder] fallback reason="${k}" ms=${out.ms} rate=${stats.fallback}/${stats.turns} by_reason=${JSON.stringify(stats.reasons)}`);
+    } else stats.agent++;
+    return out;
+  }
+
+  async function runTurn(state, input, opts, depth) {
     const t0 = now();
     const scripted = typeof opts.scripted === 'function' ? opts.scripted : o.scripted;
     turnLog = typeof opts.logQuestion === 'function' ? opts.logQuestion : null;
@@ -266,57 +332,74 @@ export function createBuilderEngine(o = {}) {
       results.push({ name, input: input2, res, source });
       toolCalls.push({ name, input: input2, ok: !!res.ok, source, ...(res.ok ? {} : { error: res.error, code: res.code }), ...(res.code === 'unknown_tool' ? { blocked: true } : {}) });
     };
+    const kbPassages = () => [...cited].sort((a, b) => a[0] - b[0]).map(([n, x]) => ({ ...x, n }));
+    const kbHadResults = () => results.some((r) => r.name === 'kb_search' && r.res.ok && (r.res.data?.results || []).length);
 
     async function fallback(reason, pre) {
       log(`[builder] agent fell back to scripted: ${reason}`);
-      const preOk = results.filter((r) => r.source === 'pre' && r.res.ok);
-      const prePatch = Object.assign({}, ...preOk.filter((r) => r.res.patch).map((r) => r.res.patch));
-      const preActions = preOk.filter((r) => r.res.action).map((r) => r.res.action);
-      const kbRes = preOk.filter((r) => r.name === 'kb_search').flatMap((r) => r.res.data?.results || []);
+      // validated results survive the fallback, the model's as well as the pre-parser's (offer-only actions never run)
+      const keptOk = results.filter((r) => r.res.ok);
+      const keptPatch = Object.assign({}, ...keptOk.filter((r) => r.res.patch).map((r) => r.res.patch));
+      const keptActions = keptOk.filter((r) => r.res.action && CLIENT_ACTIONS.has(r.res.action.type) && !OFFER_ONLY_ACTIONS.has(r.res.action.type)).map((r) => r.res.action);
       let s = null;
-      if (pre?.productQuestion) {
-        const q = quoteAnswer(msg, kbRes);
-        const cits = q ? [...cited].filter(([n]) => q.includes(`[${n}]`)).map(([n, x]) => ({ n, ...x })) : [];
+      const productQ = !!pre?.productQuestion || (kbHadResults() && QUESTIONISH.test(msg));
+      if (productQ) {
+        // no model reply: quote the KB only when the top passage is a strong, on-topic match; else "I don't know"
+        const q = quoteAnswer(msg, kbPassages(), { floor: kbFloor });
+        const cits = q ? kbPassages().filter((x) => q.includes(`[${x.n}]`)) : [];
         logQ(state, msg, q ? 'answered' : 'refused', cits, topScore);
-        s = { reply: q || dontKnow(), citations: cits };
+        s = { reply: q || dontKnow(), citations: cits.map((c) => ({ n: c.n, title: c.title || null, section: c.section || null, name: c.name || null, page: c.page || null, text: clip(c.text, 400), similarity: c.similarity ?? null })) };
       }
       if (!s && typeof scripted === 'function') { try { s = await scripted(state, input); } catch (e) { log(`[builder] scripted failed: ${e.message}`); } }
-      if (!s) s = { reply: describe(results.filter((r) => r.source === 'pre'), state) || "I'm here. Tell me what your bot is for, or add a file to start." };
+      if (!s) s = { reply: describe(keptOk, state) || "I'm here. Tell me what your bot is for, or add a file to start." };
       const own = (s.actions && s.actions.length) || (s.patch && Object.keys(s.patch).length);
       const actions = [...(s.actions || [])];
-      for (const a of preActions) if (!actions.some((b) => b.type === a.type)) actions.push(a);
-      const reply = !own && preOk.some((r) => r.res.patch || r.res.action) ? `${describe(preOk, state)}` : s.reply;
-      const chips = cleanChips([...preOk.flatMap((r) => r.res.chips || []), ...(s.chips || [])]);
-      return { reply, patch: { ...(s.patch || {}), ...prePatch }, actions, chips: chips.length >= 2 ? chips.slice(0, 4) : cleanChips([...chips, ...defaultChips(state)]).slice(0, 4),
+      for (const a of keptActions) if (!actions.some((b) => b.type === a.type)) actions.push(a);
+      const reply = !own && keptOk.some((r) => r.res.patch || (r.res.action && !OFFER_ONLY_ACTIONS.has(r.res.action.type))) && !productQ ? `${describe(keptOk, state)}` : s.reply;
+      const chips = cleanChips([...keptOk.flatMap((r) => r.res.chips || []), ...(s.chips || [])]);
+      return { reply, patch: { ...(s.patch || {}), ...keptPatch }, actions, chips: chips.length >= 2 ? chips.slice(0, 4) : cleanChips([...chips, ...defaultChips(state)]).slice(0, 4),
         citations: s.citations || [], ...(s.card ? { card: s.card } : {}), engine: 'scripted-fallback', fallbackReason: reason, toolCalls, ms: now() - t0 };
     }
 
     if (!msg) return fallback('not_a_message', null);
     const pre = preparse(msg, state);
-    // a typed chip label is the visitor's own click: run it exactly as the client would (never a model decision)
+    // a typed chip label is the visitor's own click on a button that is on screen: run it exactly as the client would
     if (pre.chip) {
       const c = pre.chip;
       if (c.action && CLIENT_ACTIONS.has(c.action.type)) {
+        // a destructive/paid (offer-only) action runs only from a chip the server really offered (state.lastChips);
+        // typed text that merely looks like it ("launch with samples anyway") gets the button, never the action
+        if (OFFER_ONLY_ACTIONS.has(c.action.type) && c.synthetic) {
+          const { synthetic, ...button } = c;
+          return { reply: c.action.type === 'show_launch' ? 'Tap below to open the launch card.' : 'Tap below if you want that.', patch: {}, actions: [], chips: cleanChips([{ ...button, kind: 'primary' }, ...defaultChips(state)]).slice(0, 4), citations: [], engine: 'agent', preparsed: 'chip', toolCalls, ms: now() - t0 };
+        }
         return { reply: c.action.type === 'show_launch' ? 'Opening the launch card.' : 'On it.', patch: {}, actions: [{ ...c.action }], chips: cleanChips(defaultChips(state)).slice(0, 4), citations: [], engine: 'agent', preparsed: 'chip', toolCalls, ms: now() - t0 };
       }
-      if (c.send && oneLine(c.send) !== msg) return turn(state, { ...input, message: c.send }, opts);
+      if (c.send && oneLine(c.send) !== msg && depth < 1) return runTurn(state, { ...input, message: c.send }, opts, depth + 1);
       if (c.emit) return { reply: 'Tap below to open it.', patch: {}, actions: [], chips: cleanChips([c, ...defaultChips(state)]).slice(0, 4), citations: [], engine: 'agent', preparsed: 'chip', toolCalls, ms: now() - t0 };
     }
 
     const ac = new AbortController();
     const outer = opts.signal;
-    if (outer) { if (outer.aborted) ac.abort(); else outer.addEventListener('abort', () => ac.abort(), { once: true }); }
+    const onOuterAbort = () => ac.abort();
+    if (outer) { if (outer.aborted) ac.abort(); else outer.addEventListener('abort', onOuterAbort, { once: true }); }
     const timer = setTimeout(() => ac.abort(), timeoutMs); timer.unref?.();
-    const deadline = new Promise((_, rej) => ac.signal.addEventListener('abort', () => rej(Object.assign(new Error('timeout'), { name: 'TimeoutError' })), { once: true }));
+    const deadline = new Promise((_, rej) => {
+      const fire = () => rej(Object.assign(new Error('timeout'), { name: 'TimeoutError' }));
+      if (ac.signal.aborted) fire(); else ac.signal.addEventListener('abort', fire, { once: true });
+    });
+    deadline.catch(() => {}); // a rejection nobody races (the turn already returned) is never unhandled
+    const runTool = (name, inp) => Promise.race([tools.run(name, inp, state, ctxFor(ac.signal)), deadline]);
+    let calls = 0;
     try {
-      for (const c of pre.toolCalls) record(c.name, c.input, await tools.run(c.name, c.input, state, ctxFor(ac.signal)), 'pre');
-      if (!complete) { clearTimeout(timer); return fallback('no_model', pre); }
+      for (const c of pre.toolCalls.slice(0, maxToolCalls)) { calls++; record(c.name, c.input, await runTool(c.name, c.input), 'pre'); }
+      if (!complete) return await fallback('no_model', pre);
 
       const summary = summarizeState(state);
       const stateText = JSON.stringify(summary);
       const already = results.map((r) => ({ tool: r.name, input: r.input, ...view(r.res) }));
       const messages = [{ role: 'user', content: [{ type: 'text', text: `<studio_state>\n${stateText}\n</studio_state>\n<already_done note="the Studio ran these for this message before you; do not repeat them">\n${JSON.stringify(already)}\n</already_done>\n<visitor_message>\n${dataText(msg, 1000)}\n</visitor_message>` }] }];
-      let calls = 0, text = null;
+      let text = null;
       for (let iter = 0; iter <= maxToolCalls + 1; iter++) {
         const forceText = calls >= maxToolCalls;
         const params = {
@@ -334,20 +417,20 @@ export function createBuilderEngine(o = {}) {
         if (r.stop_reason === 'tool_use') {
           if (!uses.length || forceText) throw new Error('invalid tool output');
           messages.push({ role: 'assistant', content: r.content });
-          const out = [];
+          const outBlocks = [];
           for (const u of uses) {
             if (typeof u.id !== 'string' || typeof u.name !== 'string') throw new Error('invalid tool output');
             if (calls >= maxToolCalls) {
               toolCalls.push({ name: u.name, input: u.input, ok: false, source: 'model', error: 'tool call limit', code: 'limit' });
-              out.push({ type: 'tool_result', tool_use_id: u.id, is_error: true, content: 'Tool call limit reached for this message. Answer the visitor now.' });
+              outBlocks.push({ type: 'tool_result', tool_use_id: u.id, is_error: true, content: 'Tool call limit reached for this message. Answer the visitor now.' });
               continue;
             }
             calls++;
-            const res = await tools.run(u.name, u.input, state, ctxFor(ac.signal));
+            const res = await runTool(u.name, u.input);
             record(u.name, u.input, res, 'model');
-            out.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(view(res)), ...(res.ok ? {} : { is_error: true }) });
+            outBlocks.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(view(res)), ...(res.ok ? {} : { is_error: true }) });
           }
-          messages.push({ role: 'user', content: out });
+          messages.push({ role: 'user', content: outBlocks });
           continue;
         }
         if (r.stop_reason === 'end_turn' || r.stop_reason === 'stop_sequence') {
@@ -356,7 +439,6 @@ export function createBuilderEngine(o = {}) {
         }
         throw new Error(`unexpected stop_reason ${r.stop_reason}`);
       }
-      clearTimeout(timer);
       if (text == null) throw new Error('no final reply');
 
       // ---- assemble: only validated tool results become patch/actions/chips
@@ -374,25 +456,29 @@ export function createBuilderEngine(o = {}) {
       let reply = g.text;
       let citations = g.citations.map((c) => ({ ...cited.get(c.from), n: c.n }));
       if (productQ && !citations.length) {
-        // a product question needs a cited answer: the KB quote when there is one, else "I don't know" + a person
-        const kbRes = ok.filter((r) => r.name === 'kb_search').flatMap((r) => r.res.data?.results || []);
-        const q = pre.productQuestion ? quoteAnswer(msg, kbRes) : null;
-        const nonFacts = g.text && !kbCalled ? g.text : '';
-        if (q) { reply = q; citations = [...cited].filter(([n]) => q.includes(`[${n}]`)).map(([n, x]) => ({ ...x, n })); }
-        else reply = `${nonFacts ? `${nonFacts} ` : ''}${dontKnow()}`;
+        // a product question needs a cited answer. The model gave none, so whatever it said that survived the gate
+        // stays, and "I don't know" plus a person is added (unless it already said that). Never a stand-in KB quote:
+        // the top hit can be off-topic, and presenting it as the answer would be a guess.
+        const keep = g.text || '';
+        if (keep && SAYS_DONT_KNOW.test(keep)) reply = keep.includes(contact) ? keep : `${keep} A person on our team can help: ${contact}.`;
+        else reply = `${keep ? `${keep} ` : ''}${dontKnow()}`;
       }
       if (!reply) reply = describe(results, state) || 'Done.';
-      if (productQ) logQ(state, msg, citations.length ? 'answered' : 'refused', citations, topScore);
+      // every turn that asked the KnowBot guide something is a product question for the questions loop (owner rule 4),
+      // whatever language or punctuation it was asked in
+      if (productQ || kbHadResults()) logQ(state, msg, citations.length ? 'answered' : 'refused', citations, topScore);
       const chips = cleanChips([...ok.flatMap((r) => r.res.chips || [])]);
       const final = chips.length >= 2 ? chips : cleanChips([...chips, ...defaultChips(state)]);
       return { reply: clip(reply, 700), patch, actions, chips: final.slice(0, 4), citations: citations.map((c) => ({ n: c.n, title: c.title || null, section: c.section || null, name: c.name || null, page: c.page || null, text: clip(c.text, 400), similarity: c.similarity ?? null })),
         engine: 'agent', toolCalls, ms: now() - t0, ...(g.dropped.length ? { dropped: g.dropped } : {}) };
     } catch (e) {
-      clearTimeout(timer);
       return fallback(e.name === 'TimeoutError' || ac.signal.aborted ? 'timeout' : `error: ${String(e.message || e).slice(0, 120)}`, pre);
+    } finally {
+      clearTimeout(timer);
+      if (outer) outer.removeEventListener('abort', onOuterAbort);
     }
   }
-  return { turn, model, systemPrompt: SYSTEM, tools: tools.defs };
+  return { turn, model, systemPrompt: SYSTEM, tools: tools.defs, stats: () => structuredClone(stats) };
 }
 
 /**

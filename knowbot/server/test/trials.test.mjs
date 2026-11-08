@@ -10,7 +10,7 @@ import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
-  splitSentences, citeQuotedLines, quotedLineParts, storeIntentOf, sourceSegments, stripSourceLines, lastSourceUrl, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords } from '../trials.mjs';
+  splitSentences, citeQuotedLines, quotedLineParts, storeIntentOf, sourceSegments, stripSourceLines, lastSourceUrl, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords, insightKey, refusalReasonOf } from '../trials.mjs';
 import { requireCitations, isCourtesy } from '../../lib/knowbot.js';
 import { atomize, extractText, startFakeKnowDrive as startKD } from './fake-knowdrive.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
@@ -766,6 +766,26 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.ok(Array.isArray(j.top) && j.top.length >= 1);
     assert.ok(j.gaps.some((g) => /brazil/i.test(g.q)), 'the refused question is a gap');
   });
+  test('r8 insights: near-duplicates group ("asked 2 ways"); off-topic refusals are not gaps (refusalReasonOf)', async () => {
+    const { t } = await sampleTrial();
+    await c.stream(t, '/ask', { question: 'Do you ship to Brazil?' });
+    await c.stream(t, '/ask', { question: 'Do you deliver to Brazil?' });
+    await c.stream(t, '/ask', { question: 'What is the capital of France?' });
+    const j = await (await c.json(t, '/insights')).json();
+    const brazil = j.gaps.filter((g) => /brazil/i.test(g.q));
+    assert.equal(brazil.length, 1, JSON.stringify(j.gaps));
+    assert.equal(brazil[0].ways, 2);
+    assert.equal(brazil[0].reason, 'near_miss');
+    assert.ok(!j.gaps.some((g) => /france/i.test(g.q)), 'general knowledge is never a content gap');
+    assert.ok(j.offTopic.some((g) => /france/i.test(g.q) && g.reason === 'off_topic'), JSON.stringify(j.offTopic));
+    assert.equal(insightKey('Do you ship to Brazil?'), insightKey('Do you deliver to Brazil?'));
+    assert.equal(refusalReasonOf({ q: 'Do you ship to Brazil?', best: 0.67, floor: 0.72 }), 'near_miss');
+    assert.equal(refusalReasonOf({ q: 'Something odd', best: 0.4, floor: 0.72 }), 'off_topic');
+    // the Builder praises an off-topic refusal and offers no "add a file"
+    const ev = await c.stream(t, '/setup', { event: { type: 'refusal', data: { question: 'What is the capital of France?', best: 0.41, floor: 0.72 } } });
+    const chips = ev.find((e) => e.event === 'chips').data.chips.map((x) => x.label);
+    assert.ok(!chips.some((x) => /add a file/i.test(x)), chips.join(','));
+  });
 
   // ---------------------------------------------------------------------------------------------- fixer r1
   test('r1: plain paraphrases of covered facts are answered; tangential lines are dropped from the answer', async () => {
@@ -946,7 +966,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const t0 = await c.trial();
     const none = await c.stream(t0, '/setup', { message: 'only answer about warranties and returns' });
     assert.match(none.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), /Add files first/);
-    assert.deepEqual(none.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Enter a Store URL', 'Open bot spec']);
+    assert.deepEqual(none.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Add website', 'Open bot spec']);
     // a scope over the sample files keeps only the warranty file on, with a ConfigDiff card
     const t = await c.trial();
     assert.equal((await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' })).status, 201);
@@ -1015,7 +1035,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     // no files: a spec edit never offers the Proof Run
     const t3 = await c.trial();
     const se = await c.stream(t3, '/setup', { event: { type: 'spec_edit', data: {} } });
-    assert.deepEqual(se.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Enter a Store URL', 'Open bot spec']);
+    assert.deepEqual(se.find((e) => e.event === 'chips').data.chips.map((x) => x.label), ['Upload files', 'Use sample files', 'Add website', 'Open bot spec']);
   });
 
   test('r4: fake knowDrive spreads weak candidates and runs two files at once', async () => {
@@ -1244,7 +1264,10 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const all = [...q.starters, ...q.proof].map((x) => x.q);
     assert.ok(!all.some((x) => /\bthe its\b|item \d/i.test(x)), all.join(' | '));
     const at = (await c.stream(t, '/setup', { event: { type: 'file_atomized', data: {} } })).filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
-    assert.doesNotMatch(at, /\b1 atoms\b|arm has|warranty lasts/, at);
+    // fixer r8 (D2): the file is described by its headings or first descriptive sentence, never by keyword triples
+    // ("It covers robot arm, arm has and warranty lasts")
+    assert.doesNotMatch(at, /\b1 atoms\b|It covers|Sections:[^.]*\b(?:arm has|warranty lasts)/, at);
+    assert.match(at, /\*\*arm\.md\*\*: 3 atoms so far\. The robot arm has a reach of 1\.2 metres and six joints\./, at);
     const rd = (await c.stream(t, '/setup', { event: { type: 'file_ready', data: {} } })).filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
     assert.doesNotMatch(rd, /\b1 atoms\b|All 1 file|1 of 1 files/, rd);
     assert.match(at, /Looks like a robot arm manual\./, at);
@@ -1671,30 +1694,42 @@ describe('local mode (no knowDrive key)', () => {
 // ------------------------------------------------------------------------------------------------ 5.3 shared samples
 describe('shared sample mode (KNOWBOT_STUDIO_SAMPLE_MODE=shared): one copy, replayed per trial', () => {
   let S, c;
-  before(async () => { S = await boot({ env: { KNOWBOT_STUDIO_SAMPLE_MODE: 'shared' }, speed: 6 }); c = client(S); });
+  const REPLAY_MS = 4000;   // the configured replay duration (production: ~25 s)
+  before(async () => { S = await boot({ env: { KNOWBOT_STUDIO_SAMPLE_MODE: 'shared' }, speed: 6, studio: { replayTargetMs: REPLAY_MS } }); c = client(S); });
   after(async () => { await S.close(); });
 
   test('samples are ingested once, replayed per trial, answer when replayed to ready, and are only disabled on remove', async () => {
     assert.equal((await (await S.api('/api/studio/config')).json()).sampleMode, 'shared');
     const a = await c.trial();
+    const tA = Date.now();
     const r = await (await c.json(a, '/samples', 'POST', { set: 'lumen-bikes' })).json();
     assert.equal(r.files.length, 4);
     assert.ok(r.files.every((f) => f.replay && f.sample));
-    assert.match(r.replay.label, /Replay of a real ingest · 4×/);
+    assert.match(r.replay.label, /^Replay of a real ingest\b/);
+    assert.equal(r.replay.durationMs, REPLAY_MS);
     const ingests = () => S.kd.calls.filter((x) => x.ingest?.path?.startsWith('knowbot/trials/_samples/lumen-bikes/') && !x.ingest.path.endsWith('timeline.json')).length;
     assert.equal(ingests(), 4);
     for (const call of S.kd.calls.filter((x) => x.ingest?.path?.startsWith('knowbot/trials/_samples/'))) {
       assert.ok(call.ingest.tags.includes('kind:trial-sample') && !call.ingest.tags.includes('kind:trial') && !call.ingest.tags.some((t) => t.startsWith('expires:')));
     }
     const files = await c.waitReady(a, 4, 30000);
+    const tookA = Date.now() - tA;
     assert.ok(files.every((f) => f.stage === 'ready' && f.atoms > 0 && f.stageAt.ready));
     const final = (await c.stream(a, '/ask', { question: 'How long is the frame warranty?' })).find((e) => e.event === 'final').data;
     assert.equal(final.status, 'grounded');
     assert.ok(files.some((f) => f.id === final.citations[0].fileId));
     const b = await c.trial();
+    const tB = Date.now();
     const rb = await (await c.json(b, '/samples', 'POST', {})).json();
     assert.deepEqual(rb.files.map((f) => f.id).sort(), r.files.map((f) => f.id).sort(), 'the second trial reuses the same copies');
     assert.equal(ingests(), 4, 'no second ingest');
+    // fixer r8 (D4): the second trial replays the same scaled timeline even though the shared copy is already ready:
+    // not all ready at once, and both trials take about the configured duration
+    assert.ok(rb.files.some((f) => f.stage !== 'ready'), 'trial 2 starts its own replay, not an instant all-ready');
+    await c.waitReady(b, 4, 30000);
+    const tookB = Date.now() - tB;
+    for (const [t, label] of [[tookA, 'trial 1'], [tookB, 'trial 2']]) assert.ok(t >= REPLAY_MS * 0.75 && t <= REPLAY_MS * 2.5, `${label} replay took ${t} ms (configured ${REPLAY_MS})`);
+    assert.ok(Math.abs(tookA - tookB) <= REPLAY_MS * 0.6, `trial 1 ${tookA} ms vs trial 2 ${tookB} ms`);
     const outsider = await c.trial();
     assert.equal((await c.json(outsider, `/files/${files[0].id}/atoms`)).status, 404, 'a trial without samples cannot read them');
     assert.equal((await c.json(a, '/samples', 'DELETE')).status, 204);
@@ -1775,6 +1810,28 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     assert.ok(prod.proof.claims.length >= 1 && prod.proof.claims.every((x) => x.verified), JSON.stringify(prod.proof.claims));
   });
 
+  test('store files are named for people, the store names the bot (ConfigDiff), starters come from page titles', async () => {
+    const t = await c.trial();
+    const done = (await c.stream(t, '/store', { url: shop.base })).at(-1).data;
+    const names = done.files.map((f) => f.name).sort();
+    assert.deepEqual(names, ['Lumen Test Shop · FAQ.md', 'Lumen Test Shop · Products.md', 'Lumen Test Shop · Refund policy.md'], names.join(', '));
+    assert.equal(done.spec.name, 'Lumen Test Shop Help');
+    assert.equal(done.spec.greeting, 'Hi! Ask me anything about Lumen Test Shop.');
+    const turn = await c.stream(t, '/setup', { event: { type: 'store_imported', data: { name: done.name } } });
+    const card = turn.find((e) => e.event === 'card' && e.data.type === 'config-diff');
+    assert.ok(card, JSON.stringify(turn.map((e) => e.event)));
+    assert.deepEqual(card.data.data.rows.find((r) => r.field === 'Name'), { field: 'Name', from: 'SampleBot', to: 'Lumen Test Shop Help' });
+    await c.waitReady(t, done.files.length);
+    const q = await (await c.json(t, '/questions')).json();
+    const all = [...q.starters, ...q.proof].map((x) => x.q);
+    assert.ok(all.length >= 1, 'store pages get starters');
+    assert.ok(all.every((x) => !/127|say about|the file/i.test(x)), all.join(' | '));
+    assert.ok(all.some((x) => /^(?:Do you ship to Canada\?|How much is the (?:Trail Pro|Commuter Lite)\?|What is your refund policy\?|Can I return an item\?)$/.test(x)), all.join(' | '));
+    // citations carry the page titles, never the host
+    const final = (await c.stream(t, '/ask', { question: 'How much is the Trail Pro?' })).find((e) => e.event === 'final').data;
+    assert.ok(final.citations.every((x) => !/127/.test(x.file || '') && !/127/.test(x.title || '')), JSON.stringify(final.citations));
+  });
+
   test('a re-import replaces the earlier src:store files; bad input and unconfirmed ownership are 400', async () => {
     const t = await c.trial();
     const first = (await c.stream(t, '/store', { url: shop.base })).at(-1).data.files.map((f) => f.id);
@@ -1805,10 +1862,14 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     assert.ok(chips.some((x) => x.action?.type === 'request_upload'), JSON.stringify(chips));
   });
 
-  test('6 imports per hour per trial, then 429 with retry-after', async () => {
+  test('6 imports per hour per trial, then 429 with retry-after; mistyped or refused addresses never use a slot', async () => {
     const t = await c.trial();
-    for (let i = 0; i < 6; i++) assert.equal((await c.stream(t, '/store', { url: 'not a url' }))[0].data.code, 'bad_url');
-    const r = await c.json(t, '/store', 'POST', { url: 'not a url' });
+    // fixer r8 (D10): invalid URLs are rejected before any slot is charged, and an import that fails before it found
+    // anything (blocked or unknown host) gives its slot back, so typos never lock the person out for an hour
+    for (let i = 0; i < 8; i++) assert.equal((await c.stream(t, '/store', { url: 'not a url' }))[0].data.code, 'bad_url');
+    for (let i = 0; i < 4; i++) assert.equal((await c.stream(t, '/store', { url: 'http://10.0.0.5/' })).find((e) => e.event === 'error').data.code, 'blocked_host');
+    for (let i = 0; i < 6; i++) assert.equal((await c.stream(t, '/store', { url: shop.base })).at(-1).data.error, undefined, `import ${i + 1} succeeds`);
+    const r = await c.json(t, '/store', 'POST', { url: shop.base });
     assert.equal(r.status, 429);
     assert.ok(Number(r.headers.get('retry-after')) > 60);
     assert.equal((await r.json()).error.code, 'rate_limited');

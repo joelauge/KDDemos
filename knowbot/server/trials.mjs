@@ -29,7 +29,7 @@ import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypt
 import * as kbLib from '../lib/knowbot.js';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
-import { importStore, ERROR_COPY as STORE_ERROR_COPY } from './storeimport.mjs';
+import { importStore, normalizeStoreUrl, ERROR_COPY as STORE_ERROR_COPY } from './storeimport.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -59,13 +59,42 @@ const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const DAY = 86400000;
 const STALL_MS = 45000;
 const CLOSE_MISS = 0.06;
+/** fixer r8 (D2): a refusal whose best match is more than this below the floor is off-topic, not a content gap. */
+const OFF_TOPIC_MARGIN = 0.10;
+/** Questions about the world, not a business ("What is the capital of France?", "Who won the World Cup?"). */
+const GENERAL_KNOWLEDGE_RE = /\b(?:capital of|president of|prime minister|who (?:won|invented|wrote|painted|discovered)|how far is|population of|meaning of life|weather (?:in|today)|tell me a joke|square root|what year did|tallest|largest (?:country|city|ocean|planet)|speed of light|world cup|recipe for)\b/i;
+export function generalKnowledge(q) { return GENERAL_KNOWLEDGE_RE.test(String(q || '')); }
+/** 'near_miss' (the files nearly answered: add content), 'off_topic' (far below the floor, or general knowledge), 'guard'. */
+export function refusalReasonOf({ q, status, best, floor } = {}) {
+  if (status === 'guard') return 'guard';
+  if (generalKnowledge(q)) return 'off_topic';
+  const f = Number(floor);
+  if (best == null || !Number.isFinite(f)) return 'off_topic';
+  return Number(best) >= f - OFF_TOPIC_MARGIN ? 'near_miss' : 'off_topic';
+}
+/** Synonym and plural normalization for grouping questions asked different ways. */
+const INSIGHT_SYNONYMS = [[/\b(?:deliver(?:y|ies|s|ed|ing)?|send(?:s|ing)?|post(?:age)?|ship(?:s|ped|ping|ment)?)\b/g, 'ship'], [/\b(?:costs?|pric(?:e|es|ing)|how much is|how much are|how much does|how much do)\b/g, 'price'],
+  [/\b(?:refunds?|returns?|returning|send back)\b/g, 'return'], [/\b(?:hours|open(?:ing)? times?|opening hours)\b/g, 'hours'], [/\b(?:guarantee|warrant(?:y|ies))\b/g, 'warranty']];
+export function insightKey(q) {
+  let t = String(q || '').toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const [re, to] of INSIGHT_SYNONYMS) t = t.replace(re, to);
+  return t.split(' ').map((w) => (w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w)).filter((w) => !/^(?:the|a|an|your|you|do|does|can|i|we|please)$/.test(w)).join(' ');
+}
 const PRICE = 249;
-const REPLAY_SPEED = 4;
-const REPLAY_TARGET_MS = 25000; // the sample demo promises ~30 s: a slow real ingest is replayed faster, never slower than 4x
-/** Replay speed for a recorded sample timeline: at least REPLAY_SPEED, fast enough that the last file is ready in ~25 s. */
-function replaySpeedOf(timeline) {
-  const last = Math.max(0, ...Object.values(timeline || {}).map((t) => Number(t?.ready) || 0));
-  return Math.max(REPLAY_SPEED, Math.ceil(last / REPLAY_TARGET_MS));
+const REPLAY_TARGET_MS = 25000; // the sample demo promises ~30 s
+/**
+ * fixer r8 (D4): every trial replays the recorded timeline scaled so its last file is ready at the configured duration
+ * (~25 s), whether or not the shared copy is already ready: trial 1 and trial 2 see the same ~25 s build (it used to
+ * be ~12 s for the first and ~5 s for the next, from a fixed 4x of a short default timeline).
+ */
+function replayLastOf(timeline) { return Math.max(0, ...Object.values(timeline || {}).map((t) => Number(t?.ready) || 0)); }
+function replaySpeedOf(timeline, targetMs = REPLAY_TARGET_MS) {
+  const last = replayLastOf(timeline);
+  return last > 0 ? last / Math.max(1000, targetMs) : 1;
+}
+function replayLabelOf(speed, targetMs = REPLAY_TARGET_MS) {
+  const x = speed >= 1.5 ? `${speed >= 10 ? Math.round(speed) : Math.round(speed * 10) / 10}× · ` : '';
+  return `Replay of a real ingest · ${x}~${Math.round(targetMs / 1000)} s`;
 }
 
 const TYPES = [
@@ -499,7 +528,7 @@ export function parseIntent(message, ctx = {}) {
   if (/\b(guess|internet|web search|make (?:it|stuff|things) up|less strict|loosen|looser|lower the floor)\b/i.test(msg)) intents.push('explain_canonical');
   // "Enter a Store URL" typed: "import my shopify store mystore.com", "pull in our products from acme.com/shop"
   const storeAsk = storeIntentOf(msg);
-  if (storeAsk) { actions.push({ type: 'import_store', ...(storeAsk.url ? { url: storeAsk.url } : {}) }); intents.push('import_store'); }
+  if (storeAsk) { actions.push({ type: 'import_store', ...(storeAsk.url ? { url: storeAsk.url } : {}) }); intents.push('import_store'); if (storeAsk.offer) intents.push('store_offer'); }
   if (/\bremove (?:the )?samples?\b|\bremove (?:the )?sample files\b/i.test(msg)) { actions.push({ type: 'remove_samples' }); intents.push('remove_samples'); }
   else if (!storeAsk && /\b(?:samples?|demo|example files?)\b/i.test(msg)) { actions.push({ type: 'attach_samples' }); intents.push('attach_samples'); }
   if (/\b(?:just\s+)?(?:let me\s+)?upload\b|\bskip\b/i.test(msg) && !intents.includes('attach_samples') && !storeAsk) { actions.push({ type: 'request_upload' }); intents.push('request_upload'); }
@@ -561,7 +590,23 @@ export function storeIntentOf(msg) {
   if (/\b(?:enter|paste|add|use)\s+(?:a|my|our|the)?\s*(?:store|shop|site|website)\s+(?:url|address|link)\b|\bstore\s+url\b/i.test(s)) return { url };
   if (verb && word && (/\b(?:import|pull|scrape|crawl|connect|sync|bring)\b/i.test(s) || url)) return { url };
   if (url && word && /\b(?:my|our)\b/i.test(s)) return { url };
+  // owner: any website the visitor mentions ("a support bot for acme.com", "The Ultimate Game Master.com") is offered
+  // for import. The import card only opens prefilled: the visitor still confirms ownership and presses Import.
+  if (url) {
+    // "The Ultimate Game Master.com": DOMAIN_RE only sees "Master.com"; the Title-Case run before it is the real name
+    const spaced = spacedDomainOf(s);
+    return { url: spaced && spaced.endsWith(url.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '')) && spaced.length > url.length ? spaced : url, offer: true };
+  }
+  const spaced = spacedDomainOf(s);
+  if (spaced) return { url: spaced, offer: true };
   return null;
+}
+/** "The Ultimate Game Master.com" -> theultimategamemaster.com (Title-Case words run together before a TLD). */
+export function spacedDomainOf(msg) {
+  const m = /((?:[A-Z][\w'’&-]*\s+){0,5}[A-Za-z0-9][\w'’&-]*)\.(com|net|org|io|co|ca|shop|store|ai|app|us|uk|au)\b/.exec(String(msg || '').replace(/\S+@\S+/g, ' '));
+  if (!m) return null;
+  const host = m[1].toLowerCase().replace(/['’]/g, '').replace(/&/g, 'and').replace(/[^a-z0-9-]+/g, '');
+  return host.length >= 2 && host.length <= 63 ? `${host}.${m[2]}` : null;
 }
 const BUSINESS_NOUN_RE = /\b(?:shop|store|business|company|startup|caf[eé]|coffee shop|restaurant|bar|pub|bakery|clinic|practice|surgery|studio|salon|spa|gym|agency|firm|hotel|hostel|b&b|school|academy|nursery|garage|workshop|brand|boutique|bookshop|pharmacy|dealership|brewery|winery|farm|charity|nonprofit|non-profit|club|team|venue|library|museum|co-?op|marketplace|platform|app|saas)$/i;
 function specificWords(msg) {
@@ -925,6 +970,7 @@ export function createStudio(o = {}) {
   const contact = env.KNOWBOT_STUDIO_CONTACT || 'mailto:hello@knowdrive.ai';
   const mailHook = env.KNOWBOT_STUDIO_MAIL_WEBHOOK || '';
   const sampleMode = String(env.KNOWBOT_STUDIO_SAMPLE_MODE || 'shared').toLowerCase() === 'live' ? 'live' : 'shared'; // owner: sample data is ingested once and replayed for every trial
+  const replayTargetMs = Math.max(1000, Number(o.replayTargetMs ?? env.KNOWBOT_STUDIO_REPLAY_MS) || REPLAY_TARGET_MS); // how long every trial's sample replay takes
   const adminToken = String(o.adminToken ?? env.KNOWBOT_ADMIN_TOKEN ?? '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
   const enabled = !!(kd && (typeof kd.apiKey === 'function' ? kd.apiKey() : kd.apiKey));
@@ -1665,7 +1711,9 @@ export function createStudio(o = {}) {
     // fixer r3: heading questions read naturally ("What does the handbook say about travel policy?"), never
     // "How does section 4 work?"; headings are cleaned of numbering first
     const noun = docNounOf(f?.name);
-    for (const h of headingsOf(atoms).slice(1)) {
+    // fixer r8 (D2): a store page's starters come from storeQuestionsOf (its titles and FAQ), never "What does the
+    // file say about Trail Pro?"
+    for (const h of f?.origin === 'store' ? [] : headingsOf(atoms).slice(1)) {
       const raw = h.replace(/[?:.]+$/, '').trim();
       if (/^(how|what|when|where|why|who|can|do|does|is|are)\b/i.test(raw) && raw.split(/\s+/).length <= 10) { out.push(`${raw}?`); continue; }
       const t = cleanTopic(h);
@@ -1753,6 +1801,9 @@ export function createStudio(o = {}) {
     }
     // fixer r3: a model question gets the same grammar gate as ours (no "How long is the equipment replaced?")
     cands = cands.filter(starterGrammarOk);
+    // fixer r8 (D2): an imported store page asks what its visitors ask: the FAQ's own questions, "How much is the
+    // Trail Pro?" for a product, "What is your refund policy?" for a policy; never a host-slug template
+    if (f.origin === 'store') cands = [...storeQuestionsOf(f, atoms), ...cands];
     const out = [];
     const tried = new Set();
     // fixer r3: keep sampling atoms from further into the file until 3 starters validate (a 26,000-atom handbook has
@@ -1776,7 +1827,7 @@ export function createStudio(o = {}) {
         const v = await validateQ(T, q, files, f.id, { relaxed: true });
         if (v) { out.push(v); break; }
       }
-      if (!out.length) {
+      if (!out.length && f.origin !== 'store') {
         const noun = docNounOf(f?.name);
         const topics = [...(f.summary?.topics || T.summaries.get(f.id)?.topics || []), ...topicsOf(atoms, { n: 3 })];
         for (const t of [...new Set(topics.map((x) => cleanTopic(String(x))).filter(Boolean))].slice(0, 4)) {
@@ -1788,6 +1839,29 @@ export function createStudio(o = {}) {
       }
     }
     return out;
+  }
+  /** fixer r8 (D2): starter candidates for a store-imported file, from its page titles and FAQ questions. */
+  function storeQuestionsOf(f, atoms) {
+    const out = [];
+    const push = (q) => { const t = clip(oneLine(q), 140); if (t && !out.includes(t)) out.push(t); };
+    const title = String(f.name || '').replace(/\.md$/i, '').split(' · ').slice(1).join(' · ').replace(/\s+\d+$/, '').trim();
+    const heads = [];
+    for (const a of atoms || []) {
+      for (const c of String(a.meta?.breadcrumb || '').split(' > ')) if (c && !heads.includes(c.trim())) heads.push(c.trim());
+      for (const m of String(a.text || '').matchAll(/^#{2,4}\s+(.+)$/gm)) if (!heads.includes(m[1].trim())) heads.push(m[1].trim());
+    }
+    for (const h of heads) if (/\?$/.test(h) && h.split(/\s+/).length <= 12) push(h);   // FAQ questions, as written
+    if (/^products?\b/i.test(title)) {
+      for (const h of heads) {
+        if (/\?$|:|^(?:products?|frequently asked|help)/i.test(h) || h.split(/\s+/).length > 6) continue;
+        if ((atoms || []).some((a) => new RegExp(`${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} price:`, 'i').test(String(a.text || '')))) push(`How much is the ${h}?`);
+      }
+    } else if (/polic|terms|shipping|refund|return|warrant/i.test(title)) {
+      push(`What is your ${title.toLowerCase()}?`);
+      if (/refund|return/i.test(title)) push('Can I return an item?');
+      if (/shipping|delivery/i.test(title)) push('How long does shipping take?');
+    }
+    return out.filter(starterGrammarOk).slice(0, 8);
   }
   /** True unless questions.json names a different home file for q than the file its validated top hit came from. */
   function homeOk(byFile, q, v, files) {
@@ -2025,12 +2099,20 @@ export function createStudio(o = {}) {
    * leaves it unset, so loopback, private and metadata addresses stay refused.
    */
   async function storeImport(req, res, T) {
-    limitOrThrow(`store ${T.id}`, limits.storeHour, 3600000, 'store imports for this bot');
-    limitOrThrow(`storeip ${ip(req)}`, limits.storeIpHour, 3600000, 'store imports from this address');
+    // fixer r8 (D10): the address is validated before any slot is charged, and an import that fails before it found
+    // anything (bad or blocked address, unknown host) gives its per-trial slot back; the per-IP cap stays (abuse)
     const body = await readBody(req);
     if (!body || typeof body !== 'object' || typeof body.url !== 'string' || !body.url.trim() || body.url.length > 2048) fail(400, 'bad_request', STORE_ERROR_COPY.bad_url);
+    let wellFormed = true;
+    try { normalizeStoreUrl(body.url); } catch { wellFormed = false; }   // reported as an SSE bad_url error below, free
     if (body.owner === false) fail(400, 'bad_request', 'Please confirm you own or manage this store.');
     if (T.storeBusy) fail(409, 'bad_request', 'A store import is already running for this bot.');
+    if (wellFormed) {
+      limitOrThrow(`store ${T.id}`, limits.storeHour, 3600000, 'store imports for this bot');
+      limitOrThrow(`storeip ${ip(req)}`, limits.storeIpHour, 3600000, 'store imports from this address');
+    }
+    let foundAny = false;
+    const refundTrialSlot = () => { const arr = windows.get(`store ${T.id}`); if (arr && arr.length) arr.pop(); };
     const files = await filesOf(T, { maxAgeMs: 0 });
     const previous = (T.rows || []).filter((r) => (r.tags || []).includes('src:store') && (r.tags || []).includes(`trial:${T.id}`));
     const prevBytes = previous.reduce((n, r) => n + (Number(r.bytes) || 0), 0);
@@ -2046,7 +2128,7 @@ export function createStudio(o = {}) {
     T.lastActivityAt = now();
     try {
       const r = await importStore(body.url, { remainingBytes: remaining, signal: ac.signal, net: o.storeNet,
-        onEvent: (ev, d) => { if (ev !== 'error') send(ev === 'done' ? 'built' : ev, d); } });
+        onEvent: (ev, d) => { if (ev === 'found') foundAny = true; if (ev !== 'error') send(ev === 'done' ? 'built' : ev, d); } });
       // replace the earlier import only now that this one built files
       for (const row of previous) {
         try { await deleteRow(row.id); } catch {}
@@ -2068,12 +2150,14 @@ export function createStudio(o = {}) {
         send('uploaded', { file });
       }
       kickPoller(T);
+      if (rows.length) applyStoreDraft(T, r.name);
       const all = await filesOf(T);
-      send('done', { files: rows, usage: usageOf(T, all), platform: r.platform, name: r.name, base: r.base, counts: r.counts, capped: r.capped });
+      send('done', { files: rows, usage: usageOf(T, all), platform: r.platform, name: r.name, base: r.base, counts: r.counts, capped: r.capped, spec: publicSpec(T) });
     } catch (e) {
       const code = e?.code && STORE_ERROR_COPY[e.code] ? e.code : e instanceof StudioError ? e.code : 'upstream';
       const message = e?.code && STORE_ERROR_COPY[e.code] ? e.message : e instanceof StudioError ? e.message : STORE_ERROR_COPY.upstream;
       if (!(e instanceof StudioError) && !e?.code) log(`[studio] store import failed: ${e?.message}`);
+      if (!foundAny && wellFormed) refundTrialSlot();
       send('error', { code, message });
       send('done', { files: [], error: true });
     } finally {
@@ -2146,7 +2230,7 @@ export function createStudio(o = {}) {
     if (T.answers.length > 50) T.answers.shift();
     saveSpecSoon(T);
     if (source === 'proof') return; // 11.1 insights hold what people ask, never the automatic Proof Run
-    T.asked.push({ q: final.question, outcome: final.refused ? 'refused' : 'answered', at: now() });
+    T.asked.push({ q: final.question, outcome: final.refused ? 'refused' : 'answered', at: now(), status, best: final.why?.best ?? null, floor: final.why?.floor ?? T.spec.floor });
     if (T.asked.length > 500) T.asked.shift();
     // 11.1: every question goes to the learning loop (fire-and-forget; never delays or fails an answer)
     questionsReady.then(() => {
@@ -2293,8 +2377,8 @@ export function createStudio(o = {}) {
     const step = stepOf(T, files);
     const ready = files.filter((f) => f.stage === 'ready');
     // fixer r4: with no files nothing can be tested yet: files first, the spec second, never a Proof Run
-    if (!files.length) return [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('store', 'Enter a Store URL', { action: { type: 'import_store' } }), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })];
-    if (step === 'purpose' || step === 'sources') return [C('samples', 'Use sample files', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('store', 'Enter a Store URL', { action: { type: 'import_store' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })];
+    if (!files.length) return [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })];
+    if (step === 'purpose' || step === 'sources') return [C('samples', 'Use sample files', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })];
     if (step === 'learn' && !ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
     if (step === 'launch') return [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('what-get', 'What do I get?', { send: 'What do I get?' })];
     if (!ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
@@ -2441,10 +2525,15 @@ export function createStudio(o = {}) {
       chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
     if (has('explain_plan')) return { reply: `KnowDrive is $${PRICE}/month: your KnowBot hosted with a share link, an embed widget for any site, 100 MB of storage, citations on every answer and canonical refusals, and question insights so you can see what people ask. Your files carry over. Cancel anytime.`,
       chips: [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
-    if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
+    if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
     if (has('import_store')) {
       const a = acts.find((x) => x.type === 'import_store') || { type: 'import_store' };
+      const storeOffer = has('store_offer');
       const where = a.url ? ` ${clip(String(a.url).replace(/^https?:\/\//i, '').replace(/\/$/, ''), 60)}` : ' your store';
+      if (storeOffer) {
+        return { reply: withNotes(`${diff.length ? `${confirmChanges(diff)} ` : ''}Want me to read${where} so ${name} can answer from it? I'll import its products, help pages and policies in about a minute. Check the address and tick that you own or manage it.`),
+          actions: [a], patch, chips: [C('upload', 'Upload files instead', { action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
+      }
       return { reply: withNotes(`${diff.length ? `${confirmChanges(diff)} ` : ''}Let's import${where}. Check the address, tick that you own or manage it, and I'll read its products, help pages and policies, about a minute.`),
         actions: [a], patch, chips: [C('upload', 'Upload files instead', { action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
     }
@@ -2504,7 +2593,7 @@ export function createStudio(o = {}) {
         const forWhom = p.business ? `your ${p.business}` : org ? org.to : null;
         const desc = `${/^[aeiou]/i.test(tone || '') ? 'an' : 'a'} ${tone ? `${tone} ` : ''}${kind ? `${kind[1].toLowerCase()} ${kind[2].toLowerCase()}` : 'bot'}${forWhom ? ` for ${forWhom}` : ''}`;
         return { reply: withNotes(`Done, meet **${nm}**: ${desc}. Now give it something to know: drop files on the right, or use my samples.`), patch,
-          chips: [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
+          chips: [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
       }
       const alreadySet = Object.keys(patch).filter((k) => k !== 'greeting' && !diff.some((d) => d.field === k)).map((k) => alreadyNote(k, T.spec[k])).filter(Boolean);
       const words = diff.map((d) => describeChange(d)).filter(Boolean);
@@ -2596,13 +2685,14 @@ export function createStudio(o = {}) {
   /** The same numbers the insights card shows, without the Builder's own probes. */
   function insightsData(T) {
     const probe = (q) => PROBES.includes(q) || PROBE_BACKUPS.includes(q);
-    const raw = localInsights(T, 5);
+    const raw = shapeInsights(T, localInsights(T, 5));
     const excluded = T.asked.filter((a) => probe(a.q)).length;
     const top = raw.top.filter((t) => !probe(t.q));
     const gaps = raw.gaps.filter((g) => !probe(g.q));
+    const offTopic = (raw.offTopic || []).filter((g) => !probe(g.q));
     const refused = T.asked.filter((a) => !probe(a.q) && a.outcome === 'refused').length;
     const total = raw.total - excluded;
-    return { total, answered: total - refused, refused, top, gaps, excluded, source: 'session' };
+    return { total, answered: total - refused, refused, top, gaps, offTopic, excluded, source: 'session' };
   }
   function insightsReply(T, files) {
     const name = botName(T);
@@ -2616,7 +2706,9 @@ export function createStudio(o = {}) {
     }
     const gap = d.gaps[0];
     const lead = `${plural(d.total, 'question')} so far: ${d.answered} answered from your files, ${d.refused} refused.`;
-    const tail = gap ? ` The top gap is "${clip(gap.q, 70)}": add a file that covers it and ${name} answers it next time.` : ' Every one was answered from your files.';
+    const off = (d.offTopic || []).length;
+    const offLine = off ? ` ${off === 1 ? `"${clip(d.offTopic[0].q, 50)}" was off-topic, and refusing it was right.` : `${off} were off-topic, and refusing them was right.`}` : '';
+    const tail = gap ? ` The top gap is "${clip(gap.q, 70)}": add a file that covers it and ${name} answers it next time.${offLine}` : d.refused ? offLine || ' No content gaps so far.' : ' Every one was answered from your files.';
     return { reply: `${lead}${tail}`, card: { type: 'insights', data: d },
       chips: [gap ? C('add-gap', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }) : C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('launch', `Launch · $${PRICE}/mo`, { action: { type: 'show_launch' } })] };
   }
@@ -2725,8 +2817,23 @@ export function createStudio(o = {}) {
     const total = files.length;
     switch (ev.type) {
       case 'boot':
-        return { reply: "Hi, I'm the KnowBot Builder. I'll turn your files into a bot that answers **only** from them and shows its proof for every line. Takes about 2 minutes, no account needed. Start with your files or ours?",
-          chips: [C('samples', 'Use sample files · 30s demo', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })] };
+        // fixer r8 (D1): one time promise everywhere (about 30 seconds with our samples, a couple of minutes with yours),
+        // and the same three first-run choices as the Studio (samples, upload, store URL)
+        return { reply: "Hi, I'm the KnowBot Builder. I'll turn your files into a bot that answers **only** from them and shows its proof for every line. About 30 seconds with our samples, a couple of minutes with your files; no account needed. Start with your files or ours?",
+          chips: [C('samples', 'Use sample files · 30s demo', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } })] };
+      case 'store_imported': {
+        // fixer r8 (D2): the store names the bot (og:site_name), shown as a ConfigDiff like the sample path; only the
+        // fields the import actually changed are rows, and a name the person chose is kept
+        const draft = T.flags.storeDraft || null;
+        const store = draft?.store || clip(oneLine(String(d.name || '')), 60) || null;
+        const rows = (draft?.diff || []).map((x) => ({ field: titleWords(x.field), from: x.field === 'greeting' ? (x.from ? `"${x.from}"` : '—') : (x.from || '—'), to: x.field === 'greeting' ? `"${x.to}"` : x.to }));
+        const lead = store ? `Imported **${store}**. While its pages learn, ` : 'Imported your store. While its pages learn, ';
+        if (rows.length) {
+          return { reply: `${lead}I've named your bot after the store:`, card: { type: 'config-diff', data: { by: 'setup', rows } },
+            chips: [C('looks-good', 'Looks good', { kind: 'primary', send: 'Looks good' }), C('rename', 'Rename it', { send: 'Rename it' }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
+        }
+        return { reply: `${lead}${name} keeps the name you gave it. Each answer will link the store page it quotes.`, chips: stepChips(T, files) };
+      }
       case 'samples_attached': {
         // fixer r7 (D2): only the fields the samples actually filled are shown as changes; what the person set stays
         // theirs (a sample name is offered as a chip, never applied), and a typed "use your samples" already said
@@ -2770,7 +2877,11 @@ export function createStudio(o = {}) {
         const naming = !sampleOnly(files) && T.spec.name === 'SampleBot' ? nameProposal(T, files) : null;
         // CONTRACT-GAP: studio/app.js (polish, ~L981) rewrites "**x**: N atoms so far." to "**x** is ready: N atoms." without
         // pluralizing, and its all-ready line (~L2975) says "All 1 file ready" when one of two files failed; owner of app.js to fix.
-        let reply = f && atoms ? `**${f.name}**: ${atomsN(atoms)} so far.${topics.length === 3 ? ` It covers ${topics[0]}, ${topics[1]} and ${topics[2]}.` : topics.length ? ` It covers ${topics.join(' and ')}.` : ''}` : 'Your first file is breaking into atoms now.';
+        // fixer r8 (D2): what the file is about comes from its headings (sectionLine: "Lumen price list 2026: Bikes,
+        // Accessories and Size guide.") or its first descriptive sentence, never a raw keyword triple
+        const about = String(f?.summary?.oneLine || (preview ? heuristicSummary(f, preview).oneLine : '') || '').trim();
+        const aboutLine = about ? ` ${/[.!]$/.test(about) ? about : `${about}.`}` : topics.length ? ` Sections: ${topics.map(topicCase).join(', ').replace(/, ([^,]+)$/, ' and $1')}.` : '';
+        let reply = f && atoms ? `**${f.name}**: ${atomsN(atoms)} so far.${aboutLine}` : 'Your first file is breaking into atoms now.';
         if (naming) {
           T.flags.namingProposal = naming.name; saveSpecSoon(T);
           reply += `\n\n${naming.why} Call it **${naming.name}**?`;
@@ -2832,8 +2943,13 @@ export function createStudio(o = {}) {
           return { reply: `Your files mention this (best match ${pct(best)}), but no line answers "${clip(q, 60)}" directly, so it refused instead of stitching a guess. Add a file that says it outright, or ask it another way.`,
             chips: [C('add-file', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }), C('rephrase', 'Rephrase it for me', { send: `Rephrase: ${q}` })] };
         }
-        return { reply: `Exactly right: nothing in your files scored above the ${fmtFloor(floor)} floor${best != null ? ` (best was ${pct(best)})` : ''}, so it refused instead of guessing. That refusal is the feature.`,
-          chips: [C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-cover', 'Add a file that covers this', { action: { type: 'request_upload' } }), C('trick', 'Try a trick question', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[2], label: null } })] };
+        // fixer r8 (D2): an off-topic question (far below the floor, or general knowledge) is praised, never framed as
+        // missing content; "add a file" is only offered for a near miss
+        const offTopic = refusalReasonOf({ q, status: a?.status, best, floor }) !== 'near_miss';
+        return { reply: `Exactly right: nothing in your files scored above the ${fmtFloor(floor)} floor${best != null ? ` (best was ${pct(best)})` : ''}, so it refused instead of guessing. That refusal is the feature.${offTopic ? ' Off-topic questions should get exactly this answer.' : ''}`,
+          chips: offTopic
+            ? [C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('trick', 'Try a trick question', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[2], label: null } })]
+            : [C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-cover', 'Add a file that covers this', { action: { type: 'request_upload' } }), C('trick', 'Try a trick question', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[2], label: null } })] };
       }
       case 'proof_done': {
         const { passed, total: totalQ } = proofScore(d.score || d);
@@ -3044,6 +3160,24 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if ((kept.name || kept.org) && !mine.greeting && T.spec.greeting) { delete patch.greeting; kept.greeting = T.spec.greeting; }
     return { patch, kept, offer: kept.name && all.name ? { name: all.name } : null };
   }
+  /**
+   * fixer r8 (D2): a store import names the bot after the store (og:site_name: "Lumen Bikes" → "Lumen Bikes Help"),
+   * with its org and greeting, unless the person already set them. The diff is replayed by the store_imported turn.
+   */
+  function applyStoreDraft(T, rawName) {
+    const store = clip(oneLine(String(rawName || '')).replace(/\s*[|–—-]\s*(?:official (?:site|store)|online (?:shop|store)|home)$/i, ''), 40);
+    T.flags.storeDraft = { store: store || null, diff: [] };
+    if (!store || /^\d+(?:\.\d+){3}$/.test(store)) { saveSpecSoon(T); return; }
+    const mine = T.flags.userSet || {};
+    const patch = {};
+    if (!mine.name && (T.spec.name === 'SampleBot' || T.spec.name === SAMPLE_SPEC['lumen-bikes']?.name)) patch.name = /\b(?:help|guide|assistant|support)$/i.test(store) ? store : `${store} Help`;
+    if (!mine.org) patch.org = store;
+    if (!mine.greeting) patch.greeting = `Hi! Ask me anything about ${store}.`;
+    let diff = [];
+    try { diff = applyPatch(T, patch, 'samples').diff; } catch (e) { log(`[studio] store spec patch: ${e.message}`); }
+    T.flags.storeDraft.diff = diff.filter((x) => ['name', 'org', 'greeting'].includes(x.field)).map((x) => ({ field: x.field, from: x.from, to: x.to }));
+    saveSpecSoon(T);
+  }
   function applySampleDraft(T, set) {
     const { patch, kept, offer } = sampleDraft(T, set);
     let diff = [];
@@ -3066,7 +3200,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       T.questionsCache = null;
       kickPoller(T);
       const files = await filesOf(T, { maxAgeMs: 0 });
-      return { files: files.filter((f) => f.sample), usage: usageOf(T, files), spec: publicSpec(T), prevName, replay: { speed: replaySpeedOf(shared.get(set)?.timeline), label: `Replay of a real ingest · ${replaySpeedOf(shared.get(set)?.timeline)}×` } };
+      const speed = replaySpeedOf(replayTimeline(shared.get(set)), replayTargetMs);
+      return { files: files.filter((f) => f.sample), usage: usageOf(T, files), spec: publicSpec(T), prevName, replay: { speed: Math.round(speed * 100) / 100, durationMs: replayTargetMs, label: replayLabelOf(speed, replayTargetMs) } };
     }
     const rows = await refreshRows(T, { maxAgeMs: 0 });
     const have = rows.filter((r) => (r.tags || []).includes(`sample:${set}`));
@@ -3107,7 +3242,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 
   // ------------------------------------------------------------------------- shared samples (5.3 fallback)
   // One pre-ingested copy per sample set lives in the trial store (kind:trial-sample, sample-set:<set>, no expires).
-  // Its real ingest timeline is recorded once; each trial replays that timeline at REPLAY_SPEED×, labelled as a replay.
+  // Its real ingest timeline is recorded once; each trial replays that timeline scaled to ~25 s (replayTargetMs), labelled as a replay.
   const shared = new Map(); // set -> { rows, timeline, at, ensuring }
   const sharedRoot = (set) => `knowbot/trials/_samples/${set}/`;
   const DEFAULT_TIMELINE = { uploaded: 0, extracted: 4200, chunked: 7400, atomized: 9800, vectorizing: 12600, ready: 17800 };
@@ -3167,16 +3302,26 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     };
     setTimeout(tick, 1000).unref?.();
   }
+  /** The per-file timeline a replay follows: the recorded one, else the default (staggered per file). */
+  function replayTimeline(S0) {
+    const out = {};
+    (S0?.rows || []).forEach((r, i) => {
+      const name = String(r.filename).split('/').pop();
+      out[name] = S0.timeline?.[name] || Object.fromEntries(Object.entries(DEFAULT_TIMELINE).map(([k, v]) => [k, v + i * 1500]));
+    });
+    return out;
+  }
   async function sharedFiles(T) {
     const set = T.flags.sharedSet;
     let S0;
     try { S0 = await ensureShared(set); } catch (e) { log(`[studio] shared samples: ${e.message}`); return []; }
-    const speed = replaySpeedOf(S0.timeline);
+    const tls = replayTimeline(S0);
+    const speed = replaySpeedOf(tls, replayTargetMs);
     const elapsed = (now() - T.flags.sharedAt) * speed;
-    return S0.rows.map((r, i) => {
+    return S0.rows.map((r) => {
       const name = String(r.filename).split('/').pop();
       const ext = extOf(name);
-      const tl = S0.timeline?.[name] || Object.fromEntries(Object.entries(DEFAULT_TIMELINE).map(([k, v]) => [k, v + i * 1500]));
+      const tl = tls[name];
       let stage = 'uploaded';
       for (const st of STAGE_ORDER) if (tl[st] != null && elapsed >= tl[st]) stage = st;
       const real = deriveStage(r);
@@ -3265,19 +3410,52 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   function localInsights(T, limit = 10) {
     const groups = new Map();
     for (const a of T.asked) {
-      const k = normText(a.q).replace(/[^a-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim();
-      const g = groups.get(k) || { q: a.q, count: 0, lastAt: 0, answered: 0, refused: 0 };
+      const k = insightKey(a.q);
+      const g = groups.get(k) || { q: a.q, count: 0, lastAt: 0, answered: 0, refused: 0, variants: new Set() };
       g.count++; g.lastAt = Math.max(g.lastAt, a.at); g[a.outcome === 'refused' ? 'refused' : 'answered']++;
+      g.variants.add(normText(a.q).replace(/[^a-z0-9 ]+/g, '').trim());
       groups.set(k, g);
     }
     const all = [...groups.values()].sort((a, b) => b.count - a.count || b.lastAt - a.lastAt);
     const iso = (t) => new Date(t).toISOString();
     return {
       total: T.asked.length, answered: T.asked.filter((a) => a.outcome !== 'refused').length, refused: T.asked.filter((a) => a.outcome === 'refused').length,
-      top: all.slice(0, limit).map((g) => ({ q: g.q, count: g.count, lastAt: iso(g.lastAt), outcome: g.refused > g.answered ? 'refused' : 'answered' })),
-      gaps: all.filter((g) => g.refused > 0 && !PROBES.includes(g.q) && !PROBE_BACKUPS.includes(g.q)).slice(0, limit).map((g) => ({ q: g.q, count: g.refused, lastAt: iso(g.lastAt) })),
+      top: all.slice(0, limit).map((g) => ({ q: g.q, count: g.count, lastAt: iso(g.lastAt), outcome: g.refused > g.answered ? 'refused' : 'answered', ways: g.variants.size })),
+      gaps: all.filter((g) => g.refused > 0 && !PROBES.includes(g.q) && !PROBE_BACKUPS.includes(g.q)).slice(0, limit).map((g) => ({ q: g.q, count: g.refused, lastAt: iso(g.lastAt), ways: g.variants.size })),
       source: 'session',
     };
+  }
+  /**
+   * fixer r8 (D2/D11): one shape for every insights source. Near-duplicate questions are one row ("Do you ship to
+   * Brazil?" / "Do you deliver to Brazil?" → asked 2 ways), and a refusal is a gap only when the files nearly answered
+   * it (best match within OFF_TOPIC_MARGIN of the floor). Off-topic and general-knowledge questions are listed apart
+   * (offTopic, reason "off_topic"): their refusal is the bot doing its job, not missing content.
+   * CONTRACT-GAP (F, server/questions.mjs): the knowDrive similarity >= 0.9 merge belongs in questionInsights; this
+   * pre-normalizes (synonyms, plurals) so both sources group the same way meanwhile.
+   */
+  function shapeInsights(T, r) {
+    if (!r || typeof r !== 'object') return r;
+    const merge = (list, countOf) => {
+      const by = new Map();
+      for (const t of list || []) {
+        if (!t || !t.q) continue;
+        const k = insightKey(t.q);
+        const g = by.get(k);
+        if (!g) { by.set(k, { ...t, ways: Math.max(1, Number(t.ways) || 1), _v: new Set([normText(t.q)]) }); continue; }
+        g.count = (Number(g.count) || 1) + (Number(countOf(t)) || 1);
+        if (!g._v.has(normText(t.q))) { g._v.add(normText(t.q)); g.ways = Math.max(g.ways + 1, g._v.size); }
+        if ((Date.parse(t.lastAt) || 0) > (Date.parse(g.lastAt) || 0)) g.lastAt = t.lastAt;
+        if (t.outcome === 'answered') g.outcome = 'answered';
+      }
+      return [...by.values()].map(({ _v, ...g }) => g).sort((a, b) => (b.count || 1) - (a.count || 1) || (Date.parse(b.lastAt) || 0) - (Date.parse(a.lastAt) || 0));
+    };
+    const top = merge(r.top, (t) => t.count);
+    const reasons = new Map();
+    for (const a of T.asked || []) if (a.outcome === 'refused') reasons.set(insightKey(a.q), refusalReasonOf(a));
+    const all = merge(r.gaps, (t) => t.count).map((g) => ({ ...g, reason: reasons.get(insightKey(g.q)) || (generalKnowledge(g.q) ? 'off_topic' : 'near_miss') }));
+    const gaps = all.filter((g) => g.reason === 'near_miss');
+    const offTopic = all.filter((g) => g.reason !== 'near_miss');
+    return { ...r, top, gaps, offTopic };
   }
   async function insights(T, limit) {
     await questionsReady;
@@ -3287,11 +3465,11 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         if (r && typeof r.total === 'number') {
           // questions logged moments ago may not be listed yet: never report fewer than this session saw
           const local = localInsights(T, limit);
-          return r.total >= local.total ? { ...r, source: r.source || 'knowdrive' } : { ...local, source: 'session' };
+          return shapeInsights(T, r.total >= local.total ? { ...r, source: r.source || 'knowdrive' } : { ...local, source: 'session' });
         }
       } catch (e) { log(`[studio] insights via questions.mjs failed: ${e.message}`); }
     }
-    return localInsights(T, limit);
+    return shapeInsights(T, localInsights(T, limit));
   }
 
   // ------------------------------------------------------------------------- HTTP

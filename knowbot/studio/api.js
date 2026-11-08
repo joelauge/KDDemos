@@ -99,7 +99,7 @@ async function request(method, path, { body, trial = true, signal, root = false,
  */
 const FLUSH_BUDGET = 6;
 const HEAVY = new Set(['final', 'retrieval', 'selected', 'hello', 'card', 'status', 'file', 'atoms']);
-export async function readSSE(response, onEvent) {
+export async function readSSE(response, onEvent, { onActivity } = {}) {
   const reader = response.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -151,6 +151,7 @@ export async function readSSE(response, onEvent) {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
+      if (onActivity) { try { onActivity(); } catch { /* ignore */ } }
       buf += dec.decode(value, { stream: true });
       let nl;
       let t0 = now();
@@ -398,7 +399,8 @@ const FILE_KEYS = ['stage', 'chunks', 'atoms', 'vectorized', 'error', 'stalledFo
  */
 export function openEvents({ onEvent, onStatus } = {}) {
   let closed = false, since = null, ctrl = null, timer = 0, pollTimer = 0, retryTimer = 0;
-  let failures = [], attempt = 0, status = null, polling = false, lastChange = Date.now(), gen = 0;
+  let failures = [], attempt = 0, status = null, polling = false, lastChange = Date.now(), gen = 0, stallTimer = 0;
+  const STALL_MS = 40000;
   const known = new Map();       // fileId -> snapshot of FILE_KEYS (shared by stream + polling, so diffs stay quiet)
 
   const setStatus = (s) => {
@@ -421,8 +423,18 @@ export function openEvents({ onEvent, onStatus } = {}) {
     let path;
     try { path = trialPath(`/events${since != null ? `?since=${encodeURIComponent(since)}` : ''}`); } catch { return; }
     let gotAny = false;
+    // r8 (D10): a stream that goes silent (no event and no ': ping' for 40 s; the server pings every 15 s) is treated
+    // as dropped: 'Reconnecting…' shows and the client reconnects, instead of waiting on a dead socket
+    let lastByte = Date.now();
+    const myCtrl = ctrl;
+    clearInterval(stallTimer);
+    stallTimer = setInterval(() => {
+      if (closed || my !== gen) { clearInterval(stallTimer); return; }
+      if (Date.now() - lastByte > STALL_MS) { clearInterval(stallTimer); setStatus('reconnecting'); try { myCtrl.abort(); } catch { /* ignore */ } }
+    }, 5000);
     try {
       const res = await fetch(BASE + path, { headers: { ...authHeaders(), accept: 'text/event-stream' }, signal: ctrl.signal, credentials: 'omit' });
+      lastByte = Date.now();
       if (!res.ok) {
         const err = await toError(res, { trialCall: true, trialRoot: res.status === 404 });
         if (err.status === 401 || err.code === 'expired' || err.status === 404) { closed = true; setStatus('reconnecting'); return; }
@@ -434,11 +446,12 @@ export function openEvents({ onEvent, onStatus } = {}) {
         if (!gotAny) { gotAny = true; attempt = 0; if (polling) stopPolling(); setStatus('live'); }
         if (type === 'bye') { try { ctrl.abort(); } catch { /* ignore */ } return; }
         deliver(type, data, id);
-      });
+      }, { onActivity: () => { lastByte = Date.now(); } });
     } catch (err) {
       if (closed) return;
       if (!(err && (err.name === 'AbortError' || err.code === 'aborted')) || !gotAny) { /* fall through to retry */ }
     }
+    if (my === gen) clearInterval(stallTimer);
     if (closed || my !== gen) return;
     // Stream ended (rotate, network, server restart). A clean 'bye' reconnects at once.
     const now = Date.now();
@@ -483,7 +496,7 @@ export function openEvents({ onEvent, onStatus } = {}) {
 
   function close() {
     closed = true;
-    clearTimeout(timer); clearTimeout(pollTimer); clearInterval(retryTimer);
+    clearTimeout(timer); clearTimeout(pollTimer); clearInterval(retryTimer); clearInterval(stallTimer);
     try { ctrl && ctrl.abort(); } catch { /* ignore */ }
   }
 
