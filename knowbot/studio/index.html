@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KnowBot Studio</title>
+<meta name="description" content="Build a bot that answers only from your files, with a citation for every line.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
+<script>/* theme + motion before paint */(function(){var d=document.documentElement,t='light',m='full';try{var s=localStorage.getItem('knowbot-theme');if(s==='dark'||s==='light')t=s;var r=localStorage.getItem('kb-studio-motion');if(r==='reduce'||r==='full')m=r;else if(matchMedia('(prefers-reduced-motion: reduce)').matches)m='reduce';}catch(e){}d.setAttribute('data-theme',t);d.setAttribute('data-motion',m);})();</script>
+<link rel="icon" href="../dashboard/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./studio.css?v=1"><link rel="stylesheet" href="./ingest.css?v=1">
+<link rel="stylesheet" href="./proof.css?v=1"><link rel="stylesheet" href="./checkout.css?v=1">
+<link rel="modulepreload" href="./store.js"><link rel="modulepreload" href="./motion.js"><link rel="modulepreload" href="./api.js">
+<script type="module" src="./app.js?v=1"></script>
+</head><body>
+<a class="st-skip" href="#st-setup-composer">Skip to Builder</a>
+<div id="st-app" class="st-app">
+  <header id="st-header" class="st-header"></header>                 <!-- B -->
+  <nav id="st-spine" class="st-spine" aria-label="Build progress"></nav>   <!-- B -->
+  <main class="st-main">
+    <section id="st-setup" class="st-pane st-setup" aria-label="Builder"></section>   <!-- B -->
+    <section id="st-bot" class="st-pane st-bot" aria-label="SampleBot">
+      <div id="st-bot-header"></div>      <!-- B: avatar, name, status dot, Bot|Proof toggle, version chip -->
+      <div id="st-bot-banner"></div>      <!-- C: partial-readiness banner -->
+      <div id="in-map-slot"></div>        <!-- D: Knowledge Map band -->
+      <div id="in-intake-slot"></div>     <!-- D: CapacityBar + FileRows / Sources chip -->
+      <div id="sb-thread-slot"></div>     <!-- C: GhostAnswer + thread -->
+      <div id="sb-suggest-slot"></div>    <!-- C -->
+      <div id="sb-composer-slot"></div>   <!-- C -->
+      <div id="in-drop-slot"></div>       <!-- D: drag overlay (absolute, covers st-bot) -->
+    </section>
+    <aside id="sb-drawer-slot"></aside>   <!-- C: ProofDrawer (overlay; docks as 3rd column ≥1440) -->
+  </main>
+  <nav id="st-tabs" class="st-tabs" aria-label="Panes"></nav>        <!-- B: mobile bottom tabs -->
+</div>
+<div id="co-modal-slot"></div>            <!-- E: CheckoutSheet, SuccessCard overlays, burst canvas -->
+<div id="st-overlay-slot"></div>          <!-- B: spec drawer, palette, toasts -->
+<div id="st-live-polite" class="st-sr" aria-live="polite"></div>
+<div id="st-live-ingest" class="st-sr" aria-live="polite"></div>
+<div id="st-live-assert" class="st-sr" aria-live="assertive"></div>
+<noscript><p class="st-noscript">KnowBot Studio needs JavaScript to build and test your bot.</p></noscript>
+</body></html>

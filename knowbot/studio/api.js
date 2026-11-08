@@ -1,0 +1,396 @@
+// KnowBot Studio: the HTTP client (owner B; contract: SPEC 3.5, server: SPEC 4).
+//
+// Conventions every caller can rely on:
+// - Errors are ApiError {status, code, retryAfter (seconds|null), detail}. status 0 = network, code 'aborted' = signal.
+// - Streaming helpers call onEvent(type, data, id) with `data` already JSON-parsed (comment pings are skipped).
+// - Every trial call sends Authorization: Bearer <token>. 401 (or a 404/expired on the trial itself) marks the trial
+//   expired in the store and emits 'trial:expired' {status, code}; B posts the ExpiredCard.
+// - No custom request headers other than content-type, authorization and x-filename (Worker CORS).
+
+import { hostedApi } from '../lib/site-config.js';
+import { getState, setState, emit } from './store.js';
+
+export class ApiError extends Error {
+  constructor(message, { status = 0, code = 'network', retryAfter = null, detail = null } = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.retryAfter = retryAfter;
+    this.detail = detail;
+  }
+}
+
+/** API base: ?api= override (dev), else the hosted Worker for this host, else same origin. */
+export const BASE = (() => {
+  try {
+    const q = new URLSearchParams(location.search).get('api');
+    if (q && /^https?:\/\/[^\s]+$/i.test(q)) return q.replace(/\/+$/, '');
+  } catch { /* ignore */ }
+  return hostedApi() ?? '';
+})();
+
+const T = () => getState().trial;
+const trialPath = (suffix = '') => {
+  const id = T().id;
+  if (!id) throw new ApiError('No trial yet', { status: 0, code: 'no_trial' });
+  return `/api/studio/trials/${encodeURIComponent(id)}${suffix}`;
+};
+const authHeaders = () => (T().token ? { authorization: `Bearer ${T().token}` } : {});
+
+function retryAfterOf(res, body) {
+  const h = res && res.headers && res.headers.get('retry-after');
+  const n = h != null ? Number(h) : (body && body.error && Number(body.error.retryAfter));
+  return Number.isFinite(n) ? n : null;
+}
+
+async function toError(res, { trialCall = false, trialRoot = false } = {}) {
+  let body = null;
+  try { body = await res.json(); } catch { /* not JSON */ }
+  const e = (body && body.error) || {};
+  const err = new ApiError(e.message || `HTTP ${res.status}`, {
+    status: res.status, code: e.code || (res.status === 429 ? 'rate_limited' : res.status >= 500 ? 'upstream' : 'http'),
+    retryAfter: retryAfterOf(res, body), detail: body && body.error ? body.error : body,
+  });
+  if (trialCall) maybeExpire(err, trialRoot);
+  return err;
+}
+
+function maybeExpire(err, trialRoot) {
+  const expired = err.status === 401 || err.code === 'expired' || (trialRoot && err.status === 404);
+  if (!expired) return;
+  const t = T();
+  if (t.status === 'expired') return;
+  setState({ trial: { ...t, status: 'expired' } }, 'expired');
+  emit('trial:expired', { status: err.status, code: err.code });
+}
+
+function netError(err, signal) {
+  if ((signal && signal.aborted) || (err && err.name === 'AbortError')) return new ApiError('Aborted', { status: 0, code: 'aborted' });
+  return new ApiError("Couldn't reach the studio", { status: 0, code: 'network', detail: String(err && err.message || err) });
+}
+
+async function request(method, path, { body, trial = true, signal, root = false, raw = false } = {}) {
+  const headers = { ...(trial ? authHeaders() : {}) };
+  let payload;
+  if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
+  let res;
+  try { res = await fetch(BASE + path, { method, headers, body: payload, signal, credentials: 'omit' }); }
+  catch (err) { throw netError(err, signal); }
+  if (!res.ok) throw await toError(res, { trialCall: trial, trialRoot: root });
+  if (raw) return res;
+  if (res.status === 204) return null;
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { throw new ApiError('Bad JSON from the studio', { status: res.status, code: 'bad_json' }); }
+}
+
+// ------------------------------------------------------------------ SSE
+
+/**
+ * Parses a text/event-stream fetch Response. Calls onEvent(type, data, id) per frame; `data` is JSON-parsed
+ * (raw string if it isn't JSON). Comment lines (':') are pings and are skipped. Resolves when the stream ends.
+ */
+export async function readSSE(response, onEvent) {
+  const reader = response.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let ev = { type: 'message', data: [], id: null };
+  const dispatch = () => {
+    if (!ev.data.length && ev.type === 'message') { ev = { type: 'message', data: [], id: null }; return; }
+    const rawData = ev.data.join('\n');
+    let data = rawData;
+    if (rawData) { try { data = JSON.parse(rawData); } catch { /* keep string */ } } else data = {};
+    const { type, id } = ev;
+    ev = { type: 'message', data: [], id: null };
+    try { onEvent && onEvent(type, data, id); } catch (err) { console.error(`[studio] SSE handler for "${type}" failed`, err); }
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.search(/\r\n|\r|\n/)) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + (buf[nl] === '\r' && buf[nl + 1] === '\n' ? 2 : 1));
+      if (line === '') { dispatch(); continue; }
+      if (line[0] === ':') continue;
+      const c = line.indexOf(':');
+      const field = c < 0 ? line : line.slice(0, c);
+      let val = c < 0 ? '' : line.slice(c + 1);
+      if (val[0] === ' ') val = val.slice(1);
+      if (field === 'event') ev.type = val || 'message';
+      else if (field === 'data') ev.data.push(val);
+      else if (field === 'id') ev.id = val;
+    }
+  }
+  buf += dec.decode();
+  if (buf.trim()) { for (const line of buf.split(/\r?\n/)) { if (line.startsWith('data:')) ev.data.push(line.slice(5).replace(/^ /, '')); else if (line.startsWith('event:')) ev.type = line.slice(6).trim(); } }
+  if (ev.data.length) dispatch();
+}
+
+async function postStream(path, body, { onEvent, signal, until } = {}) {
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      method: 'POST', signal, credentials: 'omit',
+      headers: { ...authHeaders(), 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify(body || {}),
+    });
+  } catch (err) { throw netError(err, signal); }
+  if (!res.ok) throw await toError(res, { trialCall: true });
+  let result; let errEvent = null;
+  try {
+    await readSSE(res, (type, data, id) => {
+      if (type === until) result = data;
+      if (type === 'error') errEvent = data;
+      onEvent && onEvent(type, data, id);
+    });
+  } catch (err) {
+    if (result !== undefined) return result;
+    throw netError(err, signal);
+  }
+  if (result === undefined && errEvent) {
+    const e = errEvent.error || errEvent;
+    throw new ApiError(e.message || 'Stream failed', { status: e.status || 500, code: e.code || 'upstream', retryAfter: e.retryAfter ?? null, detail: e });
+  }
+  if (result === undefined) throw new ApiError('The stream ended early', { status: 0, code: 'network' });
+  return result;
+}
+
+// ------------------------------------------------------------------ endpoints
+
+/** GET /api/studio/config (no auth). */
+export async function getConfig() {
+  return request('GET', '/api/studio/config', { trial: false });
+}
+
+/** POST /api/studio/trials -> Trial. Stores trial, usage and spec in the store. */
+export async function createTrial() {
+  const prev = T();
+  setState({ trial: { ...prev, status: 'creating' } }, 'trial:creating');
+  let r;
+  try { r = await request('POST', '/api/studio/trials', { trial: false, body: {} }); }
+  catch (err) { setState({ trial: { ...T(), status: 'error' } }, 'trial:error'); throw err; }
+  const s = getState();
+  setState({
+    trial: { ...s.trial, id: r.trialId, token: r.token, expiresAt: r.expiresAt || null, status: 'ready',
+             quota: r.quota || s.trial.quota, converted: false, email: null },
+    usage: r.usage || s.usage,
+    spec: r.spec ? { ...s.spec, ...r.spec } : s.spec,
+  }, 'trial:created');
+  return r;
+}
+
+/** GET /api/studio/trials/:id -> {trial, spec, files, usage, converted, email, trialId, expiresAt}. */
+export async function getTrial() {
+  const r = await request('GET', trialPath(), { root: true });
+  const t = T();
+  return { ...r, trial: { ...t, id: r.trialId || t.id, expiresAt: r.expiresAt || t.expiresAt, converted: !!r.converted, email: r.email ?? t.email } };
+}
+
+/** PATCH /api/studio/trials/:id -> {spec}. */
+export async function patchSpec(patch) {
+  return request('PATCH', trialPath(), { body: patch });
+}
+
+/**
+ * XHR POST /files (raw body; x-filename URI-encoded). Resolves the FileRow (plus `.usage` when the server sent it).
+ * onProgress({loaded, total, pct}, loaded, total). Rejects ApiError (status 0 = network, code 'aborted' on signal).
+ */
+export function uploadFile(file, { onProgress, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    let url;
+    try { url = BASE + trialPath('/files'); } catch (err) { reject(err); return; }
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    const t = T();
+    if (t.token) xhr.setRequestHeader('authorization', `Bearer ${t.token}`);
+    xhr.setRequestHeader('x-filename', encodeURIComponent(file.name || 'file'));
+    xhr.setRequestHeader('content-type', file.type || 'application/octet-stream');
+    xhr.upload.onprogress = (e) => {
+      const total = e.lengthComputable ? e.total : file.size;
+      const p = { loaded: e.loaded, total, pct: total ? Math.min(100, (e.loaded / total) * 100) : 0 };
+      try { onProgress && onProgress(p, p.loaded, p.total); } catch (err) { console.error(err); }
+    };
+    xhr.onload = () => {
+      let body = null;
+      try { body = JSON.parse(xhr.responseText || 'null'); } catch { /* ignore */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const row = (body && body.file) || body || {};
+        if (body && body.usage && typeof row === 'object') { try { Object.defineProperty(row, 'usage', { value: body.usage, enumerable: false }); } catch { row.usage = body.usage; } }
+        resolve(row);
+        return;
+      }
+      const e = (body && body.error) || {};
+      const ra = Number(xhr.getResponseHeader('retry-after'));
+      const err = new ApiError(e.message || `HTTP ${xhr.status}`, { status: xhr.status, code: e.code || 'upstream', retryAfter: Number.isFinite(ra) && xhr.getResponseHeader('retry-after') != null ? ra : null, detail: e });
+      maybeExpire(err, false);
+      reject(err);
+    };
+    xhr.onerror = () => reject(new ApiError('Connection lost', { status: 0, code: 'network' }));
+    xhr.ontimeout = () => reject(new ApiError('Upload timed out', { status: 0, code: 'network' }));
+    xhr.onabort = () => reject(new ApiError('Aborted', { status: 0, code: 'aborted' }));
+    if (signal) {
+      if (signal.aborted) { reject(new ApiError('Aborted', { status: 0, code: 'aborted' })); return; }
+      signal.addEventListener('abort', () => xhr.abort(), { once: true });
+    }
+    xhr.send(file);
+  });
+}
+
+/** GET /files -> {files, usage}. */
+export async function listFiles() { return request('GET', trialPath('/files')); }
+
+/** DELETE /files/:fid. */
+export async function deleteFile(fileId) { return request('DELETE', trialPath(`/files/${encodeURIComponent(fileId)}`)); }
+
+/** GET /files/:fid/atoms?limit&around&span -> {id, name, stage, atoms, items:[{seq, atomId, text, tokens, kind, meta}]}. */
+export async function fileAtoms(fileId, { limit = 12, around, span = 1 } = {}) {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (around != null) { q.set('around', String(around)); q.set('span', String(span)); }
+  return request('GET', trialPath(`/files/${encodeURIComponent(fileId)}/atoms?${q}`));
+}
+
+/** POST /samples -> {files, usage}. */
+export async function attachSamples(set = 'lumen-bikes') { return request('POST', trialPath('/samples'), { body: { set } }); }
+
+/** DELETE /samples. */
+export async function removeSamples() { return request('DELETE', trialPath('/samples')); }
+
+/** GET /questions -> {starters, proof, probes}. */
+export async function questions() { return request('GET', trialPath('/questions')); }
+
+/** GET /insights (SPEC 11.1) -> {total, answered, refused, top:[{q, count, lastAt, outcome}], gaps:[{q, count, lastAt}]}. */
+export async function insights() { return request('GET', trialPath('/insights')); }
+
+/** POST /email -> {sent, link}. */
+export async function sendEmail(email) { return request('POST', trialPath('/email'), { body: { email } }); }
+
+/** POST /checkout -> {url}. */
+export async function checkout({ email } = {}) { return request('POST', trialPath('/checkout'), { body: email ? { email } : {} }); }
+
+/** `${origin}${pathname}?t=<id>` (never contains the token). */
+export function shareLink() {
+  const id = T().id || '';
+  return `${location.origin}${location.pathname}?t=${encodeURIComponent(id)}`;
+}
+
+/** POST /setup (SSE). onEvent(type, data, id) for typing|delta|patch|action|card|chips|done. Resolves with 'done' data. */
+export function setupTurn(body, { onEvent, signal } = {}) {
+  let path;
+  try { path = trialPath('/setup'); } catch (err) { return Promise.reject(err); }
+  return postStream(path, body, { onEvent, signal, until: 'done' });
+}
+
+/** POST /ask (SSE). onEvent(type, data, id) for status|retrieval|lines|selected|delta|final|done. Resolves with 'final' data. */
+export function ask(body, { onEvent, signal } = {}) {
+  let path;
+  try { path = trialPath('/ask'); } catch (err) { return Promise.reject(err); }
+  return postStream(path, body, { onEvent, signal, until: 'final' });
+}
+
+// ------------------------------------------------------------------ trial events (SSE with resume + polling fallback)
+
+const FILE_KEYS = ['stage', 'chunks', 'atoms', 'vectorized', 'error', 'stalledFor', 'enabled', 'summary', 'bytes', 'name'];
+
+/**
+ * SSE GET /events?since=<n> via fetch (EventSource can't send Authorization). Auto-reconnects (1, 2, 4, 8 s; cap 15 s).
+ * After 2 failures within 30 s it switches to polling GET /files every 1.5 s (4 s after 30 s without change),
+ * emitting synthetic 'file' (and 'usage') events for diffs, and retries the stream every 30 s.
+ * onEvent(type, data, id); onStatus('live'|'reconnecting'|'polling'). Also emits store event 'sse:status' {status}.
+ * Returns {close()}.
+ */
+export function openEvents({ onEvent, onStatus } = {}) {
+  let closed = false, since = null, ctrl = null, timer = 0, pollTimer = 0, retryTimer = 0;
+  let failures = [], attempt = 0, status = null, polling = false, lastChange = Date.now(), gen = 0;
+  const known = new Map();       // fileId -> snapshot of FILE_KEYS (shared by stream + polling, so diffs stay quiet)
+
+  const setStatus = (s) => {
+    if (s === status) return; status = s;
+    try { onStatus && onStatus(s); } catch (err) { console.error(err); }
+    emit('sse:status', { status: s });
+  };
+  const remember = (row) => { if (row && row.id) known.set(row.id, JSON.stringify(FILE_KEYS.map((k) => row[k]))); };
+  const deliver = (type, data, id) => {
+    if (type === 'hello' && data && Array.isArray(data.files)) { known.clear(); data.files.forEach(remember); }
+    if (type === 'file') remember(data);
+    if (type === 'file' || type === 'hello') lastChange = Date.now();
+    try { onEvent && onEvent(type, data, id); } catch (err) { console.error(`[studio] events handler for "${type}" failed`, err); }
+  };
+
+  async function connect() {
+    if (closed) return;
+    const my = ++gen;
+    ctrl = new AbortController();
+    let path;
+    try { path = trialPath(`/events${since != null ? `?since=${encodeURIComponent(since)}` : ''}`); } catch { return; }
+    let gotAny = false;
+    try {
+      const res = await fetch(BASE + path, { headers: { ...authHeaders(), accept: 'text/event-stream' }, signal: ctrl.signal, credentials: 'omit' });
+      if (!res.ok) {
+        const err = await toError(res, { trialCall: true, trialRoot: res.status === 404 });
+        if (err.status === 401 || err.code === 'expired' || err.status === 404) { closed = true; setStatus('reconnecting'); return; }
+        throw err;
+      }
+      await readSSE(res, (type, data, id) => {
+        if (my !== gen) return;
+        if (id != null && id !== '') since = id;
+        if (!gotAny) { gotAny = true; attempt = 0; if (polling) stopPolling(); setStatus('live'); }
+        if (type === 'bye') { try { ctrl.abort(); } catch { /* ignore */ } return; }
+        deliver(type, data, id);
+      });
+    } catch (err) {
+      if (closed) return;
+      if (!(err && (err.name === 'AbortError' || err.code === 'aborted')) || !gotAny) { /* fall through to retry */ }
+    }
+    if (closed || my !== gen) return;
+    // Stream ended (rotate, network, server restart). A clean 'bye' reconnects at once.
+    const now = Date.now();
+    if (!gotAny) failures.push(now);
+    failures = failures.filter((t) => now - t < 30000);
+    if (failures.length >= 2 && !polling) { startPolling(); return; }
+    if (polling) return;   // polling mode retries on its own schedule
+    setStatus('reconnecting');
+    const delay = gotAny ? 250 : Math.min(15000, 1000 * 2 ** Math.min(attempt++, 4));
+    clearTimeout(timer);
+    timer = setTimeout(connect, delay);
+  }
+
+  async function pollOnce() {
+    if (closed || !polling) return;
+    try {
+      const r = await listFiles();
+      for (const row of (r && r.files) || []) {
+        const snap = JSON.stringify(FILE_KEYS.map((k) => row[k]));
+        if (known.get(row.id) !== snap) { known.set(row.id, snap); lastChange = Date.now(); deliver('file', row, null); }
+      }
+      if (r && r.usage) deliver('usage', r.usage, null);
+    } catch (err) {
+      if (err && (err.status === 401 || err.code === 'expired')) { close(); return; }
+    }
+    if (closed || !polling) return;
+    pollTimer = setTimeout(pollOnce, Date.now() - lastChange > 30000 ? 4000 : 1500);
+  }
+
+  function startPolling() {
+    polling = true;
+    setStatus('polling');
+    clearTimeout(pollTimer);
+    pollOnce();
+    clearInterval(retryTimer);
+    retryTimer = setInterval(() => { if (!closed && polling) { try { ctrl && ctrl.abort(); } catch { /* ignore */ } connect(); } }, 30000);
+  }
+  function stopPolling() { polling = false; failures = []; clearTimeout(pollTimer); clearInterval(retryTimer); }
+
+  function close() {
+    closed = true;
+    clearTimeout(timer); clearTimeout(pollTimer); clearInterval(retryTimer);
+    try { ctrl && ctrl.abort(); } catch { /* ignore */ }
+  }
+
+  const onOnline = () => { if (!closed) { clearTimeout(timer); attempt = 0; try { ctrl && ctrl.abort(); } catch { /* ignore */ } connect(); } };
+  if (typeof window !== 'undefined') window.addEventListener('online', onOnline);
+  connect();
+  return { close() { close(); if (typeof window !== 'undefined') window.removeEventListener('online', onOnline); } };
+}
