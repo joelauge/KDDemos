@@ -22,7 +22,9 @@ There are two voice engines, picked with `VOICE_ENGINE`:
 
 - **Grounding:** the system instruction requires a `search_knowledge_base` call before any answer about the business, and allows answers only from the returned passages. Gemini writes each search as a standalone question, so follow-ups ("how much is it?") still find the right product.
 - **Security:** `/voice/incoming` is signature-checked and issues a one-time token that Twilio passes back when it opens the media WebSocket. Streams without a valid token are closed before a Gemini session opens.
-- **Test without a phone:** `npm run live-test` opens a session with the same prompt and tools, asks the sample questions as text, prints the agent's words, tool calls and timings, and writes `live-answer.wav`.
+- **Texted checkout links:** after answering about a product, the agent offers (in varying words) to text a link. It confirms the version and the number (by its last four digits, or a number the caller reads out) and then calls `send_product_link`. The link is a Shopify cart permalink, `/cart/<variant_id>:<qty>`, so tapping it puts the item in the cart and opens checkout. Variant IDs come from the storefront's public `/products/<handle>.js` (cached for an hour). If the store can't be reached, the text links to the product page instead. Sold-out versions are refused with the in-stock alternatives. There's a limit of 3 texts per call.
+- **Attribution:** every link carries `utm_source=ai-assistant`, `utm_medium=sms`, `utm_campaign=voice-agent`, and `utm_content=<product handle>`, which Shopify keeps through checkout for its marketing reports. It also carries `ref=ai-voice-agent`, the referral code in each order's conversion summary, and `attributes[call]=<CallSid>`, which shows in the order notes and ties the order to the call log. Change them with the `LINK_*` settings; `SHOP_DOMAIN` turns the feature on.
+- **Test without a phone:** `npm run live-test` opens a session with the same prompt and tools, asks the sample questions as text, prints the agent's words, tool calls and timings, and writes `live-answer.wav`. Product-link texts are printed, not sent, unless you pass `--send-to=+1…`.
 - **Settings:** `GEMINI_API_KEY` (from aistudio.google.com/apikey), `GEMINI_LIVE_MODEL` (default `gemini-3.8-live`), `GEMINI_VOICE` (default `Kore`). Claude and ElevenLabs keys aren't needed in this mode.
 - **Limits:** Gemini Live audio sessions are capped at about 15 minutes. `@google/genai` 3.x defaults to API version `v1`, which has no Live endpoint, so the client pins `v1beta`.
 
@@ -131,6 +133,7 @@ src/tts.js         ElevenLabs streaming text-to-speech
 src/sessions.js    Per-call history and pending answers
 src/gemini-live.js Voice-to-voice: Twilio Media Streams <-> Gemini Live, KnowDrive as a tool
 src/audio.js       μ-law 8 kHz <-> PCM 16/24 kHz conversion
+src/shop.js        Product -> variant -> tagged Shopify cart permalink, SMS text
 scripts/ask.js     Command-line test of search + answer (+ voice)
 scripts/configure-twilio.js   Points your number's webhooks at this server
 scripts/call.js    Places an outbound demo call
@@ -140,5 +143,4 @@ scripts/live-test.js  Phone-free test of the Gemini voice-to-voice agent
 ## Possible next steps
 
 - **Classic engine latency:** switch from `<Gather>` + `<Play>` to Media Streams with ElevenLabs WebSocket TTS (`ulaw_8000`), streaming Claude's tokens into TTS sentence by sentence. (The Gemini engine already streams.)
-- **Show sources:** text the caller the source documents behind an answer via Twilio SMS.
 - **Hand off:** `<Dial>` a person when the knowledge base has no answer.

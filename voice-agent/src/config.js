@@ -35,6 +35,16 @@ export const config = {
     voice: env.GEMINI_VOICE || "Kore",
   },
 
+  // Texted product links (voice-to-voice engine). Links are Shopify cart
+  // permalinks that add the item and open checkout, tagged for attribution.
+  shop: {
+    domain: (env.SHOP_DOMAIN || "").replace(/\/+$/, ""),
+    utmSource: env.LINK_UTM_SOURCE || "ai-assistant",
+    utmMedium: env.LINK_UTM_MEDIUM || "sms",
+    utmCampaign: env.LINK_UTM_CAMPAIGN || "voice-agent",
+    ref: env.LINK_REF || "ai-voice-agent",
+  },
+
   elevenlabs: {
     apiKey: env.ELEVENLABS_API_KEY || "",
     voiceId: env.ELEVENLABS_VOICE_ID || "",

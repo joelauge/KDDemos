@@ -92,6 +92,7 @@ app.post("/voice/incoming", verifyTwilio, (req, res) => {
     // Hand the call's audio to the Gemini Live bridge over a WebSocket.
     const stream = twiml.connect().stream({ url: `${base.replace(/^http/, "ws")}/media` });
     stream.parameter({ name: "token", value: issueStreamToken(req.body.CallSid) });
+    if (req.body.From) stream.parameter({ name: "from", value: req.body.From });
     return sendTwiml(res, twiml);
   }
 

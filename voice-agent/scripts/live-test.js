@@ -6,15 +6,35 @@
 //
 //   npm run live-test
 //   npm run live-test -- "Is the magnetic dice tray in stock?" "How much is it?"
+//   npm run live-test -- --send-to=+15551234567 "How much is the dice tray?" "Yes, text me"
+//
+// Product-link texts are printed, not sent, unless --send-to is given. The
+// pretend caller's number is --send-to, or +15555550100.
 
 import { writeFileSync } from "node:fs";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { config } from "../src/config.js";
-import { searchKnowDrive } from "../src/knowdrive.js";
-import { SYSTEM_INSTRUCTION, TOOLS } from "../src/gemini-live.js";
+import { SYSTEM_INSTRUCTION, TOOLS, createToolRunner } from "../src/gemini-live.js";
+import twilio from "twilio";
 
-const questions = process.argv.slice(2).length
-  ? process.argv.slice(2)
+const argv = process.argv.slice(2);
+const sendTo = argv.find((a) => a.startsWith("--send-to="))?.slice("--send-to=".length);
+const args = argv.filter((a) => !a.startsWith("--"));
+const callerNumber = sendTo || "+15555550100";
+
+const runTool = createToolRunner({
+  callSid: "CAlivetest",
+  callerNumber,
+  sendSms: async (to, body) => {
+    if (!sendTo) return console.log(`        [sms not sent] to ***${to.slice(-4)}: ${body}`);
+    const client = twilio(config.twilio.accountSid, config.twilio.authToken);
+    await client.messages.create({ from: config.twilio.phoneNumber, to, body });
+    console.log(`        [sms sent] to ***${to.slice(-4)}: ${body}`);
+  },
+});
+
+const questions = args.length
+  ? args
   : ["What is your return policy?", "How much is the Ultimate Bundle?", "Is the magnetic dice tray in stock?"];
 
 if (!config.gemini.apiKey) {
@@ -57,14 +77,9 @@ async function onmessage(msg) {
     const functionResponses = [];
     for (const call of msg.toolCall.functionCalls) {
       console.log(`  tool  ${call.name}(${JSON.stringify(call.args || {})})`);
-      let response = { status: "ok" };
-      if (call.name === "search_knowledge_base") {
-        const passages = await searchKnowDrive(String(call.args?.query || ""));
-        for (const p of passages) console.log(`        • ${p.uri}`);
-        response = passages.length
-          ? { status: "ok", passages: passages.map((p) => ({ source: p.uri, text: p.text })) }
-          : { status: "no_results", reason: "Nothing in the knowledge base matches this question." };
-      }
+      const response = (await runTool(call)) ?? { status: "ok" };
+      if (response.passages) for (const p of response.passages) console.log(`        • ${p.source}`);
+      else if (call.name !== "search_knowledge_base") console.log(`        -> ${JSON.stringify(response)}`);
       functionResponses.push({ id: call.id, name: call.name, response });
     }
     session.sendToolResponse({ functionResponses });
@@ -116,8 +131,9 @@ session = await ai.live.connect({
 });
 console.log(`Session open in ${Date.now() - t0}ms (${config.gemini.model}, voice ${config.gemini.voice})\n`);
 
-console.log("> [call connected]");
-await ask("[call connected]");
+const connected = `[call connected] Caller's number ends in ${callerNumber.slice(-4)}.`;
+console.log(`> ${connected}`);
+await ask(connected);
 let saved = false;
 for (const q of questions) {
   console.log(`> ${q}`);
