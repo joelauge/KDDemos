@@ -35,6 +35,24 @@ const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
 
 export const QUOTA_BYTES = 100 * 1024 * 1024;                // 104857600
 export const FILE_BYTES = MAX_UPLOAD_BYTES;                  // 95 MiB = 99614720
+// knowDrive returns created_at/updated_at as unix seconds; older fakes and our own rows use ISO strings. Accept both.
+function tsMs(v) {
+  if (v == null || v === '') return 0;
+  if (typeof v === 'number' || /^\d+(?:\.\d+)?$/.test(String(v))) { const n = Number(v); return n < 1e12 ? n * 1000 : n; }
+  return Date.parse(v) || 0;
+}
+function isoOf(v) { const ms = tsMs(v); return ms ? new Date(ms).toISOString() : null; }
+/**
+ * knowDrive recognises a byte-identical file that is already in the store, and the new copy is not searchable under
+ * its own tags (verified in production: the second trial's sample files returned no hits at all). Every trial uploads
+ * the same sample files, so each trial's copy gets an invisible, trial-specific tail of spaces and tabs.
+ */
+function uniqueCopy(bytes, id) {
+  const h = createHash('sha256').update(String(id)).digest();
+  let tail = '\n';
+  for (let i = 0; i < 12; i++) for (let b = 0; b < 8; b++) tail += (h[i] >> b) & 1 ? '\t' : ' ';
+  return Buffer.concat([Buffer.from(bytes), Buffer.from(`${tail}\n`)]);
+}
 export const TRIAL_ID_RE = /^tr_[a-z2-7]{16}$/;
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const DAY = 86400000;
@@ -42,6 +60,12 @@ const STALL_MS = 45000;
 const CLOSE_MISS = 0.06;
 const PRICE = 249;
 const REPLAY_SPEED = 4;
+const REPLAY_TARGET_MS = 25000; // the sample demo promises ~30 s: a slow real ingest is replayed faster, never slower than 4x
+/** Replay speed for a recorded sample timeline: at least REPLAY_SPEED, fast enough that the last file is ready in ~25 s. */
+function replaySpeedOf(timeline) {
+  const last = Math.max(0, ...Object.values(timeline || {}).map((t) => Number(t?.ready) || 0));
+  return Math.max(REPLAY_SPEED, Math.ceil(last / REPLAY_TARGET_MS));
+}
 
 const TYPES = [
   { kind: 'pdf', ext: ['pdf'] }, { kind: 'docx', ext: ['docx'] }, { kind: 'pptx', ext: ['pptx'] }, { kind: 'xlsx', ext: ['xlsx'] },
@@ -811,7 +835,7 @@ export function createStudio(o = {}) {
   const checkoutBase = env.KNOWBOT_CHECKOUT_URL || 'https://knowdrive.ai/signup?plan=knowbot';
   const contact = env.KNOWBOT_STUDIO_CONTACT || 'mailto:hello@knowdrive.ai';
   const mailHook = env.KNOWBOT_STUDIO_MAIL_WEBHOOK || '';
-  const sampleMode = String(env.KNOWBOT_STUDIO_SAMPLE_MODE || 'live').toLowerCase() === 'shared' ? 'shared' : 'live';
+  const sampleMode = String(env.KNOWBOT_STUDIO_SAMPLE_MODE || 'shared').toLowerCase() === 'live' ? 'live' : 'shared'; // owner: sample data is ingested once and replayed for every trial
   const adminToken = String(o.adminToken ?? env.KNOWBOT_ADMIN_TOKEN ?? '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
   const enabled = !!(kd && (typeof kd.apiKey === 'function' ? kd.apiKey() : kd.apiKey));
@@ -1087,7 +1111,7 @@ export function createStudio(o = {}) {
     }
     const t = now();
     const stamps = T.stageAt.get(r.id) || {};
-    if (!stamps.uploaded) stamps.uploaded = Date.parse(r.created_at) || t;
+    if (!stamps.uploaded) stamps.uploaded = tsMs(r.created_at) || t;
     if (!stamps[stage]) {
       stamps[stage] = t;
       // stages the poll skipped over are stamped at the same moment, so the track never shows a gap
@@ -1104,7 +1128,7 @@ export function createStudio(o = {}) {
       stage, kdStage: fileStage(r), chunks: r.chunk_count ?? r.chunks ?? null, atoms,
       vectorized: Number(r.atoms_vectorized ?? (stage === 'ready' ? atoms : 0)), pages: r.page_count ?? r.metadata?.pages ?? null,
       sample: tags.some((x) => x.startsWith('sample:')), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
-      stageAt: { ...stamps }, createdAt: r.created_at || null, updatedAt: r.updated_at || r.created_at || null,
+      stageAt: { ...stamps }, createdAt: isoOf(r.created_at), updatedAt: isoOf(r.updated_at || r.created_at),
     };
     if (!TERMINAL.has(stage) && t - since >= stallMs) file.stalledFor = t - since;
     return file;
@@ -1130,7 +1154,7 @@ export function createStudio(o = {}) {
     const rows = await refreshRows(T, opts);
     const own = rows.map((r) => rowToFile(T, r));
     const shared = !T.converted && T.flags.sharedSet && T.flags.sharedAt ? await sharedFiles(T) : [];
-    return [...shared, ...own].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '') || a.name.localeCompare(b.name));
+    return [...shared, ...own].sort((a, b) => (tsMs(a.createdAt) - tsMs(b.createdAt)) || String(a.name).localeCompare(String(b.name)));
   }
   const usageOf = (T, files) => ({ bytes: files.reduce((s, f) => s + (f.bytes || 0), 0) + T.inflight, files: files.length });
 
@@ -1335,8 +1359,12 @@ export function createStudio(o = {}) {
     const ok = (h) => (hitAllowed(h, T.id, disabledTags) || convertedHitOk(T, h, disabledTags) || (sharedSet && sharedOk(h))) && !disabledIds.has(h.fileId);
     vRaw.push(...svRaw);
     hRaw.push(...shRaw);
-    const vector = vRaw.map((d) => normHit(d, 'vector')).filter(ok).filter((h) => h.text);
+    let vector = vRaw.map((d) => normHit(d, 'vector')).filter(ok).filter((h) => h.text);
     const hyb = hRaw.map((d) => normHit(d, 'hybrid')).filter(ok).filter((h) => h.text);
+    // Production knowDrive: a pure vector search under a narrow tag filter (one trial's few files in a 600k-atom store)
+    // can come back empty (the ANN index is approximate), while hybrid search with the same filter finds the atoms and
+    // still reports each hit's vector distance. Fall back to those hits, scored by that distance (never by RRF).
+    if (!vector.length && hyb.length) vector = hyb.filter((h) => h.similarity != null).map((h) => ({ ...h, mode: 'vector', viaHybrid: true }));
     vector.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
     const key200 = (h) => `${h.fileId}|${sha1(normText(h.text).slice(0, 200))}`;
     for (const [i, h] of hyb.entries()) {
@@ -2802,7 +2830,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       T.questionsCache = null;
       kickPoller(T);
       const files = await filesOf(T, { maxAgeMs: 0 });
-      return { files: files.filter((f) => f.sample), usage: usageOf(T, files), spec: publicSpec(T), prevName, replay: { speed: REPLAY_SPEED, label: `Replay of a real ingest · ${REPLAY_SPEED}×` } };
+      return { files: files.filter((f) => f.sample), usage: usageOf(T, files), spec: publicSpec(T), prevName, replay: { speed: replaySpeedOf(shared.get(set)?.timeline), label: `Replay of a real ingest · ${replaySpeedOf(shared.get(set)?.timeline)}×` } };
     }
     const rows = await refreshRows(T, { maxAgeMs: 0 });
     const have = rows.filter((r) => (r.tags || []).includes(`sample:${set}`));
@@ -2812,7 +2840,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const used = usageOf(T, rows.map((r) => rowToFile(T, r))).bytes;
       if (used + bytesNeeded > QUOTA_BYTES) fail(413, 'quota', 'Not enough room for the sample files.', { usedBytes: used, remaining: Math.max(0, QUOTA_BYTES - used) });
       for (const name of info.names) {
-        const bytes = await fsp.readFile(path.join(SAMPLES_DIR, set, name));
+        const bytes = uniqueCopy(await fsp.readFile(path.join(SAMPLES_DIR, set, name)), T.id);
         await uploadInto(T, { name, bytes, mime: MIME_OF[extOf(name)], extraTags: [`sample:${set}`] });
       }
     }
@@ -2862,7 +2890,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         const missing = (info?.names || []).filter((n) => !have.has(n));
         const started = now();
         for (const name of missing) {
-          const bytes = await fsp.readFile(path.join(SAMPLES_DIR, set, name));
+          const bytes = uniqueCopy(await fsp.readFile(path.join(SAMPLES_DIR, set, name)), `shared:${set}:v1`);
           await ingest({ storePath: `${sharedRoot(set)}${name}`, tags: ['knowbot', 'kind:trial-sample', `sample-set:${set}`], mime: MIME_OF[extOf(name)], bytes });
         }
         if (missing.length) { rows = (await listRows({ tags_all: `sample-set:${set}` })).filter((r) => (r.tags || []).includes('kind:trial-sample') && !String(r.filename).endsWith('timeline.json')); recordTimeline(set, started); }
@@ -2907,7 +2935,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const set = T.flags.sharedSet;
     let S0;
     try { S0 = await ensureShared(set); } catch (e) { log(`[studio] shared samples: ${e.message}`); return []; }
-    const elapsed = (now() - T.flags.sharedAt) * REPLAY_SPEED;
+    const speed = replaySpeedOf(S0.timeline);
+    const elapsed = (now() - T.flags.sharedAt) * speed;
     return S0.rows.map((r, i) => {
       const name = String(r.filename).split('/').pop();
       const ext = extOf(name);
@@ -2922,7 +2951,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const atoms = ['atomized', 'vectorizing', 'ready'].includes(stage) ? atomsTotal : 0;
       const vectorized = stage === 'ready' ? atomsTotal : stage === 'vectorizing' ? Math.max(1, Math.round(atomsTotal * Math.min(1, (elapsed - tl.vectorizing) / vecSpan))) : 0;
       const stageAt = {};
-      for (const st of STAGE_ORDER) if (tl[st] != null && elapsed >= tl[st]) stageAt[st] = T.flags.sharedAt + Math.round(tl[st] / REPLAY_SPEED);
+      for (const st of STAGE_ORDER) if (tl[st] != null && elapsed >= tl[st]) stageAt[st] = T.flags.sharedAt + Math.round(tl[st] / speed);
       return { id: r.id, key: null, name, bytes: Number(r.bytes || 0), mime: r.mime_type || MIME_OF[ext] || 'text/plain', kind: KIND_OF.get(ext) || 'txt', stage, kdStage: fileStage(r),
         chunks: ['chunked', 'atomized', 'vectorizing', 'ready'].includes(stage) ? (r.chunk_count ?? null) : null, atoms, vectorized, pages: null, sample: true, replay: true,
         enabled: T.spec.sources?.[r.id] !== false, error: stage === 'failed' ? mapError(r.last_error || 'failed', { ext, name }) : null, summary: T.summaries.get(r.id) || null, stageAt,
