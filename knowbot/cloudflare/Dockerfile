@@ -28,6 +28,8 @@ COPY server ./server
 COPY corpus ./corpus
 # KnowBot Studio: the Lumen Bikes sample files the 'Use sample files' demo ingests
 COPY studio/samples ./studio/samples
+# KnowBot Studio Builder: the bundled KnowBot knowledge base (server/builder/local-kb.mjs + kb.mjs read studio/kb/*.md)
+COPY studio/kb ./studio/kb
 COPY cloudflare/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
