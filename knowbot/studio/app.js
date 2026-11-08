@@ -23,10 +23,10 @@
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
 
-import * as store from './store.js';
-import * as api from './api.js';
-import * as motion from './motion.js';
-import * as icons from './icons.js';
+import * as store from './store.js?v=ffdd34f';
+import * as api from './api.js?v=ffdd34f';
+import * as motion from './motion.js?v=ffdd34f';
+import * as icons from './icons.js?v=ffdd34f';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -39,7 +39,7 @@ const STEPS = [
   { key: 'prove', label: 'Prove' }, { key: 'launch', label: 'Launch' },
 ];
 const DEFAULT_CONFIG = {
-  price: { amount: 249, currency: 'USD', interval: 'month', answersIncluded: null, annualLine: null, guaranteeLine: null },
+  price: { amount: 249, currency: 'USD', interval: 'month', answersIncluded: null, annualLine: 'or $2,499/year · up to 100 MB · first 30 days free, card required', guaranteeLine: null, enterpriseEmail: 'sales@recoursellm.com' },
   quota: { bytes: 104857600, fileBytes: 99614720, ttlDays: 7 },
   types: [], builder: { engine: 'scripted', provider: null },
   samples: [{ id: 'lumen-bikes', title: 'Lumen Bikes (sample shop)', files: 4, bytes: 31744 }],
@@ -191,6 +191,8 @@ function renderHeader() {
   const livePill = h('span', { id: 'st-livepill', class: 'st-pill st-pill-live', role: 'status', hidden: true }, h('i', { 'aria-hidden': 'true' }), 'Live');
   const dash = h('a', { id: 'st-dash', class: 'st-dash', href: 'https://knowdrive.ai/', target: '_blank', rel: 'noopener', hidden: true },
     h('span', null, 'Dashboard'), h('span', { class: 'st-dash-ico', 'aria-hidden': 'true', html: icon('external', 13) }), h('span', { class: 'st-sr' }, ' (opens in a new tab)'));
+  const restart = h('button', { type: 'button', id: 'st-restart', class: 'st-restart st-hide-mobile', 'aria-haspopup': 'dialog', onclick: () => confirmStartOver() },
+    h('span', { html: icon('refresh', 14), 'aria-hidden': 'true' }), h('span', null, 'Start over'));
   const theme = h('button', { type: 'button', id: 'st-theme', class: 'st-iconbtn st-hide-mobile', onclick: toggleTheme });
   const mot = h('button', { type: 'button', id: 'st-motion', class: 'st-iconbtn st-motion-btn st-hide-mobile', onclick: toggleMotion });
   const dbg = DEBUG ? h('span', { id: 'st-debug', class: 'st-pill st-pill-debug' }, 'debug') : null;
@@ -199,7 +201,7 @@ function renderHeader() {
   el.append(
     h('h1', { class: 'st-sr' }, 'KnowBot Studio: build a bot that answers only from your files'),
     h('div', { class: 'st-header-left' }, brand, h('span', { class: 'st-hsep', 'aria-hidden': 'true' }), botchip, botchipDesc),
-    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, livePill, dash, priceWrap, theme, mot, more),
+    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, livePill, dash, priceWrap, restart, theme, mot, more),
   );
   updateIdentity();
   updatePrice();
@@ -654,7 +656,7 @@ function renderHero() {
     const chip = $(`.st-msg-a .st-chip[data-chip="${id}"]`, logEl);
     if (chip && !chip.closest('.st-chips')?.hidden && !chip.closest('.is-stale')) { chip.click(); return; }
     if (id === 'use_samples') { addUserMessage('Use sample files · 30s demo'); dispatchAction({ type: 'attach_samples', set: 'lumen-bikes' }, { fromClick: true }); }
-    else if (id === 'import_store') { addUserMessage('Enter a Store URL'); dispatchAction({ type: 'import_store' }, { fromClick: true }); }
+    else if (id === 'import_store') { addUserMessage('Enter your website'); dispatchAction({ type: 'import_store' }, { fromClick: true }); }
     else { addUserMessage('Upload my files'); dispatchAction({ type: 'request_upload' }, { fromClick: true }); }
   };
   // r5 (D1): the Builder's 'Use sample files' chip is the one solid primary on screen. Over the map this is a quiet
@@ -680,7 +682,7 @@ function dedupeLandingLink() {
     if (!isLive()) for (const p of $$('.sb-empty', slots.bot)) {
       if (p.querySelector('[data-store-link]')) continue;
       const link = h('button', { type: 'button', class: 'sb-link', dataset: { storeLink: '1' },
-        onclick: () => { addUserMessage('Enter a Store URL'); dispatchAction({ type: 'import_store' }, { fromClick: true }); } }, "enter your store's URL");
+        onclick: () => { addUserMessage('Enter your website'); dispatchAction({ type: 'import_store' }, { fromClick: true }); } }, 'add your website');
       p.append(h('span', { class: 'sb-store' }, ' Or ', link, '.'));
     }
   };
@@ -724,7 +726,7 @@ function helpIntent(text, label) {
   if (!hasFiles) chips.push({ id: 'use_samples', label: 'Use sample files', kind: 'primary', action: { type: 'attach_samples' }, local: true });
   else if (ready && !m.proofRun) chips.push({ id: 'run_proof', label: 'Run the Proof Run', kind: 'primary', action: { type: 'run_proof' }, local: true });
   else chips.push({ id: 'add_more', label: 'Add more files', action: { type: 'request_upload' }, local: true });
-  if (!hasFiles) chips.push({ id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true });
+  if (!hasFiles) chips.push({ id: 'import_store', label: 'Add website', action: { type: 'import_store' }, local: true });
   if (!hasFiles) chips.push({ id: 'proof_info', label: 'What is the Proof Run?', send: 'What is the Proof Run?' });
   else if (ready && m.proofRun) chips.push({ id: 'launch', label: `Launch · ${priceText()}`, kind: 'primary', action: { type: 'show_launch' }, local: true });
   chips.push(channelsChip());
@@ -768,7 +770,7 @@ function priceIntent(text, label) {
   const amt = c.price?.amount ?? 249;
   const name = botName();
   const m = getState().milestones;
-  localSay(`Building and testing is free, no card. Going live is **$${amt}/mo** for ${name}: a hosted link, the embed snippet, all 6 channels and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { reply: true, chips: [
+  localSay(`Building and testing is free, no card. Going live is **$${amt}/mo** (or $2,499/year) for up to 100 MB, with the first 30 days free and a card required at signup. ${name} gets a hosted link, the embed snippet, all 6 channels and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { reply: true, chips: [
     { id: 'launch', label: `Launch · $${amt}/mo`, kind: m.firstCited ? 'primary' : 'default', action: { type: 'show_launch' }, local: true },
     { id: 'what-get', label: 'What do I get?', send: 'What do I get?' },
     m.firstCited ? { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true }
@@ -1639,7 +1641,7 @@ function defaultChips() {
   if (step === 'purpose' || step === 'sources') return [
     { id: 'use_samples', label: 'Use sample files', kind: 'primary', action: { type: 'attach_samples' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
-    { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
+    { id: 'import_store', label: 'Add website', action: { type: 'import_store' }, local: true },
   ];
   if (step === 'learn') return [
     { id: 'what_atom', label: "What's an atom?", send: "What's an atom?" },
@@ -2419,6 +2421,7 @@ function openMoreMenu(anchor) {
     item(dark ? 'sun' : 'moon', dark ? 'Light theme' : 'Dark theme', toggleTheme),
     item('motion', motion.reduced() ? 'Full motion' : 'Reduce motion', toggleMotion),
     item('command', 'Command palette', () => openPalette()),
+    t.converted ? null : item('refresh', 'Start over', () => confirmStartOver()),
     t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, icon('checkCircle', 14), ` Saved until ${new Date(t.expiresAt).toLocaleDateString()}`) : null);
   openMenu(anchor, list);
 }
@@ -2740,7 +2743,7 @@ function paletteCommands() {
   return [
     { id: 'add', label: 'Add files', ico: 'upload', run: () => { emit('intake:open', {}); if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); } },
     { id: 'samples', label: 'Use sample files', ico: 'bolt', run: () => dispatchAction({ type: 'attach_samples' }, { fromClick: true }) },
-    { id: 'store', label: 'Enter a Store URL (import products, help pages, policies)', ico: 'link', run: () => dispatchAction({ type: 'import_store' }, { fromClick: true }) },
+    { id: 'store', label: 'Enter your website (import products, help pages, policies)', ico: 'link', run: () => dispatchAction({ type: 'import_store' }, { fromClick: true }) },
     { id: 'ask', label: `Ask ${botName()}…`, ico: 'chat', run: focusBotComposer },
     { id: 'proof', label: 'Run Proof Run', ico: 'flask', run: () => dispatchAction({ type: 'run_proof' }) },
     { id: 'view', label: getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Toggle Proof view', ico: 'shieldCheck', run: () => setView(getState().ui.view === 'proof' ? 'bot' : 'proof', 'toggle') },
@@ -2748,6 +2751,7 @@ function paletteCommands() {
     { id: 'launch', label: `Launch · ${priceText()}`, ico: 'rocket', run: () => launchOpen('palette') },
     { id: 'channels', label: 'Channels & API (SMS, phone, WhatsApp, email, voice)', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
+    ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
     { id: 'motion', label: motion.reduced() ? 'Full motion' : 'Reduce motion', ico: 'motion', run: toggleMotion },
   ];
@@ -3005,17 +3009,17 @@ function openStoreImport({ url = '' } = {}) {
 }
 store.registerCard('store-import', (data, el) => {
   const id = uid('si');
-  const input = h('input', { type: 'text', inputmode: 'url', id, class: 'st-text', placeholder: 'yourstore.com', autocomplete: 'url', spellcheck: 'false', autocapitalize: 'off',
+  const input = h('input', { type: 'text', inputmode: 'url', id, class: 'st-text', placeholder: 'yourwebsite.com', autocomplete: 'url', spellcheck: 'false', autocapitalize: 'off',
     maxlength: '2048', value: data?.url || '', 'aria-describedby': `${id}-msg` });
   const own = h('input', { type: 'checkbox', id: `${id}-own`, class: 'st-si-own' });
   const msg = h('p', { id: `${id}-msg`, class: 'st-field-msg', role: 'status' });
-  const go = h('button', { type: 'submit', class: 'st-btn st-btn-primary' }, h('span', { html: icon('arrowRight', 15) }), h('span', { class: 'st-btn-label' }, 'Import store'));
+  const go = h('button', { type: 'submit', class: 'st-btn st-btn-primary' }, h('span', { html: icon('arrowRight', 15) }), h('span', { class: 'st-btn-label' }, 'Import website'));
   const instead = h('button', { type: 'button', class: 'st-btn st-btn-ghost' }, 'Upload files instead');
   const form = h('form', { class: 'st-si-form', novalidate: true },
-    h('label', { for: id, class: 'st-si-label' }, "Your store's web address"),
+    h('label', { for: id, class: 'st-si-label' }, "Your website's address"),
     h('div', { class: 'st-si-row' }, input, go),
-    h('label', { class: 'st-si-check', for: `${id}-own` }, own, h('span', null, 'I own or manage this store')),
-    h('div', { class: 'st-si-foot' }, msg, instead));
+    h('label', { class: 'st-si-check', for: `${id}-own` }, own, h('span', null, 'I own or manage this website')),
+    h('div', { class: 'st-si-foot' }, msg)); // "Upload files instead" lives in the Builder's chips below the card (one, not two)
   // the run: StageTrack-like nodes, a status line, a progress bar, the found / capped lines
   const nodes = STORE_STEPS.map((st) => h('li', { class: 'st-si-node', dataset: { step: st.key, state: 'todo' } },
     h('span', { class: 'st-si-dot', 'aria-hidden': 'true' }), h('span', { class: 'st-si-node-l' }, st.label)));
@@ -3029,7 +3033,7 @@ store.registerCard('store-import', (data, el) => {
   const actions = h('div', { class: 'st-si-actions', hidden: true });
   const run = h('div', { class: 'st-si-run', hidden: true }, status, track, bar, found, capped, actions);
   const card = h('div', { class: 'st-card st-si' },
-    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Enter a Store URL'), h('span', { class: 'st-card-meta', title: 'Shopify, WooCommerce, Magento, Squarespace or any public site' }, 'Any online store')),
+    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Enter your website'), h('span', { class: 'st-card-meta', title: 'Shopify, WooCommerce, Magento, Squarespace or any public site' }, 'Any website or online store')),
     form, run);
   el.append(card);
   let ac = null, busy = false, lastUrl = '';
@@ -3077,7 +3081,7 @@ store.registerCard('store-import', (data, el) => {
     const v = input.value.trim();
     msg.className = 'st-field-msg'; msg.textContent = '';
     if (!v || v.length > 2048 || /\s/.test(v)) {
-      msg.textContent = "That doesn't look like a web address. Try something like yourstore.com."; msg.className = 'st-field-msg is-bad';
+      msg.textContent = "That doesn't look like a web address. Try something like yourwebsite.com."; msg.className = 'st-field-msg is-bad';
       input.setAttribute('aria-invalid', 'true'); input.focus(); return;
     }
     input.removeAttribute('aria-invalid');
@@ -3735,7 +3739,7 @@ on('setup:post', (d) => {
 // Resolves C's CONTRACT-GAPs: modules ask B to run a Builder action (with the Builder's narration), or to show a tab.
 on('builder:action', (a) => {
   if (!a || !a.type) return;
-  const label = { attach_samples: 'Use sample files', request_upload: 'Upload my files', import_store: 'Enter a Store URL', run_proof: 'Run the Proof Run', show_launch: `Launch · ${priceText()}` }[a.type];
+  const label = { attach_samples: 'Use sample files', request_upload: 'Upload my files', import_store: 'Enter your website', run_proof: 'Run the Proof Run', show_launch: `Launch · ${priceText()}` }[a.type];
   if (label && a.narrate !== false) addUserMessage(label);
   dispatchAction(a, { fromClick: a.fromClick !== false });
 });
@@ -4278,6 +4282,48 @@ function onExpired() {
   localSay('', { reply: true, card: { type: 'expired', data: {} }, chips: [{ id: 'new_bot', label: 'Start a new bot', kind: 'primary', run: startNewBot, local: true }] });
 }
 
+// ------------------------------------------------------------------ start over (confirmed, destructive)
+
+let startOverEl = null;
+function confirmStartOver() {
+  if (startOverEl) return;
+  const t = getState().trial;
+  if (t.converted) { toast({ kind: 'info', text: 'This bot is live. Manage it from your KnowDrive dashboard.' }); return; }
+  ensureOverlay();
+  const files = Object.values(getState().files || {}).filter((f) => f && !f.sample).length;
+  const titleId = 'st-restart-title', descId = 'st-restart-desc';
+  const err = h('p', { class: 'st-restart-err', role: 'alert', hidden: true });
+  const cancel = h('button', { type: 'button', class: 'st-btn st-btn-ghost', onclick: () => close() }, 'Cancel');
+  const go = h('button', { type: 'button', class: 'st-btn st-btn-danger', onclick: () => run() }, h('span', { html: icon('refresh', 15), 'aria-hidden': 'true' }), h('span', { class: 'st-btn-label' }, 'Delete and start over'));
+  const panel = h('div', { class: 'st-confirm-panel' },
+    h('h2', { id: titleId }, 'Start over from scratch?'),
+    h('p', { id: descId }, `This permanently deletes ${botName()}, ${files ? `your ${files} uploaded file${files === 1 ? '' : 's'}, ` : ''}its settings, this conversation and the questions it has logged. Any link you saved to this bot will stop working. This can't be undone.`),
+    err,
+    h('div', { class: 'st-confirm-actions' }, cancel, go));
+  startOverEl = h('div', { class: 'st-confirm', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': titleId, 'aria-describedby': descId },
+    h('div', { class: 'st-scrim', onclick: () => close() }), panel);
+  slots.overlay.append(startOverEl);
+  motion.animate(panel, [{ transform: 'translateY(8px) scale(.98)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: motion.DUR[2], easing: 'out' });
+  const rec = openDialog(startOverEl, { onClose: () => { startOverEl && startOverEl.remove(); startOverEl = null; }, initialFocus: () => cancel });
+  function close() { closeDialog(rec); }
+  async function run() {
+    go.disabled = true; cancel.disabled = true; go.querySelector('.st-btn-label').textContent = 'Deleting…'; err.hidden = true;
+    try { await api.deleteTrial(); }
+    catch (e) {
+      if (!(e && (e.status === 404 || e.status === 401))) {
+        err.textContent = `Couldn't delete it just now (${(e && e.message) || 'network error'}). Nothing was changed. Try again?`;
+        err.hidden = false; go.disabled = false; cancel.disabled = false; go.querySelector('.st-btn-label').textContent = 'Delete and start over';
+        return;
+      }
+    }
+    rec.invoker = null; // focus goes to the fresh Builder, not the old header button
+    close();
+    announce('Deleted. Starting a new bot.');
+    await startNewBot();
+    toast({ kind: 'info', text: 'Started over. Everything from the old bot was deleted.' });
+  }
+}
+
 async function startNewBot() {
   try { sessionStorage.removeItem(logKey()); } catch { /* ignore */ }
   store.resetTrialState();
@@ -4289,6 +4335,7 @@ async function startNewBot() {
   logEl.innerHTML = ''; messages.length = 0;
   renderIdentityAll();
   renderB0();
+  window.__kbLandingShow?.();   // the first view again (landing.js), as for a first visit
   const r = await createTrialWithRetry();
   resolveTrial();
   await modulesP;
@@ -4319,7 +4366,7 @@ async function createTrialWithRetry() {
         localSay('Good news: your own bot can start now. Use the sample files for the 30-second demo, or add yours.', { chips: [
           { id: 'use_samples', label: 'Use sample files · 30s demo', kind: 'primary', action: { type: 'attach_samples' }, local: true },
           { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
-          { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
+          { id: 'import_store', label: 'Add website', action: { type: 'import_store' }, local: true },
         ] });
       }
       return r;
@@ -4514,7 +4561,7 @@ function renderB0() {
   setChips(rec, [
     { id: 'use_samples', label: 'Use sample files · 30s demo', kind: 'primary', action: { type: 'attach_samples', set: 'lumen-bikes' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
-    { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
+    { id: 'import_store', label: 'Add website', action: { type: 'import_store' }, local: true },
     { id: 'what_canonical', label: "How does it avoid making things up?", local: true, run: explainCanonical },
   ], { still: hydrating });
   // r6 (D1): a 3-step "what happens next" preview under the first turn (desktop; identical to index.html's static
@@ -4602,13 +4649,29 @@ function syncGhostExample() {
   }
 }
 on('change:spec', () => syncGhostExample());
+/** Landing hand-off: { text } is the visitor's first Builder message (exactly as if typed in the composer);
+ * { chip } presses that B0 chip (or runs its action when the chip is gone). */
+function landingAction(a) {
+  if (!a) return;
+  if (!messages.length && !isLive()) renderB0();
+  if (a.text) { userSays(String(a.text).slice(0, 2000)); return; }
+  const id = a.chip;
+  const btn = id && $(`.st-msg-a .st-chip[data-chip="${id}"]`, logEl);
+  const usable = btn && !btn.closest('.st-chips')?.hidden && !btn.closest('.is-stale');
+  // the file picker only opens inside a click: after a late hydration the Upload chip is focused instead
+  if (id === 'upload_files' && navigator.userActivation && !navigator.userActivation.isActive) { if (usable) { btn.focus(); return; } }
+  if (usable) { btn.click(); return; }
+  if (id === 'use_samples') { addUserMessage('Use sample files · 30s demo'); dispatchAction({ type: 'attach_samples', set: 'lumen-bikes' }, { fromClick: true }); }
+  else if (id === 'upload_files') { addUserMessage('Upload my files'); dispatchAction({ type: 'request_upload' }, { fromClick: true }); }
+  else if (id === 'import_store') { addUserMessage('Enter your website'); dispatchAction({ type: 'import_store' }, { fromClick: true }); }
+}
 
 function explainCanonical() {
   addUserMessage("How does it avoid making things up?");
   localSay(`It only answers from the files you give it. It quotes them word for word with [n] citations, and if the answer isn't there it says exactly: *"${NOT_IN_DATA}"* No guessing, ever.`, { reply: true, chips: [
     { id: 'use_samples', label: 'Show me with sample files', kind: 'primary', action: { type: 'attach_samples', set: 'lumen-bikes' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
-    { id: 'import_store', label: 'Enter a Store URL', action: { type: 'import_store' }, local: true },
+    { id: 'import_store', label: 'Add website', action: { type: 'import_store' }, local: true },
   ] });
 }
 
@@ -4843,6 +4906,9 @@ async function boot() {
   if (launchedReturn && params.get('launched') === '1' && isMobile()) setTimeout(() => showPeek(`Activating ${botName()}…`), 600);
   savedOwnFiles = !!getState().milestones.ownFile;
   if (!hadTrial && !params.get('t')) { renderB0(); renderHero(); }
+  // the first view (landing.js) hands its typed text or choice over here; one made before this point waits in __kbLanding
+  ctx.landing = landingAction;
+  if (window.__kbLanding) { const a = window.__kbLanding; window.__kbLanding = null; landingAction(a); }
   // 5. owner modules mount after first paint
   mountModules();
   // 4. trial

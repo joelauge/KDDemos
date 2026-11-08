@@ -5,17 +5,68 @@
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)">
-<script>/* theme + motion before paint */(function(){var d=document.documentElement,t='light',m='full';try{t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}catch(e){}try{var s=localStorage.getItem('knowbot-theme');if(s==='dark'||s==='light')t=s;var r=localStorage.getItem('kb-studio-motion');if(r==='reduce'||r==='full')m=r;else if(matchMedia('(prefers-reduced-motion: reduce)').matches)m='reduce';}catch(e){}d.setAttribute('data-theme',t);d.setAttribute('data-motion',m);try{var k=JSON.parse(localStorage.getItem('kb-studio:v1')||'null');if(k&&k.trial&&k.trial.id&&k.trial.token){d.setAttribute('data-returning','');if(k.trial.converted)d.setAttribute('data-live','');}}catch(e){}window.__kbPre=[];document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('#st-b0-static [data-chip]');if(b&&window.__kbPre){window.__kbPre.push(b.getAttribute('data-chip'));e.preventDefault();}},true);document.addEventListener('submit',function(e){if(e.target&&e.target.id==='st-setup-form'&&!window.__studio)e.preventDefault();},true);})();</script>
+<script>/* theme + motion before paint */(function(){var d=document.documentElement,t='light',m='full';try{t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}catch(e){}try{var s=localStorage.getItem('knowbot-theme');if(s==='dark'||s==='light')t=s;var r=localStorage.getItem('kb-studio-motion');if(r==='reduce'||r==='full')m=r;else if(matchMedia('(prefers-reduced-motion: reduce)').matches)m='reduce';}catch(e){}d.setAttribute('data-theme',t);d.setAttribute('data-motion',m);try{var k=JSON.parse(localStorage.getItem('kb-studio:v1')||'null');if(k&&k.trial&&k.trial.id&&k.trial.token){d.setAttribute('data-returning','');if(k.trial.converted)d.setAttribute('data-live','');}}catch(e){}try{var sk=localStorage.getItem('kb-landing')==='skip';if(!sk&&!d.hasAttribute('data-returning')&&!/[?&](t|launched)=/.test(location.search))d.setAttribute('data-landing','');}catch(e){}window.__kbPre=[];document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('#st-b0-static [data-chip]');if(b&&window.__kbPre){window.__kbPre.push(b.getAttribute('data-chip'));e.preventDefault();}},true);document.addEventListener('submit',function(e){if(e.target&&e.target.id==='st-setup-form'&&!window.__studio)e.preventDefault();},true);})();</script>
 <link rel="icon" href="../dashboard/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- r5 (D1): the web fonts never block the first paint (the static Builder turn below paints with the system stack, then swaps) -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"></noscript>
-<link rel="stylesheet" href="./studio.css?v=1"><link rel="stylesheet" href="./ingest.css?v=1">
+<link rel="stylesheet" href="./studio.css?v=ffdd34f"><link rel="stylesheet" href="./ingest.css?v=ffdd34f">
 <!-- r7 (D1): the answer and checkout styles never block the first paint (their modules mount after app.js waits for them) -->
-<link rel="stylesheet" href="./proof.css?v=1" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><link rel="stylesheet" href="./checkout.css?v=1" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><noscript><link rel="stylesheet" href="./proof.css?v=1"><link rel="stylesheet" href="./checkout.css?v=1"></noscript>
-<link rel="modulepreload" href="./store.js"><link rel="modulepreload" href="./motion.js"><link rel="modulepreload" href="./api.js">
-<link rel="modulepreload" href="./app.js?v=1">
+<link rel="stylesheet" href="./proof.css?v=ffdd34f" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><link rel="stylesheet" href="./checkout.css?v=ffdd34f" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><noscript><link rel="stylesheet" href="./proof.css?v=ffdd34f"><link rel="stylesheet" href="./checkout.css?v=ffdd34f"></noscript>
+<link rel="stylesheet" href="./landing.css?v=ffdd34f">
+<link rel="modulepreload" href="./store.js?v=ffdd34f"><link rel="modulepreload" href="./motion.js?v=ffdd34f"><link rel="modulepreload" href="./api.js?v=ffdd34f">
+<link rel="modulepreload" href="./app.js?v=ffdd34f">
 </head><body>
+<!-- First view (landing.css / landing.js): shown only to first-time visitors (html[data-landing], set before paint). -->
+<div id="kl-landing" class="kl">
+  <div class="kl-bg" aria-hidden="true"></div>
+  <header class="kl-top"><span class="kl-brand"><img class="kl-logo" src="../dashboard/logo.svg" alt="" width="30" height="21"><span class="kl-word">KnowBot <span>Studio</span></span></span></header>
+  <main class="kl-main" id="kl-main">
+    <div class="kl-stage">
+      <div class="kl-hero">
+        <div class="kl-wave" aria-hidden="true"><span class="kl-hand">👋</span></div>
+        <h1 class="kl-h1">Build your AI bot <span class="kl-h1-em">for free</span></h1>
+        <p class="kl-terms"><span>Don't pay for 30 days.</span> <span class="kl-card"><svg class="kl-ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 14.5h3"/></svg>Credit card required.</span></p>
+        <p class="kl-lede"><span class="kl-lede-1">Works from your files or website info. Upload your documents or enter your website.</span> <span class="kl-lede-2">It answers only from them and shows the source for every answer.</span></p>
+        <form id="kl-form" class="kl-form" autocomplete="off" novalidate>
+          <label class="kl-sr" for="kl-input">Describe the bot you want</label>
+          <div class="kl-box">
+            <span class="kl-box-ico" aria-hidden="true"><svg class="kl-ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M12 3.5 13.7 8l4.8.3-3.7 3 1.2 4.7L12 13.4 8 16l1.2-4.7-3.7-3L10.3 8Z"/><path d="M5 20h14" opacity=".55"/></svg></span>
+            <div class="kl-field">
+              <input id="kl-input" class="kl-input" name="q" type="text" enterkeyhint="go" maxlength="300" spellcheck="true" aria-describedby="kl-hint">
+              <span class="kl-ph" aria-hidden="true"><span id="kl-ph-text">a support bot for my bike shop</span><i class="kl-caret"></i></span>
+            </div>
+            <button type="submit" class="kl-go"><span>Start building</span><svg class="kl-ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+          <p id="kl-hint" class="kl-sr">For example: a support bot for my bike shop, or answers from my website's FAQ.</p>
+        </form>
+        <div class="kl-alts" role="group" aria-label="Other ways to start">
+          <button type="button" class="kl-alt" data-kl="sample"><svg class="kl-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6Z"/></svg>Try it with sample files</button>
+          <button type="button" class="kl-alt" data-kl="upload"><svg class="kl-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 15v3.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>Upload my files</button>
+          <button type="button" class="kl-alt" data-kl="store"><svg class="kl-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5c-2.3-2.4-3.4-5.2-3.4-8.5s1.1-6.1 3.4-8.5Z"/></svg>Enter your website</button>
+        </div>
+      </div>
+      <ul class="kl-orbit" aria-hidden="true">
+        <li class="kl-ch" style="--i:0"><span class="kl-ch-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="4" width="18" height="15" rx="2.5"/><path d="M3 8.5h18"/><path d="M9 12h6.5a1.5 1.5 0 0 1 1.5 1.5v.5a1.5 1.5 0 0 1-1.5 1.5H12l-2 1.5V15.5H9A1.5 1.5 0 0 1 7.5 14v-.5A1.5 1.5 0 0 1 9 12Z"/></svg></span><span class="kl-ch-t">Website chat</span></li>
+        <li class="kl-ch" style="--i:1"><span class="kl-ch-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18.5h2"/><path d="M9.8 7.5h4.4a1 1 0 0 1 1 1v2.4a1 1 0 0 1-1 1H12l-1.6 1.3v-1.3h-.6a1 1 0 0 1-1-1V8.5a1 1 0 0 1 1-1Z"/></svg></span><span class="kl-ch-t">SMS</span></li>
+        <li class="kl-ch" style="--i:2"><span class="kl-ch-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M3.5 6.5A2.5 2.5 0 0 1 6 4h7.5A2.5 2.5 0 0 1 16 6.5v4a2.5 2.5 0 0 1-2.5 2.5H9l-3.5 2.8V13A2.5 2.5 0 0 1 3.5 10.5Z"/><path d="M18.5 8.6a2.2 2.2 0 0 1 2 2.2v4a2.2 2.2 0 0 1-2.2 2.2h-.3v2.6L14.8 17h-3.3a2.2 2.2 0 0 1-2-1.3"/></svg></span><span class="kl-ch-t">WhatsApp</span></li>
+        <li class="kl-ch" style="--i:3"><span class="kl-ch-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/></svg></span><span class="kl-ch-t">Email</span></li>
+        <li class="kl-ch" style="--i:4"><span class="kl-ch-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M6.6 3.5h2.6l1.4 4-2 1.4a11 11 0 0 0 6.5 6.5l1.4-2 4 1.4v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2Z"/></svg></span><span class="kl-ch-t">Phone</span></li>
+        <li class="kl-ch" style="--i:5"><span class="kl-ch-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 10.5v3"/></svg></span><span class="kl-ch-t">Voice</span></li>
+      </ul>
+    </div>
+    <p class="kl-chline">Works on your website, SMS, WhatsApp, email and phone.</p>
+    <figure class="kl-proof">
+      <figcaption class="kl-proof-cap"><span class="kl-live" aria-hidden="true"></span>Example from a bike shop's bot</figcaption>
+      <p class="kl-q"><span class="kl-sr">Visitor asks: </span>How long is the warranty?</p>
+      <div class="kl-typing" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="kl-a">
+        <p class="kl-a-text"><span class="kl-sr">Bot answers: </span>E-bike batteries are covered for 2 years or 800 charge cycles.<span class="kl-cite" aria-hidden="true">1</span></p>
+        <p class="kl-src"><svg class="kl-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 20V4a.5.5 0 0 1 .5-.5Z"/><path d="M14 3.5V8h4"/></svg><span class="kl-sr">Source 1: </span><b aria-hidden="true">1</b>Warranty &amp; Returns</p>
+      </div>
+    </figure>
+  </main>
+</div>
 <a class="st-skip" href="#st-setup-composer">Skip to Builder</a><a class="st-skip" id="st-skip-answer" href="#sb-thread-slot">Skip to latest answer</a>
 <div id="st-app" class="st-app">
   <header id="st-header" class="st-header"></header>                 <!-- B -->
@@ -48,6 +99,7 @@
 <div id="st-live-ingest" class="st-sr" aria-live="polite"></div>
 <div id="st-live-assert" class="st-sr" aria-live="assertive"></div>
 <!-- async + last: the static Builder turn above paints and DOMContentLoaded fires without waiting for the module graph -->
-<script type="module" async src="./app.js?v=1"></script>
+<script src="./landing.js?v=ffdd34f" defer></script>
+<script type="module" async src="./app.js?v=ffdd34f"></script>
 <noscript><p class="st-noscript">KnowBot Studio needs JavaScript to build and test your bot.</p></noscript>
 </body></html>

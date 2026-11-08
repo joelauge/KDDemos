@@ -1,0 +1,273 @@
+/* KnowBot Studio first view (landing). Prefix: kl-. Uses the Studio tokens (studio.css / dashboard.css) only.
+   Shown while html[data-landing] is set (index.html pre-paint: first-time visitors only); landing.js hands off to
+   the Studio. Animations are transform/opacity only; data-motion="reduce" stills everything. */
+
+:root {
+  --kl-warm: rgb(251 191 36 / .16);
+  --kl-ink: var(--strong);
+  --kl-box-shadow: 0 1px 2px rgb(15 23 42 / .05), 0 18px 48px -18px rgb(49 46 129 / .28);
+  --kl-box-ring: rgb(99 102 241 / .16);
+  --kl-chip-bg: rgb(255 255 255 / .82);
+}
+:root[data-theme="dark"] {
+  --kl-warm: rgb(251 191 36 / .07);
+  --kl-box-shadow: 0 1px 2px rgb(0 0 0 / .4), 0 24px 60px -20px rgb(0 0 0 / .7);
+  --kl-box-ring: rgb(129 140 248 / .22);
+  --kl-chip-bg: rgb(11 19 38 / .78);
+}
+
+.kl { display: none; }
+:root[data-landing] .kl {
+  position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  background: var(--bg); color: var(--text); font: 16px/1.55 var(--font);
+  contain: strict;   /* the typewriter and floats never touch the Studio's layout underneath */
+}
+/* the Studio is built underneath (hydrates, measures) but is neither seen, focusable nor announced */
+:root[data-landing] #st-app, :root[data-landing] .st-skip, :root[data-landing] #co-modal-slot, :root[data-landing] .st-toasts { visibility: hidden; }
+
+.kl-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.kl-ico { display: inline-block; flex: none; vertical-align: -0.2em; }
+
+/* soft light: a warm glow behind the hand, an indigo one under the input */
+.kl-bg { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+.kl-bg::before, .kl-bg::after { content: ''; position: absolute; left: 50%; border-radius: 50%; transform: translateX(-50%); }
+.kl-bg::before { top: -18vh; width: min(1100px, 140vw); height: 62vh; background: radial-gradient(closest-side, var(--kl-warm), transparent); }
+.kl-bg::after { top: 38vh; width: min(1400px, 160vw); height: 70vh; background: radial-gradient(closest-side, var(--glow), transparent); }
+
+.kl-top { position: relative; z-index: 1; display: flex; align-items: center; height: 64px; padding: 0 28px; flex: none; }
+.kl-brand { display: inline-flex; align-items: center; gap: 9px; color: var(--strong); }
+.kl-logo { height: 21px; width: auto; display: block; }
+:root:not([data-theme="dark"]) .kl-logo { filter: brightness(.12); }
+.kl-word { font: 700 16.5px/1 var(--display); letter-spacing: -.3px; white-space: nowrap; }
+.kl-word span { color: var(--accent-2); }
+
+.kl-main { position: relative; z-index: 1; flex: 1 0 auto; display: flex; flex-direction: column; align-items: center; padding: 0 24px 56px; }
+.kl-stage { position: relative; width: 100%; max-width: 1280px; display: flex; flex-direction: column; align-items: center; }
+.kl-hero { position: relative; z-index: 1; width: 100%; max-width: 760px; display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: clamp(0px, 1.2vh, 24px); }
+
+/* ---- the hand: a real wrist wave (pivot low on the palm), twice on arrival, then gently on hover */
+.kl-wave { line-height: 1; margin-bottom: 10px; }
+.kl-hand {
+  display: inline-block; font-size: clamp(80px, 10.8vh, 116px); line-height: 1;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
+  transform-origin: 72% 84%; cursor: default; user-select: none;
+  animation: kl-wave 1.5s cubic-bezier(.4, 0, .3, 1) .35s 2 both;
+  filter: drop-shadow(0 14px 18px rgb(180 120 20 / .18));
+}
+.kl-wave:hover .kl-hand { animation: kl-wave-soft 1.4s ease-in-out infinite; }
+@keyframes kl-wave {
+  0% { transform: rotate(0deg); }
+  14% { transform: rotate(16deg); }
+  28% { transform: rotate(-9deg); }
+  42% { transform: rotate(15deg); }
+  56% { transform: rotate(-5deg); }
+  70% { transform: rotate(9deg); }
+  100% { transform: rotate(0deg); }
+}
+@keyframes kl-wave-soft {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(10deg); }
+  60% { transform: rotate(-5deg); }
+}
+
+.kl-h1 {
+  margin: 0; font: 800 clamp(44px, min(6.6vw, 9.8vh), 104px)/.98 var(--display); letter-spacing: -.04em; color: var(--kl-ink);
+  text-wrap: balance; max-width: 13ch;
+}
+.kl-h1-em {
+  background: linear-gradient(100deg, var(--accent-2) 10%, #7c3aed 55%, #db2777 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent; padding-right: .04em;
+}
+:root[data-theme="dark"] .kl-h1-em { background-image: linear-gradient(100deg, #a5b4fc 5%, #c4b5fd 50%, #f9a8d4 100%); }
+
+.kl-terms {
+  margin: 20px 0 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 14px;
+  font: 600 clamp(17px, 1.5vw, 20px)/1.35 var(--display); color: var(--strong); letter-spacing: -.01em;
+}
+.kl-card { display: inline-flex; align-items: center; gap: 7px; color: var(--strong); }
+.kl-card .kl-ico { color: var(--accent-2); }
+.kl-terms > span:first-child::after { content: ''; display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--line-2); margin-left: 14px; vertical-align: middle; }
+
+.kl-lede-1 { color: var(--text); font-weight: 500; }
+.kl-lede-1, .kl-lede-2 { display: block; }
+.kl-lede { margin: 12px 0 0; max-width: 46em; font-size: clamp(16px, 1.25vw, 18px); line-height: 1.5; color: var(--muted); text-wrap: balance; }
+
+/* ---- the input: one big, friendly chat box */
+.kl-form { width: 100%; max-width: 720px; margin: 28px 0 0; }
+.kl-box {
+  position: relative; display: flex; align-items: center; gap: 10px; min-height: 76px; padding: 8px 8px 8px 22px;
+  border-radius: 999px; background: var(--panel); border: 1px solid var(--line);
+  box-shadow: var(--kl-box-shadow), 0 0 0 6px transparent;
+  transition: box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+}
+.kl-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: var(--kl-box-shadow), 0 0 0 6px var(--kl-box-ring); }
+.kl-box-ico { display: inline-grid; place-items: center; color: var(--accent-2); flex: none; }
+.kl-field { position: relative; flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; }
+.kl-input {
+  width: 100%; height: 56px; padding: 0 4px; border: 0; outline: 0; background: transparent; color: var(--strong);
+  font: 500 clamp(17px, 1.45vw, 20px)/1.2 var(--font); letter-spacing: -.005em; text-align: left;
+}
+.kl-input:focus-visible { outline: 0; }
+.kl-ph {
+  contain: layout paint;
+  position: absolute; left: 4px; right: 4px; top: 50%; transform: translateY(-50%); pointer-events: none;
+  display: flex; align-items: center; overflow: hidden; white-space: nowrap; text-align: left;
+  font: 500 clamp(17px, 1.45vw, 20px)/1.2 var(--font); color: var(--dim);
+}
+#kl-ph-text { overflow: hidden; text-overflow: ellipsis; }
+.kl-caret { display: inline-block; width: 2px; height: 1.15em; margin-left: 2px; border-radius: 1px; background: var(--accent); flex: none; animation: kl-blink 1.05s steps(1) infinite; }
+.kl.has-value .kl-ph { visibility: hidden; }
+@keyframes kl-blink { 50% { opacity: 0; } }
+
+.kl-go {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; flex: none; height: 60px; padding: 0 26px 0 28px;
+  border-radius: 999px; background: var(--btn); color: #fff; cursor: pointer;
+  font: 700 17px/1 var(--display); letter-spacing: -.01em; white-space: nowrap;
+  box-shadow: 0 1px 0 rgb(255 255 255 / .18) inset, 0 10px 24px -10px rgb(79 70 229 / .7);
+  transition: background-color var(--dur-1), transform var(--dur-1) var(--ease-out);
+}
+.kl-go:hover { background: var(--btn-hover); }
+.kl-go:hover .kl-ico { transform: translateX(3px); }
+.kl-go .kl-ico { transition: transform var(--dur-2) var(--ease-out); }
+.kl-go:active { transform: scale(.97); }
+.kl-go:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 999px; }
+
+/* three quiet ways in */
+.kl-alts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 10px; margin-top: 16px; }
+.kl-alt {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 999px; cursor: pointer;
+  font: 500 14.5px/1 var(--font); color: var(--text); background: transparent; border: 1px solid var(--line);
+  transition: background-color var(--dur-1), border-color var(--dur-1), color var(--dur-1), transform var(--dur-1);
+}
+.kl-alt .kl-ico { color: var(--accent-2); }
+.kl-alt:hover { background: var(--panel); border-color: var(--line-2); color: var(--strong); }
+.kl-alt:active { transform: scale(.97); }
+.kl-alt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 999px; }
+
+/* ---- channels: a quiet row under the hero (orbiting the hero on wide screens) */
+.kl-orbit { list-style: none; margin: 40px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.kl-ch {
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px 0 6px; border-radius: 999px;
+  background: var(--kl-chip-bg); border: 1px solid var(--line); color: var(--text); font: 500 13.5px/1 var(--font);
+  box-shadow: var(--st-shadow-1);
+  animation: kl-float 6s ease-in-out calc(var(--i) * -1.1s) infinite;
+}
+.kl-ch-ico { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-2); }
+.kl-ch-ico svg { display: block; width: 17px; height: 17px; }
+@keyframes kl-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
+.kl-chline { position: relative; z-index: 1; margin: 14px 0 0; font-size: 14.5px; color: var(--muted); text-align: center; }
+
+@media (min-width: 1200px) and (min-height: 760px) {
+  .kl-orbit { position: absolute; inset: 0; margin: 0; display: block; pointer-events: none; }
+  .kl-ch { position: absolute; }
+  /* a gentle arc on each side: the middle chip sits furthest out */
+  .kl-ch:nth-child(1) { left: 8%;  top: 20%; }
+  .kl-ch:nth-child(2) { left: 1%;  top: 44%; }
+  .kl-ch:nth-child(3) { left: 7%;  top: 68%; }
+  .kl-ch:nth-child(4) { right: 9%; top: 20%; }
+  .kl-ch:nth-child(5) { right: 2%; top: 44%; }
+  .kl-ch:nth-child(6) { right: 8%; top: 68%; }
+  .kl-chline { margin-top: 12px; }
+}
+
+/* ---- proof: one small, live-looking answer with its receipt */
+.kl-proof {
+  position: relative; z-index: 1; width: 100%; max-width: 560px; margin: 28px 0 0; padding: 20px 16px 14px;
+  border-radius: 20px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--st-shadow-2);
+  display: flex; flex-direction: column; gap: 10px; text-align: left;
+}
+.kl-proof-cap {
+  position: absolute; top: -12px; left: 18px; height: 24px; padding: 0 10px 0 9px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line);
+  display: flex; align-items: center; gap: 7px; font: 600 11px/1 var(--font); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.kl-live { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex: none; }
+.kl-live::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--good); animation: kl-ping 2.4s var(--ease-out) infinite; }
+@keyframes kl-ping { 0% { transform: scale(1); opacity: .5; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
+.kl-q {
+  align-self: flex-end; margin: 0; max-width: 85%; padding: 9px 14px; border-radius: 16px 16px 4px 16px;
+  background: var(--btn); color: #fff; font-size: 14.5px; line-height: 1.4;
+}
+.kl-typing { position: absolute; left: 16px; bottom: 52px; display: flex; gap: 4px; padding: 10px 12px; border-radius: 14px; background: var(--raise); opacity: 0; }
+.kl-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); animation: kl-dot 900ms ease-in-out infinite; }
+.kl-typing i:nth-child(2) { animation-delay: 150ms; } .kl-typing i:nth-child(3) { animation-delay: 300ms; }
+@keyframes kl-dot { 0%, 100% { transform: translateY(0); opacity: .5; } 40% { transform: translateY(-3px); opacity: 1; } }
+.kl-a { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: 100%; }
+.kl-a-text { margin: 0; padding: 10px 14px; border-radius: 16px 16px 16px 4px; background: var(--raise); color: var(--strong); font-size: 14.5px; line-height: 1.45; }
+.kl-cite {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: 5px; padding: 0 4px; border-radius: 6px; vertical-align: 1px;
+  background: var(--accent-soft); color: var(--accent-2); font: 700 11px/1 var(--mono);
+}
+.kl-src {
+  display: inline-flex; align-items: center; gap: 7px; margin: 0; height: 30px; padding: 0 11px 0 9px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); background: var(--panel); color: var(--accent-2); font: 600 12.5px/1 var(--font);
+}
+.kl-src b { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 5px; background: var(--accent-2); color: var(--panel); font: 700 10.5px/1 var(--mono); }
+
+/* the conversation plays once: question, a beat of typing, the answer, then its receipt */
+.kl-q { animation: kl-rise 420ms var(--ease-out) 900ms both; }
+.kl-typing { animation: kl-typing 1100ms linear 1300ms both; }
+.kl-a-text { animation: kl-rise 420ms var(--ease-out) 2350ms both; }
+.kl-src { animation: kl-pop 460ms var(--ease-spring) 2850ms both; }
+@keyframes kl-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes kl-pop { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+@keyframes kl-typing { 0% { opacity: 0; } 12%, 88% { opacity: 1; } 100% { opacity: 0; } }
+
+/* first paint: the hero arrives softly */
+.kl-hero > *, .kl-chline, .kl-proof { animation: kl-rise 520ms var(--ease-out) both; }
+.kl-hero > .kl-wave { animation-delay: 0ms; }
+.kl-hero > .kl-h1 { animation-delay: 60ms; }
+.kl-hero > .kl-terms { animation-delay: 120ms; }
+.kl-hero > .kl-lede { animation-delay: 160ms; }
+.kl-hero > .kl-form { animation-delay: 210ms; }
+.kl-hero > .kl-alts { animation-delay: 260ms; }
+.kl-chline { animation-delay: 340ms; }
+.kl-proof { animation-delay: 420ms; }
+
+/* ---- leaving (fallback when the View Transitions API is missing) */
+.kl.kl-leaving { animation: kl-out 260ms var(--ease-in-out) both; pointer-events: none; }
+@keyframes kl-out { to { opacity: 0; transform: scale(1.03); } }
+:root.kl-enter #st-app { animation: kl-in 360ms var(--ease-out) both; }
+@keyframes kl-in { from { opacity: 0; transform: scale(.985); } }
+
+/* View Transition: the landing lifts away, the Studio settles in, and the big box becomes the Builder composer */
+:root.kl-vt::view-transition-old(root) { animation: kl-vt-out 380ms var(--ease-in-out) both; }
+:root.kl-vt::view-transition-new(root) { animation: kl-vt-in 520ms var(--ease-out) 60ms both; }
+@keyframes kl-vt-out { to { opacity: 0; transform: scale(1.035); } }
+@keyframes kl-vt-in { from { opacity: 0; transform: scale(.975); } }
+:root.kl-vt[data-landing] .kl-box { view-transition-name: kl-box; }
+:root.kl-vt:not([data-landing]) #st-setup-form { view-transition-name: kl-box; }
+:root.kl-vt::view-transition-group(kl-box) { animation-duration: 560ms; animation-timing-function: var(--ease-out); }
+:root.kl-vt::view-transition-old(kl-box), :root.kl-vt::view-transition-new(kl-box) { height: 100%; }
+
+/* ---- reduced motion: nothing moves; everything is simply there */
+:root[data-motion="reduce"] .kl *, :root[data-motion="reduce"] .kl { animation: none !important; transition: none !important; }
+:root[data-motion="reduce"] .kl-typing { display: none; }
+:root[data-motion="reduce"] .kl-caret { display: none; }
+
+/* ---- small screens */
+@media (max-width: 760px) {
+  .kl-top { height: 56px; padding: 0 16px; }
+  .kl-main { padding: 0 16px 40px; }
+  .kl-hand { font-size: 84px; }
+  .kl-wave { margin-bottom: 10px; }
+  .kl-h1 { font-size: clamp(42px, 12.4vw, 64px); letter-spacing: -.04em; }
+  .kl-terms { margin-top: 16px; font-size: 16.5px; gap: 4px 12px; flex-direction: column; }
+  .kl-terms > span:first-child::after { display: none; }
+  .kl-lede { font-size: 15.5px; }
+  .kl-form { margin-top: 24px; }
+  .kl-box { flex-wrap: wrap; border-radius: 24px; padding: 8px; gap: 4px; }
+  .kl-box-ico { display: none; }
+  .kl-field { flex-basis: 100%; min-height: 52px; }
+  .kl-input, .kl-ph { padding: 0 10px; left: 0; right: 0; font-size: 17px; }
+  .kl-ph { padding: 0 10px; }
+  .kl-go { width: 100%; height: 54px; }
+  .kl-alts { gap: 8px; margin-top: 14px; }
+  .kl-alt { font-size: 14px; padding: 0 14px; }
+  .kl-orbit { margin-top: 26px; gap: 8px; flex-wrap: nowrap; }
+  .kl-ch { width: 44px; height: 44px; padding: 0; justify-content: center; }
+  .kl-ch-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .kl-ch-ico { width: 32px; height: 32px; }
+  .kl-chline { font-size: 14px; max-width: 30ch; margin-top: 10px; }
+}
+@media (max-width: 360px) { .kl-orbit { gap: 5px; } .kl-ch { width: 40px; height: 40px; } }

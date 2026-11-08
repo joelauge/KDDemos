@@ -20,6 +20,8 @@ You can remove any file from your trial bot in KnowBot Studio, and you can remov
 
 Choosing **Start a new bot** gives you a fresh, empty bot. It does not delete the old trial's files right away: they stay in the store until that trial expires after 7 days, and are then deleted. To remove a file sooner, remove it from your bot before you start a new one.
 
+To delete everything at once, use **Start over** in the Studio header. After you confirm, it permanently deletes your trial bot's uploaded and imported files, its settings, the conversation and the questions it logged, and the old bot's link stops working. The shared sample files are not yours, so they are never deleted. A bot that has already launched is managed from your KnowDrive account instead.
+
 ## Seven-day expiry
 
 Source: /studio/

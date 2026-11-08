@@ -656,6 +656,19 @@ export function createKnowBotServer(opts = {}) {
 // ------------------------------------------------------------ main
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
+  // Local runs: load knowbot/.env (git-ignored; see .env.example). Never overrides a variable already set, and the
+  // live server never has this file (it gets the same names from Worker secrets).
+  try {
+    const envFile = path.join(__dirname, '..', '.env');
+    if (existsSync(envFile)) {
+      for (const line of readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+        const m = /^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+        if (!m || line.trim().startsWith('#')) continue;
+        const v = m[2].replace(/^(['"])(.*)\1$/, '$2');
+        if (v && process.env[m[1]] === undefined) process.env[m[1]] = v;
+      }
+    }
+  } catch { /* a bad .env never stops the server */ }
   const port = Number(process.env.PORT || 8787);
   const host = process.env.HOST || '0.0.0.0';
   const kb = createKnowBotServer();

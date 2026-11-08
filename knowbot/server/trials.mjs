@@ -30,6 +30,9 @@ import * as kbLib from '../lib/knowbot.js';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
 import { importStore, normalizeStoreUrl, ERROR_COPY as STORE_ERROR_COPY } from './storeimport.mjs';
+import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
+import { createLocalKb } from './builder/local-kb.mjs';
+import { createBuilderKb } from './builder/kb.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -529,6 +532,8 @@ export function parseIntent(message, ctx = {}) {
   // "Enter a Store URL" typed: "import my shopify store mystore.com", "pull in our products from acme.com/shop"
   const storeAsk = storeIntentOf(msg);
   if (storeAsk) { actions.push({ type: 'import_store', ...(storeAsk.url ? { url: storeAsk.url } : {}) }); intents.push('import_store'); if (storeAsk.offer) intents.push('store_offer'); }
+  // owner: a bot for a named site takes the site's name, unless the visitor already named the bot
+  if (storeAsk?.offer && storeAsk.label && !patch.name && (!spec.name || spec.name === 'SampleBot')) { patch.name = storeAsk.label; intents.push('name'); }
   if (/\bremove (?:the )?samples?\b|\bremove (?:the )?sample files\b/i.test(msg)) { actions.push({ type: 'remove_samples' }); intents.push('remove_samples'); }
   else if (!storeAsk && /\b(?:samples?|demo|example files?)\b/i.test(msg)) { actions.push({ type: 'attach_samples' }); intents.push('attach_samples'); }
   if (/\b(?:just\s+)?(?:let me\s+)?upload\b|\bskip\b/i.test(msg) && !intents.includes('attach_samples') && !storeAsk) { actions.push({ type: 'request_upload' }); intents.push('request_upload'); }
@@ -595,11 +600,24 @@ export function storeIntentOf(msg) {
   if (url) {
     // "The Ultimate Game Master.com": DOMAIN_RE only sees "Master.com"; the Title-Case run before it is the real name
     const spaced = spacedDomainOf(s);
-    return { url: spaced && spaced.endsWith(url.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '')) && spaced.length > url.length ? spaced : url, offer: true };
+    const useSpaced = spaced && spaced.endsWith(url.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '')) && spaced.length > url.length;
+    return { url: useSpaced ? spaced : url, offer: true, label: siteLabelOf(s, useSpaced ? null : url) };
   }
   const spaced = spacedDomainOf(s);
-  if (spaced) return { url: spaced, offer: true };
+  if (spaced) return { url: spaced, offer: true, label: siteLabelOf(s, null) };
   return null;
+}
+/** A bot name from the site the visitor named: "The Ultimate Game Master.com" -> "The Ultimate Game Master",
+ *  "acme-tools.com" -> "Acme Tools". */
+export function siteLabelOf(msg, url) {
+  if (!url) {
+    const m = /((?:[A-Z][\w'’&-]*\s+){0,5}[A-Za-z0-9][\w'’&-]*)\.(?:com|net|org|io|co|ca|shop|store|ai|app|us|uk|au)\b/.exec(String(msg || ''));
+    return m ? m[1].trim().slice(0, 40) : null;
+  }
+  const host = String(url).replace(/^https?:\/\//i, '').replace(/^www\./i, '').split(/[/:?#]/)[0];
+  const first = host.split('.')[0] || '';
+  if (!/^[a-z0-9-]{2,40}$/i.test(first)) return null;
+  return first.split('-').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
 }
 /** "The Ultimate Game Master.com" -> theultimategamemaster.com (Title-Case words run together before a TLD). */
 export function spacedDomainOf(msg) {
@@ -993,7 +1011,7 @@ export function createStudio(o = {}) {
     if (!studioProvider || studioProvider === 'local') return null;
     try { return o.registry?.providerKey?.(studioProvider) || null; } catch { return null; }
   }
-  const builderEngine = () => (studioProvider === 'local' ? 'llm' : studioProvider && providerKey() ? 'llm' : 'scripted');
+  const builderEngine = () => (studioProvider === 'local' ? 'llm' : studioProvider === 'anthropic' ? ((providerKey() || env.ANTHROPIC_API_KEY) ? 'agent' : 'scripted') : studioProvider && providerKey() ? 'llm' : 'scripted');
   async function studioComplete(messages, settings) {
     if (studioProvider === 'local') return o.llmComplete(messages, settings);
     if (studioProvider) {
@@ -1012,6 +1030,30 @@ export function createStudio(o = {}) {
   // F's learning loop (11.1). Guarded: the Studio keeps working if questions.mjs is absent or throws.
   let questionsMod = null;
   const questionsReady = import('./questions.mjs').then((m) => { questionsMod = m; }).catch(() => { questionsMod = null; });
+
+  // ------------------------------------------------------------------------- Builder v2 (Claude Haiku tool agent)
+  // Product facts come from studio/kb (knowDrive-backed when a store is configured, else the bundled local copy).
+  // The key: the dashboard's sealed registry entry, else the ANTHROPIC_API_KEY Worker secret (GitHub secret).
+  const anthropicKey = () => (studioProvider === 'anthropic' ? (providerKey() || env.ANTHROPIC_API_KEY || null) : null);
+  const localKb = createLocalKb({ pricing: { checkoutUrl: checkoutBase } });
+  let remoteKb = null;
+  try { remoteKb = enabled && store && o.builderKb !== false ? createBuilderKb({ kdJson, store, log, now }) : null; } catch (e) { log(`[studio] builder kb: ${e.message}`); }
+  if (remoteKb) { const t = setTimeout(() => { Promise.resolve(remoteKb.ensure()).catch(() => {}); }, 3000); t.unref?.(); }
+  const builderKb = { async search(q, opts) {
+    try { const r = await remoteKb?.search(q, { k: 4, signal: opts?.signal }); if (r?.sources?.length) return r; } catch { /* fall back */ }
+    return localKb.search(q, opts);
+  } };
+  let agentKey = null, agentCall = null;
+  const builderAgent = studioProvider === 'anthropic' ? createBuilderEngine({
+    complete: (params, co) => {
+      const k = anthropicKey(); if (!k) throw new Error('no anthropic key');
+      if (k !== agentKey) { agentKey = k; agentCall = createAnthropicComplete({ apiKey: k, baseURL: env.KNOWBOT_ANTHROPIC_BASE_URL || 'https://api.anthropic.com' }); }
+      return agentCall(params, co);
+    },
+    kb: builderKb, validatePatch, floorMin: floorDefault, model: studioModel || 'claude-haiku-5-5',
+    timeoutMs: setupTimeoutMs, maxToolCalls: 3, contact, log, now,
+    defaultChips: (st) => stepChips(st._T, st._files),
+  }) : null;
 
   // ------------------------------------------------------------------------- knowDrive client
   const apiKey = () => (typeof kd?.apiKey === 'function' ? kd.apiKey() : kd?.apiKey);
@@ -1163,8 +1205,10 @@ export function createStudio(o = {}) {
     if (!T) { T = newTrialState(id, null); trials.set(id, T); }
     return T;
   }
+  const deletedTrials = new Set(); // "Start over": a deleted trial's token stops working at once (files are gone too)
   async function auth(req, id) {
     if (!TRIAL_ID_RE.test(id)) fail(404, 'not_found', 'No such trial.');
+    if (deletedTrials.has(id)) fail(404, 'not_found', 'This bot was deleted.');
     const data = verifyToken(bearer(req), id);
     const T = trialFor(id);
     T.expiresAt = Number(data.e);
@@ -1201,6 +1245,7 @@ export function createStudio(o = {}) {
       checkoutStartedAt: T.checkoutStartedAt, flags: T.flags, answers: { grounded: T.grounded, refusals: T.refusals }, proofDone: T.proofDone, savedAt: new Date(now()).toISOString() }, null, 2);
   }
   async function flushSpec(T) {
+    if (T.deleted) return;
     clearTimeout(T.specTimer); T.specTimer = null; T.specDirty = false;
     const tags = T.converted ? ['knowbot', 'kind:trial-spec'] : [...trialTags(T), 'kind:trial-spec'];
     try { await ingest({ storePath: specPath(T.id), tags, mime: 'application/json', bytes: Buffer.from(specDoc(T)) }); }
@@ -2292,9 +2337,26 @@ export function createStudio(o = {}) {
     if (input.event?.type === 'proof_done') {
       try { const qv = await questionsFor(T); input.context = { ...input.context, expectedTotal: (qv.proof?.length || 0) + (qv.probes?.length || 0) }; } catch {}
     }
-    let out, engine = 'scripted';
+    let out, engine = 'scripted', turnTools = [], turnCitations = [];
     try {
       if (input.chipAction) out = { reply: chipActionReply(input.chipAction), actions: [{ ...input.chipAction.action }], chips: stepChips(T, files) };
+      else if (builderAgent && anthropicKey() && input.message
+        && !(INVENTORY_INTENT_RE.test(input.message) || INSIGHTS_INTENT_RE.test(input.message))) {
+        const state = { _T: T, _files: files, trialId: T.id, step: stepOf(T, files), spec: T.spec,
+          files: files.map((f) => ({ id: f.id, name: f.name, stage: f.stage, atoms: f.atoms, bytes: f.bytes, sample: !!f.sample, enabled: f.enabled !== false, summary: f.summary || null })),
+          usage: usageOf(T, files), quota: { bytes: QUOTA_BYTES }, answers: T.answers.slice(-3), grounded: T.grounded, refusals: T.refusals,
+          proof: T.proofDone ? { status: T.proofDone.partial ? 'partial' : 'done', passed: T.proofDone.passed, total: T.proofDone.total } : null,
+          milestones: input.context?.milestones || {}, storeImport: { busy: !!T.storeBusy }, lastChips: T.lastChips || [] };
+        const r = await builderAgent.turn(state, input, {
+          scripted: () => scriptedTurn(T, files, input),
+          logQuestion: (q) => questionsReady.then(() => questionsMod?.logQuestion?.({ kd: { ...kd, store }, store,
+            scopeTags: ['bucket:knowbot-builder'], root: 'knowbot/builder-questions', ...q })) });
+        out = { reply: withSourceLine(r.reply, r.citations), patch: r.patch, actions: r.actions, chips: r.chips, ...(r.card ? { card: r.card } : {}) };
+        engine = r.engine === 'agent' ? 'agent' : 'scripted';
+        turnTools = (r.toolCalls || []).map((t) => ({ name: t.name, ok: !!t.ok, ...(t.blocked ? { blocked: true } : {}) }));
+        turnCitations = r.citations || [];
+        if (r.fallbackReason) log(`[studio] builder fallback: ${r.fallbackReason}`);
+      }
       // fixer r7: product questions (developer API, insights, inventory, refusal line, languages) get the scripted
       // answer with real numbers and the right chips, whichever engine is on
       else if (builderEngine() === 'llm' && (input.message || input.chip) && !String(CHIP_SENDS[input.chip] || '').startsWith('__')
@@ -2328,7 +2390,8 @@ export function createStudio(o = {}) {
     const chips = normalizeChips(out.chips, T, files);
     T.lastChips = chips;
     emit('chips', { chips });
-    emit('done', { turnId: `turn_${T.setupTurns}_${randB32(6)}`, engine, ms: Math.round(performance.now() - t0), step: stepOf(T, files) });
+    if (turnCitations.length) emit('citations', { citations: turnCitations });
+    emit('done', { turnId: `turn_${T.setupTurns}_${randB32(6)}`, engine, ms: Math.round(performance.now() - t0), step: stepOf(T, files), ...(turnTools.length ? { tools: turnTools } : {}) });
     try { res.end(); } catch {}
   }
   /** fixer r5: the chip a typed message stands for: one on offer last turn (label or send, case- and punctuation-blind,
@@ -2523,7 +2586,7 @@ export function createStudio(o = {}) {
       chips: ready.length ? [C('ask-starter', 'Ask a question', { kind: 'primary', action: { type: 'ask_samplebot', question: ready.length ? (T.questionsCache?.value?.starters?.[0]?.q || null) : null } }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] : [C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
     if (has('explain_types')) return { reply: 'PDF, Word (DOCX), PowerPoint (PPTX), Excel (XLSX), HTML, Markdown, plain text and CSV, images (PNG, JPG, WEBP, GIF) and audio (MP3, WAV, M4A, OGG). Up to 95 MB per file and 100 MB in total.',
       chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
-    if (has('explain_plan')) return { reply: `KnowDrive is $${PRICE}/month: your KnowBot hosted with a share link, an embed widget for any site, 100 MB of storage, citations on every answer and canonical refusals, and question insights so you can see what people ask. Your files carry over. Cancel anytime.`,
+    if (has('explain_plan')) return { reply: `KnowDrive is $${PRICE}/month or $2,499/year for up to 100 MB, with the first 30 days free (card required): your KnowBot hosted with a share link, an embed widget for any site, 100 MB of storage, citations on every answer and canonical refusals, and question insights so you can see what people ask. Your files carry over. Cancel anytime. More than 100 MB? Email sales@recoursellm.com.`,
       chips: [C('launch', `Launch · $${PRICE}/mo`, { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
     if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
     if (has('import_store')) {
@@ -3567,7 +3630,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (a === 'config' && !id) {
       allow('GET');
       return sendJson(res, 200, {
-        price: { amount: PRICE, currency: 'USD', interval: 'month', answersIncluded: env.KNOWBOT_STUDIO_ANSWERS_INCLUDED || null, annualLine: env.KNOWBOT_STUDIO_ANNUAL_LINE || null, guaranteeLine: env.KNOWBOT_STUDIO_GUARANTEE_LINE || null },
+        price: { amount: PRICE, currency: 'USD', interval: 'month', answersIncluded: env.KNOWBOT_STUDIO_ANSWERS_INCLUDED || null, annualLine: env.KNOWBOT_STUDIO_ANNUAL_LINE || 'or $2,499/year · up to 100 MB · first 30 days free, card required', guaranteeLine: env.KNOWBOT_STUDIO_GUARANTEE_LINE || null, enterpriseEmail: env.KNOWBOT_ENTERPRISE_EMAIL || 'sales@recoursellm.com' },
         quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES, ttlDays }, types: TYPES,
         builder: { engine: builderEngine(), provider: studioProvider && builderEngine() === 'llm' ? studioProvider : null },
         samples: sampleSets().map(({ names, ...s }) => s), sampleMode, anchors: ANCHORS, contact, floor: floorDefault,
@@ -3649,7 +3712,26 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         const r = applyPatch(T, await readBody(req), 'user');
         return sendJson(res, 200, { spec: publicSpec(T), version: T.spec.version, diff: r.diff });
       }
-      allow('GET', 'PATCH');
+      if (m === 'DELETE') {
+        // "Start over": delete this trial's own files (uploads, spec, logged questions). Shared sample copies are never
+        // touched. A live (converted) bot is managed from the dashboard instead.
+        if (T.converted) fail(409, 'converted', 'This bot is live. Manage it from your KnowDrive dashboard.');
+        T.deleted = true;
+        clearTimeout(T.specTimer); T.specTimer = null; T.specDirty = false;
+        if (T.poller) { clearTimeout(T.poller); T.poller = null; }
+        for (const c of [...T.clients]) { try { c.res.end(); } catch { /* gone */ } }
+        const rows = await listRows({ tags_all: `trial:${T.id}` });
+        let deleted = 0;
+        for (const r of rows) {
+          const tags = r.tags || [];
+          if (!tags.includes(`trial:${T.id}`) || !tags.includes('kind:trial') || tags.includes('kind:trial-sample')) continue; // fail closed
+          try { await deleteRow(r.id); deleted++; } catch (e) { log(`[studio] start over ${T.id}: delete ${r.id}: ${e.message}`); }
+        }
+        deletedTrials.add(T.id);
+        trials.delete(T.id);
+        return sendJson(res, 200, { deleted });
+      }
+      allow('GET', 'PATCH', 'DELETE');
     }
 
     if (sub === 'files' && !fid) {

@@ -4,7 +4,7 @@
   "main": "worker.js",
   "compatibility_date": "2026-10-01",
   "observability": { "enabled": true },
-  "vars": { "SITE_URL": "https://knowbot.knowdrive.ai", "KNOWBOT_RATE_LIMIT": "30" },
+  "vars": { "SITE_URL": "https://knowbot.knowdrive.ai", "KNOWBOT_RATE_LIMIT": "30", "KNOWBOT_STUDIO_PROVIDER": "anthropic", "KNOWBOT_STUDIO_MODEL": "claude-haiku-5-5" },
   "containers": [
     {
       "class_name": "KnowBotContainer",

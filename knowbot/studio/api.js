@@ -7,8 +7,8 @@
 //   expired in the store and emits 'trial:expired' {status, code}; B posts the ExpiredCard.
 // - No custom request headers other than content-type, authorization and x-filename (Worker CORS).
 
-import { hostedApi } from '../lib/site-config.js';
-import { getState, setState, emit, batch } from './store.js';
+import { hostedApi } from '../lib/site-config.js?v=ffdd34f';
+import { getState, setState, emit, batch } from './store.js?v=ffdd34f';
 
 export class ApiError extends Error {
   constructor(message, { status = 0, code = 'network', retryAfter = null, detail = null } = {}) {
@@ -349,6 +349,8 @@ export async function importStore(url, { owner = true, onEvent, signal } = {}) {
   }
   return done;
 }
+/** DELETE the whole trial ("Start over"): its files, spec and logged questions. */
+export async function deleteTrial() { return request('DELETE', trialPath('')); }
 
 /** DELETE /samples. */
 export async function removeSamples() { return request('DELETE', trialPath('/samples')); }

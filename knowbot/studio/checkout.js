@@ -360,6 +360,7 @@ export function mount(ctx) {
       h('ul', { class: 'co-incl', 'aria-label': 'Included' }, incl.map(([t]) => h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 14) }), h('span', null, t)))),
       p.annualLine ? h('p', { class: 'co-optline' }, String(p.annualLine)) : null,
       p.guaranteeLine ? h('p', { class: 'co-optline' }, h('span', { html: icon('shieldCheck', 14) }), ' ', String(p.guaranteeLine)) : null,
+      p.enterpriseEmail ? h('p', { class: 'co-optline co-enterprise' }, 'More than 100 MB? ', h('a', { href: `mailto:${p.enterpriseEmail}?subject=${encodeURIComponent('KnowBot enterprise')}` }, 'Talk to enterprise sales')) : null,
       channelsStrip,
       h('p', { class: 'co-anchors' }, anchors()));
 
@@ -1603,7 +1604,7 @@ export function mount(ctx) {
       }
       return null;
     }
-    if (!goLiveMod) goLiveMod = import('./golive.js').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
+    if (!goLiveMod) goLiveMod = import('./golive.js?v=ffdd34f').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
     return goLiveMod;
   }
   async function openGoLive({ tab = 'channels', channel = null, invoker = null } = {}) {
