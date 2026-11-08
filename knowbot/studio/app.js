@@ -3593,7 +3593,7 @@ function groupStoreRows() {
       const pn = storeGroupPanel(k);
       if (pn.el.parentNode !== grp) grp.replaceChildren(pn.el);
       grp.removeAttribute('aria-owns');
-      pn.total(total);
+      pn.total(`${total}:${ready}`);
     } else {
       if (grp.firstChild) grp.replaceChildren();
       if (open) {
@@ -3625,7 +3625,7 @@ function storeGroupPanel(kind) {
   const next = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Next');
   const pager = h('div', { class: 'st-sgp-pager' }, prev, next);
   const el = h('div', { class: 'st-sgp' }, h('label', { for: sid, class: 'st-sgp-ql' }, `Search ${label.toLowerCase()}`), q, count, ul, pager);
-  let offset = 0, total = 0, seq = 0, timer = 0, known = 0;
+  let offset = 0, total = 0, seq = 0, timer = 0, known = '';
   async function load({ fresh = false } = {}) {
     const my = ++seq;
     el.setAttribute('aria-busy', 'true');
@@ -3687,8 +3687,8 @@ function storeGroupPanel(kind) {
   next.addEventListener('click', () => { offset += STORE_PAGE; load(); });
   pn = {
     el,
-    // a new total (more files landed, or some were removed elsewhere) refreshes the page once it changes
-    total(n) { if (n !== known) { const first = !known; known = n; load({ fresh: !first }); } },
+    // a new total or ready count (files landed, learned, or were removed elsewhere) refreshes the page once it changes
+    total(sig) { if (sig !== known) { const first = !known; known = sig; load({ fresh: !first }); } },
   };
   storeGroupPanels.set(kind, pn);
   return pn;

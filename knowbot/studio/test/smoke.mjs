@@ -788,7 +788,7 @@ async function storeJourney(browser, dev, cell) {
         let one = false;
         if (listed) {
           await q.evaluate((x) => { x.value = 'trail'; x.dispatchEvent(new Event('input', { bubbles: true })); });
-          one = await page.waitForFunction(() => { const l = [...document.querySelectorAll('#in-intake-slot .st-sgp-l > li')]; return l.length === 1 && /Trail Pro/.test(l[0].innerText) && !!l[0].querySelector('a[target="_blank"]') && !!l[0].querySelector('input[type="checkbox"]') && /Remove/.test(l[0].innerText); }, null, { timeout: 8000 }).then(() => true).catch(() => false);
+          one = await page.waitForFunction(() => { const l = [...document.querySelectorAll('#in-intake-slot .st-sgp-l > li')]; return l.length === 1 && /Trail Pro/.test(l[0].textContent) && !!l[0].querySelector('a[target="_blank"]') && !!l[0].querySelector('input[type="checkbox"]') && /Remove/.test(l[0].textContent); }, null, { timeout: 8000 }).then(() => true).catch(() => false);
           await q.evaluate((x) => { x.value = ''; x.dispatchEvent(new Event('input', { bubbles: true })); });
         }
         check('18-store', 'Sources group past the row cap: search finds any product file (link, Use switch, Remove)', listed && one,
