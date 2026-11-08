@@ -2,6 +2,7 @@
 // Node 22, no dependencies.
 import { promises as fsp, watch as fsWatch, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { hitPage, hitSection } from '../lib/knowbot.js';
 
 // ---------------------------------------------------------------- frontmatter
 
@@ -215,7 +216,7 @@ export class LocalRetriever {
         const terms = tokenize(text);
         const tf = new Map();
         for (const t of terms) tf.set(t, (tf.get(t) || 0) + 1);
-        chunks.push({ filename, title, url, text, tf, len: terms.length, titleTerms });
+        chunks.push({ filename, title, url, text, tf, len: terms.length, titleTerms, section: hitSection({ breadcrumb: c.heading }, title) });
       }
     }
     const df = new Map();
@@ -308,6 +309,7 @@ export class LocalRetriever {
         score: Math.round((s / (s + 8)) * 10000) / 10000, // squash BM25 into (0,1) so it is comparable to knowDrive scores
         bm25: Math.round(s * 1000) / 1000,
         text: c.text,
+        ...(c.section ? { section: c.section } : {}), // the chunk's heading, when it is not just the title
       });
       if (results.length >= k) break;
     }
@@ -443,7 +445,10 @@ export class KnowDriveRetriever {
     const local = this.local?.lookup(filename);
     const title = pickStr(attrs.title) || local?.title || titleFromFilename(filename);
     const url = pickStr(attrs.url) || local?.url || null;
-    return { file_id: d.file_id || d.id || `kd:${filename}`, filename, title, url, score: Number(d.score) || 0, text };
+    // Where the hit sits: its page (only when knowDrive reports one, e.g. PDFs; never guessed) and its section heading.
+    const page = hitPage(attrs), section = hitSection(attrs, title);
+    return { file_id: d.file_id || d.id || `kd:${filename}`, filename, title, url, score: Number(d.score) || 0, text,
+      ...(page ? { page } : {}), ...(section ? { section } : {}) };
   }
 }
 
