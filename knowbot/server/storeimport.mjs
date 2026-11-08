@@ -15,6 +15,9 @@
 //       enrich?: 'auto'|'thin'|'all'|'none',   // read product pages besides the feed (auto: thin feed copy, or all
 //                                              // when the time budget allows)
 //       batchFiles?: 40, batchBytes?: 2 MB, date?: Date, planOnly?: boolean,
+//       skip?: { urls?: string[], paths?: string[] },   // resume: pages an interrupted run of this import already wrote
+//                                   // (their URLs, and/or their file paths site/<host>/<kind>/<slug>.<ext>). They are
+//                                   // neither read nor written again; result.report.already {kind:n} counts them.
 //       net?: { ...createStoreFetcher options }   // tests only: allowAddresses, allowPorts:'any', resolve, paceMs
 //   }) → Promise<{ platform, api, base, host, name, plan, files, counts, report, capped, skipped, warnings }>
 //   It throws StoreImportError { code, message, status } after emitting `error`.
@@ -883,7 +886,7 @@ function createRepeatFilter({ pruneEvery = 1000 } = {}) {
  * add() is serialised (docs arrive from parallel readers); the first 10 HTML pages are held back so repeated blocks can
  * be recognised before anything is written. → { add(doc), finish(), stats }
  */
-function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batchFiles = 40, batchBytes = 2 * MB, warmPages = 10, maxBatchAgeMs = 3000 }) {
+function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batchFiles = 40, batchBytes = 2 * MB, warmPages = 10, maxBatchAgeMs = 3000, isDone = null }) {
   const label = displayPart(storeName) || displayPart(siteHost) || 'Store';
   const stats = { used: 0, files: 0, written: {}, leftOut: {}, bytesByKind: {} };
   const out = [];
@@ -917,6 +920,8 @@ function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batch
     let rel = `site/${host}/${d.kind}/${slug}.${ext}`;
     if (taken.has(rel)) { slug = `${slug}-${shortHash(d.url)}`; rel = `site/${host}/${d.kind}/${slug}.${ext}`; }
     if (taken.has(rel)) return;
+    // resume: a page the interrupted run already wrote (its URL, or its file path) is not written twice
+    if (isDone && isDone(d.url, d.kind, rel)) return;
     taken.add(rel);
     stats.used += size + FILE_OVERHEAD; stats.files++; inc(stats.written, d.kind); inc(stats.bytesByKind, d.kind, size);
     const title = headText(d.title);
@@ -1236,6 +1241,7 @@ async function readPageSource(ctx, s) {
   const key = urlKey(s.url);
   if (ctx.seen.has(key) || ctx.seenProducts.has(key)) { report.skipped.duplicate++; return; }
   ctx.seen.add(key);
+  if (ctx.already(s.url, s.kind)) return;
   let html, url = s.url;
   const pre = ctx.prefetched.get(key) || ctx.plan.prefetched.get(key);
   if (pre && htmlToText(pre.html, { main: true }).replace(/\s+/g, ' ').length >= 30) html = pre.html;
@@ -1248,6 +1254,7 @@ async function readPageSource(ctx, s) {
     url = normalizeUrl(r.url) || s.url;
     const canon = goodCanonical(ctx, canonicalOf(html, url), url);
     if (canon) { const ck = urlKey(canon); if (ck !== key && ctx.seen.has(ck)) { report.skipped.duplicate++; return; } ctx.seen.add(ck); url = canon; }
+    if (url !== s.url && ctx.already(url, s.kind)) return;
   }
   let kind = s.kind;
   if (kind === 'page' || kind === 'help') { const k2 = classifyUrl(url, { platform: ctx.det.platform, text: pre?.title || titleOfHtml(html) }); if (['faq', 'policy', 'help'].includes(k2)) kind = k2; }
@@ -1345,6 +1352,7 @@ async function readProductUrl(ctx, url, { requireLd = false, candidate = false }
     const ck = urlKey(canon);
     if (ck !== urlKey(url) && ctx.seenProducts.has(ck)) { report.skipped.duplicate++; return null; }
     ctx.seenProducts.add(ck); finalUrl = canon;
+    if (canon !== url && ctx.already(canon, 'product')) return 'product';
   }
   const doc = readProductHtml(html, finalUrl, null, { requireLd: requireLd || candidate });
   if (!doc) {
@@ -1380,6 +1388,8 @@ async function readProducts(ctx) {
   const claim = (url) => {
     const k = urlKey(url);
     if (!k || ctx.seenProducts.has(k)) { report.skipped.duplicate++; return false; }
+    // resume: written by the interrupted run: counts as done (and against the product cap), never read again
+    if (ctx.already(url, 'product')) { ctx.seenProducts.add(k); ctx.productCount++; done++; return false; }
     if (ctx.productCount + pending >= max) { ctx.productsMore = true; ctx.inc(report.leftOut.cap, 'product'); return false; }
     ctx.seenProducts.add(k); pending++;
     return true;
@@ -1420,6 +1430,7 @@ async function readPdfs(ctx) {
   ctx.totals.pdf = all.length;
   for (const p of all.slice(caps.maxPdfs)) ctx.inc(report.leftOut.cap, 'pdf');
   await pool(all.slice(0, caps.maxPdfs), async (p) => {
+    if (ctx.already(p.url, 'pdf')) return;
     if (ctx.timeUp) { ctx.inc(report.leftOut.time, 'pdf'); return; }
     let r;
     try { r = await f.get(p.url, { accept: 'application/pdf', maxBytes: f.config.maxPdfBytes }); } catch (e) { ctx.pageError(e, 'pdf'); return; }
@@ -1456,10 +1467,26 @@ export async function importStore(input, o = {}) {
     let lastReading = 0;
     // kinds: the page kinds the visitor ticked (null = every kind); unknown names are ignored
     const kinds = Array.isArray(o.kinds) && o.kinds.length ? new Set(o.kinds.filter((k) => KINDS.includes(k))) : null;
+    // resume: pages written by an interrupted run of this import, by URL key and by file path
+    const skipUrls = new Set([...(o.skip?.urls || [])].map((u) => urlKey(u)).filter(Boolean));
+    const skipPaths = new Set([...(o.skip?.paths || [])].map((x) => String(x).toLowerCase()));
+    const isDone = skipUrls.size || skipPaths.size ? (url, kind, rel) => {
+      const k = urlKey(url);
+      if (k && skipUrls.has(k)) return true;
+      if (!rel) { try { rel = `site/${kind === 'pdf' ? ctx.plan?.host || new URL(url).hostname.toLowerCase() : new URL(url).hostname.toLowerCase()}/${kind}/${slugOf(url)}.${kind === 'pdf' ? 'pdf' : 'md'}`; } catch { return false; } }
+      return skipPaths.has(String(rel).toLowerCase());
+    } : null;
+    report.already = {};
     const ctx = { f, base: det.base, det, caps, report, warnings: [], seen: new Set(), seenProducts: new Set(), pdfs: new Map(), prefetched: new Map(),
       productCount: 0, productsMore: false, timeUp: false, enrich: o.enrich || 'auto', pageSize: o.pageSize, totals: {}, kinds, collectionsRead: 0,
       enrichSeen: 0, enrichThin: 0, enrichClock: { t0: 0, n: 0 },
       inc: (obj, k, n = 1) => { obj[k] = (obj[k] || 0) + n; },
+      /** Written by the interrupted run (resume): counted in report.already and in the reading progress, not read. */
+      already(url, kind) {
+        if (!isDone || !isDone(url, kind)) return false;
+        ctx.inc(report.already, kind);
+        return true;
+      },
       pageError(e, kind) {
         if (FATAL.has(e.code)) throw e;
         if (e.code === 'robots') report.skipped.robots++;
@@ -1472,7 +1499,8 @@ export async function importStore(input, o = {}) {
         const t = Date.now();
         if (t - lastReading < 250) return;
         lastReading = t;
-        emit('reading', { kind, done: report.read[kind], total: Math.max(ctx.totals[kind] || 0, report.read[kind]), read: { ...report.read } });
+        const done = report.read[kind] + (report.already[kind] || 0);
+        emit('reading', { kind, done, total: Math.max(ctx.totals[kind] || 0, done), read: { ...report.read } });
       } };
     const plan = await findSources(f, det, { inflate: (b) => zlib.gunzipSync(b, { maxOutputLength: f.config.maxBytes }), registrable: registrableDomain,
       allowHelpHost: (h) => f.allowHost(h), feedTotal: () => feedTotalOf(ctx), onDiscover: (d) => emit('discovering', d) });
@@ -1493,7 +1521,8 @@ export async function importStore(input, o = {}) {
     if (total === 0 && !det.api) throw err('no_content');
 
     const writer = createWriter({ maxTotalBytes: caps.maxTotalBytes, storeName: det.name || plan.host, siteHost: plan.host, onFiles: o.onFiles, emit,
-      batchFiles: o.batchFiles || 40, batchBytes: o.batchBytes || 2 * MB });
+      batchFiles: o.batchFiles || 40, batchBytes: o.batchBytes || 2 * MB,
+      isDone: isDone ? (url, kind, rel) => { if (!isDone(url, kind, rel)) return false; ctx.inc(report.already, kind); return true; } : null });
     ctx.writer = writer;
     // best sources first: policies and FAQ, help, then every product, PDFs, collections, blog, other pages; kinds the
     // visitor did not tick are never read (reported as leftOut.excluded)
@@ -1531,7 +1560,8 @@ export async function importStore(input, o = {}) {
     if (quotaOut) capped.bytes = { limit: caps.maxTotalBytes, droppedProducts: report.leftOut.quota.product || 0, droppedSections: quotaOut, leftOut: report.leftOut.quota };
     if (ctx.timeUp) capped.time = { leftOut: report.leftOut.time };
     if (Object.keys(capped).length) emit('capped', capped);
-    if (!writer.stats.files) throw err(quotaOut ? 'quota' : 'no_content');
+    const alreadyN = Object.values(report.already).reduce((a, b) => a + b, 0);
+    if (!writer.stats.files && !alreadyN) throw err(quotaOut ? 'quota' : 'no_content');
     emit('built', { n: writer.stats.files, bytes: writer.stats.used, written: report.written, files: files.slice(0, 50).map((x) => ({ name: x.name, path: x.path, bytes: x.size, kind: x.kind })), report });
     return { platform: det.platform, api: !!det.api && !ctx.feedFailed, base: det.base, host: plan.host, name: det.name, plan: publicPlan, files, counts, report,
       capped: Object.keys(capped).length ? capped : null, skipped: report.skipped, warnings: ctx.warnings, requests: f.stats.total, maxConcurrent: f.stats.maxActive };
