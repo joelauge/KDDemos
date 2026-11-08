@@ -49,6 +49,56 @@ export function firstSentence(text) {
   const s = m ? m[1] : t.slice(0, 200) + (t.length > 200 ? '…' : '');
   return s;
 }
+// fixer M r1 (D8): the bot's preview line is a cited fact in the librarian voice, never its courtesy opener.
+// Mirrors lib/knowbot.js isCourtesy (opener/closer templates with no digit, currency, URL or quotation).
+const COURTESY_LINE = /^(?:(?:i think |good news,? |great news,? )?i(?:'ve| have)? found (?:what you(?:'re| are) looking for|it|this|that|the answer|something|a few things|a couple of things|some things)(?: that (?:should|might|may|could|will) help)?(?: for you)?|here(?:'s| is) what i found(?: for you)?|(?:i )?hope (?:this|that) helps(?: you)?|feel free to [^.!?]{0,80}|(?:i'm |i am )?happy to help(?: with that)?|glad (?:you asked|to help|i could help)|let me know if you need [^.!?]{0,40}|(?:good|great) question|thanks for asking)[.!]*$/i;
+const COURTESY_FACTY = /\d|[$€£¥₹¢]|@|https?:|www\.|[“”"«»]/;
+export function isCourtesyLine(s) {
+  const t = String(s ?? '').replace(/[‘’]/g, "'").replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, '').replace(/\s+/g, ' ').trim();
+  return !t || (t.length <= 140 && !COURTESY_FACTY.test(t) && COURTESY_LINE.test(t));
+}
+// “Title” or [“Title”](url), then optional ", page N" and ", under “Section”"
+const WHERE_RE = /(?:\[“([^”]{1,140})”\]\([^)\s]*\)|“([^”]{1,140})”)((?:,\s*page\s+[^,:“]{1,20})?)(?:,\s*under\s+“([^”]{1,100})”)?/;
+const whereLabel = (m) => {
+  if (!m) return '';
+  const title = String(m[1] || m[2] || '').trim();
+  const page = (m[3] || '').replace(/^,\s*/, '').trim();
+  return [title, page, (m[4] || '').trim()].filter(Boolean).join(' · ');
+};
+/**
+ * The first cited fact of an answer in the librarian voice: {where, quote, n, text}. Skips courtesy openers/closers and
+ * the "From “Title”, under “Section”:" lead-in (it becomes `where`). text is ready to show: 'Title · Section: “quote”'.
+ * Falls back to the first marker-carrying sentence, then to citations[0].excerpt. Pure.
+ */
+export function citedLine(text, citations = []) {
+  const ls = String(text || '').split('\n').map((l) => l.replace(/^\s*[-*•]\s+/, '').trim()).filter(Boolean);
+  let headWhere = '';
+  for (const l of ls) {
+    // "Here's what “Title”, under “X” says [1]:" — a header for the bullets that follow
+    const hm = /(?:what|In|From)\s+(.+?)\s+says\s*\[\d+\]\s*:\s*$/.exec(l);
+    if (hm) { headWhere = whereLabel(WHERE_RE.exec(hm[1])); continue; }
+    const q = /“([^”\n]{3,400})”\s*\[(\d{1,3})\]/.exec(l);
+    if (q) {
+      const before = l.slice(0, q.index);
+      const lead = /(?:^|\s)(?:In|From)\s+(.+?)(?:,\s*it says)?\s*:\s*$/.exec(before);
+      const where = (lead && whereLabel(WHERE_RE.exec(lead[1]))) || headWhere;
+      const quote = q[1].trim().replace(/([^.!?…])$/, '$1.');
+      return { where, quote, n: Number(q[2]), text: `${where ? `${where}: ` : ''}“${quote}”` };
+    }
+    // model-written prose: the first sentence that carries a marker and is not courtesy
+    for (const sen of l.split(/(?<=[.!?])\s+(?=[A-Z“"(\d])/)) {
+      const m = /\[(\d{1,3})(?:\s*,\s*\d+)*\]/.exec(sen);
+      if (!m || isCourtesyLine(sen)) continue;
+      const plain = stripMarkers(sen).replace(/^(?:From|In)\s+“[^”]+”(?:,\s*[^:]{0,60})?:\s*/, '');
+      if (plain.split(/\s+/).length >= 3) return { where: '', quote: '', n: Number(m[1]), text: /[.!?]["”’)]?$/.test(plain) ? plain : `${plain}.` };
+    }
+  }
+  const c = (citations || []).find((x) => x && x.excerpt) || null;
+  if (!c) return null;
+  const ex = firstSentence(String(c.excerpt).replace(/^#+\s*/gm, '')).replace(/[“”]/g, '"');
+  const where = [c.title || c.file, c.section].filter(Boolean).join(' · ');
+  return { where, quote: ex, n: c.n || 1, text: `${where ? `${where}: ` : ''}“${ex}”` };
+}
 export async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back below */ }
   const ta = h('textarea', { class: 'co-sr', readonly: true, 'aria-hidden': 'true' }); ta.value = text;
@@ -81,6 +131,9 @@ export function mount(ctx) {
     return { amount, sym, per, text: `${sym}${amount}/${per}`, today: `${sym}${amount.toFixed(2)}`, long: `${sym}${amount}/${p.interval === 'year' ? 'year' : 'month'}`, p };
   };
   const botName = () => getState().spec.name || 'Your bot';
+  // fixer M r1 (D8): the trial bot is "your bot" until it is actually launched (never "live" before payment)
+  const converted = () => { const s = getState(); return !!(s.trial?.converted || s.milestones?.launched); };
+  const backLabel = () => (converted() ? 'Back to the live bot' : 'Back to your bot');
   const hueVar = () => `var(--f${(Number(getState().spec.avatar?.hue) || 0) % 8})`;
   const enabledFiles = () => {
     const s = getState();
@@ -109,16 +162,17 @@ export function mount(ctx) {
   function lastQA() {
     const th = getState().thread || [];
     const ok = (a) => a && a.status === 'grounded' && a.final && !a.final.refused && typeof a.final.text === 'string' && (a.final.citations || []).length;
-    const sentenceOf = (a) => stripMarkers(firstSentence(a.final.text));
-    const clean = (s) => !!s && !/^[a-z]/.test(s) && s.split(/\s+/).filter(Boolean).length >= 5 && /[.!?]["”’)]?$/.test(s) && !/…$/.test(s);
+    const lineOf = (a) => { if (!a._coLine || a._coLine.src !== a.final.text) { try { Object.defineProperty(a, '_coLine', { value: { src: a.final.text, v: citedLine(a.final.text, a.final.citations) }, configurable: true, enumerable: false, writable: true }); } catch { return citedLine(a.final.text, a.final.citations); } } return a._coLine.v; };
+    const clean = (l) => !!l && !!l.text && !/…["”]?$/.test(l.text) && l.text.split(/\s+/).filter(Boolean).length >= 4;
     const score = (a) => Math.max(0, ...(a.final.citations || []).map((c) => Number(c.match) || (c.similarity != null ? Number(c.similarity) * 100 : 0) || 0), Number(a.final.topMatch) || 0);
-    const cands = th.map((a, i) => ({ a, i })).filter(({ a }) => ok(a) && a.question && clean(sentenceOf(a)));
+    const cands = th.map((a, i) => ({ a, i })).filter(({ a }) => ok(a) && a.question && clean(lineOf(a)));
     const best = (list) => list.sort((x, y) => (score(y.a) - score(x.a)) || (y.i - x.i))[0]?.a || null;
     const pick = best(cands.filter(({ a }) => a.by !== 'proof')) || best(cands.filter(({ a }) => a.by === 'proof'))
-      || [...th].reverse().find((a) => ok(a) && /[.!?]["”’)]?$/.test(sentenceOf(a)));
+      || [...th].reverse().find((a) => ok(a) && lineOf(a));
     if (!pick) return null;
-    const c = pick.final.citations.find((x) => x.n === 1) || pick.final.citations[0];
-    return { answerId: pick.id, question: pick.question, answer: sentenceOf(pick), cite: c };
+    const line = lineOf(pick);
+    const c = pick.final.citations.find((x) => x.n === line.n) || pick.final.citations.find((x) => x.n === 1) || pick.final.citations[0];
+    return { answerId: pick.id, question: pick.question, answer: line.text, where: line.where, quote: line.quote, cite: c };
   }
   const anchors = () => {
     const a = cfg().anchors && (cfg().anchors.items || []).length ? cfg().anchors : DEFAULT_ANCHORS;
@@ -330,7 +384,7 @@ export function mount(ctx) {
       embedEl.append(embedPreview(qa));
       if (!qa) return;
       const c = qa.cite;
-      const chip = h('button', { type: 'button', class: 'co-cite', 'aria-label': `Citation 1: ${c.title || c.file}${c.seq != null ? `, atom ${c.seq}` : ''}. Opens the quoted source.` }, '1');
+      const chip = h('button', { type: 'button', class: 'co-cite', 'aria-label': `Citation ${c.n || 1}: ${c.title || c.file}${c.seq != null ? `, atom ${c.seq}` : ''}. Opens the quoted source.` }, String(c.n || 1));
       chip.addEventListener('click', () => emit('drawer:open', { fileId: c.fileId, atomId: c.atomId ?? null, seq: c.seq ?? null, answerId: qa.answerId, n: c.n || 1 }));
       qaEl.append(
         h('figcaption', { class: 'co-qa-q' }, h('span', { class: 'co-qa-k' }, 'Q'), h('span', null, qa.question)),
@@ -549,7 +603,7 @@ export function mount(ctx) {
         qaEl.hidden = !qa;
         if (qa) {
           const c = qa.cite;
-          const chip = h('button', { type: 'button', class: 'co-cite', 'aria-label': `Citation 1: ${c.title || c.file}${c.seq != null ? `, atom ${c.seq}` : ''}. Opens the quoted source.` }, '1');
+          const chip = h('button', { type: 'button', class: 'co-cite', 'aria-label': `Citation ${c.n || 1}: ${c.title || c.file}${c.seq != null ? `, atom ${c.seq}` : ''}. Opens the quoted source.` }, String(c.n || 1));
           chip.addEventListener('click', () => emit('drawer:open', { fileId: c.fileId, atomId: c.atomId ?? null, seq: c.seq ?? null, answerId: qa.answerId, n: c.n || 1 }));
           qaEl.append(
             h('figcaption', { class: 'co-qa-q' }, h('span', { class: 'co-qa-k' }, 'Q'), h('span', null, qa.question)),
@@ -616,7 +670,7 @@ export function mount(ctx) {
           h('span', { class: 'co-thumb-head' }),
           h('span', { class: 'co-thumb-q' }, qa ? qa.question : ''),
           h('span', { class: 'co-thumb-a' }, qa ? qa.answer : getState().spec.greeting || ''),
-          h('span', { class: 'co-thumb-src' }, qa ? `[1] ${qa.cite.file || qa.cite.title || ''}` : '')),
+          h('span', { class: 'co-thumb-src' }, qa ? `[${qa.cite.n || 1}] ${qa.cite.file || qa.cite.title || ''}` : '')),
         h('span', { class: 'co-thumb-dot' })),
       h('span', { class: 'co-thumb-cap', 'aria-hidden': 'true' }, 'On your site'));
   }
@@ -683,7 +737,7 @@ export function mount(ctx) {
     let fr = preStub ? preStub.getBoundingClientRect() : fromR && fromR.width ? { left: fromR.left, top: fromR.top, width: fromR.width, height: Math.min(56, fromR.height) } : null;
     const botPane = document.getElementById('st-bot');
     if (botPane && botPane.contains(document.activeElement)) focus = true;
-    const closeBtn = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small co-stage-x', 'aria-describedby': 'co-stage-x-hint' }, h('span', { 'aria-hidden': 'true', html: icon('x', 14) }), 'Back to the live bot', h('span', { class: 'co-sr', id: 'co-stage-x-hint', hidden: true }, 'Closes the receipt'));
+    const closeBtn = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small co-stage-x', 'aria-describedby': 'co-stage-x-hint' }, h('span', { 'aria-hidden': 'true', html: icon('x', 14) }), backLabel(), h('span', { class: 'co-sr', id: 'co-stage-x-hint', hidden: true }, 'Closes the receipt'));
     // fixer r7 (D9): the eyebrow is the panel's heading and its focus target on a user-initiated open
     const headEl = h('h2', { class: 'co-eyebrow co-stage-h', id: 'co-stage-h', tabindex: '-1' }, h('span', { html: icon('rocket', 13), 'aria-hidden': 'true' }), `${botName()} is ready to launch`);
     const head = h('div', { class: 'co-stage-head' }, headEl, closeBtn);
@@ -808,8 +862,8 @@ export function mount(ctx) {
     if (focus === true || (focus === 'auto' && !typing)) requestAnimationFrame(() => { if (stage === st0) focusStageHead(); });
     // fixer r7 (D9): an auto-open says what just appeared; a user-initiated one also says where focus went
     announce(auto
-      ? `${botName()} is ready to launch: receipt and plan opened beside the Builder, ${price().long}. Press Escape or Back to the live bot to close it.`
-      : `Receipt and plan for ${botName()}, ${price().long}, opened beside the Builder. Back to the live bot closes it.`, 'polite');
+      ? `${botName()} is ready to launch: receipt and plan opened beside the Builder, ${price().long}. Press Escape or ${backLabel()} to close it.`
+      : `Receipt and plan for ${botName()}, ${price().long}, opened beside the Builder. ${backLabel()} closes it.`, 'polite');
     preloadGoLive();
     return stage;
   }
@@ -873,8 +927,8 @@ export function mount(ctx) {
           h('div', { class: 'co-embed-msgs' },
             h('p', { class: 'co-em is-bot' }, greet),
             qa ? h('p', { class: 'co-em is-user' }, qa.question) : null,
-            qa ? h('p', { class: 'co-em is-bot is-ans' }, qa.answer, h('sup', { class: 'co-em-cite' }, '1')) : null,
-            qa ? h('p', { class: 'co-em-src' }, `[1] ${qa.cite.file || qa.cite.title || ''}`) : null)),
+            qa ? h('p', { class: 'co-em is-bot is-ans' }, qa.answer, h('sup', { class: 'co-em-cite' }, String(qa.cite?.n || 1))) : null,
+            qa ? h('p', { class: 'co-em-src' }, `[${qa.cite.n || 1}] ${qa.cite.file || qa.cite.title || ''}`) : null)),
         h('span', { class: 'co-embed-launcher' }, h('span', { html: icon('chat', 14) }))));
   }
   // fixer r4 (D8): the preview is never an empty widget. Every message (greeting, question, the cited answer, its
@@ -1040,7 +1094,7 @@ export function mount(ctx) {
     const ex = h('p', { class: 'co-sr-ex', id: exId, hidden: true },
       h('span', { class: 'co-qa-src-ico', html: icon('file', 12) }),
       h('span', null, h('b', null, [c.file || c.title || 'source', c.locator].filter(Boolean).join(' · ')), c.excerpt ? h('q', null, String(c.excerpt).replace(/\s+/g, ' ').slice(0, 220)) : null));
-    const chip = h('button', { type: 'button', class: 'co-cite', 'aria-expanded': 'false', 'aria-controls': exId, 'aria-label': `Citation 1: ${c.title || c.file || 'source'}. Shows the quoted line.` }, '1');
+    const chip = h('button', { type: 'button', class: 'co-cite', 'aria-expanded': 'false', 'aria-controls': exId, 'aria-label': `Citation ${c.n || 1}: ${c.title || c.file || 'source'}. Shows the quoted line.` }, String(c.n || 1));
     chip.addEventListener('click', () => {
       const open = ex.hidden; ex.hidden = !open; chip.setAttribute('aria-expanded', String(open));
       if (open) motion.animate(ex, [{ opacity: 0, transform: 'translateY(-3px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out' });
@@ -1110,8 +1164,8 @@ export function mount(ctx) {
     // through (tap it to go back to the bot). The peek is a visual echo of the receipt's own Q&A, so it is aria-hidden.
     const qa0 = !side ? lastQA() : null;
     const peek = !side ? h('div', { class: 'co-peek', 'aria-hidden': 'true', style: { '--co-hue': hueVar() } },
-      h('span', { class: 'co-peek-head' }, avatar(22), h('b', null, botName()), h('span', { class: 'co-peek-on' }, h('i', { class: 'co-dot is-ready' }), 'live bot')),
-      qa0 ? h('span', { class: 'co-peek-a' }, qa0.answer, NBSP, h('span', { class: 'co-peek-cite' }, '1')) : h('span', { class: 'co-peek-a' }, getState().spec.greeting || `Ask ${botName()} anything.`)) : null;
+      h('span', { class: 'co-peek-head' }, avatar(22), h('b', null, botName()), h('span', { class: 'co-peek-on' }, h('i', { class: 'co-dot is-ready' }), converted() ? 'live bot' : 'your bot (draft)')),
+      qa0 ? h('span', { class: 'co-peek-a' }, qa0.answer, NBSP, h('span', { class: 'co-peek-cite' }, String(qa0.cite?.n || 1))) : h('span', { class: 'co-peek-a' }, getState().spec.greeting || `Ask ${botName()} anything.`)) : null;
     const layer = h('div', { class: `co-layer${side ? ' is-side' : ' is-bottom'}`, dataset: { kind: 'checkout' } }, scrim, peek, dialog);
     if (peek) peek.addEventListener('click', () => closeSheet('back'));
     // fixer r7 (D8): desktop checkout docks on the RIGHT, the same edge as the receipt panel it continues (and at its

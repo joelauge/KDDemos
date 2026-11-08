@@ -886,3 +886,25 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
   .pf-pop-link { position: relative; }
   .pf-pop-link::after { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
 }
+
+/* fixer V r1 (D5/D7): receipt actions on one row (the document link first, then Open receipt); builder detail
+   (atom locator, match, character ranges) behind a "Details" disclosure */
+.pf-pop-acts { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0; }
+.pf-pop-acts .pf-pop-link { margin: 0 0 0 -8px; }
+.pf-pop-acts .pf-pop-link + .pf-pop-open { margin-left: 0; }
+.pf-pop-details, details.pf-dspan { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+.pf-pop-details summary, details.pf-dspan summary { cursor: pointer; width: max-content; border-radius: 4px; font-weight: 600; }
+.pf-pop-details summary:focus-visible, details.pf-dspan summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pf-pop-details .pf-pop-loc { margin: 4px 0 0; }
+details.pf-dspan > span { display: block; margin-top: 4px; }
+/* < 600 px: chip and its evidence card pulse together instead of a thread drawn across the answer text */
+.pf-cite.pf-pulse, .pf-card.pf-pulse { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (min-width: 600px) { .pf-cite.pf-pulse, .pf-card.pf-pulse { outline: none; } }
+/* fixer V r1 (D10): on phones the starter row snaps chip by chip (the right-edge fade says "more"), and it steps aside
+   while an answer streams so the answer gets the room. CONTRACT-GAP: the map + Sources 44 px peek bar after the first
+   answer lives in the Studio layout (studio/app.js + studio.css, owner B). */
+@media (max-width: 899px) {
+  .sb-sugg { scroll-snap-type: x proximity; }
+  .sb-sugg > .sb-chip { scroll-snap-align: start; }
+  .st-bot:has(.sb-answer[data-status="pending"], .sb-answer[data-status="streaming"]) > #sb-suggest-slot { display: none; }
+}

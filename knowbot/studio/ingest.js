@@ -541,6 +541,7 @@ export function mount(ctx) {
     let area = { x0: 0, y0: 0, x1: 0, y1: 0 };   // where dots may be drawn (never under the HUD or the legend)
     let chrome = { hudBottom: 36, hudRight: 180, hudRLeft: 0, legendTop: 0, legendRight: 0 };
     let chromeStale = true;          // the HUD / legend moved (mode change): re-measure at the next clean-layout moment
+    let chromeFor = '';              // fixer M r1: "WxH" the chrome was last measured for inside a ResizeObserver callback
     let onRetrievalEnd = null;
     // Rects the shatter currently covers (stage coords): cluster labels keep clear of them, so a DocCard, a chunk
     // strip or an atom chip never sits on a "name · stage" label.
@@ -638,13 +639,17 @@ export function mount(ctx) {
       // only the height changed and the chrome is known: the HUD is top-anchored and the legend bottom-anchored, so
       // no layout read is needed (reads here would force a layout other modules' DOM writes just invalidated)
       if (w === W && chrome.measured && !chromeStale) known = true;
+      // fixer M r1: the ResizeObserver measured the chrome for this exact box already (clean layout, no forced read)
+      const fresh = chromeFor === `${w}x${hh}`;
       W = w; H = hh;
       // a short band (B's post-answer strip): the "Each dot is…" caption steps aside so it never sits on the HUD
       setDs(band, 'short', hh < 132 ? 'yes' : '');
       canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);   // CSS sizes the element (100%)
       try { c2d.direction = 'ltr'; c2d.font = MONO10; } catch { /* ignore */ }
-      if (known && chrome.legendTop) chrome = { ...chrome, legendTop: chrome.legendTop + dH };
+      if (fresh) { /* measured at this size in the observer callback */ }
+      else if (known && chrome.legendTop) chrome = { ...chrome, legendTop: chrome.legendTop + dH };
       else measureChrome();
+      chromeFor = '';
       relayout(true);
       if (red) snapAll();
       dirty = true;
@@ -768,7 +773,8 @@ export function mount(ctx) {
       const hit = (a, b) => a.x < b.x + b.w + G && a.x + a.w + G > b.x && a.y < b.y + b.h + G && a.y + a.h + G > b.y;
       const hitsOcc = (b) => occ.some((o) => hit(b, o));
       const hitsLabel = (b) => placed.some((p) => hit(b, p));
-      const discs = live.map((q) => ({ x: q.cx, y: q.cy, r: (q.seg ? Math.min(q.seg.w, q.seg.h) / 2 : isPre(q) ? preR(q) : q.rad) + 3 }));
+      // fixer M r1 (D4/D7): a wider keep-out (+7 px) so a label never sits on a neighbour cluster's outer dots
+      const discs = live.map((q) => ({ x: q.cx, y: q.cy, r: (q.seg ? Math.min(q.seg.w, q.seg.h) / 2 : isPre(q) ? preR(q) : q.rad) + 7 }));
       const hitsDisc = (b) => discs.some((d) => {
         const nx = clamp(d.x, b.x, b.x + b.w), ny = clamp(d.y, b.y, b.y + b.h);
         return (nx - d.x) ** 2 + (ny - d.y) ** 2 < d.r * d.r;
@@ -1838,6 +1844,19 @@ export function mount(ctx) {
     function size() { return { W, H }; }
     function resizeNow() { W = 0; resize(); }
     function remeasure() { measureChrome(); relayout(true); kick(); }
+    // fixer M r1 (D6): observer callbacks only READ (layout is clean there); the canvas re-allocation, the cluster
+    // re-layout and the redraw run in the next frame, one per frame however many observers fired.
+    function premeasure(box) {
+      const w = Math.max(1, Math.round(box.width)), hh = Math.max(1, Math.round(box.height));
+      if (w === W && hh === H) return;
+      measureChrome(); chromeFor = `${w}x${hh}`;
+    }
+    let remRaf = 0;
+    function remeasureSoon() {
+      measureChrome();
+      if (remRaf) return;
+      remRaf = requestAnimationFrame(() => { remRaf = 0; if (!destroyed) { relayout(true); kick(); } });
+    }
     function setReduced(v) { red = v; if (v) snapAll(); dirty = true; kick(); }
     function setVisible(v) { visible = v; if (v) { dirty = true; kick(); } }
     function clusterOf(key) { const r = recByKey.get(key); return r ? { x: r.cx, y: r.cy, rad: r.rad } : null; }
@@ -1860,7 +1879,7 @@ export function mount(ctx) {
     try { if (/[?&]debug=1/.test(location.search)) window.__inMapDbg = () => ({ W, H, mode, peek, strip, area, chrome, N, check: dotCheck(),
       recs: recs.map((r) => ({ name: r.name, atoms: r.atoms, real: r.real, failed: r.failed, pending: r.pending, seqs: r.dots.slice(0, 12).map((i) => SEQ[i]) })), retrieval: retrieval && { px: retrieval.px, py: retrieval.py, hits: retrieval.hits.map((x) => [Math.round(X[x.i]), Math.round(Y[x.i]), Math.round(TX[x.i]), Math.round(TY[x.i])]) } }); } catch { /* ignore */ }
     return { resize, sync, targetFor, spawn, hold, reserve, release, halo, showLabel, playRetrieval, relax, fastForward, setHighlight,
-      pick, infoOf, setHover, setMode, setPeek, remeasure, size, setReduced, setVisible, readColors, clusterOf, bornCount, stageOffset, kick, isRetrieving,
+      pick, infoOf, setHover, setMode, setPeek, remeasure, remeasureSoon, premeasure, size, setReduced, setVisible, readColors, clusterOf, bornCount, stageOffset, kick, isRetrieving,
       setOccluder, setLanes, getLanes, setOverlay, muteLabel, setSectionNames, sectionSeqs, setReading, halfMass,
       get frameMs() { return frameMs; }, get colors() { return colors; },
       set onRetrievalEnd(fn) { onRetrievalEnd = fn; }, get area() { return area; }, get chrome() { return chrome; }, get k() { return k; } };
@@ -1868,7 +1887,7 @@ export function mount(ctx) {
 
   // ---- map host wiring
   let ro = null;
-  let resizeRaf = 0;
+  let resizeRaf = 0, pendingBox = null;
   try {
     // resize inside the observer callback: layout is clean there, so the reads cost nothing and nothing is forced later
     ro = new ResizeObserver((ents) => {
@@ -1877,14 +1896,16 @@ export function mount(ctx) {
       // placed for the old height and would be cut at the band's top edge. It ends now; its atoms land on the canvas.
       const H0 = map.size().H;
       if (cr && cr.height && H0 && cr.height < H0 - 24 && (shatterJobs.size || mapFx.childElementCount)) abortAllShatters();
-      if (cr && cr.width) map.resize({ width: cr.width, height: cr.height }); else if (!resizeRaf) resizeRaf = requestAnimationFrame(() => { resizeRaf = 0; map.resize(); });
+      // fixer M r1 (D6): read here (clean layout), resize + redraw in the next frame (one rAF however many fire)
+      if (cr && cr.width) { pendingBox = { width: cr.width, height: cr.height }; map.premeasure(pendingBox); }
+      if (!resizeRaf) resizeRaf = requestAnimationFrame(() => { resizeRaf = 0; const b = pendingBox; pendingBox = null; if (!destroyed) map.resize(b || undefined); });
     });
     ro.observe(stage);
   } catch { listen(window, 'resize', () => map.resize()); }
   // The HUD and the legend change size (counts, legend chips, a mode's padding): re-measure inside a ResizeObserver
   // callback, where layout is already clean, instead of reading rects in a rAF callback after fresh DOM writes.
   let chromeRO = null;
-  try { chromeRO = new ResizeObserver(() => { if (!destroyed) map.remeasure(); }); for (const el of [hudL, hudR, legend, legendChips]) chromeRO.observe(el); } catch { chromeRO = null; }
+  try { chromeRO = new ResizeObserver(() => { if (!destroyed) map.remeasureSoon(); }); for (const el of [hudL, hudR, legend, legendChips]) chromeRO.observe(el); } catch { chromeRO = null; }
   let io = null;
   try { io = new IntersectionObserver((ents) => { for (const e of ents) map.setVisible(e.isIntersecting); }); io.observe(stage); } catch { /* always visible */ }
   const mo = new MutationObserver((recsM) => {
@@ -2578,9 +2599,12 @@ export function mount(ctx) {
   let enterBatch = 0;
   function enterRow(li) {
     if (reduced()) return;
-    const d = (enterBatch++) * 60;
+    // fixer M r1 (D4): a row is fully opaque the moment it mounts (a long import's later rows used to sit at opacity 0
+    // through a stacked delay and read as disabled); the entrance is a short transform-only settle, staggered at most
+    // 180 ms. Progress lives in the stage pill, never in the row's opacity.
+    const d = Math.min(180, (enterBatch++) * 45);
     setTimeout(() => { enterBatch = Math.max(0, enterBatch - 1); }, d + 30);
-    anim(li, [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 380, delay: d, easing: 'out' });
+    anim(li, [{ transform: 'translateY(6px)' }, { transform: 'none' }], { duration: 240, delay: d, easing: 'out', essential: false });
   }
   function removeRowEl(lid) {
     const r = rowEls.get(lid);
@@ -2685,7 +2709,11 @@ export function mount(ctx) {
     setDs(intakeSlot, 'busy', skel || all.some((f) => f.phase !== 'ready') ? 'yes' : '');
     setDs(mapSlot, 'busy', skel || all.some((f) => !TERMINAL.has(f.phase)) ? 'yes' : '');
     setDs(mapSlot, 'files', all.length || skel ? 'yes' : '');
-    const wantCollapsed = collapsedByUser.auto ? (allReady || (askedCollapse && files.length > 0)) : collapsedByUser.value;
+    // fixer M r1 (D6/D10/D4 CLS): never auto-fold on "all ready" before the first question: the fold would move the
+    // thread with no input (mobile CLS 0.155) and leave the pane empty. It folds inside the ask's input window instead
+    // (answer:start), or on a reload that already has answers.
+    const hasAnswers = (getState().thread || []).some((a) => a && a.by !== 'proof' && a.final);
+    const wantCollapsed = collapsedByUser.auto ? ((allReady && hasAnswers) || (askedCollapse && files.length > 0)) : collapsedByUser.value;
     applyCollapsed(wantCollapsed && all.length > 0 && !skel, files, atoms);
   }
   let isCollapsed = false;
@@ -2712,7 +2740,7 @@ export function mount(ctx) {
           h('span', { class: 'in-chip-dots' }, files.slice(0, 8).map((f) => h('span', {
             class: `in-chip-f${isEnabled(f) ? '' : ' is-off'}`, dataset: { phase: f.phase },
             style: { '--hue': `var(--f${f.hue % 8})`, '--p': fileProgress(f).toFixed(3) },
-          }, h('i', { 'aria-hidden': 'true' }), mid(f.name, isMobile() ? 12 : 18)))),
+          }, h('i', { 'aria-hidden': 'true' }), h('span', { class: 'in-chip-fn' }, mid(f.name, isMobile() ? 12 : 40))))),
           h('span', { class: 'in-chip-more', 'aria-hidden': 'true' }, files.length > 6 ? `+${files.length - 6}` : ''),
           h('span', { class: 'in-chip-ico', 'aria-hidden': 'true', html: icon('chevronDown', { size: 15 }) }));
         chipDesc.textContent = learning || failed
@@ -3735,7 +3763,7 @@ export function mount(ctx) {
       // the card rises from the intake below the map
       const fromX = cx, fromY = sh + 24;
       const hgt = mob ? 20 : 18, lineH = mob ? 22 : 24, gapX = 6;
-      const chipFont = mob ? MONO12 : MONO10;
+      const chipFont = mob ? MONO12 : MONO11;   // fixer M r1 (D4): never under 11 px
       const occH = mob ? ch + 8 : Math.max(ch + 36, availH + 10);
 
       // ---- A. DocCard: the file's real text (its first atoms when they exist, else its own first lines), with a
@@ -4029,7 +4057,8 @@ export function mount(ctx) {
           if (c.more) {
             // "+N atoms" heads for the cluster and dissolves: the rest stream in on the canvas at the real rate
             const e = easeOut(p);
-            blit(c.sp, sx + (q.x - sx) * e, sy + (q.y - sy) * e, c.w, 1 - 0.65 * e, 1 - e);
+            // fixer M r1 (D4): it keeps its full 11 px size while it travels (it used to shrink to ~6 px), and fades
+            blit(c.sp, sx + (q.x - sx) * e, sy + (q.y - sy) * e, c.w, 1, 1 - e * e);
             continue;
           }
           if (p >= 1) {

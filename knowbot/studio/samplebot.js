@@ -131,6 +131,15 @@ export function mount(ctx) {
   }
   // ---- librarian voice: the answer names where it found each fact as a markdown link ([“Title”](https://…)) and the
   // citation carries its page / section / link when the source really has them (never guessed).
+  // The sample files ship with the Studio (studio/samples/<set>/), so a sample citation can always offer its document.
+  const SAMPLE_SETS = { 'lumen-bikes': ['lumen-price-list-2026.md', 'lumen-service-plans.html', 'lumen-store-faq.txt', 'lumen-warranty-returns.md'] };
+  const baseName = (f) => String(f || '').split('/').pop();
+  function sampleHref(file) {
+    const b = baseName(file);
+    const set = Object.keys(SAMPLE_SETS).find((k) => SAMPLE_SETS[k].includes(b));
+    if (!set) return '';
+    try { return new URL(`samples/${set}/${b}`, import.meta.url).href; } catch { return `samples/${set}/${b}`; }
+  }
   const httpUrl = (u) => (typeof u === 'string' && /^https?:\/\/[^\s]+$/i.test(u.trim()) ? u.trim() : '');
   const isDownload = (u) => /\.(?:pdf|docx?|xlsx?|pptx?|csv|zip|epub)(?:[?#]|$)/i.test(String(u || ''));
   /** "p. 17 · Oil filter" from a citation (empty when it has neither). */
@@ -427,7 +436,8 @@ export function mount(ctx) {
           h('span', { class: 'sb-ghost-av' }),
           h('div', { class: 'sb-ghost-body' },
             h('div', { class: 'sb-ghost-src' }, h('i'), line('warranty.pdf · match 86')),
-            h('p', null, h('span', { class: 'sb-ghost-mark' }, line('Frames carry a lifetime warranty for the original owner.')),
+            // the same librarian shape the bot really answers in: where it found it, then the exact words, cited
+            h('p', null, line('Good news! In “Warranty”, page 2, it says: '), h('span', { class: 'sb-ghost-mark' }, line('“Frames carry a lifetime warranty for the original owner.”')),
               h('b', { class: 'sb-ghost-chip' }, h('span', { class: 'sb-ghost-chip-n' }, '1'), h('span', { class: 'sb-ghost-chip-t' }, '· Warranty'))),
             h('div', { class: 'sb-ghost-pill' }, line('Grounded · 1 quote · 100% verified'))))));
     threadEl.prepend(ghostEl);
@@ -836,7 +846,8 @@ export function mount(ctx) {
       h('span', { class: 'pf-cited sb-num', hidden: true }),
       h('span', { class: 'pf-card-ico' }, fico(meta.kind, 14)),
       h('span', { class: 'pf-card-name', title: fname }, fname)),
-    h('span', { class: 'pf-card-loc sb-num' }, [hit.locator || (hit.seq != null ? `atom #${hit.seq + 1}` : null), hit.rank ? `retrieval #${hit.rank}` : null].filter(Boolean).join(' · ')),
+    // the retrieval rank is builder detail: in the card's tooltip, not on the card
+    h('span', { class: 'pf-card-loc sb-num', title: hit.rank ? `Search rank ${hit.rank}` : null }, hit.locator || (hit.seq != null ? `atom #${hit.seq + 1}` : '')),
     snip,
     h('span', { class: 'pf-card-foot' },
       below ? h('span', { class: 'pf-below-l' }, gap != null && gap < 3 ? `just below floor ${pct(fl)} · not used` : 'below floor · not used')
@@ -1034,9 +1045,22 @@ export function mount(ctx) {
     const line = Number(chip.dataset.line);
     const cit = f.citations.find((c) => c.n === n);
     if (!cit) return null;
-    const claim = f.proof?.claims?.[line];
-    const qText = claim && claim.n === n && claim.quote ? claim.quote : (cit.quotes?.[0]?.text || cit.excerpt);
-    const ql = (f.proof?.quotedLines || []).find((x) => x.n === n && x.text === qText) || (f.proof?.quotedLines || []).find((x) => x.n === n);
+    // The chip's quote is the one its OWN sentence carries, matched by text, never by position: proof.claims holds the
+    // cited lines only (a courtesy opener is not a claim), so claims[line] is off by one under the librarian voice and
+    // 1a / 1b would open each other's atoms. Order: the claim whose sentence IS this line, then a quoted line whose text
+    // appears in this sentence, then the citation's first quote.
+    const norm = (t) => String(t || '').replace(/\s*\(opens in a new tab\)/g, '').replace(/\[([^\]\n]{1,200})\]\((?:https?:)?[^\s)]*\)/g, '$1').replace(/\s*\[\d{1,3}\]/g, '').replace(/^\s*[-*•]\s+/, '')
+      .replace(/[‘’“”"'`]/g, '').replace(/…$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const sentText = norm(A.lineEls?.[line]?.sent?.textContent || chip.closest('.sb-line')?.querySelector('.sb-sent')?.textContent || '');
+    const inSent = (t) => { const x = norm(t); return !!x && !!sentText && (sentText.includes(x) || (x.length > 60 && sentText.includes(x.slice(0, 60)))); };
+    const claims = f.proof?.claims || [];
+    const qls = f.proof?.quotedLines || [];
+    const claim = (sentText && claims.find((c) => c.n === n && c.quote && norm(c.sentence) === sentText))
+      || claims.find((c) => c.n === n && c.quote && inSent(c.quote))
+      || (claims[line] && claims[line].n === n && claims[line].quote && !sentText ? claims[line] : null);
+    const own = qls.find((x) => x.n === n && inSent(x.text));
+    const qText = claim?.quote || own?.text || cit.quotes?.[0]?.text || cit.excerpt;
+    const ql = qls.find((x) => x.n === n && x.text === qText) || qls.find((x) => x.n === n);
     const q = (cit.quotes || []).find((x) => x.text === qText) || cit.quotes?.[0] || null;
     const atomId = ql?.atomId || cit.atomId;
     const hit = (A.retrieval?.hits || []).find((x) => x.atomId === atomId);
@@ -1202,7 +1226,8 @@ export function mount(ctx) {
     const docName = c.title || chipTitle(c.file, c.title);
     pop.setAttribute('aria-label', `Citation ${c.label || c.n} receipt`);
     pop.innerHTML = '';
-    pop.append(
+    // Element.append(null) would print "null": every optional part goes through h()'s null-skipping kids
+    pop.append(...[
       h('div', { class: 'pf-pop-head' }, h('span', { class: 'pf-pop-n sb-num' }, c.label || String(c.n)), h('span', { class: 'pf-pop-title' }, c.title || chipTitle(c.file, c.title)),
         c.derived ? h('span', { class: 'pf-badge is-derived' }, 'from a table row') : h('span', { class: 'pf-badge' }, ico('check', 11), 'Verbatim')),
       h('p', { class: 'pf-pop-ctx' },
@@ -1211,12 +1236,19 @@ export function mount(ctx) {
         parts.after ? h('span', { class: 'pf-ctx-dim' }, ` ${parts.after}`) : null),
       // where it is in the document (page / section) and the source's own link, when the citation carries them
       where ? h('p', { class: 'pf-pop-where' }, where) : null,
-      h('p', { class: 'pf-pop-meta sb-num' }, h('span', { class: 'pf-pop-file' }, `Quoted verbatim from ${c.file}`), h('span', { class: 'pf-pop-loc' }, locBits.join(' · '))),
-      link ? h('a', { class: 'pf-pop-link', href: link, target: '_blank', rel: 'noopener noreferrer',
-        'aria-label': `${dl ? 'Download' : 'Open'} ${docName}${dl ? ` (${(/\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(link)?.[1] || 'file').toUpperCase()})` : ''} (opens in a new tab)` },
-      ico(dl ? 'file' : 'external', 13), dl ? 'Download' : 'Open') : null,
-      h('button', { type: 'button', class: 'pf-pop-open', onclick: () => openDrawer({ fileId: c.fileId, atomId: c.atomId, seq: c.seq, answerId: A.id, n: c.n, line: Number(chip.dataset.line) }, chip) },
-        'Open receipt', ico('arrowRight', 13)));
+      h('p', { class: 'pf-pop-meta sb-num' }, h('span', { class: 'pf-pop-file' }, `Quoted word for word from ${c.file}`)),
+      // every receipt ends with the document itself: the source's own link (Open / Download), else the sample file
+      h('div', { class: 'pf-pop-acts' },
+        link ? h('a', { class: 'pf-pop-link', href: link, target: '_blank', rel: 'noopener noreferrer',
+          'aria-label': `${dl ? 'Download' : 'Open'} ${docName}${dl ? ` (${(/\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(link)?.[1] || 'file').toUpperCase()})` : ''} (opens in a new tab)` },
+        ico(dl ? 'file' : 'external', 13), dl ? 'Download' : 'Open')
+          : sampleHref(c.file) ? h('a', { class: 'pf-pop-link', href: sampleHref(c.file), download: baseName(c.file), 'aria-label': `Download ${baseName(c.file)}` },
+            ico('file', 13), `Download ${baseName(c.file)}`) : null,
+        h('button', { type: 'button', class: 'pf-pop-open', onclick: () => openDrawer({ fileId: c.fileId, atomId: c.atomId, seq: c.seq, answerId: A.id, n: c.n, line: Number(chip.dataset.line) }, chip) },
+          'Open receipt', ico('arrowRight', 13))),
+      // builder detail (atom locator, match score) stays one click away, never in the visitor's line of sight
+      locBits.length ? h('details', { class: 'pf-pop-details' }, h('summary', null, 'Details'), h('p', { class: 'pf-pop-loc sb-num' }, locBits.join(' · '))) : null,
+    ].filter(Boolean));
     const mk = pop.querySelector('mark');
     if (mk) mk.style.backgroundSize = '100% 100%';
   }
@@ -1277,6 +1309,16 @@ export function mount(ctx) {
     if (!linked || !linked.card) return;
     const { A, chip, card } = linked;
     if (!chip.isConnected || !card.isConnected) return;
+    // below 600 px a line from chip to card would cross the answer text: both pulse instead (a highlight, no thread)
+    if (mq('(max-width: 599px)')) {
+      A.el.svg.classList.remove('is-on');
+      if (animateIn) for (const el of [chip, card]) {
+        el.classList.add('pf-pulse');
+        if (!reduced()) anim(el, [{ boxShadow: '0 0 0 0 var(--accent-soft)' }, { boxShadow: '0 0 0 6px var(--accent-soft)' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 700, easing: 'out' });
+        setTimeout(() => el.classList.remove('pf-pulse'), 1400);
+      }
+      return;
+    }
     const host = A.el.root.getBoundingClientRect();
     const a = chip.getBoundingClientRect(), b = card.getBoundingClientRect();
     const strip = A.el.strip.getBoundingClientRect();
@@ -2367,7 +2409,8 @@ export function mount(ctx) {
     }
     foot.innerHTML = '';
     foot.append(
-      h('p', { class: 'pf-dspan sb-num' }, span || (q ? 'quoted line' : data.seq != null ? `atom #${data.seq + 1}` : '')),
+      // character ranges and atom numbers are builder detail: behind a "Details" disclosure
+      h('details', { class: 'pf-dspan sb-num' }, h('summary', null, q ? 'Quoted line · details' : 'Details'), h('span', null, span || (q ? 'quoted line' : data.seq != null ? `atom #${data.seq + 1}` : ''))),
       h('div', { class: 'pf-dacts' },
         h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: (e) => expandSource(data, body, e.currentTarget) }, ico('file', 13), 'Expand source'),
         h('button', { type: 'button', class: 'sb-btn sb-btn-sm sb-btn-primary', onclick: () => askAboutPassage(data) }, ico('chat', 13), 'Ask about this passage')));

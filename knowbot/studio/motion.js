@@ -167,6 +167,7 @@ function frame(t) {
   rafId = 0;
   const dt = lastT ? Math.min(100, t - lastT) : 16.7;
   lastT = t;
+  if (lastT && dt < 100) frameEma = frameEma * 0.9 + dt * 0.1;
   // Round-robin under a per-frame budget: when the loop work of one frame runs long (many tickers + a map tween on a
   // throttled CPU), the remaining callbacks run first on the next frame. Callbacks read `t`, so a skipped frame only
   // means a coarser step, never a wrong value.
@@ -337,6 +338,17 @@ export function typeText(el, text, { cps = 1000 / 14, maxMs = 600 } = {}) {
 
 // ------------------------------------------------------------------ view transitions
 
+// Smoothed frame time of the shared loop (EMA of dt while the loop runs). A device that runs above ~22 ms per frame
+// (or that the fps probe / governor marked low) takes the cheap paths below.
+let frameEma = 16.7;
+function slowFrames() {
+  try { const r = document.documentElement; if (r.dataset.detail === 'low' || 'lite' in r.dataset) return true; } catch { /* no DOM */ }
+  return frameEma > 22;
+}
+/** additive: the shared loop's smoothed frame time in ms (16.7 at 60 fps). Modules cap particles by it. */
+export const frameTime = () => frameEma;
+
+
 /**
  * SPEC 2.3. Uses document.startViewTransition when available and motion is full; otherwise a WAAPI
  * FLIP from `el`'s old rect to `target`'s new rect (target = opts.target element or function, default el);
@@ -347,6 +359,17 @@ export function viewTransition(update, { name, el, target } = {}) {
   const resolveTarget = () => (typeof target === 'function' ? target() : target) || el;
   if (reduced()) {
     return run().then(() => { const t = resolveTarget(); if (t) return animate(t, [{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'linear', reducedFade: true }).finished; });
+  }
+  // fixer M r1 (D6 frame budget): on a device measured slow (fpsProbe data-detail="low", or the governor tripped in
+  // the last signature) a view transition costs two full-page snapshots and the FLIP fallback a layout read right
+  // after the update: both were 100-200 ms frames under 4x CPU. The update runs as is; the target settles in with a
+  // compositor-only rise on the NEXT frame (no rect read, no forced layout). Same information, cheaper motion.
+  if (slowFrames()) {
+    return run().then(() => new Promise((res) => requestAnimationFrame(() => {
+      const t = resolveTarget();
+      if (!t || !t.isConnected) { res(); return; }
+      animate(t, [{ opacity: 0.6, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: DUR[2], easing: 'out', essential: false }).finished.then(res, res);
+    })));
   }
   if (typeof document.startViewTransition === 'function' && !document.documentElement.dataset.vtBusy) {
     try {

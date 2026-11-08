@@ -11,7 +11,7 @@ import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { flushQuestions, configureQuestions, _resetQuestions, hashCaller } from '../questions.mjs';
-import { twilioSignature, metaSignature, mailgunSignature, formatSms, formatSpoken, formatWhatsApp, formatEmail, channelStatus, answerSentences, NOT_IN_DATA as UTIL_REFUSAL } from '../channels/util.mjs';
+import { twilioSignature, metaSignature, mailgunSignature, formatSms, smsInfo, toGsm7, formatSpoken, formatWhatsApp, formatEmail, channelStatus, answerSentences, NOT_IN_DATA as UTIL_REFUSAL } from '../channels/util.mjs';
 import { encodingFor } from '../channels/google.mjs';
 import { stripReply } from '../channels/email.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
@@ -134,6 +134,25 @@ describe('channels: per-medium formatting', () => {
     assert.equal(formatSms({ refused: true }, 'x'), NOT_IN_DATA);
     assert.equal(UTIL_REFUSAL, NOT_IN_DATA, 'the channels use the canonical refusal byte for byte');
   });
+  test('SMS spends its budget on the answer: no courtesy, GSM-7 only, whole quotes, best match first (frame warranty)', () => {
+    const fw = { refused: false, question: 'How long is the frame warranty?',
+      answer: 'I found a few things that should help!\n- From “Lumen Bikes Warranty and Returns Policy”, under “Crash damage”: “Damage from crashes and falls is covered by the Crash Replacement program at 40% off, but not by the lifetime frame warranty” [1]\n- From “Lumen Bikes Warranty and Returns Policy”, under “Frames”: “Lumen frames carry a lifetime warranty for the original owner – registration required within 30 days” [1]\n- From “Lumen Store FAQ”: “Paint and finish are covered for two years from the date of purchase, excluding chips from normal riding” [2]\nHope this helps!',
+      citations: [{ n: 1, file: 'lumen-warranty-returns.md' }, { n: 2, file: 'faq.md' }] };
+    const s = formatSms(fw, 'https://kb.example.test/p/abcdefghijkl');
+    assert.match(s, /^"Lumen frames carry a lifetime warranty for the original owner - registration required within 30 days" \[1\]\. /, s);
+    assert.ok(s.includes('lifetime'), s);
+    assert.ok(!/[“”‘’–…]/.test(s) && !/From "|Hope this|I found/.test(s), s);
+    const info = smsInfo(s);
+    assert.equal(info.encoding, 'GSM-7');
+    assert.ok(info.segments <= 2 && s.length <= 306, JSON.stringify(info));
+    // whole quotes only: an item that does not fit is left out, never cut mid-quote
+    assert.equal((s.match(/"/g) || []).length % 2, 0, s);
+    assert.ok(!s.includes('...'), s);
+    assert.match(s, / Proof: https:\/\/kb\.example\.test\/p\/abcdefghijkl$/);
+    assert.equal(toGsm7('“a” ‘b’ – c… café'), '"a" \'b\' - c... café');
+    assert.deepEqual(smsInfo('x'.repeat(161)), { encoding: 'GSM-7', chars: 161, segments: 2 });
+    assert.equal(smsInfo('日本').encoding, 'UCS-2');
+  });
   test('voice speaks with attribution and no markers', () => {
     const s = formatSpoken(r);
     assert.equal(s, 'According to the Returns Policy, you can return any unused item within 30 days of delivery for a full refund. And according to the Refunds file, refunds go back to the original payment method within 5 business days.');
@@ -189,12 +208,12 @@ describe('channels: per-medium formatting', () => {
     assert.equal(sn[1].tag, ' [1]');
     const sms = formatSms(one, 'https://kb/p/abc');
     assert.ok(sms.length <= 320, String(sms.length));
-    assert.ok(!sms.includes('](') && sms.includes('“Owner\'s Manual” (https://x.example/manual.pdf)'), sms);
-    assert.match(sms, /only” \[1\]\. Proof: https:\/\/kb\/p\/abc$/, 'the courtesy closer gives way to the proof link');
+    // SMS: the verbatim quote and its marker only (GSM-7 straight quotes, no courtesy, no "In “Title”, it says:" pointer)
+    assert.equal(sms, '"Replace the oil filter every 5,000 km. Use OEM parts only" [1]. Proof: https://kb/p/abc');
     // too long for one SMS: the courtesy opener goes first, the cited fact stays
     const long = { ...one, answer: one.answer.replace('Use OEM parts only', `Use OEM parts only${' and keep the receipt'.repeat(8)}`) };
     const ls = formatSms(long, 'https://kb/p/abc');
-    assert.ok(ls.length <= 320 && !/^I think/.test(ls), ls);
+    assert.ok(ls.length <= 306 && !/^I think/.test(ls) && smsInfo(ls).encoding === 'GSM-7' && smsInfo(ls).segments <= 2, ls);
     const w = formatWhatsApp(one, 'https://p');
     assert.ok(!w.includes(']('), w);
     assert.match(w, /\[1\] Owner's Manual, page 17, “Oil filter” \(manual\.pdf\)\n {4}Download: https:\/\/x\.example\/manual\.pdf/);
@@ -363,6 +382,14 @@ describe('channels: webhooks against fake providers', () => {
     assert.equal((await (await S.api(`${p}?key=mail-secret`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: own })).json()).ignored, true);
     const ooo = JSON.stringify({ FromFull: { Email: 'x@example.com' }, Subject: 'Out of office', TextBody: 'away', Headers: [{ Name: 'Auto-Submitted', Value: 'auto-replied' }] });
     assert.equal((await (await S.api(`${p}?key=mail-secret`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: ooo })).json()).ignored, true);
+    // a payload with no sender is never silently dropped: it says why and which shapes are accepted
+    const odd = await (await S.api(`${p}?key=mail-secret`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ subject: 'Q', text: Q }) })).json();
+    assert.equal(odd.ignored, true);
+    assert.equal(odd.reason, 'unrecognized_payload');
+    assert.match(odd.message, /Postmark/);
+    // a plain {from, subject, text} relay shape is answered
+    const plain = await (await S.api(`${p}?key=mail-secret`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: 'Kim <kim@example.org>', subject: 'Returns', text: Q }) })).json();
+    assert.equal(plain.refused, false, JSON.stringify(plain));
   });
 
   test('browser voice bot: audio in → Google transcript → cited answer → Google audio out', async () => {

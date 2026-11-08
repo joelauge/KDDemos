@@ -456,7 +456,9 @@ export function createDevApi(o = {}) {
     } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
 
     const refused = !!fin.refused;
-    const text = refused && !guard ? NOT_IN_DATA : String(fin.text || '');
+    // A courtesy opener never hedges right before a verbatim quote on the API and channels ("I think I found …" → "Good news, I found …").
+    // CONTRACT-GAP: lib/knowbot.js (owner Q) OPENERS still contains the hedging form for Studio; drop it there to align every surface.
+    const text = refused && !guard ? NOT_IN_DATA : String(fin.text || '').replace(/^I think I found what you(?:'|’)re looking for!/, "Good news, I found what you're looking for!");
     const lines = refused ? [] : answerLines(text, { markdown: true });
     // The verbatim quote of a cited line is the span inside “…” right before its [n] (the librarian voice wraps the source's
     // exact words in curly quotes and names the document around them); a cited line with no such span is quoted whole,
@@ -886,22 +888,100 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
   }
   function openapi(req) {
     const base = apiBase(req);
-    const citation = { type: 'object', properties: { n: { type: 'integer' }, file: { type: 'string' }, title: { type: 'string' }, excerpt: { type: 'string', description: 'One verbatim line quoted under [n] (never two lines joined)' }, spans: { type: 'array', items: { type: 'string' }, description: 'Every line quoted under [n], each verbatim' }, url: { type: 'string' } }, required: ['n', 'file', 'excerpt', 'spans'] };
-    const proof = { type: 'object', properties: { hits: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, similarity: { type: ['number', 'null'], description: 'Vector similarity 0–1 (never a rank-fusion score); null with label "keyword match" when unknown.' } } } },
-      quoted: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, text: { type: 'string' }, file: { type: 'string' }, fileId: { type: 'string' } } } } } };
-    const answerSchema = { type: 'object', properties: { id: { type: 'string' }, answer: { type: 'string' }, citations: { type: 'array', items: citation }, refused: { type: 'boolean' }, grounded: { type: 'boolean' }, proof, proofUrl: { type: 'string' }, usage: { type: 'object', properties: { latencyMs: { type: 'integer' } } } } };
-    const errors = { 401: { description: 'Missing, invalid, revoked or expired key' }, 403: { description: 'This key is not valid for this bot' }, 404: { description: 'No such bot' }, 429: { description: 'Rate limit (see retry-after, x-ratelimit-*)' } };
+    const ref = (n) => ({ $ref: `#/components/schemas/${n}` });
+    const str = (description, extra = {}) => ({ type: 'string', ...(description ? { description } : {}), ...extra });
+    const int = (description, extra = {}) => ({ type: 'integer', ...(description ? { description } : {}), ...extra });
+    const arr = (items, description) => ({ type: 'array', items, ...(description ? { description } : {}) });
+    const exampleCitation = { n: 1, file: 'lumen-warranty-returns.md', title: 'Lumen Bikes Warranty and Returns Policy', excerpt: 'Lumen frames carry a lifetime warranty for the original owner.',
+      spans: ['Lumen frames carry a lifetime warranty for the original owner.'], section: 'Frames', url: 'https://lumen.example/warranty' };
+    const exampleAnswer = { id: 'ans_8f2k1q', object: 'knowbot.answer', created: 1762560000, bot: 'lumen-bikes', question: 'How long is the frame warranty?',
+      answer: 'Good news, I found what you\'re looking for! In [“Lumen Bikes Warranty and Returns Policy”](https://lumen.example/warranty), under “Frames”, it says: “Lumen frames carry a lifetime warranty for the original owner.” [1] Feel free to open the link for the full details.',
+      format: 'prose', citations: [exampleCitation], refused: false, grounded: true,
+      proof: { hits: [{ file: 'lumen-warranty-returns.md', similarity: 0.8312, excerpt: 'Lumen frames carry a lifetime warranty …' }], quoted: [{ n: 1, text: 'Lumen frames carry a lifetime warranty for the original owner.', file: 'lumen-warranty-returns.md' }], floor: { min: 0.55, top: 0.8312 } },
+      proofUrl: `${publicBase(req, env)}/p/Xk29fQ1a`, usage: { latencyMs: 640, promptTokens: 912, completionTokens: 58, tokensEstimated: true } };
+    const Citation = { type: 'object', description: 'One source the answer cites as [n]. Optional fields appear only when the source really carries them.',
+      properties: { n: int('Footnote number used in the answer text as [n]', { minimum: 1 }), file: str('Path of the cited file in the bot\'s store'), title: str('Human title of the document'),
+        excerpt: str('One verbatim line quoted under [n] (never two lines joined)'), spans: arr({ type: 'string' }, 'Every line quoted under [n], each verbatim'),
+        page: int('Page of the quote, when the document has pages', { minimum: 1 }), section: str('Heading the quote sits under, when known'), url: str('Link to open or download the source (http/https)', { format: 'uri' }) },
+      required: ['n', 'file', 'title', 'excerpt', 'spans'], example: exampleCitation };
+    const Hit = { type: 'object', properties: { file: str(), similarity: { type: ['number', 'null'], minimum: 0, maximum: 1, description: 'Vector similarity 0-1 (1 - distance/2), never a rank-fusion score; null with label "keyword match" when unknown.' }, label: str('"keyword match" when only keyword search found it'), excerpt: str('First 200 characters of the passage') }, required: ['file', 'similarity'] };
+    const Quoted = { type: 'object', properties: { n: int(), text: str('Verbatim quote'), file: { type: ['string', 'null'] }, fileId: str() }, required: ['n', 'text'] };
+    const Proof = { type: 'object', description: 'What the answer stands on: the retrieved passages and every quote, verbatim.', properties: { hits: arr(ref('Hit')), quoted: arr(ref('Quoted')),
+      floor: { type: 'object', properties: { min: { type: ['number', 'null'], description: 'Similarity floor below which nothing is cited' }, top: { type: ['number', 'null'], description: 'Best similarity seen' } } } }, required: ['hits', 'quoted'] };
+    const Usage = { type: 'object', properties: { latencyMs: int(), promptTokens: int(), completionTokens: int(), tokensEstimated: { type: 'boolean', description: 'true when the provider did not report usage (chars / 4 estimate)' } }, required: ['latencyMs'] };
+    const Answer = { type: 'object', properties: { id: str(), object: { const: 'knowbot.answer' }, created: int('Unix seconds'), bot: str(), question: str(),
+      answer: str(`Markdown in the librarian voice: where it was found (title, page/section, link), the exact words in “…” with [n], at most one courtesy opener and closer. A refusal is exactly "${NOT_IN_DATA}"`),
+      format: { type: 'string', enum: ['prose', 'bullets', 'text'] }, citations: arr(ref('Citation')), refused: { type: 'boolean' }, grounded: { type: 'boolean', description: 'true when at least one citation backs the answer' },
+      proof: ref('Proof'), proofUrl: str('Public page showing every quote in context (expires)', { format: 'uri' }), guard: str('Set when a safety/scope guard answered instead of retrieval'), usage: ref('Usage') },
+      required: ['id', 'object', 'answer', 'citations', 'refused', 'grounded', 'proof', 'usage'], example: exampleAnswer };
+    const Message = { type: 'object', properties: { role: { type: 'string', enum: ['system', 'user', 'assistant'] }, content: { oneOf: [{ type: 'string' }, arr({ type: 'object', properties: { type: { const: 'text' }, text: str() } })] } }, required: ['role', 'content'] };
+    const ChatRequest = { type: 'object', description: 'Send "question" or "messages" (the last user message is the question; up to 8 earlier turns are context).',
+      properties: { question: str('', { maxLength: MAX_Q }), messages: arr(ref('Message'), 'max 50'), stream: { type: 'boolean', default: false, description: 'SSE events: retrieval, delta, final, done (error on failure)' },
+        format: { type: 'string', enum: ['prose', 'bullets'], default: 'prose', description: 'prose: sentences with inline [n] (as the Studio shows it); bullets: one cited claim per line' },
+        channel: { type: 'string', enum: CHANNELS, default: 'api', description: 'Which surface asked (question insights)' }, user: str('Your end-user id (hashed, for de-duplication only)') },
+      example: { question: 'How long is the frame warranty?' } };
+    const KnowbotExt = { type: 'object', description: 'KnowBot extension on chat.completion (and on the final chunk when streaming)', properties: { citations: arr(ref('Citation')), refused: { type: 'boolean' }, grounded: { type: 'boolean' }, proof: ref('Proof'), proofUrl: str(), latencyMs: int(), usageEstimated: { type: 'boolean' } } };
+    const ChatCompletionRequest = { type: 'object', properties: { model: str('Your bot id (or "knowbot")'), messages: arr(ref('Message')), stream: { type: 'boolean' }, stream_options: { type: 'object', properties: { include_usage: { type: 'boolean' } } },
+      format: { type: 'string', enum: ['prose', 'bullets'] }, user: str() }, required: ['messages'], example: { model: 'lumen-bikes', messages: [{ role: 'user', content: 'How long is the frame warranty?' }] } };
+    const ChatCompletion = { type: 'object', properties: { id: str(), object: { const: 'chat.completion' }, created: int(), model: str(), system_fingerprint: str(),
+      choices: arr({ type: 'object', properties: { index: int(), message: { type: 'object', properties: { role: { const: 'assistant' }, content: str('Answer followed by numbered footnotes "[n] Title, page, “section” — file <url>"'), refusal: { type: 'null' } } }, logprobs: { type: 'null' }, finish_reason: { type: 'string', enum: ['stop'] } } }),
+      usage: { type: 'object', properties: { prompt_tokens: int(), completion_tokens: int(), total_tokens: int() } }, knowbot: ref('KnowbotExtension') }, required: ['id', 'object', 'choices', 'knowbot'] };
+    const ChatCompletionChunk = { type: 'object', description: 'One SSE "data:" line; the stream ends with "data: [DONE]". The last content chunk has finish_reason "stop" and the knowbot extension.',
+      properties: { id: str(), object: { const: 'chat.completion.chunk' }, created: int(), model: str(), choices: arr({ type: 'object', properties: { index: int(), delta: { type: 'object', properties: { role: str(), content: str() } }, finish_reason: { type: ['string', 'null'] } } }), knowbot: ref('KnowbotExtension') } };
+    const StreamEvents = { type: 'object', description: 'Server-sent events of /v1/bots/{botId}/chat with stream:true',
+      properties: { retrieval: { type: 'object', properties: { hits: arr(ref('Hit')), floor: { type: 'object' }, ms: int() } }, delta: { type: 'object', properties: { text: str(), raw: str('Concatenate every raw to get the full answer'), n: arr({ type: 'integer' }) } }, final: ref('Answer'), done: { type: 'object', properties: { latencyMs: int(), error: { type: 'boolean' } } }, error: ref('ErrorBody') } };
+    const ErrorBody = { type: 'object', properties: { message: str(), type: str('', { enum: [...new Set(Object.values(TYPES)), 'api_error'] }), code: str(), param: { type: ['string', 'null'] }, status: int() }, required: ['message', 'type', 'code'] };
+    const ErrorSchema = { type: 'object', properties: { error: ref('ErrorBody') }, required: ['error'] };
+    const rlHeaders = { 'x-ratelimit-limit': { schema: { type: 'integer' }, description: 'Requests allowed per minute for this key' }, 'x-ratelimit-remaining': { schema: { type: 'integer' } }, 'x-ratelimit-reset': { schema: { type: 'integer' }, description: 'Seconds until the window resets' },
+      'x-ratelimit-limit-requests': { schema: { type: 'integer' }, description: 'OpenAI-style alias' }, 'x-ratelimit-remaining-requests': { schema: { type: 'integer' } }, 'x-ratelimit-reset-requests': { schema: { type: 'string' }, description: 'e.g. "42s"' }, 'x-request-id': { schema: { type: 'string' } } };
+    const err = (status, code, message) => ({ description: message, content: { 'application/json': { schema: ref('Error'), example: { error: { message, type: TYPES[status] || 'api_error', code, param: null, status } } } } });
+    const responses = {
+      BadRequest: err(400, 'invalid_request', 'Send "question" (a string) or "messages" ([{role, content}]).'),
+      Unauthorized: err(401, 'invalid_api_key', 'Missing, invalid, revoked or expired key.'),
+      Forbidden: err(403, 'key_not_for_bot', 'This key is not valid for this bot.'),
+      NotFound: err(404, 'bot_not_found', 'No such bot.'),
+      RateLimited: { ...err(429, 'rate_limited', 'Too many requests for this key. Retry after the number of seconds in retry-after.'), headers: { 'retry-after': { schema: { type: 'integer' } }, ...rlHeaders } },
+      NotConfigured: err(503, 'channel_not_configured', 'The SMS channel is not configured on this server. Set TWILIO_AUTH_TOKEN.'),
+    };
+    const std = { 400: { $ref: '#/components/responses/BadRequest' }, 401: { $ref: '#/components/responses/Unauthorized' }, 403: { $ref: '#/components/responses/Forbidden' }, 404: { $ref: '#/components/responses/NotFound' }, 429: { $ref: '#/components/responses/RateLimited' } };
+    const botId = { name: 'botId', in: 'path', required: true, schema: { type: 'string' }, description: 'Your bot id (a trial id for kb_trial_ keys)', example: 'lumen-bikes' };
+    const webhook = (summary, ct, description) => ({ post: { summary, security: [], tags: ['Channels'], parameters: [botId], description,
+      requestBody: { content: Object.fromEntries(ct.map((c) => [c, { schema: { type: 'object' } }])) },
+      responses: { 200: { description: 'Reply in the provider\'s format' }, 403: { description: 'Provider signature did not verify', content: { 'application/json': { schema: ref('Error') } } }, 503: { $ref: '#/components/responses/NotConfigured' } } } });
     return {
-      openapi: '3.1.0', info: { title: 'KnowBot API', version: '1.0.0', description: `Grounded answers with citations. A question the files do not answer gets exactly: "${NOT_IN_DATA}"` },
-      servers: [{ url: base }], components: { securitySchemes: { bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'kb_live_… | kb_trial_…' } }, schemas: { Answer: answerSchema, Citation: citation } },
+      openapi: '3.1.0',
+      info: { title: 'KnowBot API', version: '1.0.0', description: `Grounded answers with citations from your own files. Every fact is quoted and cited as [n]; a question the files do not answer gets exactly: "${NOT_IN_DATA}"\n\n/v1 and /api/v1 are aliases. Rate limits are per key (see the x-ratelimit-* headers).` },
+      servers: [{ url: base.replace(/\/v1$/, ''), description: 'KnowBot' }],
+      tags: [{ name: 'Answers' }, { name: 'OpenAI-compatible' }, { name: 'Voice' }, { name: 'Channels', description: 'Provider webhooks; authenticated by provider signatures, not API keys' }],
       security: [{ bearer: [] }],
+      components: {
+        securitySchemes: { bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'kb_live_… | kb_trial_…' } },
+        schemas: { Answer, Citation, Hit, Quoted, Proof, Usage, Message, ChatRequest, StreamEvents, ChatCompletionRequest, ChatCompletion, ChatCompletionChunk, KnowbotExtension: KnowbotExt, ErrorBody, Error: ErrorSchema },
+        responses, headers: rlHeaders,
+      },
       paths: {
-        '/v1/bots/{botId}/chat': { post: { summary: 'Ask a bot', parameters: [{ name: 'botId', in: 'path', required: true, schema: { type: 'string' } }],
-          requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { question: { type: 'string', maxLength: MAX_Q }, messages: { type: 'array' }, stream: { type: 'boolean' }, format: { type: 'string', enum: ['prose', 'bullets'], default: 'prose', description: 'prose: sentences with inline [n] (as the Studio shows it); bullets: one cited claim per line' }, user: { type: 'string', description: 'Your end-user id (hashed, for de-duplication only)' } } } } } },
-          responses: { 200: { description: 'Answer (JSON) or text/event-stream', content: { 'application/json': { schema: { $ref: '#/components/schemas/Answer' } } } }, ...errors } } },
-        '/v1/chat/completions': { post: { summary: 'OpenAI-compatible chat completion (model = bot id)', responses: { 200: { description: 'chat.completion with a knowbot extension field, or chat.completion.chunk SSE ending in [DONE]' }, ...errors } } },
-        '/v1/models': { get: { summary: 'The bot this key can use', responses: { 200: { description: 'OpenAI list' } } } },
-        '/v1/bots/{botId}/voice': { post: { summary: 'Voice: audio or text in, cited answer and speech out', responses: { 200: { description: '{transcript, answer, citations, refused, spoken, audio (base64), mime}' }, 503: { description: 'Google speech not configured (use browser speech and send {"text"})' } } } },
+        '/v1': { get: { summary: 'API index', security: [], responses: { 200: { description: 'Endpoints and the base URL to use' } } } },
+        '/v1/bots/{botId}/chat': { post: { operationId: 'askBot', tags: ['Answers'], summary: 'Ask a bot (JSON or SSE)', parameters: [botId],
+          requestBody: { required: true, content: { 'application/json': { schema: ref('ChatRequest') } } },
+          responses: { 200: { description: 'The answer (JSON), or text/event-stream with events retrieval, delta, final, done', headers: rlHeaders,
+            content: { 'application/json': { schema: ref('Answer') }, 'text/event-stream': { schema: ref('StreamEvents') } } }, ...std } } },
+        '/v1/chat/completions': { post: { operationId: 'createChatCompletion', tags: ['OpenAI-compatible'], summary: 'OpenAI-compatible chat completion (model = bot id). Works with the OpenAI SDKs by changing baseURL.',
+          requestBody: { required: true, content: { 'application/json': { schema: ref('ChatCompletionRequest') } } },
+          responses: { 200: { description: 'chat.completion, or chat.completion.chunk SSE ending in [DONE]', headers: rlHeaders,
+            content: { 'application/json': { schema: ref('ChatCompletion') }, 'text/event-stream': { schema: ref('ChatCompletionChunk') } } }, ...std } } },
+        '/v1/models': { get: { operationId: 'listModels', tags: ['OpenAI-compatible'], summary: 'The bot this key can use', responses: { 200: { description: 'OpenAI list', content: { 'application/json': { schema: { type: 'object', properties: { object: { const: 'list' }, data: arr({ type: 'object', properties: { id: str(), object: { const: 'model' }, created: int(), owned_by: str() } }) } } } } }, 401: std[401] } } },
+        '/v1/bots/{botId}/voice': { post: { operationId: 'voice', tags: ['Voice'], summary: 'Voice: audio or text in, cited answer and speech out', parameters: [botId],
+          requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { text: str('Already-recognised speech'), audio: str('base64 audio'), mime: str() } } }, 'audio/*': { schema: { type: 'string', format: 'binary' } } } },
+          responses: { 200: { description: 'Transcript, answer and audio', content: { 'application/json': { schema: { type: 'object', properties: { transcript: str(), answer: str(), citations: arr(ref('Citation')), refused: { type: 'boolean' }, spoken: str('What is read aloud ("According to page 17 of the Owner\'s Manual, …"); never a URL'), audio: str('base64'), mime: str() } } } } },
+            503: { description: 'Google speech not configured (use browser speech and send {"text"})', content: { 'application/json': { schema: ref('Error') } } }, ...std } } },
+        '/v1/channels/{botId}': { get: { operationId: 'channels', tags: ['Channels'], summary: 'Channel status and webhook URLs', security: [], parameters: [botId], responses: { 200: { description: 'Per channel: configured, needs (env var names), webhook URL' }, 404: std[404] } } },
+        '/v1/channels/{botId}/sms': webhook('Twilio Messaging webhook (TwiML reply: GSM-7, at most 2 segments, quotes with [n] and a proof link)', ['application/x-www-form-urlencoded'], 'Signed with X-Twilio-Signature (TWILIO_AUTH_TOKEN).'),
+        '/v1/channels/{botId}/voice': webhook('Twilio Voice webhook (TwiML speech loop; Google STT/TTS when configured)', ['application/x-www-form-urlencoded'], 'Signed with X-Twilio-Signature.'),
+        '/v1/channels/{botId}/whatsapp': { ...webhook('WhatsApp (Meta Cloud API or Twilio)', ['application/json', 'application/x-www-form-urlencoded'], 'Meta: X-Hub-Signature-256; Twilio: X-Twilio-Signature.'),
+          get: { summary: 'Meta verify-token handshake', security: [], tags: ['Channels'], parameters: [botId, { name: 'hub.challenge', in: 'query', schema: { type: 'string' } }, { name: 'hub.verify_token', in: 'query', schema: { type: 'string' } }], responses: { 200: { description: 'The challenge, echoed' }, 403: { description: 'Wrong verify token' } } } },
+        '/v1/channels/{botId}/email': webhook('Inbound e-mail (SendGrid Inbound Parse multipart, Postmark JSON {From, Subject, TextBody}, Mailgun signed form, or plain JSON {from, subject, text})', ['multipart/form-data', 'application/json', 'application/x-www-form-urlencoded'],
+          'Authenticated by ?key=EMAIL_WEBHOOK_SECRET (or Basic auth) or a Mailgun signature. A payload with no sender returns {ok:true, ignored:true, reason:"unrecognized_payload"}.'),
+        '/p/{proofId}': { get: { summary: 'Public proof page: every quote in context (?format=json for JSON)', security: [], parameters: [{ name: 'proofId', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'HTML or JSON' }, 404: { description: 'Expired' } } } },
       },
     };
   }

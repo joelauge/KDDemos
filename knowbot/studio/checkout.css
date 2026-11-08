@@ -665,3 +665,8 @@
 @media (max-width: 899px), (pointer: coarse) {
   .co-foot .co-link, .co-addfirst .co-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0; margin: -13px 0; vertical-align: middle; }
 }
+
+/* fixer M r1 (D8): one solid $249 CTA at a time. While the receipt or the checkout sheet is open the stage/sheet CTA is
+   the only Launch on screen; the header "Launch · $249/mo" pill steps out of view (it keeps its box: no shift). */
+:root[data-co-cta="receipt"] #st-pricewrap, :root[data-co-cta="receipt"] #st-price,
+:root[data-co-cta="sheet"] #st-pricewrap, :root[data-co-cta="sheet"] #st-price { visibility: hidden !important; pointer-events: none; }

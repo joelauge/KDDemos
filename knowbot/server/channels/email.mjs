@@ -33,7 +33,9 @@ export async function parseInbound(raw, contentType) {
   if (/json/i.test(ct)) {
     let j; try { j = JSON.parse(Buffer.from(raw).toString('utf8') || '{}'); } catch { throw new ChannelError(400, 'bad_request', 'invalid JSON'); }
     const headers = Array.isArray(j.Headers) ? Object.fromEntries(j.Headers.map((h) => [String(h.Name || '').toLowerCase(), String(h.Value || '')])) : {};
-    return { provider: 'postmark', from: addr(j.FromFull?.Email || j.From), subject: String(j.Subject || ''), text: String(j.StrippedTextReply || j.TextBody || ''), autoSubmitted: headers['auto-submitted'] || '' };
+    if (j.From || j.FromFull) return { provider: 'postmark', from: addr(j.FromFull?.Email || j.From), subject: String(j.Subject || ''), text: String(j.StrippedTextReply || j.TextBody || ''), autoSubmitted: headers['auto-submitted'] || '' };
+    // a plain relay shape: {from, subject, text} (from may be "Name <a@b>" or {email})
+    return { provider: 'json', from: addr(j.from?.email || j.from || j.sender), subject: String(j.subject || ''), text: String(j.text || j.body || ''), autoSubmitted: j.autoSubmitted ? 'auto' : '' };
   }
   const f = await parseForm(raw, ct);
   if ('signature' in f && 'token' in f && 'timestamp' in f) {
@@ -90,9 +92,11 @@ export async function handleEmail(cx) {
   if (!ok) throw new ChannelError(403, 'bad_signature', 'This inbound-mail webhook is not authorized.');
 
   const own = addr(env.EMAIL_FROM);
-  if (!mail.from || (own && mail.from === own) || /^(?:mailer-daemon|postmaster|no-?reply)@/i.test(mail.from) || mail.autoSubmitted || /^(?:auto(?:matic)? reply|out of office)/i.test(mail.subject)) {
-    return sendJsonRes(res, 200, { ok: true, ignored: true });
-  }
+  // never silent: a misconfigured provider (a JSON shape we do not parse) gets a reason it can log
+  if (!mail.from) return sendJsonRes(res, 200, { ok: true, ignored: true, reason: 'unrecognized_payload',
+    message: 'No sender found. Send SendGrid Inbound Parse (multipart), Postmark inbound JSON ({From, Subject, TextBody}) or Mailgun routes (form: sender, subject, body-plain).' });
+  if ((own && mail.from === own) || /^(?:mailer-daemon|postmaster|no-?reply)@/i.test(mail.from)) return sendJsonRes(res, 200, { ok: true, ignored: true, reason: 'own_or_system_sender' });
+  if (mail.autoSubmitted || /^(?:auto(?:matic)? reply|out of office)/i.test(mail.subject)) return sendJsonRes(res, 200, { ok: true, ignored: true, reason: 'auto_reply' });
   const body = stripReply(mail.text);
   const subject = mail.subject.replace(/^\s*(?:re|fwd?|aw):\s*/gi, '').trim();
   const question = (body || subject).replace(/\s+/g, ' ').trim().slice(0, 1000);

@@ -166,14 +166,45 @@ export function lowerLead(s, proper = new Set()) {
   if (/^[A-Z]/.test(next) && !/^(?:I|I'm|I've)$/.test(next)) return s;      // "The Lumen …": a name, keep the capital
   return s.charAt(0).toLowerCase() + s.slice(1);
 }
+// fixer M r1 (D11): spoken like the server's formatSpoken (server/channels/util.mjs): the librarian voice's quotations
+// are what gets read, the courtesy opener/closer and the written "From “X”, under “Y”:" pointer are dropped, and the
+// source is said once ("According to …, …"; a second source: "And according to …").
+const SPOKEN_COURTESY = /^(?:(?:i think |good news,? |great news,? )?i(?:'ve| have)? found [^.!?]{0,60}|here(?:'s| is) what i found(?: for you)?|(?:i )?hope (?:this|that) helps(?: you)?|feel free to [^.!?]{0,80}|(?:i'm |i am )?happy to help(?: with that)?|glad (?:you asked|to help|i could help)|let me know if you need [^.!?]{0,40}|(?:good|great) question|thanks for asking)[.!]*$/i;
+const spokenCourtesy = (t) => { const x = String(t || '').replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim(); return !x || (x.length <= 140 && !/\d|[$€£¥]|https?:|[“”"]/.test(x) && SPOKEN_COURTESY.test(x)); };
+const speakable = (t) => String(t || '').replace(/\[([^\]]+)\]\((?:https?:|mailto:)[^)]*\)/g, '$1').replace(/https?:\/\/\S+/g, '').replace(/[*_`#>]/g, '').replace(/[“”]/g, '').replace(/\s+/g, ' ').trim();
+export function spokenItems(text) {
+  const out = [];
+  for (const l of lines(text)) {
+    if (/\bsays\s*\[\d+\]\s*:\s*$/.test(l)) continue;               // "Here's what “X” says [1]:" header, the attribution says it
+    const q = [...l.matchAll(/“([^”\n]+)”\s*\[(\d{1,3})\]/g)];
+    if (q.length) { for (const m of q) out.push({ n: Number(m[2]), text: m[1] }); continue; }
+    for (const sen of l.split(/(?<=[.!?])\s+/)) {
+      if (spokenCourtesy(stripMarkers(sen))) continue;
+      const n = Number(/\[(\d{1,3})\]/.exec(sen)?.[1]) || null;
+      const t = stripMarkers(sen).replace(/^(?:From|In)\s+“[^”]+”(?:,\s*[^:]{0,60})?:\s*/, '');
+      if (t) out.push({ n, text: t });
+    }
+  }
+  return out;
+}
 function spokenText(r, names = []) {
   if (r.refused) return NOT_IN_DATA;
-  const body = stripMarkers(lines(r.text).join(' '));
-  const c = (r.citations || [])[0];
-  if (!c) return body;
-  const src = humanFile(c.title || c.file);
-  const proper = properWords([r.text, ...(r.citations || []).map((x) => x.excerpt)], [...names, src, c.title]);
-  return `According to ${src}, ${lowerLead(body, proper)}`;
+  const cites = r.citations || [];
+  const byN = new Map(cites.map((c) => [c.n, c]));
+  const items = spokenItems(r.text);
+  const proper = properWords([r.text, ...cites.map((x) => x.excerpt)], [...names, ...cites.map((c) => humanFile(c.title || c.file)), ...cites.map((c) => c.title)]);
+  const parts = [];
+  let lastN = null, said = 0;
+  for (const it of items.slice(0, 3)) {
+    let s = speakable(it.text);
+    if (!s) continue;
+    if (!/[.!?]$/.test(s)) s += '.';
+    const c = byN.get(it.n) || (said === 0 && !it.n ? cites[0] : null);
+    if (c && it.n !== lastN) { parts.push(`${said ? 'And according to' : 'According to'} ${humanFile(c.title || c.file)}, ${lowerLead(s, proper)}`); said++; }
+    else parts.push(s);
+    lastN = it.n ?? lastN;
+  }
+  return parts.join(' ') || stripMarkers(lines(r.text).join(' '));
 }
 
 // ================================================================== the dialog
@@ -1355,7 +1386,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     }
 
     function speak(r, audioUrl = null, { after = null } = {}) {
-      const text = r.spoken && audioUrl ? r.spoken : spokenText(r, [botName(), getState().spec.org, getState().spec.name]);
+      const text = r.spoken || spokenText(r, [botName(), getState().spec.org, getState().spec.name]);
       const words = text.split(/(\s+)/);
       capBot.innerHTML = '';
       const spans = [];

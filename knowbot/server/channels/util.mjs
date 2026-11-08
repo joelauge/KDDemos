@@ -214,29 +214,98 @@ export function smsJoin(list) {
   }).join(' ');
 }
 
+// GSM-7 (the 160-character SMS alphabet). One character outside it turns the whole message into UCS-2 (70 per segment).
+const GSM7 = /^[@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-./0-9:;<=>?¡A-ZÄÖÑÜ§¿a-zäöñüà^{}\\[~\]|€]*$/;
+const GSM_MAP = { '“': '"', '”': '"', '„': '"', '«': '"', '»': '"', '‘': "'", '’': "'", '‚': "'", '–': '-', '—': '-', '‑': '-', '−': '-', '…': '...', '•': '-', '·': '-', '\u00a0': ' ', '\u2009': ' ', '\u202f': ' ', '×': 'x', '™': '(TM)', '®': '(R)', '©': '(C)' };
+/** Curly quotes, dashes, ellipses and bullets → their GSM-7 forms; accents GSM-7 lacks lose the accent ("ê" → "e"). */
+export function toGsm7(s) {
+  return [...String(s ?? '')].map((c) => {
+    if (GSM_MAP[c] != null) return GSM_MAP[c];
+    if (GSM7.test(c)) return c;
+    const bare = c.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return bare && GSM7.test(bare) ? bare : c;
+  }).join('');
+}
+/** How an SMS body is billed: { encoding: 'GSM-7'|'UCS-2', chars, segments } (GSM-7 extension characters count twice). */
+export function smsInfo(s) {
+  const t = String(s ?? '');
+  const gsm = GSM7.test(t);
+  const chars = gsm ? [...t].reduce((n, c) => n + (/[\^{}\\[~\]|€]/.test(c) ? 2 : 1), 0) : t.length;
+  const one = gsm ? 160 : 70, many = gsm ? 153 : 67;
+  return { encoding: gsm ? 'GSM-7' : 'UCS-2', chars, segments: chars === 0 ? 0 : chars <= one ? 1 : Math.ceil(chars / many) };
+}
+const qTokens = (s) => new Set((String(s || '').toLowerCase().match(/[a-z0-9]+/g) || []).filter((w) => w.length > 2 && !/^(?:the|and|for|you|your|how|what|does|can|are|with|from|that|this|its|long|much|many|any|our|has|have|was|did|when|where|which|who|why)$/.test(w)).map((w) => w.replace(/ies$/, 'y').replace(/([^s])s$/, '$1')));
+
 /**
- * SMS: ≤ 320 characters. The answer's own sentences with their [n] markers, cut at a sentence boundary, then
- * " Proof: <link>". Never citation excerpts, never a half sentence (unless the first sentence alone is too long).
- * A refusal is the canonical sentence, unchanged.
+ * The answer as SMS items: the librarian voice's verbatim quotes ("quote" [n], without the "In “Title”, it says:" or
+ * "From “Title”:" pointer, which the proof link carries), or a plain cited sentence. Courtesy openers/closers and a
+ * list's "Here's what “Title” says [1]:" header are left out.
+ */
+export function smsItems(answer) {
+  const out = [];
+  for (const x of answerSentences(answer)) {
+    if (x.courtesy) continue;
+    const t = x.text;
+    const q = /“([^”\n]+)”$/.exec(t);
+    if (q && /,?\s*(?:it says|says|reads|states)\s*:?\s*$|:\s*$/i.test(t.slice(0, q.index)) || (q && /^(?:From|In)\s/.test(t))) { out.push({ quote: q[1].trim(), tag: x.tag, stop: x.stop }); continue; }
+    if (q && /^“[^”]+”$/.test(t)) { out.push({ quote: q[1].trim(), tag: x.tag, stop: x.stop }); continue; }
+    if (/^here(?:'s|’s| is) what\b/i.test(t) && /“/.test(t)) continue;
+    out.push({ text: t, tag: x.tag, stop: x.stop });
+  }
+  return out;
+}
+const smsItemText = (x) => (x.quote != null ? `"${x.quote.replace(/[.,;:]+$/, '')}"${x.tag}.` : null);
+/** Items joined: a quote is '"quote" [n].'; a run of plain sentences from the same source carries its marker once. */
+function smsBody(items) {
+  const parts = [];
+  for (let i = 0; i < items.length; i++) {
+    const x = items[i];
+    if (x.quote != null) { parts.push(smsItemText(x)); continue; }
+    const nx = items[i + 1];
+    const same = nx && nx.quote == null && nx.tag && nx.tag === x.tag;
+    parts.push(`${x.text}${same ? '' : x.tag}${x.stop}`);
+  }
+  return parts.join(' ');
+}
+
+/**
+ * SMS: GSM-7 only (straight quotes, '-' for dashes) and at most two segments (306 characters, never above `max`).
+ * The answer's facts, never its courtesy opener or closer: each verbatim quote as '"quote" [n].', whole items packed
+ * until the budget is reached (the item that best matches the question first), then " Proof: <link>". An item is only
+ * cut when even the best one alone does not fit. A refusal is the canonical sentence, unchanged.
  */
 export function formatSms(r, proofUrl, max = 320) {
   if (r.refused) return NOT_IN_DATA;
   const suffix = proofUrl ? ` Proof: ${proofUrl}` : '';
-  const budget = Math.max(60, max - suffix.length);
-  let sentences = answerSentences(r.answer);
-  // the proof link is the text's own closer: a courtesy line after the last cited sentence is left out
-  while (sentences.length > 1 && sentences.at(-1).courtesy) sentences = sentences.slice(0, -1);
-  // the facts come first: when the whole answer does not fit, the friendly opener and closer are the first to go
-  if (smsJoin(sentences).length > budget) sentences = sentences.filter((x) => !x.courtesy);
-  let body = '';
-  const picked = [];
-  for (const x of sentences) {
-    const next = smsJoin([...picked, x]);
-    if (next.length > budget) break;
-    picked.push(x); body = next;
+  const items = smsItems(r.answer).map((x) => (x.quote != null ? { ...x, quote: toGsm7(x.quote) } : { ...x, text: toGsm7(x.text) }));
+  const limit = Math.min(max, 306);
+  const budget = Math.max(60, limit - suffix.length);
+  if (!items.length) return toGsm7(clipWords(stripMarks(r.answer), budget).replace(/…$/, '...')) + suffix;
+  // the item that best answers the question leads (ties keep the answer's own order); the rest follow in order
+  const qt = qTokens(r.question);
+  const score = (x) => { const it = qTokens(x.quote ?? x.text); let n = 0; for (const w of qt) if (it.has(w)) n++; return n; };
+  let lead = 0;
+  if (qt.size) {
+    let best = -1;
+    // a direct statement beats a caveat ("… but not by the lifetime frame warranty"); a quote that fits one segment wins ties
+    const caveat = (x) => /\b(?:not|never|except|excluding|unless)\b|n't\b/i.test(x.quote ?? x.text);
+    items.forEach((x, i) => { const sc = score(x) - (caveat(x) ? 0.75 : 0) + (smsBody([x]).length <= 160 ? 0.25 : 0); if (sc > best) { best = sc; lead = i; } });
   }
-  if (!body && sentences.length) { const x = sentences[0]; body = `${clipWords(x.text, Math.max(20, budget - x.tag.length))}${x.tag}`; }
-  return body + suffix;
+  const order = [items[lead], ...items.filter((_, i) => i !== lead)];
+  const picked = [];
+  for (const x of order) {
+    if (smsBody([...picked, x]).length > budget) continue; // a later, shorter item may still fit whole
+    picked.push(x);
+  }
+  // keep the answer's own order among the packed items (the lead stays first)
+  const rest = items.filter((x) => picked.includes(x) && x !== order[0]);
+  let body = picked.length ? smsBody([order[0], ...rest].filter((x) => picked.includes(x))) : '';
+  if (!body) {
+    const x = order[0];
+    const room = Math.max(20, budget - x.tag.length - 4);
+    body = x.quote != null ? `"${clipWords(x.quote, room).replace(/…$/, '...')}"${x.tag}.` : `${clipWords(x.text, room).replace(/…$/, '...')}${x.tag}.`;
+  }
+  return toGsm7(body) + suffix;
 }
 
 /** WhatsApp: the answer with [n] markers, then numbered source footnotes and the proof link (≤ 4096). */

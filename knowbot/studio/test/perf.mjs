@@ -60,7 +60,8 @@ function probe() {
     })),
   }));
   obs('longtask', (e) => P.tasks.push({ phase: P.phase, dur: Math.round(e.duration), start: Math.round(e.startTime) }));
-  obs('layout-shift', (e) => { if (!e.hadRecentInput) { P.cls += e.value; if (e.value > 0.001) P.shifts.push({ phase: P.phase, v: +e.value.toFixed(4), nodes: (e.sources || []).map((s) => s.node && (s.node.id || s.node.className || s.node.nodeName)).slice(0, 3) }); } });
+  obs('layout-shift', (e) => { if (!e.hadRecentInput) { P.cls += e.value; if (e.value > 0.001) P.shifts.push({ phase: P.phase, t: Math.round(e.startTime), v: +e.value.toFixed(4), nodes: (e.sources || []).map((s) => s.node && (s.node.id || s.node.className || s.node.nodeName)).slice(0, 3),
+    moves: (e.sources || []).slice(0, 3).map((s) => `${Math.round(s.previousRect.y)}+${Math.round(s.previousRect.height)}→${Math.round(s.currentRect.y)}+${Math.round(s.currentRect.height)}`) }); } });
   // PERF_LAYOUT=1: time every layout-reading API and keep the stack of each call that took > 4 ms (a forced reflow)
   P.forced = [];
   if (window.__perfLayout) {
@@ -214,7 +215,7 @@ try {
     for (const [p, d] of Object.entries(r.byPhase)) log(`    ${p.padEnd(11)} ${d.length} long: ${d.join(', ')} ms`);
     for (const w of r.worst) log(`    ${w.dur} ms [${w.phase}] style/layout ${w.style} ms · ${w.scripts.map((s) => `${where(s.src, s.ch)} ${s.fn || '?'} ${s.dur}ms${s.fl ? ` (forced layout ${s.fl}ms)` : ''}`).join(' | ')}`);
     for (const f of r.forced) log(`    forced ${f.ms} ms [${f.phase}] ${f.name} · ${f.stack}`);
-    for (const s of r.shifts) log(`    shift ${s.v} [${s.phase}] ${s.nodes.join(', ')}`);
+    for (const s of r.shifts) log(`    shift ${s.v} [${s.phase}] @${s.t} ms ${s.nodes.map((n, i) => `${n} (y+h ${s.moves?.[i] || '?'})`).join(', ')}`);
     if (r.errors.length) log(`  page errors: ${r.errors.slice(0, 3).join(' || ')}`);
   }
 } finally {
