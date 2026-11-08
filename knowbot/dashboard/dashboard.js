@@ -94,6 +94,8 @@ function normCitations(arr) {
   return arr.slice(0, 24).filter((c) => c && typeof c === 'object').map((c, i) => ({
     n: num(c.n) ?? i + 1, file_id: str(c.file_id, 200), filename: str(c.filename, 300) || str(c.file_id, 200) || `source-${i + 1}`,
     title: str(c.title, 300), url: safeUrl(c.url), score: num(c.score), snippet: str(c.snippet || c.text, 1200),
+    // where in the document (librarian voice): only when the answer's citation really carries it
+    page: Number.isInteger(c.page) && c.page > 0 ? c.page : null, section: str(c.section, 120),
   }));
 }
 function normLatency(l) {
@@ -619,7 +621,7 @@ function renderMd(text, cites, onCite) {
         for (const n of tok.slice(1, -1).split(',').map((x) => parseInt(x, 10))) {
           const c = byN.get(n);
           out.push(c && onCite
-            ? h('button', { type: 'button', class: 'cite', title: c.title || c.filename, 'aria-label': `Citation ${n}: ${c.title || c.filename}`, onclick: () => onCite(n) }, String(n))
+            ? h('button', { type: 'button', class: 'cite', title: c.title || c.filename, 'aria-label': `${n}: citation, ${c.title || c.filename}`, onclick: () => onCite(n) }, String(n))
             : h('span', { class: `cite${c ? '' : ' dead'}`, title: c ? (c.title || c.filename) : 'no matching source' }, String(n)));
         }
       } else {
@@ -652,7 +654,8 @@ function sourcesList(cites) {
     const title = c.title || c.filename;
     const li = h('li', { class: 'src' },
       h('span', { class: 'cite', 'aria-hidden': 'true' }, String(c.n)),
-      h('span', { class: 'src-title' }, c.url ? h('a', { href: c.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, title) : title),
+      h('span', { class: 'src-title' }, c.url ? h('a', { href: c.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, title) : title,
+        c.page || c.section ? h('span', { class: 'src-loc', style: { color: 'var(--muted, #666)', fontWeight: '400' } }, ` · ${[c.page && `p. ${c.page}`, c.section].filter(Boolean).join(' · ')}`) : null),
       h('span', { class: 'src-file' }, c.filename, c.score != null ? h('span', { class: 'score' }, `score ${c.score.toFixed(3)}`) : null),
       c.snippet ? h('span', { class: 'src-snip' }, c.snippet) : null,
     );

@@ -10,8 +10,8 @@ import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
-  splitSentences, citeQuotedLines, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords } from '../trials.mjs';
-import { requireCitations } from '../../lib/knowbot.js';
+  splitSentences, citeQuotedLines, quotedLineParts, sourceSegments, stripSourceLines, lastSourceUrl, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords } from '../trials.mjs';
+import { requireCitations, isCourtesy } from '../../lib/knowbot.js';
 import { atomize, extractText, startFakeKnowDrive as startKD } from './fake-knowdrive.mjs';
 import { NOT_IN_DATA } from '../../lib/knowbot.js';
 
@@ -436,7 +436,12 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.equal(final.proof.unsupported, 0);
     const deltas = ev.filter((e) => e.event === 'delta').map((e) => e.data);
     assert.equal(deltas.length, final.text.split('\n').length);
-    assert.ok(deltas.every((d) => !/\[\d+\]/.test(d.text) && d.n.length >= 1));
+    assert.ok(deltas.every((d) => !/\[\d+\]/.test(d.text)));
+    // librarian voice: only a courtesy opener (first line) or closer (last line) may stream without a citation
+    deltas.forEach((d, i) => { if (!d.n.length) assert.ok((i === 0 || i === deltas.length - 1) && isCourtesy(d.text), `uncited line ${i}: ${d.text}`); });
+    assert.ok(deltas.some((d) => d.n.length >= 1));
+    // it points to where it found the answer, in the guide voice
+    assert.match(final.text, /(?:In|From) “[^”]+”/, final.text);
     assert.ok(final.latencyMs.total >= final.latencyMs.retrieve);
   });
 
@@ -446,7 +451,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const ev = await c.stream(t, '/ask', { question: 'How long is the warranty?' });
     const final = ev.find((e) => e.event === 'final').data;
     assert.equal(final.status, 'grounded');
-    const first = final.text.split('\n')[0];
+    const first = final.text.split('\n').find((l) => /\[\d+\]/.test(l)); // the first cited line (a courtesy opener may precede it)
     assert.match(first, /lifetime/i, final.text);
     assert.doesNotMatch(final.text, /We build bikes to be ridden hard|This page explains/, 'never the document intro');
     for (const l of final.text.split('\n')) assert.doesNotMatch(l.replace(/\s*\[\d+\]\s*$/, ''), /\?\s*$/, `a question is never a claim: ${l}`);
@@ -1080,12 +1085,41 @@ describe('KnowBot Studio server (trials.mjs)', () => {
       ['A tube costs $1.50, e.g. for a 700c wheel.', 'See lumenbikes.example/help.html for more.', '3 left']);
     // lib requireCitations alone keeps only the fragment after the address's dot; citeQuotedLines keeps the quoted line
     const fin = { text: 'To make a warranty claim, email us. Email warranty@lumenbikes.example with photos and your serial number. [1]', citations: [{ n: 1, file_id: 'f1' }], refused: false };
-    assert.match(requireCitations(fin).text, /^example with photos/, 'documents the lib behaviour this guards against');
+    // the lib may split at every stop (historic) or only at a stop followed by whitespace; never mid-address beyond that
+    const rc = requireCitations(fin).text;
+    assert.ok(rc === fin.text || /^example with photos/.test(rc) || /^Email warranty@lumenbikes\.example with photos/.test(rc), rc);
     assert.equal(citeQuotedLines(fin, requireCitations).text, fin.text);
     const two = { ...fin, text: '- Test rides last 30 minutes and require photo ID. We will set the saddle height. [1]\n- Test rides on weekdays need no booking. [1]' };
     assert.equal(citeQuotedLines(two, requireCitations).text, two.text);
     const unmarked = { ...fin, text: 'An uncited line.\nA cited one. [1]' };
     assert.equal(citeQuotedLines(unmarked, requireCitations).text, requireCitations(unmarked).text, 'a line without its own marker is still judged by sentence');
+  });
+
+  test('librarian voice: courtesy lines may stand unmarked only as opener/closer; proof helpers split by Source lines (pure)', () => {
+    const c1 = [{ n: 1, file_id: 'f1' }, { n: 2, file_id: 'f2' }];
+    // one-line guide answer: opener + pointer + quote + closer, an e-mail address inside the quote stays whole
+    const one = { text: "I think I found what you're looking for! In “Warranty”, under “Claims”, it says: “Email warranty@lumenbikes.example with photos” [1]. Hope this helps!", citations: c1.slice(0, 1), refused: false };
+    assert.equal(citeQuotedLines(one, requireCitations).text, one.text);
+    const parts = quotedLineParts(one.text);
+    assert.equal(parts.opener, "I think I found what you're looking for!");
+    assert.equal(parts.closer, 'Hope this helps!');
+    assert.match(parts.body, /^In “Warranty”.*\[1\]\.$/);
+    // list answer: opener line, a pointer line, cited bullets, closer line
+    const list = { text: "Here's what I found!\n- From “A”: “Helmets are free” [1]\n- From “B”: “Locks cost $5” [2]\nFeel free to ask if you have any other questions.", citations: c1, refused: false };
+    assert.equal(citeQuotedLines(list, requireCitations).text, list.text);
+    // a courtesy line in the middle, or courtesy alone, is never accepted as is
+    const mid = { ...list, text: '- “Helmets are free” [1]\nHope this helps!\n- “Locks cost $5” [2]' };
+    assert.notEqual(citeQuotedLines(mid, requireCitations).text, mid.text);
+    assert.equal(citeQuotedLines({ ...list, text: 'Hope this helps!' }, requireCitations).refused, true);
+    // an uncited fact line is still dropped
+    const fact = { ...list, text: "Here's what I found!\nShipping is free.\n- “Helmets are free” [1]" };
+    assert.doesNotMatch(citeQuotedLines(fact, requireCitations).text, /Shipping is free/);
+    // Source lines: split into sections with their URL, stripped from what is quoted
+    const segs = sourceSegments('tail of an earlier product\n\n## Trail Pro\n\nSource: https://shop.example/products/trail-pro\n- Price: 1,299.00 USD\n## Mug\nSource: https://shop.example/products/mug\nHandmade.');
+    assert.deepEqual(segs.map((x) => [x.url, x.heading]), [[null, null], ['https://shop.example/products/trail-pro', 'Trail Pro'], ['https://shop.example/products/mug', 'Mug']]);
+    assert.ok(!segs.some((x) => /Source:/.test(stripSourceLines(x.text))));
+    assert.equal(lastSourceUrl('a\nSource: https://x.example/a\nb\nSource: https://x.example/b'), 'https://x.example/b');
+    assert.equal(lastSourceUrl('Source: javascript:alert(1)'), null);
   });
 
   test('r3: answerCheck wants the asked-for fact: expected substrings, shared terms, a duration for "how long" (pure)', () => {
@@ -1457,7 +1491,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.ok(new Set((api.citations || []).map((x) => x.file || x.filename)).size >= 2, JSON.stringify(api));
     // the strongest quote leads (the 30-day return rule, not the inspection line)
     const ret = (await c.stream(t, '/ask', { question: 'How long do I have to return a bike?' })).find((e) => e.event === 'final').data;
-    assert.match(ret.text.split('\n')[0], /30 days/, ret.text);
+    assert.match(ret.text.split('\n').find((l) => /\[\d+\]/.test(l)), /30 days/, ret.text);
     // a list question quotes more than one line
     const inc = (await c.stream(t, '/ask', { question: 'What does the Lumen Care Plan include?' })).find((e) => e.event === 'final').data;
     assert.ok(inc.proof.quotedLines.length >= 2, inc.text);

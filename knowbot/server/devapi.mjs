@@ -319,7 +319,11 @@ export function createDevApi(o = {}) {
     const parts = Array.isArray(retriever?.parts) ? retriever.parts.map((p) => p.retriever) : [retriever];
     await Promise.all(parts.filter((r) => r && typeof r.query === 'function' && typeof r.mapResult === 'function').map(async (r) => {
       try {
-        for (const d of await r.query(question, 8, 'vector')) {
+        // production: a pure vector search under a narrow tag filter can come back empty while hybrid (same filter) still
+        // finds the atoms, each hit carrying its vector `distance`; only that distance is a similarity (RRF never is)
+        let docs = await r.query(question, 8, 'vector');
+        if (!docs.length) docs = (await r.query(question, 8, 'hybrid')).filter((d) => d && d.distance != null && Number.isFinite(Number(d.distance)));
+        for (const d of docs) {
           const m = r.mapResult(d);
           if (!m || !m.text) continue;
           const s = simOf(d);

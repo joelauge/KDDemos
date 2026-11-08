@@ -377,6 +377,8 @@ describe('server (HTTP)', () => {
     const call = llm.calls.at(-1);
     assert.equal(call.temperature, 0); assert.equal(call.top_p, 1); assert.equal(call.max_tokens, 300); assert.equal(call.seed, 7);
     assert.equal(call.messages[0].role, 'system');
+    // every live bot answers in the librarian voice: the system prompt asks it to say where it found the answer
+    assert.match(call.messages[0].content, /where you found it/i, 'librarian voice in generate mode');
     const evs = await live;
     const ce = evs.find((e) => e.type === 'canonical');
     assert.ok(ce, 'canonical event on SSE');
@@ -527,5 +529,28 @@ describe('server (HTTP)', () => {
       const okH = await fetch(u('/api/events'), { headers: { authorization: 'Bearer sekret' } }); assert.equal(okH.status, 200); await okH.text();
       const cfg = await fetch(u('/api/config')); assert.equal(cfg.status, 200); assert.ok(!(await cfg.text()).includes('sekret'));
     } finally { await close(kb6.server); }
+  });
+});
+
+describe('server: librarian voice on live bots (select mode)', () => {
+  test('POST /api/canonical answers like a kind librarian: opener, where it was found (with its link), the exact words, cited', { skip: !existsSync(LIB) && 'lib/knowbot.js not present' }, async () => {
+    const corpusDir = await makeCorpus();
+    const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-'));
+    // the selector model only names a line; KnowBot quotes it
+    const llm = http.createServer((req, res) => { req.resume(); req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ id: 'x', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: 'L1' }, finish_reason: 'stop' }] })); }); });
+    const llmPort = await listen(llm);
+    const kb = createKnowBotServer({ root: ROOT, corpusDir, dataDir, libPath: LIB, quiet: true, watch: false, rateLimit: 1000,
+      env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1`, LLM_MODEL: 'fake-model', KNOWBOT_ANSWER_MODE: 'select' } });
+    await kb.ready;
+    const port = await listen(kb.server);
+    try {
+      const a = await (await fetch(`http://127.0.0.1:${port}/api/canonical`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: 'What is your return policy?' }) })).json();
+      assert.equal(a.refused, false, a.text);
+      assert.match(a.text, /^(?:I think I found|Good news|Here's what I found|I found a few)/, `a friendly opener: ${a.text}`);
+      assert.match(a.text, /“[^”\n]+” \[1\]/, `the source's exact words, quoted and cited: ${a.text}`);
+      const c = a.citations[0];
+      if (c.url) assert.ok(a.text.includes(`](${c.url})`), 'points to where it found it, with the link');
+      assert.ok(a.text.includes(`“${c.title}”`), `names the document: ${a.text}`);
+    } finally { await close(kb.server); await close(llm); }
   });
 });

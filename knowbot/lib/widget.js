@@ -11,7 +11,7 @@ export const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESC[
 
 function inline(s, cite) {
   return escapeHtml(s)
-    .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s()[\]]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer nofollow">$1</a>')
+    .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s()[\]]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer nofollow">$1<span class="kb-sr"> (opens in a new tab)</span></a>')
     .replace(/\[([^\]\n]{1,200})\]\(mailto:([\w.+-]+@[\w-]+(?:\.[\w-]+)+)\)/g, '<a href="mailto:$2">$1</a>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
@@ -210,7 +210,14 @@ class ChatView {
     if (a.citations.length) {
       html += `<div class="kb-sources"><div class="kb-sources-h" id="${mid}-sh">Sources</div><ol aria-labelledby="${mid}-sh">${a.citations.map((c) => {
         const url = safeUrl(c.url), t = escapeHtml(c.title);
-        return `<li id="${mid}-s${c.n}" tabindex="-1"><span class="kb-src-n">${c.n}</span><div class="kb-src-body">${url ? `<a class="kb-src-title" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${t}</a>` : `<span class="kb-src-title">${t}</span>`}<code class="kb-src-file">${escapeHtml(c.filename)}</code>${c.snippet ? `<p class="kb-src-snip">${escapeHtml(c.snippet)}</p>` : ''}</div></li>`;
+        // where in the document: "p. 17 · Oil filter" (only what the citation really carries, never guessed)
+        const page = Number.isInteger(Number(c.page)) && Number(c.page) > 0 ? Number(c.page) : null;
+        const loc = [page && `p. ${page}`, typeof c.section === 'string' && c.section.trim()].filter(Boolean).map(escapeHtml).join(' · ');
+        const pdf = url && /\.pdf(?:[?#]|$)/i.test(url);
+        const head = `${url ? `<a class="kb-src-title" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${t}<span class="kb-sr"> (opens in a new tab)</span></a>` : `<span class="kb-src-title">${t}</span>`}${loc ? ` <span class="kb-src-loc" style="color:var(--kb-mute);font-size:12px">${loc}</span>` : ''}`;
+        // a PDF is offered as a download; the link's name starts with its visible text (WCAG 2.5.3)
+        const dl = pdf ? ` <a class="kb-src-dl" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="Download ${t} (PDF, opens in a new tab)" style="font-size:12px;font-weight:600;color:var(--kb-accent-text)">Download</a>` : '';
+        return `<li id="${mid}-s${c.n}" tabindex="-1"><span class="kb-src-n">${c.n}</span><div class="kb-src-body"><span>${head}${dl}</span><code class="kb-src-file">${escapeHtml(c.filename)}</code>${c.snippet ? `<p class="kb-src-snip">${escapeHtml(c.snippet)}</p>` : ''}</div></li>`;
       }).join('')}</ol></div>`;
     }
     const secs = (a.latencyMs.total / 1000).toFixed(1);

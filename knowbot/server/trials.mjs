@@ -218,12 +218,48 @@ export function normHit(d, mode) {
   const page = meta.page_number ?? meta.page ?? null, slide = meta.slide ?? meta.slide_number ?? null;
   const sheet = meta.sheet ?? null, row = meta.row ?? null, ts = meta.start_time ?? meta.ts ?? null;
   const crumb = at.breadcrumb ?? md.breadcrumb ?? (Array.isArray(at.parent_path) ? at.parent_path.join(' > ') : null);
+  const url = [meta.source_url, meta.url, d.source_url].find((u) => typeof u === 'string' && /^https?:\/\/[^\s<>"]+$/i.test(u)) || null;
   return {
     fileId, atomId, seq: seq == null ? null : Number(seq), offset: offset == null ? null : Number(offset), text: String(text || ''),
     filename: String(d.filename ?? md.filename ?? at.filename ?? ''), similarity, rrf, mode,
     tags: Array.isArray(d.tags) ? d.tags.map((t) => String(t).toLowerCase()) : null,
-    page, slide, sheet, row, ts, crumb: crumb ? String(crumb) : null, kind: at.node_kind ?? md.node_kind ?? null,
+    page, slide, sheet, row, ts, crumb: crumb ? String(crumb) : null, kind: at.node_kind ?? md.node_kind ?? null, url,
   };
+}
+
+// ------------------------------------------------------------------------------------------- "Source: <url>" lines
+// Imported store files (storeimport.mjs) give every section a "Source: <url>" line so a citation can link the page the
+// answer came from. These lines are provenance, never an answer: they are split off before line selection.
+const SOURCE_LINE_RE = /^[ \t]*Source:[ \t]*(https?:\/\/[^\s<>"]+)[ \t]*$/i;
+/** Remove "Source: <url>" lines (pure). */
+export function stripSourceLines(text) {
+  return String(text ?? '').split('\n').filter((l) => !SOURCE_LINE_RE.test(l)).join('\n');
+}
+/** The last "Source: <url>" URL in a text, or null (pure). */
+export function lastSourceUrl(text) {
+  let url = null;
+  for (const l of String(text ?? '').split('\n')) { const m = SOURCE_LINE_RE.exec(l); if (m) url = m[1]; }
+  return url;
+}
+/**
+ * Split an atom's text at its "Source: <url>" lines (pure): [{ text, url, heading }]. A heading right before a Source
+ * line opens that section; text before the first Source line has url null (its section began in an earlier atom).
+ */
+export function sourceSegments(text) {
+  const out = [];
+  let cur = { lines: [], url: null, heading: null };
+  const push = () => { if (cur.lines.some((l) => l.trim())) out.push({ text: cur.lines.join('\n').trim(), url: cur.url, heading: cur.heading }); };
+  for (const line of String(text ?? '').split('\n')) {
+    const m = SOURCE_LINE_RE.exec(line);
+    if (!m) { cur.lines.push(line); continue; }
+    const prev = cur.lines;
+    while (prev.length && !prev[prev.length - 1].trim()) prev.pop();
+    const head = prev.length && /^#{1,6}\s+\S/.test(prev[prev.length - 1]) ? prev.pop() : null;
+    push();
+    cur = { lines: head ? [head] : [], url: m[1], heading: head ? head.replace(/^#+\s*/, '').replace(/[*_`]+/g, '').trim() : null };
+  }
+  push();
+  return out.length ? out : [{ text: String(text ?? '').trim(), url: null, heading: null }];
 }
 
 /** Fail closed: a hit must carry trial:<id>, and none of the excluded tags (the fake ignores filters on purpose). */
@@ -630,10 +666,40 @@ export function citeQuotedLines(fin, requireCitations) {
   if (!fin || fin.refused || !Array.isArray(fin.citations) || !fin.citations.length) return requireCitations(fin);
   const valid = new Set(fin.citations.map((c) => Number(c.n)));
   const lines = String(fin.text || '').split('\n').filter((l) => l.trim());
-  const whole = lines.length && lines.every((l) => { const m = /\[(\d{1,3})\]\s*$/.exec(l); return !!m && valid.has(Number(m[1])) && !/\[\d{1,3}\]/.test(l.slice(0, m.index)); });
+  // librarian voice: a pure-courtesy line (opener / closer, kbLib.isCourtesy) may stand unmarked, but only as the first
+  // or the last line, and never as the whole answer
+  const parts = lines.map((l) => quotedLineParts(l));
+  const ok = parts.map((x, i) => {
+    if (x.courtesyOnly) return i === 0 || i === parts.length - 1;
+    const m = /\[(\d{1,3})\][.:]?\s*$/.exec(x.body);
+    return !!m && valid.has(Number(m[1])) && !/\[\d{1,3}\]/.test(x.body.slice(0, m.index)) && (!x.opener || i === 0) && (!x.closer || i === parts.length - 1);
+  });
+  const whole = lines.length && ok.every(Boolean) && parts.some((x) => !x.courtesyOnly);
   if (!whole) return requireCitations(fin);
   return { ...fin, text: lines.join('\n'), grounded: true, refused: false };
 }
+/**
+ * One answer line split into an optional courtesy opener, its cited body and an optional courtesy closer (pure).
+ * "I think I found it! In “Rentals”, it says: “Helmets are free” [1]. Hope this helps!" →
+ * { opener: 'I think I found it!', body: 'In “Rentals”, it says: “Helmets are free” [1].', closer: 'Hope this helps!' }.
+ */
+export function quotedLineParts(line) {
+  const l = String(line ?? '').trim();
+  const bare = l.replace(/^\s*[-*•]\s+/, '');
+  if (kbLib.isCourtesy(bare)) return { opener: null, body: '', closer: null, courtesyOnly: true };
+  let body = l, opener = null, closer = null;
+  const om = /^([^.!?\[“"]{1,140}?[.!?]+)\s+(?=\S)/.exec(body);
+  if (om && kbLib.isCourtesy(om[1])) { opener = om[1]; body = body.slice(om[0].length); }
+  const marks = [...body.matchAll(/\[\d{1,3}\][.:!?]?/g)];
+  const lastM = marks[marks.length - 1];
+  if (lastM) {
+    const tail = body.slice(lastM.index + lastM[0].length).trim();
+    if (tail && kbLib.isCourtesy(tail)) { closer = tail; body = body.slice(0, lastM.index + lastM[0].length); }
+  }
+  return { opener, body: body.trim(), closer, courtesyOnly: false };
+}
+/** The fact text of a quoted line, as the answer shows it (guide-voice curly quotes swapped, end stop dropped). */
+const voiceQuote = (t) => String(t ?? '').replace(/…$/, '').replace(/\s*[.;:,]?\s*$/, '').replace(/“/g, '‘').replace(/”/g, '’');
 const QTY_NUM = '(?:\\d[\\d,.]*|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|forty|fifty|ninety|a|an)';
 /** What a quantity question wants: how long -> a duration, how much -> money, how far -> a distance, how many -> a count. */
 const QTY_WANTS = [
@@ -1536,6 +1602,7 @@ export function createStudio(o = {}) {
     return { q, fileId: best.fileId, file: f?.name || '', top: best.similarity, atomKey: best.atomId || `${best.fileId}|${sha1(normText(best.text).slice(0, 200))}` };
   }
   function candidatesFor(f, atoms) {
+    atoms = atoms.map((a) => (SOURCE_LINE_RE.test(String(a.text).split('\n').find((l) => SOURCE_LINE_RE.test(l)) || '') ? { ...a, text: stripSourceLines(a.text) } : a));
     const out = [];
     for (const a of atoms) {
       for (const l of String(a.text).split('\n')) if (/\?\s*$/.test(l.trim()) && l.trim().split(/\s+/).length >= 3 && l.length <= 140 && /^[A-Z]/.test(l.trim())) out.push(oneLine(l));
@@ -1828,10 +1895,11 @@ export function createStudio(o = {}) {
       }
       // 5. select
       const titleOf = (h) => (h.crumb ? h.crumb.split(' > ')[0] : '') || titleFromName(fileName(h.fileId));
-      const sources = kept.map((h) => ({ file_id: h.fileId, filename: fileName(h.fileId), title: titleOf(h), url: null, score: h.similarity ?? 0, text: h.text }));
+      // librarian voice: every source carries where it lives (page, section, link) so the answer can point there
+      const { sources, srcHit } = await answerSources(T, kept, { titleOf, fileName });
       const lines = kbLib.candidateLines(sources);
       const lineView = (l) => {
-        const h = kept[l.source];
+        const h = srcHit[l.source];
         const derived = isDerivedLine(l.text) && !h.text.includes(l.text.replace(/…$/, ''));
         return { L: l.n, fileId: h.fileId, atomId: h.atomId, text: clip(l.text, 320), offset: derived ? null : findOffset(h.text, l.text), derived };
       };
@@ -1844,15 +1912,15 @@ export function createStudio(o = {}) {
         raw = String(out.raw ?? ''); model = out.model || model;
       } catch (e) { raw = ''; model = 'keyword-fallback'; log(`[studio] select failed (${e.message}); keyword fallback`); }
       if (ac.signal.aborted) { clearInterval(ping); return; }
-      let fin0 = kbLib.finalizeSelection(raw, lines, sources, { question });
+      let fin0 = kbLib.finalizeSelection(raw, lines, sources, { question, voice: true });
       if (fin0.fallback) model = 'keyword-fallback';
       // keep only lines that answer the question themselves (within LINE_MARGIN of the best selected line)
       if (!fin0.refused && (fin0.selected || []).length > 1) {
-        const keep = keepRelevantLines(question, fin0.selected, (L) => lines[L - 1]?.text || '', (L) => kept[lines[L - 1]?.source]?.similarity ?? floor, LINE_MARGIN,
-          { isIntro: (L) => { const h = kept[lines[L - 1]?.source]; return !!h && Number(h.seq) <= 2 && !!h.crumb && !h.crumb.includes(' > '); } });
+        const keep = keepRelevantLines(question, fin0.selected, (L) => lines[L - 1]?.text || '', (L) => srcHit[lines[L - 1]?.source]?.similarity ?? floor, LINE_MARGIN,
+          { isIntro: (L) => { const h = srcHit[lines[L - 1]?.source]; return !!h && Number(h.seq) <= 2 && !!h.crumb && !h.crumb.includes(' > '); } });
         if (keep.length && keep.length < fin0.selected.length) {
           const fb = fin0.fallback;
-          fin0 = { ...kbLib.finalizeSelection(keep.map((L) => `L${L}`).join(', '), lines, sources, { question }), fallback: fb };
+          fin0 = { ...kbLib.finalizeSelection(keep.map((L) => `L${L}`).join(', '), lines, sources, { question, voice: true }), fallback: fb };
         }
       }
       emit('selected', { lines: fin0.selected ?? [], ms: ms() - tSel0, model });
@@ -1870,14 +1938,17 @@ export function createStudio(o = {}) {
       for (const L of fin0.selected || []) {
         const line = lines[L - 1];
         if (!line) continue;
-        const h = kept[line.source], src = sources[line.source];
+        const h = srcHit[line.source], src = sources[line.source];
         const c = fin.citations.find((x) => x.file_id === src.file_id);
         if (!c) continue;
         const lv = lineView(line);
         quotes.push({ n: c.n, L, text: line.text, fileId: h.fileId, file: src.filename, atomId: h.atomId, seq: h.seq, offset: lv.offset, derived: lv.derived, hit: h });
       }
       const outLines = String(fin.text).split('\n').filter((l) => l.trim());
-      const unsupported = Math.max(0, (fin0.selected || []).length - outLines.length);
+      // proof claims: the cited lines only (a courtesy opener/closer is not a claim, and a "Here's what “X” says [1]:"
+      // pointer line only names the place), each matched to its quote by marker and quoted text, never by position
+      const claimLines = outLines.map((l) => quotedLineParts(l)).filter((x) => !x.courtesyOnly && /\[\d{1,3}\]/.test(x.body) && !/\[\d{1,3}\]:\s*$/.test(x.body));
+      const unsupported = Math.max(0, (fin0.selected || []).length - claimLines.length);
       // server-paced presentation of the real final text (40 ms per line), not generation
       for (const l of outLines) {
         if (ac.signal.aborted) break;
@@ -1886,15 +1957,20 @@ export function createStudio(o = {}) {
       }
       const citations = fin.citations.map((c) => {
         const qs = quotes.filter((q) => q.n === c.n);
-        const h = qs[0]?.hit || kept.find((x) => x.fileId === c.file_id);
-        return { n: c.n, fileId: c.file_id, file: c.filename, title: c.title, atomId: h?.atomId ?? null, seq: h?.seq ?? null, excerpt: clip(oneLine(h?.text || c.snippet || ''), 240),
+        const h = qs[0]?.hit || srcHit.find((x) => x.fileId === c.file_id);
+        return { n: c.n, fileId: c.file_id, file: c.filename, title: c.title, ...(c.url ? { url: c.url } : {}), ...(c.page ? { page: c.page } : {}), ...(c.section ? { section: c.section } : {}), atomId: h?.atomId ?? null, seq: h?.seq ?? null, excerpt: clip(oneLine(h?.text || c.snippet || ''), 240),
           offset: qs[0]?.offset ?? null, locator: h ? locatorOf(h, h.atomsTotal) : null, similarity: h?.similarity == null ? null : round4(h.similarity), match: pct(h?.similarity),
           quotes: qs.map((q) => ({ L: q.L, text: q.text, offset: q.offset, derived: q.derived })) };
       });
-      const claims = outLines.map((l, i) => {
-        const q = quotes[i] || quotes.find((x) => l.includes(x.text.replace(/…$/, '').slice(0, 40)));
-        const nn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? q?.n ?? 0) || null;
-        return { sentence: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: nn, quote: q?.text ?? null, file: q?.file ?? null,
+      const usedQ = new Set();
+      const claims = claimLines.map((x) => {
+        const l = x.body;
+        const nn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null;
+        const flat = l.replace(/“/g, '‘').replace(/”/g, '’');
+        const has = (q) => { const t = voiceQuote(q.text); return !!t && (flat.includes(t.slice(0, 60)) || l.includes(q.text.replace(/…$/, '').slice(0, 40))); };
+        const q = quotes.find((y) => !usedQ.has(y) && y.n === nn && has(y)) || quotes.find((y) => !usedQ.has(y) && has(y));
+        if (q) usedQ.add(q);
+        return { sentence: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: nn ?? q?.n ?? null, quote: q?.text ?? null, file: q?.file ?? null,
           locator: q ? locatorOf(q.hit, q.hit.atomsTotal) : null, verified: !!q && (q.offset != null || q.derived) };
       });
       const quotedLines = quotes.map((q) => ({ n: q.n, L: q.L, text: q.text, file: q.file, fileId: q.fileId, atomId: q.atomId, offset: q.offset }));
@@ -1915,6 +1991,45 @@ export function createStudio(o = {}) {
       emit('done', { latencyMs: ms(), error: true });
       try { res.end(); } catch {}
     }
+  }
+  /**
+   * The sources the answer step quotes from, one per "Source:" section of each kept hit: { file_id, filename, title,
+   * url, score, text, page?, section? } plus srcHit[i] (the hit source i came from). url: the section's own
+   * "Source: <url>" line, else the nearest earlier one in the same section of the file (atoms list, cached), else the
+   * row's metadata; section: the section heading, else the hit's last breadcrumb segment; page: the hit's page.
+   */
+  async function answerSources(T, kept, { titleOf, fileName }) {
+    const sources = [], srcHit = [];
+    const needsLookup = (h) => { const r = (T.rows || []).find((x) => x.id === h.fileId); return !!r && (r.tags || []).includes('src:store'); };
+    const lookupUrl = async (h) => {
+      if (h.seq == null || !needsLookup(h)) return null;
+      let atoms = [];
+      try { atoms = await allAtoms(T, h.fileId); } catch { return null; }
+      const crumbOf = (a) => String(a.meta?.breadcrumb ?? '');
+      const hc = String(h.crumb || '');
+      for (const a of [...atoms].sort((x, y) => y.seq - x.seq)) {
+        if (a.seq >= h.seq) continue;
+        const u = lastSourceUrl(a.text);
+        if (!u) continue;
+        const ac = crumbOf(a);
+        const same = ac && hc ? hc === ac || hc.startsWith(`${ac} > `) : a.seq === h.seq - 1;
+        return same ? u : null; // the nearest earlier Source line belongs to another section: no link rather than a wrong one
+      }
+      return null;
+    };
+    for (const h of kept) {
+      const segs = sourceSegments(h.text);
+      const crumbSection = h.crumb && h.crumb.includes(' > ') ? h.crumb.split(' > ').pop().trim() : null;
+      for (const [i, sg] of segs.entries()) {
+        const url = sg.url || (i === 0 ? h.url || await lookupUrl(h) : null);
+        const text = stripSourceLines(sg.text);
+        if (!text.trim()) continue;
+        sources.push({ file_id: h.fileId, filename: fileName(h.fileId), title: titleOf(h), url: url || null, score: h.similarity ?? 0, text,
+          ...(h.page != null ? { page: h.page } : {}), ...((sg.heading || crumbSection) ? { section: sg.heading || crumbSection } : {}) });
+        srcHit.push(h);
+      }
+    }
+    return { sources, srcHit };
   }
   /** A refusal the files nearly answered (best ≥ floor − 0.06, not a probe): the Builder offers [Add a file] [Rephrase it for me]. */
   const closeMissOf = (best, floor, q) => (best != null && best < floor && best >= floor - CLOSE_MISS && !PROBES.includes(q) && !PROBE_BACKUPS.includes(q)

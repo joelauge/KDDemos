@@ -129,6 +129,34 @@ export function mount(ctx) {
     for (const c of kids.flat(Infinity)) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
     return el;
   }
+  // ---- librarian voice: the answer names where it found each fact as a markdown link ([“Title”](https://…)) and the
+  // citation carries its page / section / link when the source really has them (never guessed).
+  const httpUrl = (u) => (typeof u === 'string' && /^https?:\/\/[^\s]+$/i.test(u.trim()) ? u.trim() : '');
+  const isDownload = (u) => /\.(?:pdf|docx?|xlsx?|pptx?|csv|zip|epub)(?:[?#]|$)/i.test(String(u || ''));
+  /** "p. 17 · Oil filter" from a citation (empty when it has neither). */
+  function citeLoc(c, { max = 40 } = {}) {
+    const page = Number.isInteger(Number(c?.page)) && Number(c.page) > 0 ? Number(c.page) : null;
+    let sec = typeof c?.section === 'string' ? c.section.replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim() : '';
+    if (sec.length > max) sec = `${sec.slice(0, max - 1).trimEnd()}…`;
+    return [page && `p. ${page}`, sec].filter(Boolean).join(' · ');
+  }
+  /** Answer text → text nodes and safe links: [label](http(s)://…) becomes a new-tab link; any other target stays text. */
+  function richText(text) {
+    const out = [];
+    const re = /\[([^\]\n]{1,200})\]\(([^)\s]+)\)/g;
+    let at = 0, m;
+    const str = String(text || '');
+    while ((m = re.exec(str))) {
+      if (m.index > at) out.push(str.slice(at, m.index));
+      const url = httpUrl(m[2]);
+      // the link's name is its visible text plus where it opens (WCAG 2.5.3: the name starts with the visible text)
+      out.push(url ? h('a', { class: 'sb-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, m[1], h('span', { class: 'st-sr' }, ' (opens in a new tab)')) : m[1]);
+      at = m.index + m[0].length;
+    }
+    if (at < str.length) out.push(str.slice(at));
+    return out;
+  }
+
   // r5 perf: icon markup is parsed once per distinct string, then cloned (streaming answers create many icons)
   const svgCache = new Map();
   const svgFrag = (markup) => {
@@ -951,7 +979,7 @@ export function mount(ctx) {
   function queueLine(A, d) {
     const idx = A.lineEls.length;
     const p = h('p', { class: 'sb-line' });
-    const sent = h('span', { class: 'sb-sent' }, d.text || '');
+    const sent = h('span', { class: 'sb-sent' }, richText(d.text || ''));
     p.append(sent);
     const chips = [];
     for (const n of d.n || []) {
@@ -1168,6 +1196,10 @@ export function mount(ctx) {
     parts.before = cleanExcerpt(parts.before); parts.after = cleanExcerpt(parts.after);
     // r5: two lines (file, then locator · match) that wrap inside the popover's width, never past its border
     const locBits = [c.locator, c.match == null ? 'keyword match' : `match ${c.match}`].filter(Boolean);
+    const where = citeLoc(c.cit);
+    const link = httpUrl(c.cit?.url);
+    const dl = isDownload(link);
+    const docName = c.title || chipTitle(c.file, c.title);
     pop.setAttribute('aria-label', `Citation ${c.label || c.n} receipt`);
     pop.innerHTML = '';
     pop.append(
@@ -1177,7 +1209,12 @@ export function mount(ctx) {
         parts.before ? h('span', { class: 'pf-ctx-dim' }, `${parts.before} `) : null,
         h('mark', { class: 'pf-mark' }, parts.mark),
         parts.after ? h('span', { class: 'pf-ctx-dim' }, ` ${parts.after}`) : null),
+      // where it is in the document (page / section) and the source's own link, when the citation carries them
+      where ? h('p', { class: 'pf-pop-where' }, where) : null,
       h('p', { class: 'pf-pop-meta sb-num' }, h('span', { class: 'pf-pop-file' }, `Quoted verbatim from ${c.file}`), h('span', { class: 'pf-pop-loc' }, locBits.join(' · '))),
+      link ? h('a', { class: 'pf-pop-link', href: link, target: '_blank', rel: 'noopener noreferrer',
+        'aria-label': `${dl ? 'Download' : 'Open'} ${docName}${dl ? ` (${(/\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(link)?.[1] || 'file').toUpperCase()})` : ''} (opens in a new tab)` },
+      ico(dl ? 'file' : 'external', 13), dl ? 'Download' : 'Open') : null,
       h('button', { type: 'button', class: 'pf-pop-open', onclick: () => openDrawer({ fileId: c.fileId, atomId: c.atomId, seq: c.seq, answerId: A.id, n: c.n, line: Number(chip.dataset.line) }, chip) },
         'Open receipt', ico('arrowRight', 13)));
     const mk = pop.querySelector('mark');
@@ -1413,7 +1450,9 @@ export function mount(ctx) {
       const c = byN.get(Number(chip.dataset.n));
       if (!c) return;
       const d = citeData(A, chip);
-      const title = chipTitle(c.file, c.title);
+      // the chip names the document and, when the source has them, its page / section: "Owner's Manual · p. 17"
+      const where = citeLoc(c, { max: 24 });
+      const title = where ? `${chipTitle(c.file, c.title)} · ${where}` : chipTitle(c.file, c.title);
       const t = chip.querySelector('.pf-cite-t');
       t.textContent = title;
       const lab = A.citeLabel(c.n, d?.atomId);

@@ -872,3 +872,17 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
   .pf-only { display: block !important; }
 }
 .pf-tablewrap:focus-visible, .pf-dbody:focus-visible { outline: var(--st-focus); outline-offset: -2px; }
+
+/* ------------------------------------------------------------------ librarian voice: links and source locations */
+/* the answer names where it found each fact ([“Title”](https://…) → a new-tab link); http(s) only (samplebot richText) */
+.sb-link { color: var(--accent-2); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.sb-link:hover { text-decoration-thickness: 2px; }
+.sb-link:focus-visible, .pf-pop-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+/* the receipt's page / section line and the source's own link (Open / Download) */
+.pf-pop-where { margin: -4px 0 8px; color: var(--muted); font: 600 11.5px/1.4 var(--font); overflow-wrap: anywhere; }
+.pf-pop-link { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; margin: 0 6px 0 -8px; border-radius: 8px; color: var(--accent-2); font: 600 12.5px/1 var(--font); text-decoration: none; }
+.pf-pop-link:hover { background: var(--accent-soft); }
+@media (pointer: coarse) {
+  .pf-pop-link { position: relative; }
+  .pf-pop-link::after { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+}
