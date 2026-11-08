@@ -34,9 +34,9 @@ function parseSSE(text) {
 }
 
 /** A live SSE reader: frames accumulate in `events`; waitFor(pred) resolves with the first match. */
-async function openSSE(url, headers) {
+async function openSSE(url, headers, init = {}) {
   const ac = new AbortController();
-  const res = await fetch(url, { headers, signal: ac.signal });
+  const res = await fetch(url, { headers, signal: ac.signal, ...init });
   const events = [];
   const waiters = [];
   let buf = '';
@@ -73,8 +73,8 @@ async function openSSE(url, headers) {
   };
 }
 
-async function boot({ env = {}, studio = {}, speed = 3, kdKey = true } = {}) {
-  const kd = await startFakeKnowDrive({ speed, narrowScope: 'all' }); // production: narrow-filter vector search can be empty
+async function boot({ env = {}, studio = {}, speed = 3, kdKey = true, kdOpts = {} } = {}) {
+  const kd = await startFakeKnowDrive({ speed, narrowScope: 'all', ...kdOpts }); // production: narrow-filter vector search can be empty
   const llm = await startFakeLLM({ slowMs: 9000 });
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-trials-'));
   const clock = { skew: 0 };
@@ -1741,8 +1741,8 @@ describe('shared sample mode (KNOWBOT_STUDIO_SAMPLE_MODE=shared): one copy, repl
 });
 
 // ------------------------------------------------------------------------------------------------ Enter a Store URL
-/** A tiny Shopify-shaped store on 127.0.0.1 (products.json, a refund policy, an FAQ page). */
-async function fakeShop() {
+/** A tiny Shopify-shaped store on 127.0.0.1 (products.json, a refund policy, an FAQ page). slow: n extra product pages, each slow. */
+async function fakeShop({ slow = 0, slowMs = 120 } = {}) {
   const page = (title, body) => `<!doctype html><html><head><title>${title}</title></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
   let price = '1299.00';
   const routes = {
@@ -1753,10 +1753,18 @@ async function fakeShop() {
     ] })],
     '/policies/refund-policy': () => [200, 'text/html', page('Refund policy', '<p>Unridden bikes can be returned within 30 days of delivery for a full refund.</p>')],
     '/pages/faq': () => [200, 'text/html', page('FAQ', '<details><summary>Do you ship to Canada?</summary><p>Yes, we ship to Canada for a flat $25 fee.</p></details>')],
-    '/sitemap.xml': (u, base) => [200, 'application/xml', `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${base}/pages/faq</loc></url></urlset>`],
+    '/sitemap.xml': (u, base) => [200, 'application/xml', `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${base}/pages/faq</loc></url>${
+      Array.from({ length: slow }, (_, i) => `<url><loc>${base}/products/slow-${i + 1}</loc></url>`).join('')}</urlset>`],
   };
-  const s = http.createServer((req, res) => {
+  const s = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
+    const sm = /^\/products\/slow-(\d+)$/.exec(u.pathname);
+    if (sm) {
+      await sleep(slowMs);
+      const n = sm[1];
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(`<!doctype html><html><head><title>Slow ${n}</title><script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: `Slow Bike ${n}`, offers: { '@type': 'Offer', price: '100.00', priceCurrency: 'USD' } })}</script></head><body><main><h1>Slow Bike ${n}</h1><p>Slow bike number ${n} is a steel touring bike.</p></main></body></html>`);
+    }
     const r = routes[u.pathname];
     if (!r) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
     const [status, type, body] = r(u, `http://127.0.0.1:${s.address().port}`);
@@ -1767,32 +1775,47 @@ async function fakeShop() {
 }
 
 describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
-  let S, P, c, shop;
+  let S, P, c, shop, slowShop;
   before(async () => {
     shop = await fakeShop();
-    // the importer's injectable net option lets this test reach 127.0.0.1; production (P below) never sets it
-    S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 } } });
+    slowShop = await fakeShop({ slow: 24, slowMs: 250 });
+    // the importer's injectable net option lets this test reach 127.0.0.1; production (P below) never sets it.
+    // knowDrive cuts Markdown like production here (heading-path prefixed atoms), so citations are tested on real atoms.
+    S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 } }, kdOpts: { chunker: 'production' } });
     P = await boot();
     c = client(S);
   });
-  after(async () => { await S.close(); await P.close(); await shop.close(); });
+  after(async () => { await S.close(); await P.close(); await shop.close(); await slowShop.close(); });
 
-  test('imports a store: progress events, src:store uploads that atomize, cited answers that link the source page', async () => {
+  test('imports a store: plan, progress, batched src:store uploads (one file per page), cited answers that link the exact page', async () => {
     const t = await c.trial();
     const ev = await c.stream(t, '/store', { url: shop.base, owner: true });
     const names = ev.map((e) => e.event);
-    for (const n of ['detect', 'fetching', 'found', 'building', 'built', 'uploaded', 'done']) assert.ok(names.includes(n), `${n} in ${names.join(',')}`);
-    assert.ok(names.indexOf('detect') < names.indexOf('found') && names.indexOf('found') < names.indexOf('building') && names.indexOf('built') < names.indexOf('uploaded'));
+    for (const n of ['detect', 'plan', 'found', 'fetching', 'building', 'uploaded', 'built', 'done']) assert.ok(names.includes(n), `${n} in ${names.join(',')}`);
+    const at = (n) => names.indexOf(n);
+    assert.ok(at('detect') < at('plan') && at('plan') < at('found') && at('found') < at('building') && at('building') <= at('uploaded') && names.lastIndexOf('uploaded') < at('built') && at('built') < at('done'), names.join(','));
+    assert.ok(ev.every((e, i) => i === 0 || e.id > ev[i - 1].id), 'ids are the job sequence');
     assert.equal(ev.find((e) => e.event === 'detect').data.platform, 'shopify');
-    assert.deepEqual(ev.find((e) => e.event === 'found').data, { products: 2, pages: 0, policies: 1, faqs: 1 });
+    const plan = ev.find((e) => e.event === 'plan').data;
+    assert.equal(plan.counts.product, 2); assert.equal(plan.counts.faq, 1);
+    const found = ev.find((e) => e.event === 'found').data;
+    assert.equal(found.products, 2); assert.equal(found.faqs, 1);
     const done = ev.at(-1);
     assert.equal(done.event, 'done');
-    assert.ok(done.data.files.length >= 3, JSON.stringify(done.data));
-    assert.ok(done.data.files.every((f) => f.origin === 'store'));
+    assert.equal(done.data.fileCount, 4, JSON.stringify(done.data.report));
+    assert.ok(done.data.files.every((f) => f.origin === 'store' && f.page), JSON.stringify(done.data.files));
+    assert.deepEqual(done.data.report.written, { policy: 1, faq: 1, product: 2 });
     const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`));
-    assert.ok(rows.length >= 3 && rows.every((f) => f.tags.includes('src:store') && f.filename.startsWith(`knowbot/trials/${t.trialId}/`) && f.filename.endsWith('.md')));
+    assert.equal(rows.length, 4);
+    assert.ok(rows.every((f) => f.tags.includes('src:store') && f.tags.includes('site:127.0.0.1') && f.filename.startsWith(`knowbot/trials/${t.trialId}/site/127.0.0.1/`) && f.filename.endsWith('.md')), rows.map((r) => r.filename).join(' '));
+    const prods = rows.filter((f) => f.tags.includes('page:product'));
+    assert.deepEqual(prods.map((f) => f.filename.split('/').slice(-2).join('/')).sort(), ['product/commuter-lite.md', 'product/trail-pro.md']);
+    assert.equal(new Set(prods.map((f) => f.tags.find((x) => x.startsWith('tfile:')))).size, 1, 'product pages went up in one /ingest batch');
+    assert.ok(rows.some((f) => f.tags.includes('page:policy') && f.filename.endsWith('/policy/refund-policy.md')));
     assert.ok(!S.kd.calls.some((x) => x.stray?.length), 'no stray text parts were sent to /ingest');
-    await c.waitReady(t, done.data.files.length);
+    // every atom knowDrive cut from a product page carries that page's URL
+    for (const f of prods) { const url = `${shop.base}/products/${f.filename.split('/').pop().replace(/\.md$/, '')}`; assert.ok(f.atoms.length && f.atoms.every((a) => a.text.includes(url)), f.atoms.map((a) => a.text).join('\n---\n')); }
+    await c.waitReady(t, 4);
     // the librarian answer points to the page it came from, with its link
     const fin = (await c.stream(t, '/ask', { question: 'Can I return a bike?' })).find((e) => e.event === 'final').data;
     assert.equal(fin.status, 'grounded', JSON.stringify(fin.why));
@@ -1800,12 +1823,13 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     const cit = fin.citations.find((x) => /refund/i.test(x.file));
     assert.ok(cit, JSON.stringify(fin.citations));
     assert.equal(cit.url, `${shop.base}/policies/refund-policy`);
+    assert.equal(cit.title, 'Refund policy');
     assert.ok(fin.text.includes(`(${shop.base}/policies/refund-policy)`), `the answer links the policy page: ${fin.text}`);
-    assert.doesNotMatch(fin.text, /Source:/, 'Source lines are provenance, never quoted');
+    assert.doesNotMatch(fin.text, /Source:|· http/, 'Source lines and page heads are provenance, never quoted');
     const prod = (await c.stream(t, '/ask', { question: 'How much is the Commuter Lite?' })).find((e) => e.event === 'final').data;
     assert.equal(prod.status, 'grounded', JSON.stringify(prod.why));
     assert.match(prod.text, /799/);
-    assert.ok(prod.citations.some((x) => x.url === `${shop.base}/products/commuter-lite`), JSON.stringify(prod.citations));
+    assert.ok(prod.citations.length && prod.citations.every((x) => x.url === `${shop.base}/products/commuter-lite`), JSON.stringify(prod.citations));
     assert.equal(prod.proof.unsupported, 0);
     assert.ok(prod.proof.claims.length >= 1 && prod.proof.claims.every((x) => x.verified), JSON.stringify(prod.proof.claims));
   });
@@ -1814,7 +1838,7 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     const t = await c.trial();
     const done = (await c.stream(t, '/store', { url: shop.base })).at(-1).data;
     const names = done.files.map((f) => f.name).sort();
-    assert.deepEqual(names, ['Lumen Test Shop · FAQ.md', 'Lumen Test Shop · Products.md', 'Lumen Test Shop · Refund policy.md'], names.join(', '));
+    assert.deepEqual(names, ['Lumen Test Shop · Commuter Lite.md', 'Lumen Test Shop · FAQ.md', 'Lumen Test Shop · Refund policy.md', 'Lumen Test Shop · Trail Pro.md'], names.join(', '));
     assert.equal(done.spec.name, 'Lumen Test Shop Help');
     assert.equal(done.spec.greeting, 'Hi! Ask me anything about Lumen Test Shop.');
     const turn = await c.stream(t, '/setup', { event: { type: 'store_imported', data: { name: done.name } } });
@@ -1825,14 +1849,15 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     const q = await (await c.json(t, '/questions')).json();
     const all = [...q.starters, ...q.proof].map((x) => x.q);
     assert.ok(all.length >= 1, 'store pages get starters');
-    assert.ok(all.every((x) => !/127|say about|the file/i.test(x)), all.join(' | '));
+    assert.ok(all.every((x) => !/127|say about|the file|http/i.test(x)), all.join(' | '));
     assert.ok(all.some((x) => /^(?:Do you ship to Canada\?|How much is the (?:Trail Pro|Commuter Lite)\?|What is your refund policy\?|Can I return an item\?)$/.test(x)), all.join(' | '));
     // citations carry the page titles, never the host
     const final = (await c.stream(t, '/ask', { question: 'How much is the Trail Pro?' })).find((e) => e.event === 'final').data;
-    assert.ok(final.citations.every((x) => !/127/.test(x.file || '') && !/127/.test(x.title || '')), JSON.stringify(final.citations));
+    assert.ok(final.citations.length && final.citations.every((x) => !/127/.test(x.file || '') && !/127|http/.test(x.title || '')), JSON.stringify(final.citations));
+    assert.ok(final.citations.some((x) => x.title === 'Trail Pro' && x.url === `${shop.base}/products/trail-pro`), JSON.stringify(final.citations));
   });
 
-  test('a re-import replaces the earlier src:store files; bad input and unconfirmed ownership are 400', async () => {
+  test('a re-import replaces the earlier src:store files; bad input and unconfirmed ownership are 400; GET replays the last job', async () => {
     const t = await c.trial();
     const first = (await c.stream(t, '/store', { url: shop.base })).at(-1).data.files.map((f) => f.id);
     shop.setPrice('1199.00');
@@ -1841,13 +1866,69 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     const now = (await (await c.json(t, '/files')).json()).files.map((f) => f.id).sort();
     assert.deepEqual(now, [...second].sort(), 'only the new import is left');
     assert.ok(first.every((id) => !S.kd.files.has(id)), 'the earlier import was deleted from knowDrive');
+    assert.ok([...S.kd.files.values()].some((f) => f.tags.includes(`trial:${t.trialId}`) && /1,199\.00 USD/.test(f.text)), 'the new price is in');
     assert.equal((await c.json(t, '/store', 'POST', { url: '' })).status, 400);
     assert.equal((await c.json(t, '/store', 'POST', { url: shop.base, owner: false })).status, 400);
     const bad = await c.stream(t, '/store', { url: 'javascript:alert(1)' });
     assert.deepEqual(bad.map((e) => e.event), ['error', 'done']);
     assert.equal(bad[0].data.code, 'bad_url');
     assert.match(bad[0].data.message, /web address/);
-    assert.equal((await c.json(t, '/store', 'GET')).status, 405);
+    // GET re-attaches to the last job (here: the finished bad_url one) and replays it
+    const replay = parseSSE(await (await c.json(t, '/store', 'GET')).text());
+    assert.deepEqual(replay.map((e) => e.event), ['error', 'done']);
+    assert.equal((await c.json(t, '/store', 'DELETE')).status, 409, 'nothing to cancel');
+    assert.equal((await c.json(t, '/store', 'PUT')).status, 405);
+  });
+
+  test('background job: survives the request closing, one job per trial (409), resumes from ?since=, reaches the events stream', async () => {
+    const t = await c.trial();
+    const post = await openSSE(`${S.base}/api/studio/trials/${t.trialId}/store`, c.h(t, null, { 'content-type': 'application/json' }), { method: 'POST', body: JSON.stringify({ url: slowShop.base, owner: true }) });
+    const plan = await post.waitFor((e) => e.event === 'plan');
+    assert.equal(plan.data.counts.product, 24, JSON.stringify(plan.data.counts)); // the sitemap's product pages (the feed adds 2 more)
+    post.close(); // the browser went away: the import keeps going
+    await sleep(100);
+    const busy = await c.json(t, '/store', 'POST', { url: slowShop.base });
+    assert.equal(busy.status, 409);
+    assert.equal((await busy.json()).error.code, 'busy');
+    const since = plan.id;
+    const res = await c.json(t, `/store?since=${since}`, 'GET');
+    assert.equal(res.status, 200);
+    const rest = parseSSE(await res.text());
+    assert.ok(rest.length && rest.every((e) => e.id > since), 'only events after since');
+    assert.equal(rest.at(-1).event, 'done');
+    const done = rest.at(-1).data;
+    assert.equal(done.error, undefined, JSON.stringify(done));
+    assert.equal(done.report.products.read, 26);
+    assert.equal(done.fileCount, 28, 'every product page (2 from the feed, 24 from the sitemap), the FAQ and the refund policy');
+    const rows = [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`) && f.tags.includes('page:product'));
+    assert.equal(rows.length, 26);
+    const calls = S.kd.calls.filter((x) => x.url === '/api/v1/ingest' && x.ingest?.path?.includes(`/trials/${t.trialId}/site/`));
+    assert.ok(calls.length < 26, `product pages were batched (${calls.length} /ingest calls for 28 files)`);
+    // the trial's events stream carried the job (store events, replayable)
+    const evs = await openSSE(`${S.base}/api/studio/trials/${t.trialId}/events?since=0`, c.h(t));
+    const storeDone = await evs.waitFor((e) => e.event === 'store' && e.data.type === 'done');
+    evs.close();
+    assert.equal(storeDone.data.data.fileCount, 28);
+    assert.ok(evs.events.some((e) => e.event === 'store' && e.data.type === 'plan'));
+  });
+
+  test('DELETE cancels a running import: files already uploaded stay, the stream ends with aborted', async () => {
+    const t = await c.trial();
+    const post = await openSSE(`${S.base}/api/studio/trials/${t.trialId}/store`, c.h(t, null, { 'content-type': 'application/json' }), { method: 'POST', body: JSON.stringify({ url: slowShop.base, owner: true }) });
+    await post.waitFor((e) => e.event === 'uploaded');
+    const del = await c.json(t, '/store', 'DELETE');
+    assert.equal(del.status, 202);
+    const done = await post.waitFor((e) => e.event === 'done', 20000);
+    post.close();
+    const err = post.events.find((e) => e.event === 'error');
+    assert.equal(err?.data.code, 'aborted');
+    assert.equal(done.data.cancelled, true);
+    assert.ok(done.data.fileCount >= 1 && done.data.fileCount < 28, `kept what was uploaded before the cancel (${done.data.fileCount})`);
+    const own = (await (await c.json(t, '/files')).json()).files;
+    assert.equal(own.length, done.data.fileCount);
+    // a new import can start right away
+    const again = await c.stream(t, '/store', { url: shop.base });
+    assert.equal(again.at(-1).data.error, undefined);
   });
 
   test('the Builder understands typed store imports ("import my shopify store mystore.com") and offers the store chip first-run', async () => {

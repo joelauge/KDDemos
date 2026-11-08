@@ -718,11 +718,23 @@ async function storeJourney(browser, dev, cell) {
     const gated = await page.waitForFunction(() => /own or manage/i.test(document.querySelector('.st-si .st-field-msg')?.textContent || ''), null, { timeout: 3000 }).then(() => true).catch(() => false);
     check('18-store', 'import waits for "I own or manage this store"', gated);
     await page.locator('.st-si .st-si-check input[type="checkbox"]').last().check();
-    await press(page.locator('.st-si button[type="submit"]').last(), 'Import store');
-    const seen = await page.waitForFunction(() => /Shopify store found/.test(document.querySelector('.st-si-run')?.innerText || '') || /Found \d/.test(document.querySelector('.st-si-found')?.textContent || ''), null, { timeout: 15000 }).then(() => true).catch(() => false);
-    check('18-store', 'progress: platform found, then counts', seen, { detail: await page.locator('.st-si-run').last().innerText().catch(() => '') });
-    const done = await page.waitForFunction(() => /Imported \d+ files?/.test(document.querySelector('.st-si-status')?.textContent || ''), null, { timeout: 30000 }).then(() => true).catch(() => false);
-    check('18-store', 'import done: "Imported N files from …"', done, { detail: await page.locator('.st-si-status').last().innerText().catch(() => '') });
+    await press(page.locator('.st-si button[type="submit"]').last(), 'Find sources');
+    // a server with the finder (config.storeJobs) shows the plan first; an older one runs the one-shot import
+    const seen = await page.waitForFunction(() => /Shopify store found/.test(document.querySelector('.st-si-run')?.innerText || '') || /Found \d/.test(document.querySelector('.st-si-found')?.textContent || '')
+      || /^Found \d/.test(document.querySelector('.st-si-plan:not([hidden]) .st-si-plan-h')?.textContent || ''), null, { timeout: 15000 }).then(() => true).catch(() => false);
+    check('18-store', 'progress: platform found, then counts', seen, { detail: await page.locator('.st-si').last().innerText().catch(() => '') });
+    const planned = await page.locator('.st-si-plan:not([hidden])').count() > 0;
+    if (planned) {
+      const kinds = await page.locator('.st-si-plan .st-si-kbox').evaluateAll((els) => els.map((e) => ({ kind: e.dataset.kind, on: e.checked, name: e.closest('label')?.innerText || '' })));
+      check('18-store', 'finder plan: a checkbox per kind, all on, each named by its visible text', kinds.length >= 2 && kinds.every((k) => k.on && k.name.trim()), { detail: JSON.stringify(kinds) });
+      const est = await page.locator('.st-si-plan .st-si-est').innerText().catch(() => '');
+      check('18-store', 'finder plan: estimate (pages, MB, minutes)', /page/.test(est) && /MB/.test(est) && /minute|hour/.test(est), { detail: est });
+      await press(page.locator('.st-si-plan button', { hasText: /^\s*Import\s*$/ }).last(), 'Import');
+      const prog = await page.waitForFunction(() => /Reading|Building|Adding|Finding/.test(document.querySelector('.st-si-status')?.textContent || '') || /Imported/.test(document.querySelector('.st-si-status')?.textContent || ''), null, { timeout: 15000 }).then(() => true).catch(() => false);
+      check('18-store', 'background job: progress (finding / reading i of N / building / adding k of M)', prog, { detail: await page.locator('.st-si-status').last().innerText().catch(() => '') });
+    }
+    const done = await page.waitForFunction(() => /Imported \d|Imported .+ from/.test(document.querySelector('.st-si-status')?.textContent || ''), null, { timeout: planned ? 120000 : 30000 }).then(() => true).catch(() => false);
+    check('18-store', 'import done: "Imported N … from …"', done, { detail: await page.locator('.st-si-status').last().innerText().catch(() => '') });
     await shot(page, cell, '18-store');
     const rows = await waitState(page, (s) => s.fileOrder.length >= 3 && s.fileOrder.some((id) => s.files[id]?.phase === 'ready'), { timeout: 45000 }).then(() => true).catch(() => false);
     check('18-store', 'imported files appear and learn like uploads', rows);
@@ -733,9 +745,13 @@ async function storeJourney(browser, dev, cell) {
     check('18-store', 'librarian answer links the store page it quotes', !!fin && fin.status === 'grounded' && fin.text.includes(`${dev.shopUrl}/policies/refund-policy`), { detail: fin?.text });
     // a bad address: store error copy with both ways forward
     await pane(page, cell, 'setup');
+    if (planned) {
+      const sum = await page.locator('.st-si-sum:not([hidden])').last().innerText().catch(() => '');
+      check('18-store', 'summary lists what was imported by kind', /Products|Policies|Help pages/.test(sum), { detail: sum.replace(/\s+/g, ' ') });
+    }
     await press(page.locator('.st-si-actions button', { hasText: 'Import again' }).last(), 'Import again');
     await input.fill('localhost');
-    await press(page.locator('.st-si button[type="submit"]').last(), 'Import store');
+    await press(page.locator('.st-si button[type="submit"]').last(), 'Find sources');
     const errUi = await page.waitForFunction(() => {
       const run = document.querySelector('.st-si.is-error .st-si-run');
       return run && /Try another URL/.test(run.innerText) && /Upload files instead/.test(run.innerText) ? run.innerText : null;

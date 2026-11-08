@@ -1,78 +1,47 @@
 // KnowBot Studio: "Enter a Store URL" importer (server side). Zero dependencies (node: built-ins only).
 //
 // ============================================================================================================
-// INTEGRATION HOOK (not wired yet; trials.mjs and the Studio UI are owned elsewhere)
+// CONTRACT (trials.mjs runs this as a background job; see storeJob in trials.mjs)
 // ============================================================================================================
 //
-// Exports used by trials.mjs:
-//
-//   importStore(url: string, {
-//       remainingBytes: number,           // QUOTA_BYTES - usageOf(T, files).bytes   (required in production)
-//       signal?: AbortSignal,             // abort on req 'close'
-//       onEvent?: (event: string, data: object) => void,   // progress, see "SSE events" below
-//       maxProducts?: 2000, maxPages?: 200, maxTotalBytes?: 20 MB,
-//       net?: { ...createStoreFetcher options }   // tests only: allowAddresses, allowPorts:'any', resolve, timeouts
-//   }) → Promise<{
-//       platform: 'shopify'|'magento'|'squarespace'|'woocommerce'|'generic', api: boolean, base: string, name: string|null,
-//       files: [{ name: string, bytes: Buffer, mime: 'text/markdown', docs: number, size: number }],
-//       counts: { products, pages, policies, faqs }, capped: object|null, skipped: { robots, failed, budget }, warnings: string[] }>
+//   importStore(url, {
+//       remainingBytes: number,     // bytes left in the trial (100 MB quota minus what it holds); never exceeded
+//       signal?: AbortSignal,       // cancel
+//       onEvent?: (event, data) => void,
+//       onFiles?: async ({ kind, files }) => void,   // a batch of built files (one page kind per batch), uploaded by
+//                                   // the caller as soon as it is built; awaited (backpressure). Without onFiles the
+//                                   // files are returned in result.files (tests, small imports).
+//       budgetMs?: 20 min, maxProducts?: 10000, maxPages?: 500, maxCollections?: 200, maxBlog?: 100, maxPdfs?: 100,
+//       enrich?: 'auto'|'thin'|'all'|'none',   // read product pages besides the feed (auto: thin feed copy, or all
+//                                              // when the time budget allows)
+//       batchFiles?: 40, batchBytes?: 2 MB, date?: Date, planOnly?: boolean,
+//       net?: { ...createStoreFetcher options }   // tests only: allowAddresses, allowPorts:'any', resolve, paceMs
+//   }) → Promise<{ platform, api, base, host, name, plan, files, counts, report, capped, skipped, warnings }>
 //   It throws StoreImportError { code, message, status } after emitting `error`.
 //
-// Route (owner A adds it next to `sub === 'samples'` in studio.handle, and adds `store` to the server.mjs isStream
-// regex: /^\/api\/studio\/trials\/[^/]+\/(?:events|setup|ask|store)/):
+// Events (data is one JSON object):
+//   detect   { platform, api, base, name }
+//   plan     { counts:{product,faq,policy,help,pdf,collection,blog,page}, samples:{kind:[url]}, total, robots, helpdesks,
+//              feedTotal }                          what the finder found and will read, best sources first
+//   found    { products, pages, policies, faqs, help, pdfs, collections, blog }   (the same counts, Studio copy names)
+//   fetching { done, total }                        request progress (throttled)
+//   reading  { kind, done, total, read:{kind:n} }   page progress (throttled)
+//   building { files:[name], n }                    the first files are built (uploads start right away)
+//   capped   { products?, pages?, bytes?, time? }   only when something was left out
+//   built    { n, bytes, written:{kind:n}, report } every page is built and handed over
+//   error    { code, message }
 //
-//   POST /api/studio/trials/:id/store      Authorization: Bearer <token>     body {"url":"https://shop.example.com"}
-//   → SSE (4.3 headers, id/event/data frames, `: ping` every 15 s, ends with `event: done`)
+// FILE LAYOUT (knowDrive atoms; verified in production, see the research memo): one Markdown file per page,
+//   path  site/<host>/<kind>/<slug>.md          kind: product | faq | policy | help | collection | blog | page
+//   # <Page or product title> · <canonical URL>
 //
-//   if (sub === 'store') {
-//     allow('POST');
-//     limitTrialAndIp(T, req, 'store imports', 6, 20, 'store imports');        // suggested: 6/h per trial, 20/h per IP
-//     const body = await readBody(req);                                        // {url} only; 400 bad_request otherwise
-//     const files = await filesOf(T, { maxAgeMs: 0 });
-//     const remaining = QUOTA_BYTES - usageOf(T, files).bytes;
-//     if (remaining <= 0) fail(413, 'quota', 'Your trial is full. Remove a file to import a store.');
-//     open SSE; const ac = new AbortController(); req.on('close', () => ac.abort());
-//     let n = 0; const send = (ev, data) => writeFrame(res, ++n, ev, data);
-//     try {
-//       const r = await importStore(body.url, { remainingBytes: remaining, signal: ac.signal, onEvent: send });
-//       const rows = [];
-//       for (const f of r.files) {                       // the existing upload path, unchanged: tags, quota, expires
-//         if (!sniffOk('md', f.bytes)) continue;         // always true (UTF-8, no NUL) but keeps the 4.4.5 rule
-//         rows.push(await uploadInto(T, { name: f.name, bytes: f.bytes, mime: f.mime, extraTags: ['src:store'] }));
-//         send('uploaded', { file: rows.at(-1) });
-//       }
-//       kickPoller(T);
-//       const all = await filesOf(T);
-//       send('done', { files: rows, usage: usageOf(T, all), platform: r.platform, counts: r.counts, capped: r.capped });
-//     } catch (e) { send('error', { code: e.code || 'upstream', message: e.message }); send('done', { files: [] }); }
-//     finally { res.end(); }
-//   }
+//   Source: <canonical URL>
 //
-//   Note: importStore itself emits `done` (its build result) before the upload; trials.mjs should either forward it
-//   renamed as `built`, or drop it, and send its own terminal `done` after uploadInto (shown above). Simplest: wrap
-//   onEvent as (ev, d) => send(ev === 'done' ? 'built' : ev, d).
-//   Extra tag `src:store` is optional (sample copies already set the precedent with `sample:<set>`); a re-import can
-//   delete earlier rows tagged `src:store` first so files don't pile up as "acme-com-products-1 (2).md".
-//
-// SSE events (data is one JSON line; same names are passed to onEvent):
-//   detect   { platform, api, base, name }                    platform found; api=false means HTML/JSON-LD fallback
-//   fetching { done, total }                                   request progress (throttled to ~4/s, plus a final one)
-//   found    { products, pages, policies, faqs }               what was collected
-//   building { files: [name] }                                 Markdown files being assembled
-//   capped   { products?:{limit,kept,more}, pages?:{limit,kept,more}, bytes?:{limit,droppedProducts,droppedSections},
-//              time?:true }                                    only when something was left out
-//   built/done { files: [{ name, bytes:<number>, docs }], platform, counts }
-//   uploaded { file: FileRow }                                 (trials.mjs only)
-//   error    { code, message }   codes: bad_url, blocked_host, not_found, unreachable, robots, timeout, too_large,
-//                                 too_many_redirects, no_content, quota, aborted, upstream
-//
-// UI (Builder third chip "Enter a Store URL", owner B): chip opens an inline input (type=url, placeholder
-// "yourstore.com", submit "Import store"). States: idle → validating (client: non-empty, ≤ 2048 chars) →
-// "Looking at yourstore.com…" (until detect) → "Shopify store found" (detect) → progress bar from fetching.done/total
-// with "Reading products and help pages…" → "Found 412 products, 6 help pages, 3 policies" (found) → "Building 4
-// files…" (building) → optional notice for capped ("Imported the first 2,000 products") → files appear in the ingest
-// panel via the normal events stream (uploaded/done) → error states map code → copy (see ERROR_COPY below; every
-// error offers "Try another URL" and "Upload files instead").
+//   ## Price and availability / Description / Specs / Care / Shipping and returns / FAQ (### per question) / Reviews …
+// knowDrive puts the heading path in front of every atom's text, always starting with the H1 (deep paths keep the
+// first and last heading), and the H1 atom itself begins with the H1 line. So the product URL travels in EVERY atom
+// of the file, including continuation fragments of long sections, which never repeat a Source line. PDFs are uploaded
+// as they are (site/<host>/pdf/<slug>.pdf); their URL is kept by the caller in a manifest.
 // ============================================================================================================
 
 import http from 'node:http';
@@ -80,17 +49,18 @@ import https from 'node:https';
 import net from 'node:net';
 import dns from 'node:dns';
 import zlib from 'node:zlib';
+import { createHash } from 'node:crypto';
+import { findSources, classifyUrl, normalizeUrl, urlKey, anchorsOf, canonicalOf, decodeEntities, KIND_RANK, KINDS } from './sitefinder.mjs';
 
+export { decodeEntities };
 export const USER_AGENT = 'KnowBotStudio/1.0 (+https://knowbot.knowdrive.ai)';
 const UA_TOKEN = 'knowbotstudio';
 const MB = 1024 * 1024;
-export const LIMITS = Object.freeze({ maxProducts: 2000, maxPages: 200, maxTotalBytes: 20 * MB, timeoutMs: 10000, maxBytes: 5 * MB, budgetMs: 90000,
-  concurrency: 4, paceMs: 150, maxRedirects: 5 });
-const POLICY_HANDLES = ['refund-policy', 'shipping-policy', 'privacy-policy', 'terms-of-service'];
-const HELP_RE = /faq|help|support|customer-?service|question|shipping|delivery|return|refund|exchange|warrant|guarantee|about|contact|polic|terms|privacy|care-guide|size-guide|sizing/i;
-const FAQ_RE = /faq|help|question/i;
-const POLICY_RE = /shipping|delivery|return|refund|exchange|warrant|guarantee|polic|terms|privacy/i;
-const SKIP_SITEMAP_RE = /blog|post|article|news|image|video|tag|author|categor|collection/i;
+export const LIMITS = Object.freeze({ maxProducts: 10000, maxPages: 500, maxCollections: 200, maxBlog: 100, maxPdfs: 100, maxOtherPages: 50,
+  maxTotalBytes: 100 * MB, timeoutMs: 15000, maxBytes: 5 * MB, maxPdfBytes: 20 * MB, budgetMs: 20 * 60000,
+  concurrency: 4, paceMs: 150, maxRedirects: 5, maxRetries: 3, maxRetryAfterMs: 120000, maxPaceMs: 10000, slowMs: 4000 });
+/** Bytes the caller adds to every file (trials.mjs uniqueCopy tail); counted against the quota here. */
+export const FILE_OVERHEAD = 100;
 
 export const ERROR_COPY = {
   bad_url: "That doesn't look like a web address. Try something like yourstore.com.",
@@ -102,6 +72,7 @@ export const ERROR_COPY = {
   too_large: 'A page on that store was too large to read.',
   too_many_redirects: 'That address redirects too many times.',
   no_content: "We couldn't find products or help pages on that site. It may build its pages with JavaScript; upload files instead.",
+  busy: 'A website import is already running for this bot.',
   quota: 'Your trial is full. Remove a file to import a store.',
   aborted: 'The import was cancelled.',
   upstream: 'Something went wrong reading that store. Try again, or upload files instead.',
@@ -189,7 +160,7 @@ export function normalizeStoreUrl(input) {
 }
 
 // ------------------------------------------------------------------------------------------------ robots.txt
-/** RFC 9309 parser: { groups:[{agents:[...], rules:[{allow, path}]}], sitemaps:[...] }. */
+/** RFC 9309 parser: { groups:[{agents:[...], rules:[{allow, path}], crawlDelay?}], sitemaps:[...] } (Crawl-delay kept per group). */
 export function parseRobots(text) {
   const groups = [], sitemaps = [];
   let cur = null, lastWasAgent = false;
@@ -208,6 +179,7 @@ export function parseRobots(text) {
     lastWasAgent = false;
     if (!cur) continue;
     if (key === 'allow' || key === 'disallow') { if (val) cur.rules.push({ allow: key === 'allow', path: val }); }
+    else if (key === 'crawl-delay') { const n = Number(val); if (Number.isFinite(n) && n >= 0) cur.crawlDelay = n; }
   }
   return { groups, sitemaps };
 }
@@ -239,27 +211,35 @@ export function robotsAllows(parsed, pathAndQuery, token = UA_TOKEN) {
   return win ? win.allow : true;
 }
 
-// ------------------------------------------------------------------------------------------------ safe fetcher
+
 async function defaultResolve(host) { return dns.promises.lookup(host, { all: true, verbatim: true }); }
 
 /**
  * An SSRF-safe fetcher for one import run. Every request: http/https only, standard ports, DNS resolved here and
  * every address checked (the socket then connects to that checked address, so DNS rebinding can't swap it), same
- * registrable site (plus allowHost'ed CDN hosts), robots.txt honoured, redirects re-checked hop by hop (max 5),
- * 10 s per request, 5 MB per body (after decompression), ~90 s total budget, ≤ 4 in flight with polite pacing.
- * No cookies are stored or sent; only UA/Accept/Accept-Encoding (+content-type for GraphQL POSTs) go out.
+ * registrable site (plus allowHost'ed help-desk hosts, and allowPdfHost'ed asset CDNs for .pdf paths only), robots.txt
+ * honoured, redirects re-checked hop by hop (max 5), 15 s per request, 5 MB per body (after decompression), a total
+ * time budget (20 min by default), at most 4 in flight with adaptive pacing (Crawl-delay floor, 429/Retry-After
+ * backoff and retry, slow answers slow us down). No cookies are stored or sent; only UA/Accept/Accept-Encoding
+ * (+content-type for GraphQL POSTs) go out.
  *
  * Options (tests): allowAddresses: ['127.0.0.1'] (default none), allowPorts: [80,443] | 'any', resolve(host) →
- * [{address,family}], timeoutMs, maxBytes, budgetMs, concurrency, paceMs, maxRedirects, signal, onProgress({done,total}).
+ * [{address,family}], timeoutMs, maxBytes, budgetMs, concurrency, paceMs, maxRedirects, maxRetries, maxRetryAfterMs,
+ * signal, onProgress({done,total}).
  */
 export function createStoreFetcher(o = {}) {
   const cfg = { ...LIMITS, resolve: defaultResolve, allowAddresses: [], allowPorts: [80, 443], userAgent: USER_AGENT, ...o };
+  cfg.concurrency = Math.max(1, Math.min(4, Number(cfg.concurrency) || 4)); // politeness: never more than 4 in flight
   const allowAddr = new Set((cfg.allowAddresses || []).map(normIp));
-  const sites = new Set(), hosts = new Set();
+  const sites = new Set(), hosts = new Set(), pdfHosts = new Set();
   const dnsCache = new Map(), robotsCache = new Map();
   const startedAt = Date.now();
   const deadline = startedAt + cfg.budgetMs;
-  const stats = { done: 0, total: 0, bytes: 0, maxActive: 0 };
+  const stats = { done: 0, total: 0, bytes: 0, maxActive: 0, retries: 0, throttled: 0, pace: cfg.paceMs, crawlDelayMs: 0 };
+  // adaptive pacing: `pace` ms between request starts. A 429/503 doubles it and pauses everything until Retry-After;
+  // a slow answer adds a quarter; every 20 quick successes take a fifth off again, never below the floor
+  // (max(paceMs, Crawl-delay)).
+  let pace = cfg.paceMs, floor = cfg.paceMs, pauseUntil = 0, okStreak = 0;
   let active = 0, lastStart = 0, pumpTimer = null;
   const queue = [];
 
@@ -268,7 +248,7 @@ export function createStoreFetcher(o = {}) {
   function pump() {
     while (queue.length && active < cfg.concurrency) {
       if (cfg.signal?.aborted || pastDeadline()) { const it = queue.shift(); it.rej(cfg.signal?.aborted ? err('aborted') : err('timeout', 'Time budget used up.', { budget: true })); continue; }
-      const wait = lastStart + cfg.paceMs - Date.now();
+      const wait = Math.max(lastStart + pace, pauseUntil) - Date.now();
       if (wait > 0) { if (!pumpTimer) { pumpTimer = setTimeout(() => { pumpTimer = null; pump(); }, wait); pumpTimer.unref?.(); } return; }
       const it = queue.shift();
       active++; stats.maxActive = Math.max(stats.maxActive, active); lastStart = Date.now();
@@ -295,7 +275,8 @@ export function createStoreFetcher(o = {}) {
     // DNS and address blocking (resolveChecked), so an unknown host reads "couldn't reach" and a private one "public
     // web address", never a misleading port message
     if (u.port && !portOk(u)) throw err('blocked_host', 'Only standard web ports (80 and 443) can be read.');
-    if (!anyHost && !hostOk(h)) throw err('blocked_host', `${h} is not part of this store.`, { offSite: true });
+    // asset hosts (cdn.shopify.com …) are allowed for PDF files only, still address-checked on every hop
+    if (!anyHost && !hostOk(h) && !(pdfHosts.has(h) && /\.pdf$/i.test(u.pathname))) throw err('blocked_host', `${h} is not part of this store.`, { offSite: true });
   }
   function checkPortAfterResolve(u) {
     if (!portOk(u)) throw err('blocked_host', 'Only standard web ports (80 and 443) can be read.');
@@ -392,8 +373,27 @@ export function createStoreFetcher(o = {}) {
         const address = await resolveChecked(u.hostname);
         checkPortAfterResolve(u);
         if (!skipRobots && !(await robotsAllowed(u))) throw err('robots', `robots.txt asks us not to read ${u.pathname}.`, { path: u.pathname });
-        const r = await schedule(() => rawRequest(u, address, { method, headers, body, maxBytes }));
-        stats.bytes += r.body.length;
+        let r;
+        for (let attempt = 0; ; attempt++) {
+          const t0 = Date.now();
+          r = await schedule(() => rawRequest(u, address, { method, headers, body, maxBytes }));
+          stats.bytes += r.body.length;
+          if ((r.status === 429 || (r.status === 503 && r.headers['retry-after'] != null)) && attempt < cfg.maxRetries) {
+            // honour 429/Retry-After: slow down for everyone, wait, then try the same request again
+            stats.throttled++; stats.retries++;
+            const wait = Math.min(cfg.maxRetryAfterMs, retryAfterMs(r.headers['retry-after']) ?? Math.max(1000, pace * 4));
+            pace = Math.min(cfg.maxPaceMs, Math.max(pace * 2, 250)); okStreak = 0; stats.pace = pace;
+            if (Date.now() + wait >= deadline) throw err('timeout', 'Time budget used up.', { budget: true });
+            pauseUntil = Math.max(pauseUntil, Date.now() + wait);
+            await sleepAbortable(wait, cfg.signal);
+            continue;
+          }
+          const took = Date.now() - t0;
+          if (r.status >= 500 || took > cfg.slowMs) { pace = Math.min(cfg.maxPaceMs, Math.max(pace * 1.25, floor + 50)); okStreak = 0; }
+          else if (++okStreak >= 20 && pace > floor) { pace = Math.max(floor, pace * 0.8); okStreak = 0; }
+          stats.pace = pace;
+          break;
+        }
         if (r.status >= 300 && r.status < 400 && r.headers.location) {
           if (hop >= cfg.maxRedirects) throw err('too_many_redirects');
           let next;
@@ -435,11 +435,34 @@ export function createStoreFetcher(o = {}) {
     fetch: fetchUrl, get, getJson, robotsFor, robotsAllowed, stats, deadline, config: cfg,
     allowSite(host) { sites.add(registrableDomain(host)); },
     allowHost(host) { hosts.add(String(host).toLowerCase()); },
+    /** Allow `host` for .pdf paths only (an asset CDN such as cdn.shopify.com). */
+    allowPdfHost(host) { pdfHosts.add(String(host).toLowerCase()); },
+    /** robots.txt Crawl-delay (seconds, capped at 30): becomes the pacing floor. */
+    setCrawlDelay(sec) { const ms = Math.min(30, Math.max(0, Number(sec) || 0)) * 1000; stats.crawlDelayMs = ms; floor = Math.max(cfg.paceMs, ms); pace = Math.max(pace, floor); stats.pace = pace; },
+    get pace() { return pace; },
     /** True when `url` is http(s) on this store's site (or an allowed CDN host). */
     hostOkFor(url) { try { const x = new URL(url); return (x.protocol === 'http:' || x.protocol === 'https:') && hostOk(x.hostname); } catch { return false; } },
+    /** True when `url` may be fetched as a PDF: on this site, or a .pdf on an allowPdfHost'ed asset host. */
+    pdfOkFor(url) { try { const x = new URL(url); return (x.protocol === 'http:' || x.protocol === 'https:') && (hostOk(x.hostname) || (pdfHosts.has(x.hostname.toLowerCase()) && /\.pdf$/i.test(x.pathname))); } catch { return false; } },
     timeLeft: () => deadline - Date.now(),
     flushProgress: () => progress(true),
   };
+}
+/** Retry-After as ms: delta-seconds or an HTTP date; null when absent or unreadable. */
+export function retryAfterMs(v) {
+  if (v == null || v === '') return null;
+  const s = String(Array.isArray(v) ? v[0] : v).trim();
+  if (/^\d+(?:\.\d+)?$/.test(s)) return Math.round(Number(s) * 1000);
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? Math.max(0, t - Date.now()) : null;
+}
+function sleepAbortable(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(err('aborted'));
+    const t = setTimeout(() => { signal?.removeEventListener?.('abort', on); resolve(); }, ms);
+    const on = () => { clearTimeout(t); reject(err('aborted')); };
+    signal?.addEventListener?.('abort', on, { once: true });
+  });
 }
 function netError(e, u) {
   const c = e && e.code;
@@ -450,19 +473,51 @@ function netError(e, u) {
 }
 
 // ------------------------------------------------------------------------------------------------ HTML helpers
-const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', hellip: '…', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“',
-  copy: '©', reg: '®', trade: '™', euro: '€', pound: '£', yen: '¥', cent: '¢', deg: '°', times: '×', middot: '·', bull: '•', laquo: '«', raquo: '»', shy: '' };
-export function decodeEntities(s) {
-  return String(s ?? '').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
-    if (e[0] === '#') { const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); try { return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : ''; } catch { return ''; } }
-    return ENT[e.toLowerCase()] ?? m;
-  });
-}
 const oneLine = (s) => decodeEntities(String(s ?? '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1).replace(/\s+\S*$/, '')}…` : s);
-const STRIP_BLOCKS_RE = /<(script|style|noscript|template|svg|iframe|object|embed|canvas|form|select|button|dialog)\b[\s\S]*?<\/\1\s*>/gi;
-const CHROME_RE = /<(nav|header|footer|aside)\b[\s\S]*?<\/\1\s*>/gi;
+const STRIP_BLOCKS_RE = /<(script|style|noscript|template|svg|iframe|object|embed|canvas|form|select|button|dialog|video|audio|picture)\b[\s\S]*?<\/\1\s*>/gi;
+const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr', 'param']);
 
+/**
+ * Remove every element whose opening tag matches pred(tagName, openTagText), with its whole subtree (nesting of the
+ * same tag is counted). An element that is never closed loses only its opening tag.
+ */
+export function removeElements(html, pred) {
+  const s = String(html ?? '');
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/g;
+  let out = '', last = 0, skip = null, m;
+  while ((m = re.exec(s))) {
+    const close = !!m[1], name = m[2].toLowerCase(), self = !!m[3];
+    if (skip) {
+      if (name === skip.tag) { if (close) { if (--skip.depth === 0) { last = re.lastIndex; skip = null; } } else if (!self) skip.depth++; }
+      continue;
+    }
+    if (!close && !self && !VOID.has(name) && pred(name, m[0])) { out += s.slice(last, m.index); skip = { tag: name, depth: 1, openEnd: re.lastIndex }; }
+  }
+  if (skip) return out + s.slice(skip.openEnd);
+  return out + s.slice(last);
+}
+const CHROME_TAG_RE = /^(?:nav|header|footer|aside)$/;
+const CHROME_ATTR_RE = /\brole\s*=\s*["']?(?:navigation|banner|contentinfo|dialog|alertdialog|search)\b|\b(?:id|class)\s*=\s*["'][^"']*?(?:cookie|consent|gdpr|onetrust|cookiebot|cc-window|cc-banner|newsletter|klaviyo|mailchimp|popup|pop-up|announcement|breadcrumb|site-nav|site-header|site-footer|mega-?menu|skip-to|skip-link|visually-hidden|sr-only|share-buttons|social-share|recently-viewed|you-may-also-like|related-products|product-recommendations|upsell|cross-sell)[^"']*["']/i;
+/** Drop navigation, header, footer, asides, cookie/consent banners, newsletter pop-ups, breadcrumbs and "related" rails. */
+export function stripBoilerplate(html) {
+  return removeElements(html, (name, tag) => CHROME_TAG_RE.test(name) || CHROME_ATTR_RE.test(tag));
+}
+/**
+ * Page-builder shortcodes (Divi, WPBakery, Avada …) that leak into WordPress content: accordion and toggle items become
+ * <details><summary>title</summary>body</details> (their titles are the FAQ questions), tabs become headings, every
+ * other shortcode tag is dropped and its inner text kept.
+ */
+export function convertShortcodes(html) {
+  const attr = (a, k) => decodeEntities(new RegExp(`\\b${k}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|&#8221;([^&]*)&#8221;|&#8243;([^&]*)&#8243;)`).exec(a)?.slice(1).find((x) => x != null) || '');
+  return String(html ?? '')
+    .replace(/\[(et_pb_accordion_item|et_pb_toggle|vc_tta_section|fusion_toggle|av_toggle)\b([^\]]*)\]([\s\S]*?)\[\/\1\]/g, (m, tag, a, body) => {
+      const t = attr(a, 'title') || attr(a, 'heading');
+      return t ? `<details><summary>${t.replace(/</g, '&lt;')}</summary>${body}</details>` : body;
+    })
+    .replace(/\[(?:et_pb_tab|vc_tab)\b([^\]]*)\]/g, (m, a) => { const t = attr(a, 'title'); return t ? `<h3>${t.replace(/</g, '&lt;')}</h3>` : ' '; })
+    .replace(/\[\/?(?:et_pb_|vc_|fusion_|av_|cs_|x_|themify_|tatsu_|su_|ux_|fl_|elementor)[a-z_0-9-]*\b[^\]]*\]/gi, ' ');
+}
 function mainOf(html) {
   const m = /<main\b[^>]*>([\s\S]*?)<\/main\s*>/i.exec(html) || /<article\b[^>]*>([\s\S]*)<\/article\s*>/i.exec(html);
   if (m) return m[1];
@@ -471,26 +526,31 @@ function mainOf(html) {
   const b = /<body\b[^>]*>([\s\S]*)<\/body\s*>/i.exec(html);
   return b ? b[1] : html;
 }
+/** Imported text can never forge our structure: a line starting with # or "Source:" is escaped. */
+export function escapeText(text) {
+  return String(text ?? '').replace(/^(\s*)(#{1,6})(?=\s|$)/gm, '$1\\$2').replace(/^(\s*)(Source\s*:|Product page\s*:)/gim, '$1\\$2');
+}
 /**
- * Readable text of an HTML page or fragment: scripts/styles/forms stripped, nav/header/footer dropped (main=true),
- * headings rendered as Markdown starting at `minLevel`, lists as `- `, and any `#` the page itself begins a line with
- * escaped, so imported text can never forge a section heading (citations rely on our own `##` structure).
+ * Readable text of an HTML page or fragment: scripts/styles/forms stripped, shortcodes converted, boilerplate dropped
+ * (main=true), headings rendered as Markdown starting at `minLevel`, lists as `- `, and any `#` or `Source:` the page
+ * itself begins a line with escaped, so imported text can never forge a section heading or a source link.
  */
 export function htmlToText(html, { main = true, minLevel = 3 } = {}) {
-  let s = String(html ?? '').replace(/[\u0001\u0002]/g, '');
+  let s = convertShortcodes(String(html ?? '').replace(/[\u0001\u0002]/g, ''));
   s = s.replace(/<!--[\s\S]*?-->/g, ' ').replace(STRIP_BLOCKS_RE, ' ').replace(/<(script|style)\b[^>]*\/>/gi, ' ');
-  if (main) s = mainOf(s).replace(CHROME_RE, ' ');
+  s = main ? stripBoilerplate(mainOf(s)) : stripBoilerplate(s);
   s = s.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi, (_, l, t) => {
     const txt = oneLine(t); if (!txt) return '\n';
-    return `\n\n\u0001${Math.min(6, minLevel + Math.max(0, Number(l) - 2))}\u0002 ${txt}\n\n`;
+    return `\n\n\u0001${Math.min(6, minLevel + Math.max(0, Number(l) - 2))}\u0002 ${txt.replace(/^#+\s*/, '')}\n\n`;
   });
+  s = s.replace(/<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/gi, (_, t) => `\n\n**${oneLine(t)}**\n\n`);
   s = s.replace(/<li\b[^>]*>/gi, '\n- ').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(?:td|th)\s*>/gi, ' · ')
-    .replace(/<\/?(?:p|div|section|article|ul|ol|table|tr|blockquote|dl|dt|dd|details|summary|figure|figcaption|pre|address|main)\b[^>]*>/gi, '\n\n')
+    .replace(/<\/?(?:p|div|section|article|ul|ol|table|tr|blockquote|dl|dt|dd|details|summary|figure|figcaption|pre|address|main|h[1-6])\b[^>]*>/gi, '\n\n')
     .replace(/<[^>]+>/g, ' ');
   s = decodeEntities(s).replace(/\u0000/g, '');
   const lines = s.split('\n').map((l) => l.replace(/[ \t\f\v ]+/g, ' ').trim().replace(/\s·$/, ''));
   let out = lines.filter((l) => l !== '-').join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  out = out.replace(/^(#{1,6})(?=\s|$)/gm, '\\$1');
+  out = escapeText(out);
   return out.replace(/\u0001(\d)\u0002/g, (_, n) => '#'.repeat(Number(n)));
 }
 export function titleOfHtml(html) {
@@ -517,28 +577,21 @@ export function jsonLdBlocks(html) {
     out.push(x);
     if (Array.isArray(x['@graph'])) x['@graph'].forEach((y) => walk(y, depth + 1));
   };
-  while ((m = re.exec(html))) {
+  while ((m = re.exec(String(html ?? '')))) {
     const raw = m[1].trim().replace(/^<!\[CDATA\[|\]\]>$/g, '');
     try { walk(JSON.parse(raw)); } catch { try { walk(JSON.parse(raw.replace(/[\u0000-\u001f]+/g, ' '))); } catch {} }
   }
   return out;
 }
 const typeIs = (o, t) => [].concat(o?.['@type'] || []).some((x) => String(x).replace(/^.*[/#]/, '') === t);
-function linksOf(html, baseUrl) {
-  const out = new Set();
-  const re = /<a\b[^>]*href=["']([^"'#]+)(?:#[^"']*)?["']/gi;
-  let m;
-  while ((m = re.exec(html))) { try { const u = new URL(decodeEntities(m[1]), baseUrl); if (u.protocol.startsWith('http')) { u.hash = ''; out.add(u.href); } } catch {} }
-  return [...out];
-}
-/** Q/A pairs from a help page: <details><summary>, and headings / bold lines that end with '?'. */
+/** Q/A pairs on a page: <details><summary> (and converted accordions), else headings / bold lines that end with '?'. */
 export function faqPairsFromHtml(html) {
   const pairs = [];
-  const body = mainOf(String(html).replace(STRIP_BLOCKS_RE, ' ')).replace(CHROME_RE, ' ');
+  const body = stripBoilerplate(mainOf(convertShortcodes(String(html ?? '')).replace(STRIP_BLOCKS_RE, ' ')));
   const dre = /<details\b[^>]*>\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>([\s\S]*?)<\/details\s*>/gi;
   let m;
   while ((m = dre.exec(body))) { const q = oneLine(m[1]), a = htmlToText(m[2], { main: false, minLevel: 5 }); if (q && a) pairs.push({ q, a }); }
-  if (pairs.length >= 2) return pairs;
+  if (pairs.length >= 1) return pairs;
   const text = htmlToText(body, { main: false, minLevel: 3 });
   const blocks = text.split(/\n(?=#{3,6} |\*\*[^\n]+\?\*\*\s*$)/m);
   const hq = [];
@@ -548,8 +601,36 @@ export function faqPairsFromHtml(html) {
   }
   return hq.length >= 2 ? hq : pairs;
 }
+/** FAQPage JSON-LD → [{q, a}]. */
+function ldFaqs(ld) {
+  const out = [];
+  for (const o of ld) {
+    if (!typeIs(o, 'FAQPage')) continue;
+    for (const q of [].concat(o.mainEntity || [])) {
+      const a = [].concat(q?.acceptedAnswer || [])[0];
+      const qt = oneLine(q?.name), at = a ? htmlToText(String(a.text || ''), { main: false, minLevel: 5 }) : '';
+      if (qt && at) out.push({ q: qt, a: at });
+    }
+  }
+  return out;
+}
+/** Markdown (our `## ` headings) → [{ heading|null, text }]. */
+function splitSections(md) {
+  const out = [];
+  let cur = { heading: null, lines: [] };
+  for (const line of String(md || '').split('\n')) {
+    const h = /^## (.+)$/.exec(line);
+    if (h) { out.push(cur); cur = { heading: h[1].trim(), lines: [] }; continue; }
+    cur.lines.push(line);
+  }
+  out.push(cur);
+  return out.map((s) => ({ heading: s.heading, text: s.lines.join('\n').trim() })).filter((s) => s.text || s.heading);
+}
+const normPara = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 // ------------------------------------------------------------------------------------------------ documents
+// A document is one page: { kind, url, title, sections:[{ heading|null, text, html? }], pdfs:[{url, text}] }, or a PDF
+// { kind:'pdf', url, title, bytes, mime }. renderMarkdown turns it into the file layout described at the top.
 const fmtMoney = (v, cur) => {
   const n = Number(v);
   if (v == null || v === '' || !Number.isFinite(n)) return null;
@@ -559,10 +640,9 @@ const fmtMoney = (v, cur) => {
 const AVAIL = (a) => (a == null ? null : a === true ? 'in stock' : a === false ? 'out of stock'
   : String(a).replace(/^.*[/#]/, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase());
 const cleanTitle = (s) => clip(oneLine(s), 200).replace(/^#+\s*/, '');
-/** A product as Markdown body lines (the section heading and Source line are added by the file builder). */
-export function productDoc(p) {
-  // Every fact line names its product ("- Trail Pro price: …"): a line is quoted on its own, so it must say what it
-  // is about without its heading (a line picker sees only the line; a librarian quote should read whole).
+
+/** Fact lines for a product record; every line names its product (a line is quoted on its own). */
+export function productFacts(p) {
   const name = cleanTitle(p.title) || 'Untitled product';
   const L = [];
   const fact = (key, value) => L.push(`- ${name} ${key}: ${value}`);
@@ -573,8 +653,7 @@ export function productDoc(p) {
   if (p.type) fact('type', oneLine(p.type));
   if (p.sku) fact('SKU', oneLine(p.sku));
   const vs = (p.variants || []).filter((v) => v && v.title && !/^default( title)?$/i.test(v.title));
-  // fixer r8 (D5): a product-level "in stock" is never written when any option is out (it contradicted the variant
-  // lines): mixed stock names the options that are in stock; all out says so
+  // a product-level "in stock" is never written when any option is out: mixed stock names the options in stock
   const vIn = (v) => v.available === true || /^in ?stock$/i.test(String(v.available ?? '').trim());
   const vOut = (v) => v.available === false || /^(?:out ?of ?stock|sold ?out)$/i.test(String(v.available ?? '').trim());
   let availability = p.availability || null;
@@ -586,57 +665,271 @@ export function productDoc(p) {
   if (availability) fact('availability', availability);
   if (vs.length) {
     L.push(`- ${name} variants:`);
-    for (const v of vs.slice(0, 60)) {
+    for (const v of vs.slice(0, 100)) {
       const bits = [fmtMoney(v.price, p.currency), v.sku ? `SKU ${oneLine(v.sku)}` : null, v.available == null ? null : AVAIL(v.available)].filter(Boolean);
       const vt = oneLine(v.title);
       L.push(`  - ${vt.toLowerCase().startsWith(name.toLowerCase()) ? vt : `${name} ${vt}`}${bits.length ? `: ${bits.join(', ')}` : ''}`);
     }
-    if (vs.length > 60) L.push(`  - …and ${vs.length - 60} more variants`);
+    if (vs.length > 100) L.push(`  - …and ${vs.length - 100} more variants`);
   }
   if (p.options?.length) fact('options', p.options.map((o) => `${oneLine(o.name)} (${o.values.map(oneLine).join(', ')})`).join('; '));
   if (p.categories?.length) fact('categories', p.categories.map(oneLine).filter(Boolean).join(', '));
   if (p.tags?.length) fact('tags', p.tags.map(oneLine).filter(Boolean).join(', '));
-  const desc = p.descriptionHtml != null ? htmlToText(p.descriptionHtml, { main: false, minLevel: 4 }) : String(p.description || '').trim();
-  const text = `${L.join('\n')}${desc ? `\n\n${clip(desc, 6000)}` : ''}`.trim();
-  return { kind: 'product', title: name, url: p.url, text };
+  return escapeText(L.join('\n'));
 }
-function productFromLd(o, pageUrl) {
+/** A product record ({title, url, price, …, descriptionHtml}) as a document. */
+export function productDoc(p) {
+  const title = cleanTitle(p.title) || 'Untitled product';
+  const sections = [];
+  const facts = productFacts(p);
+  if (facts) sections.push({ heading: 'Price and availability', text: facts });
+  const desc = p.descriptionHtml != null ? htmlToText(p.descriptionHtml, { main: false, minLevel: 3 }) : escapeText(String(p.description || '').trim());
+  if (desc) sections.push({ heading: 'Description', text: clip(desc, 12000) });
+  return { kind: 'product', url: p.url, title, sections, pdfs: [...(p.pdfs || [])], record: p };
+}
+function recordFromLd(o, pageUrl) {
   const offers = [].concat(o.offers || []).flatMap((x) => (typeIs(x, 'AggregateOffer') && x.offers ? [].concat(x.offers) : [x]));
   const first = offers[0] || {};
   const agg = [].concat(o.offers || []).find((x) => typeIs(x, 'AggregateOffer'));
   const variants = [].concat(o.hasVariant || []).map((v) => { const vo = [].concat(v.offers || [])[0] || {}; return { title: v.name, sku: v.sku, price: vo.price, available: vo.availability ? AVAIL(vo.availability) : null }; });
-  return productDoc({ title: o.name, url: (typeof o.url === 'string' && o.url) || pageUrl, sku: o.sku, brand: typeof o.brand === 'object' ? o.brand?.name : o.brand,
+  return { title: o.name, url: pageUrl, sku: o.sku, brand: typeof o.brand === 'object' ? o.brand?.name : o.brand,
     price: agg?.lowPrice ?? first.price ?? first.priceSpecification?.price, priceMax: agg?.highPrice, currency: agg?.priceCurrency || first.priceCurrency || first.priceSpecification?.priceCurrency,
     availability: first.availability ? AVAIL(first.availability) : null, variants, categories: o.category ? [].concat(o.category).map(String) : [],
-    descriptionHtml: o.description ? String(o.description) : '' });
+    descriptionHtml: o.description ? String(o.description) : '' };
 }
-const kindOf = (url, title) => { const s = `${safePath(url)} ${title || ''}`; return FAQ_RE.test(s) ? 'faq' : POLICY_RE.test(s) ? 'policy' : 'page'; };
-function safePath(url) { try { return new URL(url).pathname; } catch { return String(url || ''); } }
+const SECTION_NAMES = [
+  ['FAQ', /\b(?:faqs?|frequently asked|questions?)\b/i],
+  ['Reviews', /\b(?:reviews?|ratings?|testimonials?)\b/i],
+  ['Shipping and returns', /\b(?:shipping|delivery|returns?|refunds?|exchanges?|warrant(?:y|ies)|guarantee)\b/i],
+  ['Care', /\b(?:care|wash(?:ing)?|cleaning|maintenance|storage)\b/i],
+  ['Specs', /\b(?:specs?|specifications?|dimensions?|measurements?|materials?|fabric|composition|weight|technical|tech specs|features?|ingredients|size(?: and fit| & fit| guide| chart)?|fit|what'?s included|in the box|details)\b/i],
+  ['Description', /\b(?:description|overview|about this|product info(?:rmation)?)\b/i],
+];
+const sectionName = (h) => SECTION_NAMES.find(([, re]) => re.test(h))?.[0] || null;
+/** Product-page reviews as text: aggregateRating and up to 5 written reviews from JSON-LD. */
+function ldReviews(p) {
+  const L = [];
+  const ar = p?.aggregateRating;
+  if (ar && ar.ratingValue != null) L.push(`Rated ${oneLine(ar.ratingValue)} out of ${oneLine(ar.bestRating ?? 5)}${ar.reviewCount ?? ar.ratingCount ? ` from ${oneLine(ar.reviewCount ?? ar.ratingCount)} reviews` : ''}.`);
+  for (const r of [].concat(p?.review || []).slice(0, 5)) {
+    const body = oneLine(r?.reviewBody || r?.description || '');
+    if (!body) continue;
+    const who = oneLine(typeof r.author === 'object' ? r.author?.name : r.author);
+    const stars = r.reviewRating?.ratingValue != null ? ` (${oneLine(r.reviewRating.ratingValue)}/${oneLine(r.reviewRating.bestRating ?? 5)})` : '';
+    L.push(`- ${clip(body, 600)}${who ? ` (${clip(who, 60)})` : ''}${stars}`);
+  }
+  return escapeText(L.join('\n'));
+}
+/** .pdf links in the main content of a page: [{url, text}] (manuals, spec sheets, size charts first). */
+function pdfLinksOf(html, pageUrl) {
+  const main = stripBoilerplate(mainOf(String(html ?? '').replace(STRIP_BLOCKS_RE, ' ')));
+  const out = new Map();
+  for (const a of anchorsOf(main, pageUrl)) if (/\.pdf$/i.test(new URL(a.url).pathname) && !out.has(a.url)) out.set(a.url, { url: a.url, text: a.text, from: pageUrl });
+  return [...out.values()];
+}
 
-/** Everything useful on one fetched HTML page: JSON-LD products and FAQs, Q/A pairs, else readable text. */
-export function docsFromHtml(html, url, { kindHint = null, wantProducts = true } = {}) {
-  const docs = [];
+/**
+ * A product page's HTML on top of what the feed gave (rec, may be null): JSON-LD Product, FAQPage and reviews, the
+ * page's own sections (specs, care, shipping and returns, FAQ …, boilerplate stripped), its PDF links and canonical URL.
+ * Paragraphs that repeat the feed description are dropped. → doc | null (no product on the page and no record).
+ */
+export function readProductHtml(html, pageUrl, rec = null, { requireLd = false } = {}) {
   const ld = jsonLdBlocks(html);
-  if (wantProducts) for (const o of ld) if ((typeIs(o, 'Product') || typeIs(o, 'ProductGroup')) && o.name) docs.push(productFromLd(o, url));
-  const title = titleOfHtml(html) || safePath(url);
-  let faqs = [];
-  for (const o of ld) {
-    if (!typeIs(o, 'FAQPage')) continue;
-    for (const q of [].concat(o.mainEntity || [])) {
-      const a = [].concat(q?.acceptedAnswer || [])[0];
-      const qt = oneLine(q?.name), at = a ? htmlToText(String(a.text || ''), { main: false, minLevel: 5 }) : '';
-      if (qt && at) faqs.push({ q: qt, a: at });
+  const ldp = ld.find((o) => (typeIs(o, 'Product') || typeIs(o, 'ProductGroup')) && o.name);
+  if (!rec && !ldp && requireLd) return null;
+  const canonical = canonicalOf(html, pageUrl);
+  const url = rec?.url || canonical || pageUrl;
+  const record = rec || (ldp ? recordFromLd(ldp, url) : { title: titleOfHtml(html) || url, url });
+  const doc = productDoc(record);
+  doc.canonical = canonical;
+  const descNorm = normPara((doc.sections.find((s) => s.heading === 'Description')?.text || ''));
+  const title = doc.title.toLowerCase();
+  const merged = new Map();
+  for (const s of splitSections(htmlToText(html, { main: true, minLevel: 2 }))) {
+    const paras = s.text.split(/\n{2,}/).map((p) => p.trim()).filter((p) => {
+      const n = normPara(p);
+      if (!n || n.split(' ').length < 3) return false;          // "Quantity", "$799.00", "Add to cart"
+      if (descNorm && n.length > 20 && descNorm.includes(n)) return false;
+      return true;
+    });
+    if (!paras.length) continue;
+    let name = s.heading && s.heading.toLowerCase() !== title ? (sectionName(s.heading) || clip(s.heading.replace(/[*_`]+/g, ''), 80)) : 'From the product page';
+    if (name === 'Description') name = 'More about this product';
+    const prev = merged.get(name);
+    merged.set(name, prev ? `${prev}\n\n${paras.join('\n\n')}` : paras.join('\n\n'));
+  }
+  const faqs = [...ldFaqs(ld), ...(merged.has('FAQ') ? faqPairsFromHtml(html) : [])];
+  if (faqs.length) merged.delete('FAQ');
+  const reviewsLd = ldReviews(ldp);
+  for (const [heading, text] of merged) {
+    if (heading === 'Reviews' && text.replace(/\s+/g, ' ').length < 40) continue;
+    doc.sections.push({ heading, text: clip(text, 12000), html: true });
+  }
+  if (faqs.length) {
+    const seen = new Set();
+    doc.sections.push({ heading: 'FAQ', text: faqs.filter((f) => !seen.has(f.q) && seen.add(f.q)).map((f) => `### ${headText(f.q)}\n${clip(f.a, 3000)}`).join('\n\n'), html: true });
+  }
+  if (reviewsLd && !merged.has('Reviews')) doc.sections.push({ heading: 'Reviews', text: reviewsLd });
+  doc.pdfs = [...doc.pdfs, ...pdfLinksOf(html, pageUrl)];
+  return doc;
+}
+/**
+ * A help, policy, FAQ, collection, blog or other page as a document. FAQ pages become one `##` section per question
+ * (each question is its own atom); other pages keep their own headings as `##` sections.
+ */
+export function readPageHtml(html, pageUrl, { kind = 'help', title = null } = {}) {
+  const ld = jsonLdBlocks(html);
+  const t = cleanTitle(title || titleOfHtml(html) || new URL(pageUrl).pathname);
+  const canonical = canonicalOf(html, pageUrl);
+  let faqs = ldFaqs(ld);
+  if (!faqs.length && (kind === 'faq' || /\b(?:faqs?|questions)\b/i.test(t))) faqs = faqPairsFromHtml(html);
+  const doc = { kind, url: pageUrl, title: t, sections: [], pdfs: pdfLinksOf(html, pageUrl), canonical };
+  if (faqs.length >= 2 || (faqs.length && kind === 'faq')) {
+    if (kind !== 'faq' && kind !== 'policy') doc.kind = 'faq';
+    const seen = new Set();
+    for (const f of faqs) if (!seen.has(f.q)) { seen.add(f.q); doc.sections.push({ heading: f.q, text: clip(f.a, 8000), html: true }); }
+    return doc;
+  }
+  const secs = splitSections(htmlToText(html, { main: true, minLevel: 2 }));
+  for (const s of secs) {
+    if (s.heading && s.heading.toLowerCase() === t.toLowerCase()) { if (s.text) doc.sections.push({ heading: null, text: s.text, html: true }); continue; }
+    doc.sections.push({ heading: s.heading, text: s.text, html: true });
+  }
+  return doc;
+}
+
+// ------------------------------------------------------------------------------------------------ Markdown files
+/** Our own heading text: one line, no leading #, no " > " (the breadcrumb separator), no forged " · <url>" tail. */
+export function headText(s) {
+  return String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/^[#\s]+/, '').replace(/\s+>\s+/g, ' › ').replace(/\s·\s+(?=https?:)/gi, ' - ').replace(/\s+/g, ' ').trim().slice(0, 240) || 'Untitled';
+}
+/** A file-name part: no path separators or control characters, single spaces, at most 60 characters. */
+const displayPart = (s) => String(s ?? '').replace(/[\0-\x1f\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 60).trim();
+/** The Markdown of one page document (deterministic: same document, same bytes). */
+export function renderMarkdown(doc) {
+  const url = doc.url;
+  const out = [`# ${headText(doc.title)} · ${url}`, '', `Source: ${url}`];
+  for (const s of doc.sections) {
+    const text = String(s.text || '').trim();
+    if (!text) continue;
+    if (s.heading) out.push('', `## ${headText(s.heading)}`, '', text);
+    else out.push(text);
+  }
+  if (doc.kind === 'product' && doc.pdfs?.length) out.push('', '## Downloads', '', doc.pdfs.slice(0, 20).map((p) => `- ${headText(p.text || 'Document')} (PDF): ${p.url}`).join('\n'));
+  return `${out.join('\n').replace(/\n{3,}/g, '\n\n')}\n`;
+}
+const shortHash = (s) => createHash('sha1').update(String(s)).digest('hex').slice(0, 6);
+/** A stable slug for a page URL (last meaningful path segment). */
+export function slugOf(url) {
+  let p = '';
+  try { p = decodeURIComponent(new URL(url).pathname); } catch { try { p = new URL(url).pathname; } catch { p = String(url || ''); } }
+  const segs = p.split('/').filter(Boolean).map((x) => x.replace(/\.(?:html?|php|aspx?|pdf)$/i, ''));
+  const last = segs.length ? segs[segs.length - 1] : 'home';
+  return String(last).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `page-${shortHash(url)}`;
+}
+
+/** Counts of repeated paragraphs across HTML pages: text on more than half the pages (and at least 3) is boilerplate. */
+function createRepeatFilter() {
+  const counts = new Map();
+  let pages = 0;
+  const parasOf = (doc) => doc.sections.filter((s) => s.html).flatMap((s) => s.text.split(/\n{2,}/)).map(normPara).filter((n) => n.length >= 30);
+  return {
+    observe(doc) { const ps = new Set(parasOf(doc)); if (!ps.size) return false; pages++; for (const p of ps) counts.set(p, (counts.get(p) || 0) + 1); return true; },
+    get pages() { return pages; },
+    apply(doc) {
+      if (pages < 4) return doc;
+      const boiler = (p) => { const n = normPara(p); const c = counts.get(n) || 0; return n.length >= 30 && c >= 3 && c / pages > 0.5; };
+      const sections = doc.sections.map((s) => (s.html ? { ...s, text: s.text.split(/\n{2,}/).filter((p) => !boiler(p)).join('\n\n') } : s)).filter((s) => s.text.trim());
+      return { ...doc, sections };
+    },
+  };
+}
+
+/**
+ * The file writer: documents in, Markdown (or PDF) files out, in batches of one page kind, under a byte budget.
+ * add() is serialised (docs arrive from parallel readers); the first 10 HTML pages are held back so repeated blocks can
+ * be recognised before anything is written. → { add(doc), finish(), stats }
+ */
+function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batchFiles = 40, batchBytes = 2 * MB, warmPages = 10, maxBatchAgeMs = 3000 }) {
+  const label = displayPart(storeName) || displayPart(siteHost) || 'Store';
+  const stats = { used: 0, files: 0, written: {}, leftOut: {}, bytesByKind: {} };
+  const out = [];
+  const taken = new Set();
+  const batches = new Map();
+  const filter = createRepeatFilter();
+  let held = [], warm = false, q = Promise.resolve(), announced = false;
+  const inc = (o, k, n = 1) => { o[k] = (o[k] || 0) + n; };
+  async function flush(kind) {
+    const b = batches.get(kind);
+    if (!b || !b.files.length) return;
+    batches.delete(kind);
+    if (onFiles) await onFiles({ kind, files: b.files });
+  }
+  async function write(doc) {
+    const d = doc.kind === 'pdf' ? doc : filter.apply(doc);
+    let bytes, ext, mime;
+    if (d.kind === 'pdf') { bytes = d.bytes; ext = 'pdf'; mime = 'application/pdf'; }
+    else {
+      if (!d.sections.some((s) => String(s.text || '').trim())) return;
+      bytes = Buffer.from(renderMarkdown(d), 'utf8'); ext = 'md'; mime = 'text/markdown';
     }
+    const size = bytes.length;
+    if (stats.used + size + FILE_OVERHEAD > maxTotalBytes) { inc(stats.leftOut, d.kind); return; }
+    let host = siteHost;
+    try { const h = new URL(d.url).hostname.toLowerCase(); if (d.kind !== 'pdf') host = h; } catch {}
+    let slug = slugOf(d.url);
+    let rel = `site/${host}/${d.kind}/${slug}.${ext}`;
+    if (taken.has(rel)) { slug = `${slug}-${shortHash(d.url)}`; rel = `site/${host}/${d.kind}/${slug}.${ext}`; }
+    if (taken.has(rel)) return;
+    taken.add(rel);
+    stats.used += size + FILE_OVERHEAD; stats.files++; inc(stats.written, d.kind); inc(stats.bytesByKind, d.kind, size);
+    const title = headText(d.title);
+    const file = { path: rel, name: `${label} · ${displayPart(title) || 'Page'}.${ext}`, title, url: d.url, kind: d.kind, host, bytes, mime, size, docs: 1 };
+    if (!announced) { announced = true; emit('building', { files: [file.name], n: 1 }); }
+    if (onFiles) {
+      let b = batches.get(d.kind);
+      if (!b) { b = { files: [], bytes: 0, at: Date.now() }; batches.set(d.kind, b); }
+      b.files.push(file); b.bytes += size;
+      const limit = d.kind === 'product' ? batchFiles : d.kind === 'pdf' ? 1 : 10;
+      // a batch also goes up once it is a few seconds old, so a slow crawl still feeds knowDrive steadily
+      if (b.files.length >= limit || b.bytes >= batchBytes || Date.now() - b.at >= maxBatchAgeMs) await flush(d.kind);
+      out.push({ ...file, bytes: undefined });
+    } else out.push(file);
   }
-  const kind = kindHint || kindOf(url, title);
-  if (!faqs.length && kind !== 'product' && (kind === 'faq' || FAQ_RE.test(title))) faqs = faqPairsFromHtml(html);
-  if (faqs.length) for (const f of faqs) docs.push({ kind: 'faq', title: clip(f.q, 300), url, text: clip(f.a, 8000), group: title });
-  else if (kind !== 'product' && !docs.some((d) => d.kind === 'product')) {
-    // the page's own title heading would repeat our `## title` line
-    const text = htmlToText(html, { main: true, minLevel: 3 }).replace(/^#{3,6} (.*)\n+/, (m, h) => (h.trim().toLowerCase() === title.trim().toLowerCase() ? '' : m));
-    if (text.replace(/\s+/g, ' ').length >= 40) docs.push({ kind: kind === 'faq' ? 'page' : kind, title: cleanTitle(title), url, text: clip(text, 60000) });
+  async function addNow(doc) {
+    if (doc.kind !== 'pdf' && filter.observe(doc) && !warm) {
+      held.push(doc);
+      if (filter.pages >= warmPages) { warm = true; const h = held; held = []; for (const x of h) await write(x); }
+      return;
+    }
+    await write(doc);
   }
-  return docs;
+  return {
+    stats, files: out,
+    add(doc) { q = q.then(() => addNow(doc)); return q; },
+    /** Hand over every pending batch (between reading phases: help pages go up before the products are read). */
+    flushAll() { q = q.then(async () => { for (const k of [...batches.keys()]) await flush(k); }); return q; },
+    async finish() {
+      await q;
+      warm = true;
+      const h = held; held = [];
+      for (const x of h) await write(x);
+      for (const k of [...batches.keys()].sort((a, b) => (KIND_RANK[a] ?? 9) - (KIND_RANK[b] ?? 9))) await flush(k);
+      return out;
+    },
+  };
+}
+/**
+ * Build files from documents synchronously (no batching, no repeated-block filter): { files, capped, leftOut }.
+ * Kept for callers and tests that hold all documents at once.
+ */
+export async function buildMarkdownFiles(docs, o = {}) {
+  const files = [];
+  const w = createWriter({ maxTotalBytes: o.maxTotalBytes ?? LIMITS.maxTotalBytes, storeName: o.storeName, siteHost: o.host || 'site', emit: () => {}, warmPages: Infinity,
+    onFiles: async (b) => { files.push(...b.files); } });
+  for (const d of [...docs].sort((a, b) => (KIND_RANK[a.kind] ?? 9) - (KIND_RANK[b.kind] ?? 9))) await w.add(d);
+  await w.finish();
+  return { files, leftOut: w.stats.leftOut, capped: Object.keys(w.stats.leftOut).length ? { bytes: { limit: o.maxTotalBytes, droppedProducts: w.stats.leftOut.product || 0, droppedSections: Object.values(w.stats.leftOut).reduce((a, b) => a + b, 0) } } : null };
 }
 
 // ------------------------------------------------------------------------------------------------ platform detection
@@ -645,6 +938,7 @@ const hasHeader = (h, re) => Object.keys(h || {}).some((k) => re.test(k));
  * Detect the store platform. `fetchFn` is a createStoreFetcher().fetch (or anything with the same contract:
  * (url, {method, body, headers, accept, anyHost}) → {status, ok, url, headers, body, text(), json()}).
  * → { platform, api, base, name, currency, signals:[...], home:{url, html}, apiBase? }
+ * platform: shopify | magento | squarespace | woocommerce (feeds) | bigcommerce | wix (sitemaps + HTML) | generic.
  */
 export async function detectPlatform(url, fetchFn) {
   const start = typeof url === 'string' ? normalizeStoreUrl(url) : url;
@@ -663,6 +957,8 @@ export async function detectPlatform(url, fetchFn) {
     squarespace: /squarespace/i.test(String(h.server || '')) || /static1\.squarespace\.com|Static\.SQUARESPACE_CONTEXT|<!-- This is Squarespace/.test(html),
     woocommerce: /woocommerce|wc-block-|\/wp-content\/plugins\/woocommerce/i.test(html),
     wordpress: /wp-content|wp-json|api\.w\.org/.test(html) || /api\.w\.org/.test(String(h.link || '')),
+    bigcommerce: /cdn\d*\.bigcommerce\.com|BCData|stencil-utils/i.test(html) || /bigcommerce/i.test(String(h.server || '') + String(h['x-powered-by'] || '')),
+    wix: hasHeader(h, /^x-wix-/) || /static\.wixstatic\.com|wix-warmup-data|_wixCssImports/.test(html),
   };
   for (const [k, v] of Object.entries(hint)) if (v) signals.push(`hint:${k}`);
   const name = siteNameOfHtml(html);
@@ -692,144 +988,64 @@ export async function detectPlatform(url, fetchFn) {
     const r = await probes[k]();
     if (r) { signals.push(`api:${k}`); return { platform: k, api: true, base, name: r.name || name, currency: r.currency || currency, signals, home: { url: home.url, html }, apiBase: r.apiBase }; }
   }
-  const hinted = ['shopify', 'magento', 'squarespace', 'woocommerce'].find((k) => hint[k]);
+  const hinted = ['shopify', 'magento', 'squarespace', 'woocommerce', 'bigcommerce', 'wix'].find((k) => hint[k]);
   return { platform: hinted || 'generic', api: false, base, name, currency, signals, home: { url: home.url, html } };
 }
 
-// ------------------------------------------------------------------------------------------------ collectors
-/** Sitemap discovery: robots.txt Sitemap: lines, then /sitemap.xml and /sitemap_index.xml; follows indexes. */
-async function sitemapEntries(ctx) {
-  if (ctx._sitemap) return ctx._sitemap;
-  ctx._sitemap = (async () => {
-    const { f, base } = ctx;
-    const robots = await f.robotsFor(base).catch(() => ({ sitemaps: [] }));
-    const seeds = [...new Set([...(robots.sitemaps || []), `${base}/sitemap.xml`, `${base}/sitemap_index.xml`, ...(ctx.det.platform === 'woocommerce' ? [`${base}/wp-sitemap.xml`] : [])])];
-    const entries = [], seenLoc = new Set(), seenMap = new Set();
-    const queue = seeds.map((u) => ({ u, depth: 0 }));
-    let files = 0, foundAny = false;
-    while (queue.length && files < 40 && entries.length < 20000) {
-      const { u, depth } = queue.shift();
-      if (seenMap.has(u)) continue; seenMap.add(u);
-      if (depth === 0 && foundAny && !robots.sitemaps?.includes(u)) continue; // defaults only when robots gave nothing usable
-      let r;
-      try { r = await f.get(u, { accept: 'application/xml,text/xml,*/*' }); } catch (e) { if (FATAL.has(e.code)) throw e; if (e.budget) break; continue; }
-      files++;
-      let xml = r.body;
-      if (xml[0] === 0x1f && xml[1] === 0x8b) { try { xml = zlib.gunzipSync(xml, { maxOutputLength: f.config.maxBytes }); } catch { continue; } }
-      const s = xml.toString('utf8');
-      const locs = [...s.matchAll(/<loc>\s*(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?\s*<\/loc>/gi)].map((m) => decodeEntities(m[1].trim()));
-      if (/<sitemapindex\b/i.test(s)) {
-        const kids = locs.filter((l) => { try { return f.hostOkFor(l); } catch { return false; } });
-        const pri = (l) => (/page/i.test(l) ? 0 : /product/i.test(l) ? 1 : SKIP_SITEMAP_RE.test(l) ? 3 : 2);
-        kids.sort((a, b) => pri(a) - pri(b));
-        for (const k of kids) if (depth < 3 && pri(k) < 3 && !(ctx.skipProductSitemaps && pri(k) === 1)) queue.push({ u: k, depth: depth + 1 });
-        foundAny = foundAny || kids.length > 0;
-      } else {
-        for (const l of locs) if (!seenLoc.has(l) && f.hostOkFor(l)) { seenLoc.add(l); entries.push({ loc: l, sitemap: u }); }
-        foundAny = foundAny || locs.length > 0;
-      }
-    }
-    return entries;
-  })();
-  return ctx._sitemap;
-}
 
-/** Fetch help/policy pages (≤ maxPages+1 so caps can be reported) and turn them into documents. */
-async function fetchHelpPages(ctx, urls, { titleFilter = false, kindHint = null } = {}) {
-  const docs = [];
-  const uniq = [...new Set(urls)].filter((u) => !ctx.seenPages.has(u));
-  for (const u of uniq) ctx.seenPages.add(u);
-  const room = Math.max(0, ctx.caps.maxPages + 1 - ctx.pageCount);
-  const list = uniq.slice(0, room);
-  if (uniq.length > room) ctx.pagesMore = true;
-  ctx.pageCount += list.length;
-  await Promise.all(list.map(async (u) => {
-    try {
-      const r = await ctx.f.get(u, { accept: 'text/html,application/xhtml+xml' });
-      if (!/html|xml/i.test(String(r.headers['content-type'] || 'text/html'))) return;
-      const html = r.text();
-      const ds = docsFromHtml(html, r.url, { kindHint, wantProducts: false });
-      if (titleFilter && !HELP_RE.test(`${safePath(u)} ${titleOfHtml(html)}`)) return;
-      docs.push(...ds);
-    } catch (e) { ctx.pageError(e); }
-  }));
-  return docs;
-}
-/** Product pages without an API: JSON-LD Product on each page (bounded by maxProducts and the time budget). */
-async function fetchProductPages(ctx, urls) {
-  const docs = [];
-  const uniq = [...new Set(urls)];
-  const room = Math.max(0, ctx.caps.maxProducts + 1 - ctx.productPageCount);
-  const list = uniq.slice(0, room);
-  if (uniq.length > room) ctx.productsMore = true;
-  ctx.productPageCount += list.length;
-  await Promise.all(list.map(async (u) => {
-    try {
-      const r = await ctx.f.get(u, { accept: 'text/html,application/xhtml+xml' });
-      docs.push(...docsFromHtml(r.text(), r.url, { kindHint: 'product' }).filter((d) => d.kind === 'product' || d.kind === 'faq'));
-    } catch (e) { ctx.pageError(e); }
-  }));
-  return docs;
-}
-const PRODUCT_URL_RE = /\/(?:products?|p|shop|item|items|store)\/[^/?#]+/i;
-function isHelpUrl(u) { return HELP_RE.test(safePath(u)); }
-
-async function collectGeneric(ctx, { products = true } = {}) {
-  const docs = [];
-  const homeHtml = ctx.det.home.html;
-  docs.push(...docsFromHtml(homeHtml, ctx.det.home.url, { kindHint: 'home' }).filter((d) => d.kind !== 'page' && d.kind !== 'home'));
-  let entries = await sitemapEntries(ctx);
-  if (!entries.length) entries = linksOf(homeHtml, ctx.det.home.url).filter((l) => ctx.f.hostOkFor(l)).map((loc) => ({ loc, sitemap: null }));
-  const help = entries.filter((e) => isHelpUrl(e.loc) && !/product/i.test(e.sitemap || '')).map((e) => e.loc);
-  docs.push(...await fetchHelpPages(ctx, help));
-  if (products) {
-    const prod = entries.filter((e) => /product/i.test(e.sitemap || '') || PRODUCT_URL_RE.test(safePath(e.loc)) || (ctx.det.platform === 'magento' && /\.html$/.test(e.loc) && !isHelpUrl(e.loc)));
-    docs.push(...await fetchProductPages(ctx, prod.map((e) => e.loc)));
+// ------------------------------------------------------------------------------------------------ platform feeds
+// Each feed is an async generator of product-record arrays ({ title, url, price, priceMax, compareAt, currency, sku,
+// brand, type, availability, variants, options, categories, tags, descriptionHtml, pdfs }).
+async function* shopifyFeed(ctx) {
+  const size = ctx.pageSize || 250;
+  for (let page = 1; page <= 400; page++) {
+    let list;
+    try { list = page === 1 && ctx.firstFeedPage ? ctx.firstFeedPage : (await ctx.f.getJson(`${ctx.base}/products.json?limit=${size}&page=${page}`)).data?.products; }
+    catch (e) { if (FATAL.has(e.code)) throw e; if (page === 1) ctx.feedFailed = true; else ctx.pageError(e, 'product'); return; }
+    if (!Array.isArray(list) || !list.length) return;
+    yield list.map((p) => {
+      const vs = Array.isArray(p.variants) ? p.variants : [];
+      const prices = vs.map((v) => Number(v.price)).filter(Number.isFinite);
+      const url = `${ctx.base}/products/${p.handle}`;
+      return { title: p.title, url, brand: p.vendor, type: p.product_type, currency: ctx.det.currency,
+        price: prices.length ? Math.min(...prices) : null, priceMax: prices.length ? Math.max(...prices) : null,
+        compareAt: vs.length === 1 ? vs[0].compare_at_price : null, sku: vs.length === 1 ? vs[0].sku : null,
+        availability: vs.length ? (vs.some((v) => v.available !== false) ? 'in stock' : 'out of stock') : null,
+        variants: vs.length > 1 ? vs.map((v) => ({ title: v.title, price: v.price, sku: v.sku, available: v.available })) : [],
+        options: (p.options || []).filter((o) => o?.name && Array.isArray(o.values) && o.values.length > 1).map((o) => ({ name: o.name, values: o.values })),
+        tags: Array.isArray(p.tags) ? p.tags : String(p.tags || '').split(',').map((t) => t.trim()).filter(Boolean), descriptionHtml: p.body_html || '',
+        pdfs: pdfLinksOf(`<main>${p.body_html || ''}</main>`, url) };
+    });
+    if (list.length < size) return;
   }
-  return docs;
 }
-
-async function collectShopify(ctx) {
-  const { f, base, caps } = ctx;
-  const docs = [];
-  let api = ctx.det.api;
-  if (api) {
-    let n = 0;
-    for (let page = 1; n <= caps.maxProducts && page <= 100; page++) {
-      let list;
-      try { list = (await f.getJson(`${base}/products.json?limit=${ctx.pageSize || 250}&page=${page}`)).data?.products; }
-      catch (e) { if (FATAL.has(e.code)) throw e; if (page === 1) api = false; else ctx.pageError(e); break; }
-      if (!Array.isArray(list) || !list.length) break;
-      for (const p of list) {
-        if (n++ >= caps.maxProducts) { ctx.productsMore = true; break; }
-        const vs = Array.isArray(p.variants) ? p.variants : [];
-        const prices = vs.map((v) => Number(v.price)).filter(Number.isFinite);
-        const avail = vs.some((v) => v.available !== false);
-        docs.push(productDoc({ title: p.title, url: `${base}/products/${p.handle}`, brand: p.vendor, type: p.product_type, currency: ctx.det.currency,
-          price: prices.length ? Math.min(...prices) : null, priceMax: prices.length ? Math.max(...prices) : null,
-          compareAt: vs.length === 1 ? vs[0].compare_at_price : null, sku: vs.length === 1 ? vs[0].sku : null,
-          availability: vs.length ? (avail ? 'in stock' : 'out of stock') : null,
-          variants: vs.length > 1 ? vs.map((v) => ({ title: v.title, price: v.price, sku: v.sku, available: v.available })) : [],
-          tags: Array.isArray(p.tags) ? p.tags : String(p.tags || '').split(',').map((t) => t.trim()).filter(Boolean), descriptionHtml: p.body_html || '' }));
-      }
-      if (list.length < (ctx.pageSize || 250)) break;
-    }
-    ctx.api = api;
-  }
-  ctx.skipProductSitemaps = api;
-  const entries = await sitemapEntries(ctx);
-  if (!api) {
-    ctx.warnings.push('This Shopify store turns off /products.json, so products were read from product pages (slower, fewer details).');
-    docs.push(...await fetchProductPages(ctx, entries.filter((e) => /sitemap_products/.test(e.sitemap || '') || /\/products\/[^/]+$/.test(safePath(e.loc))).map((e) => e.loc)));
-  }
-  docs.push(...await fetchHelpPages(ctx, POLICY_HANDLES.map((h) => `${base}/policies/${h}`), { kindHint: 'policy' }));
-  const pages = entries.filter((e) => /sitemap_pages/.test(e.sitemap || '') || /^\/pages\//.test(safePath(e.loc))).map((e) => e.loc);
-  const byHandle = pages.filter(isHelpUrl);
-  docs.push(...await fetchHelpPages(ctx, byHandle));
-  if (pages.length <= 30) docs.push(...await fetchHelpPages(ctx, pages.filter((u) => !byHandle.includes(u)), { titleFilter: true }));
-  return docs;
+function wooUrl(ctx, route, params) {
+  const qs = new URLSearchParams(params).toString();
+  return ctx.det.apiBase === 'rest_route' ? `${ctx.base}/?rest_route=${route}&${qs}` : `${ctx.base}/wp-json${route}?${qs}`;
 }
-
+async function* wooFeed(ctx) {
+  const size = ctx.pageSize || 100;
+  for (let page = 1, total = 1; page <= total && page <= 400; page++) {
+    let r;
+    try { r = await ctx.f.getJson(wooUrl(ctx, '/wc/store/v1/products', { per_page: size, page })); } catch (e) { if (FATAL.has(e.code)) throw e; if (page === 1) ctx.feedFailed = true; else ctx.pageError(e, 'product'); return; }
+    total = Number(r.res.headers['x-wp-totalpages']) || (Array.isArray(r.data) && r.data.length === size ? page + 1 : page);
+    const list = Array.isArray(r.data) ? r.data : [];
+    if (!list.length) return;
+    yield list.map((p) => {
+      const pr = p.prices || {};
+      const div = 10 ** (Number(pr.currency_minor_unit) || 0);
+      const m = (v) => (v == null || v === '' ? null : Number(v) / div);
+      const html = [p.short_description, p.description].filter(Boolean).join('\n');
+      return { title: decodeEntities(p.name), url: p.permalink, sku: p.sku, currency: pr.currency_code,
+        price: pr.price_range ? m(pr.price_range.min_amount) : m(pr.price), priceMax: pr.price_range ? m(pr.price_range.max_amount) : null,
+        compareAt: pr.regular_price && pr.regular_price !== pr.price ? m(pr.regular_price) : null,
+        availability: p.stock_availability?.text ? oneLine(p.stock_availability.text).toLowerCase() : p.is_in_stock == null ? null : AVAIL(!!p.is_in_stock),
+        options: (p.attributes || []).filter((a) => a.terms?.length).map((a) => ({ name: a.name, values: a.terms.map((t) => t.name) })),
+        categories: (p.categories || []).map((c) => decodeEntities(c.name)), tags: (p.tags || []).map((t) => decodeEntities(t.name)),
+        descriptionHtml: html, pdfs: p.permalink ? pdfLinksOf(`<main>${html}</main>`, p.permalink) : [] };
+    });
+  }
+}
 const MAGENTO_Q_FULL = `query($page:Int!,$size:Int!){products(search:"",pageSize:$size,currentPage:$page){total_count page_info{current_page total_pages}
 items{__typename name sku url_key url_suffix stock_status categories{name}
 price_range{minimum_price{regular_price{value currency} final_price{value currency}} maximum_price{final_price{value currency}}}
@@ -838,62 +1054,41 @@ short_description{html} description{html}
 const MAGENTO_Q_MIN = `query($page:Int!,$size:Int!){products(search:"",pageSize:$size,currentPage:$page){total_count page_info{current_page total_pages}
 items{name sku url_key stock_status price_range{minimum_price{regular_price{value currency} final_price{value currency}}} description{html}}}}`;
 const MAGENTO_CMS = ['faq', 'faqs', 'customer-service', 'help', 'shipping', 'shipping-policy', 'delivery', 'returns', 'return-policy', 'returns-and-exchanges',
-  'warranty', 'privacy-policy-cookie-restriction-mode', 'privacy-policy', 'terms', 'terms-and-conditions', 'about-us', 'contact'];
+  'warranty', 'privacy-policy-cookie-restriction-mode', 'privacy-policy', 'terms', 'terms-and-conditions', 'about-us', 'contact', 'size-guide', 'care'];
 async function magentoGql(ctx, query, variables) {
   const r = await ctx.f.fetch(`${ctx.base}/graphql`, { method: 'POST', accept: 'application/json', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) });
   const j = r.json();
   if (!j || (!r.ok && !j.data)) throw err('upstream', `GraphQL answered ${r.status}.`);
   return j;
 }
-async function collectMagento(ctx) {
-  const { base, caps } = ctx;
-  if (!ctx.det.api) return collectGeneric(ctx);
-  ctx.skipProductSitemaps = true;
-  const docs = [];
-  let q = MAGENTO_Q_FULL, n = 0;
+async function* magentoFeed(ctx) {
+  let q = MAGENTO_Q_FULL;
   const size = ctx.pageSize || 100;
-  try {
-    for (let page = 1, total = 1; page <= total && n <= caps.maxProducts && page <= 200; page++) {
-      let j = await magentoGql(ctx, q, { page, size });
+  for (let page = 1, total = 1; page <= total && page <= 400; page++) {
+    let j;
+    try {
+      j = await magentoGql(ctx, q, { page, size });
       if (!j.data?.products && q === MAGENTO_Q_FULL) { q = MAGENTO_Q_MIN; j = await magentoGql(ctx, q, { page, size }); }
-      const pr = j.data?.products;
-      if (!pr) { if (page === 1) throw err('upstream', 'GraphQL products query failed.'); break; }
-      total = Number(pr.page_info?.total_pages) || 1;
-      for (const it of pr.items || []) {
-        if (n++ >= caps.maxProducts) { ctx.productsMore = true; break; }
-        const mp = it.price_range?.minimum_price || {};
-        const cur = mp.final_price?.currency || mp.regular_price?.currency || ctx.det.currency;
-        docs.push(productDoc({ title: it.name, url: `${base}/${it.url_key}${it.url_suffix ?? '.html'}`, sku: it.sku, currency: cur,
-          price: mp.final_price?.value ?? mp.regular_price?.value, compareAt: mp.regular_price?.value, priceMax: it.price_range?.maximum_price?.final_price?.value,
-          availability: it.stock_status ? AVAIL(it.stock_status === 'IN_STOCK') : null, type: it.__typename && it.__typename !== 'SimpleProduct' ? it.__typename.replace(/Product$/, '') : null,
-          categories: (it.categories || []).map((c) => c?.name).filter(Boolean),
-          variants: (it.variants || []).map((v) => ({ title: (v.attributes || []).map((a) => a.label).join(' / '), sku: v.product?.sku, price: v.product?.price_range?.minimum_price?.final_price?.value,
-            available: v.product?.stock_status ? v.product.stock_status === 'IN_STOCK' : null })),
-          descriptionHtml: [it.short_description?.html, it.description?.html].filter(Boolean).join('\n') }));
-      }
-    }
-  } catch (e) {
-    if (FATAL.has(e.code)) throw e;
-    if (!docs.length) { ctx.api = false; ctx.skipProductSitemaps = false; ctx.warnings.push("This Magento store's GraphQL API didn't answer, so products were read from product pages."); return collectGeneric(ctx); }
-    ctx.pageError(e);
+    } catch (e) { if (FATAL.has(e.code)) throw e; if (page === 1) ctx.feedFailed = true; else ctx.pageError(e, 'product'); return; }
+    const pr = j.data?.products;
+    if (!pr) { if (page === 1) ctx.feedFailed = true; return; }
+    total = Number(pr.page_info?.total_pages) || 1;
+    yield (pr.items || []).map((it) => {
+      const mp = it.price_range?.minimum_price || {};
+      const cur = mp.final_price?.currency || mp.regular_price?.currency || ctx.det.currency;
+      const url = `${ctx.base}/${it.url_key}${it.url_suffix ?? '.html'}`;
+      const html = [it.short_description?.html, it.description?.html].filter(Boolean).join('\n');
+      return { title: it.name, url, sku: it.sku, currency: cur,
+        price: mp.final_price?.value ?? mp.regular_price?.value, compareAt: mp.regular_price?.value, priceMax: it.price_range?.maximum_price?.final_price?.value,
+        availability: it.stock_status ? AVAIL(it.stock_status === 'IN_STOCK') : null, type: it.__typename && it.__typename !== 'SimpleProduct' ? it.__typename.replace(/Product$/, '') : null,
+        categories: (it.categories || []).map((c) => c?.name).filter(Boolean),
+        variants: (it.variants || []).map((v) => ({ title: (v.attributes || []).map((a) => a.label).join(' / '), sku: v.product?.sku, price: v.product?.price_range?.minimum_price?.final_price?.value,
+          available: v.product?.stock_status ? v.product.stock_status === 'IN_STOCK' : null })),
+        descriptionHtml: html, pdfs: pdfLinksOf(`<main>${html}</main>`, url) };
+    });
   }
-  // CMS pages: one aliased cmsPage query (missing identifiers just come back null with an error entry)
-  try {
-    const qq = `{${MAGENTO_CMS.map((id, i) => `p${i}: cmsPage(identifier:${JSON.stringify(id)}){title content url_key}`).join(' ')}}`;
-    const j = await magentoGql(ctx, qq, {});
-    for (const [, pg] of Object.entries(j.data || {})) {
-      if (!pg?.content) continue;
-      const url = `${base}/${pg.url_key}`;
-      ctx.seenPages.add(url);
-      docs.push(...docsFromHtml(`<main><h1>${pg.title || ''}</h1>${pg.content}</main>`, url, { wantProducts: false }));
-      ctx.pageCount++;
-    }
-  } catch (e) { if (FATAL.has(e.code)) throw e; }
-  docs.push(...await collectGeneric(ctx, { products: false }));
-  return docs;
 }
-
-function squarespaceItemDoc(it, base) {
+function squarespaceRecord(it, base) {
   const sc = it.structuredContent || {};
   const vs = Array.isArray(it.variants) ? it.variants : Array.isArray(sc.variants) ? sc.variants : [];
   const money = (v) => (v?.priceMoney?.value != null ? Number(v.priceMoney.value) : v?.price != null ? Number(v.price) / 100 : null);
@@ -901,226 +1096,320 @@ function squarespaceItemDoc(it, base) {
   const prices = vs.map(money).filter(Number.isFinite);
   const vtitle = (v) => Object.entries(v.attributes || v.optionValues || {}).map(([k, x]) => (typeof x === 'object' ? `${x.optionName || k}: ${x.value}` : `${k}: ${x}`)).join(' / ');
   const avail = (v) => (v.unlimited || Number(v.qtyInStock ?? v.stock?.quantity) > 0 || v.stock?.unlimited ? true : v.qtyInStock != null || v.stock ? false : null);
-  return productDoc({ title: it.title, url: `${base}${it.fullUrl || ''}`, currency: cur, price: prices.length ? Math.min(...prices) : null, priceMax: prices.length ? Math.max(...prices) : null,
+  return { title: it.title, url: `${base}${it.fullUrl || ''}`, currency: cur, price: prices.length ? Math.min(...prices) : null, priceMax: prices.length ? Math.max(...prices) : null,
     sku: vs.length === 1 ? vs[0].sku : null, availability: vs.length ? (vs.some((v) => avail(v) === true) ? 'in stock' : vs.every((v) => avail(v) === false) ? 'out of stock' : null) : null,
     variants: vs.length > 1 ? vs.map((v) => ({ title: vtitle(v), sku: v.sku, price: money(v), available: avail(v) })) : [],
-    tags: it.tags || [], categories: it.categories || [], descriptionHtml: it.body || it.excerpt || '' });
+    tags: it.tags || [], categories: it.categories || [], descriptionHtml: it.body || it.excerpt || '' };
 }
-async function collectSquarespace(ctx) {
-  const { f, base, caps } = ctx;
-  const docs = [];
-  const entries = await sitemapEntries(ctx);
-  const productUrls = entries.filter((e) => /\/p\/[^/]+$/.test(safePath(e.loc)) || PRODUCT_URL_RE.test(safePath(e.loc))).map((e) => e.loc);
+async function* squarespaceFeed(ctx) {
+  const colls = new Set();
+  for (const u of ctx.plan.productUrls) { const p = new URL(u).pathname; const m = /^(.*)\/p\/[^/]+$/.exec(p); colls.add(m ? m[1] || '/' : p.replace(/\/[^/]+$/, '') || '/'); }
   let got = false;
-  if (ctx.det.api) {
-    const colls = new Set();
-    for (const u of productUrls) { const p = safePath(u); const m = /^(.*)\/p\/[^/]+$/.exec(p); colls.add(m ? m[1] || '/' : p.replace(/\/[^/]+$/, '') || '/'); }
-    let n = 0;
-    for (const c of [...colls].slice(0, 10)) {
-      let offset = null;
-      for (let guard = 0; guard < 200 && n <= caps.maxProducts; guard++) {
-        let j;
-        try { j = (await f.getJson(`${base}${c}?format=json${offset != null ? `&offset=${encodeURIComponent(offset)}` : ''}`)).data; } catch (e) { if (FATAL.has(e.code)) throw e; ctx.pageError(e); break; }
-        const items = (j?.items || []).filter((it) => it.structuredContent?.variants || it.variants || it.recordTypeLabel === 'store-item' || it.productType != null);
-        for (const it of items) { if (n++ >= caps.maxProducts) { ctx.productsMore = true; break; } docs.push(squarespaceItemDoc(it, base)); got = true; }
-        const pg = j?.pagination;
-        if (!pg?.nextPage || pg.nextPageOffset == null) break;
-        offset = pg.nextPageOffset;
-      }
+  for (const c of [...colls].slice(0, 20)) {
+    let offset = null;
+    for (let guard = 0; guard < 400; guard++) {
+      let j;
+      try { j = (await ctx.f.getJson(`${ctx.base}${c}?format=json${offset != null ? `&offset=${encodeURIComponent(offset)}` : ''}`)).data; } catch (e) { if (FATAL.has(e.code)) throw e; ctx.pageError(e, 'product'); break; }
+      const items = (j?.items || []).filter((it) => it.structuredContent?.variants || it.variants || it.recordTypeLabel === 'store-item' || it.productType != null);
+      if (items.length) { got = true; yield items.map((it) => squarespaceRecord(it, ctx.base)); }
+      const pg = j?.pagination;
+      if (!pg?.nextPage || pg.nextPageOffset == null) break;
+      offset = pg.nextPageOffset;
     }
   }
-  if (!got) { if (ctx.det.api === false) ctx.warnings.push("Squarespace's JSON view isn't open to bots on this site, so products were read from product pages."); docs.push(...await fetchProductPages(ctx, productUrls)); }
-  ctx.api = got;
-  docs.push(...await collectGeneric(ctx, { products: false }));
-  return docs;
+  if (!got) ctx.feedFailed = true;
 }
-
-function wooUrl(ctx, route, params) {
-  const qs = new URLSearchParams(params).toString();
-  return ctx.det.apiBase === 'rest_route' ? `${ctx.base}/?rest_route=${route}&${qs}` : `${ctx.base}/wp-json${route}?${qs}`;
-}
-async function collectWoo(ctx) {
-  const { f, caps } = ctx;
-  if (!ctx.det.api) return collectGeneric(ctx);
-  ctx.skipProductSitemaps = true;
-  const docs = [];
-  const size = ctx.pageSize || 100;
-  let n = 0;
-  for (let page = 1, total = 1; page <= total && n <= caps.maxProducts && page <= 200; page++) {
-    let r;
-    try { r = await f.getJson(wooUrl(ctx, '/wc/store/v1/products', { per_page: size, page })); } catch (e) { if (FATAL.has(e.code)) throw e; ctx.pageError(e); break; }
-    total = Number(r.res.headers['x-wp-totalpages']) || (Array.isArray(r.data) && r.data.length === size ? page + 1 : page);
-    const list = Array.isArray(r.data) ? r.data : [];
-    if (!list.length) break;
-    for (const p of list) {
-      if (n++ >= caps.maxProducts) { ctx.productsMore = true; break; }
-      const pr = p.prices || {};
-      const div = 10 ** (Number(pr.currency_minor_unit) || 0);
-      const m = (v) => (v == null || v === '' ? null : Number(v) / div);
-      docs.push(productDoc({ title: decodeEntities(p.name), url: p.permalink, sku: p.sku, currency: pr.currency_code,
-        price: pr.price_range ? m(pr.price_range.min_amount) : m(pr.price), priceMax: pr.price_range ? m(pr.price_range.max_amount) : null,
-        compareAt: pr.regular_price && pr.regular_price !== pr.price ? m(pr.regular_price) : null,
-        availability: p.stock_availability?.text ? oneLine(p.stock_availability.text).toLowerCase() : p.is_in_stock == null ? null : AVAIL(!!p.is_in_stock),
-        options: (p.attributes || []).filter((a) => a.terms?.length).map((a) => ({ name: a.name, values: a.terms.map((t) => t.name) })),
-        categories: (p.categories || []).map((c) => decodeEntities(c.name)), tags: (p.tags || []).map((t) => decodeEntities(t.name)),
-        descriptionHtml: [p.short_description, p.description].filter(Boolean).join('\n') }));
-    }
+const FEEDS = { shopify: shopifyFeed, woocommerce: wooFeed, magento: magentoFeed, squarespace: squarespaceFeed };
+/** The feed's product total when one request tells it (WooCommerce X-WP-Total, Magento total_count). */
+async function feedTotalOf(ctx) {
+  if (!ctx.det.api) return null;
+  if (ctx.det.platform === 'shopify') {
+    // the first feed page is read here once (and reused by the feed): a short page is the exact catalogue size
+    const size = ctx.pageSize || 250;
+    const list = (await ctx.f.getJson(`${ctx.base}/products.json?limit=${size}&page=1`)).data?.products;
+    if (!Array.isArray(list)) return null;
+    ctx.firstFeedPage = list;
+    return list.length < size ? list.length : null;
   }
-  // WordPress pages (public REST); falls back to the sitemap
-  let wpOk = false;
-  for (let page = 1; page <= 3 && ctx.pageCount <= caps.maxPages; page++) {
-    let r;
-    try { r = await f.getJson(wooUrl(ctx, '/wp/v2/pages', { per_page: 100, page, _fields: 'link,title,content' })); } catch (e) { if (FATAL.has(e.code)) throw e; break; }
-    const list = Array.isArray(r.data) ? r.data : [];
-    wpOk = wpOk || list.length > 0;
-    for (const pg of list) {
-      const title = oneLine(pg.title?.rendered), link = pg.link;
-      if (!link || !HELP_RE.test(`${safePath(link)} ${title}`) || ctx.seenPages.has(link)) continue;
-      if (!f.hostOkFor(link)) continue;
-      if (ctx.pageCount >= caps.maxPages + 1) { ctx.pagesMore = true; break; }
-      ctx.seenPages.add(link); ctx.pageCount++;
-      docs.push(...docsFromHtml(`<main><h1>${title}</h1>${pg.content?.rendered || ''}</main>`, link, { wantProducts: false }));
-    }
-    if (list.length < 100) break;
-  }
-  docs.push(...await collectGeneric(ctx, { products: false }));
-  return docs;
+  if (ctx.det.platform === 'woocommerce') { const r = await ctx.f.fetch(wooUrl(ctx, '/wc/store/v1/products', { per_page: 1 }), { accept: 'application/json' }); const n = Number(r.headers['x-wp-total']); return Number.isFinite(n) ? n : null; }
+  if (ctx.det.platform === 'magento') { const j = await magentoGql(ctx, '{products(search:"",pageSize:1){total_count}}', {}); const n = Number(j.data?.products?.total_count); return Number.isFinite(n) ? n : null; }
+  return null;
 }
-const COLLECTORS = { shopify: collectShopify, magento: collectMagento, squarespace: collectSquarespace, woocommerce: collectWoo, generic: collectGeneric };
-
-// ------------------------------------------------------------------------------------------------ Markdown files
-/** A file-name part: no path separators or control characters, single spaces, at most 60 characters. */
-const displayPart = (s) => String(s ?? '').replace(/[\0-\x1f\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 60).trim();
-/** "REFUND POLICY" / "refund policy" → "Refund policy" (titles already in mixed case are kept). */
-const sentenceCase = (s) => { const t = String(s || '').trim(); if (!t) return t; const lower = t === t.toUpperCase() || t === t.toLowerCase() ? t.toLowerCase() : t; return lower[0].toUpperCase() + lower.slice(1); };
-const mdLine = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/^#+\s*/, '').trim();
-/**
- * Turn documents into a few Markdown files: `<Store> · Products N.md` (one `## title` per product), `<Store> · FAQ.md`
- * (`## page` / `### question`), one `<Store> · <Policy title>.md` per policy and `<Store> · Help pages.md`. Every section carries a
- * `Source: <url>` line (right under its heading, after a blank line) so citations can link where the answer came from. Byte budget priority: policies, FAQ, pages,
- * then products. → { files:[{name, bytes:Buffer, mime, docs, size}], capped:{...}|null }
- */
-export function buildMarkdownFiles(docs, o = {}) {
-  const maxTotalBytes = Math.min(o.maxTotalBytes ?? LIMITS.maxTotalBytes, LIMITS.maxTotalBytes);
-  const maxProducts = o.maxProducts ?? LIMITS.maxProducts, maxPages = o.maxPages ?? LIMITS.maxPages;
-  const perFile = o.perFileProducts ?? 400, maxFileBytes = o.maxFileBytes ?? 2 * MB;
-  const store = mdLine(o.storeName) || o.slug || 'Store';
-  const stamp = `Imported from ${o.base || 'the store website'} on ${(o.date || new Date()).toISOString().slice(0, 10)}. Each section names its source page.`;
-  const capped = {};
-  // de-duplicate
-  const seen = new Set();
-  docs = docs.filter((d) => { const k = `${d.kind}|${d.url}|${d.title}`; if (seen.has(k)) return false; seen.add(k); return d.text && d.title; });
-  let products = docs.filter((d) => d.kind === 'product');
-  const policies = docs.filter((d) => d.kind === 'policy');
-  const faqs = docs.filter((d) => d.kind === 'faq');
-  const pages = docs.filter((d) => d.kind === 'page');
-  if (products.length > maxProducts || o.productsMore) capped.products = { limit: maxProducts, kept: Math.min(products.length, maxProducts), more: true };
-  products = products.slice(0, maxProducts);
-  const pageUrls = [...new Set([...policies, ...faqs, ...pages].map((d) => d.url))];
-  let keepUrls = null;
-  if (pageUrls.length > maxPages || o.pagesMore) { capped.pages = { limit: maxPages, kept: Math.min(pageUrls.length, maxPages), more: true }; keepUrls = new Set(pageUrls.slice(0, maxPages)); }
-  const keep = (d) => !keepUrls || keepUrls.has(d.url);
-
-  let used = 0, droppedSections = 0, droppedProducts = 0;
-  const files = [];
-  const taken = new Set();
-  // fixer r8 (D4/D5): files are named for people, "<Store> · <Page title>.md" ("Lumen Bikes · Refund policy.md"), so
-  // the file list and every citation label read as the store's own pages, never a host slug ("127-0-0-1-faq.md")
-  const label = displayPart(o.storeName) || displayPart(o.slug) || 'Store';
-  const nameOf = (title) => {
-    const t = displayPart(title) || 'Page';
-    let n = `${label} · ${t}.md`, i = 2;
-    while (taken.has(n.toLowerCase())) n = `${label} · ${t} ${i++}.md`;
-    taken.add(n.toLowerCase()); return n;
+/** Pages a platform API hands over whole (WordPress pages, Magento CMS pages): fewer requests, Crawl-delay friendly. */
+async function prefetchPlatformPages(ctx) {
+  const { f, plan } = ctx;
+  const addSource = (url, title, html) => {
+    const u = normalizeUrl(url);
+    if (!u || !f.hostOkFor(u)) return;
+    ctx.prefetched.set(urlKey(u), { html, title: oneLine(title) });
+    const kind = classifyUrl(u, { platform: ctx.det.platform, text: title });
+    if (!['faq', 'policy', 'help'].includes(kind)) return;
+    if (!plan.sources.some((s) => urlKey(s.url) === urlKey(u))) { plan.sources.push({ url: u, kind, rank: KIND_RANK[kind], via: ['api'], text: oneLine(title) }); plan.counts[kind]++; }
   };
-  // The heading stands alone (so every chunker keeps it as the section breadcrumb) and the Source line opens the section's
-  // first paragraph (so the URL travels in the same atom as the first facts; trials.mjs looks it up for later atoms).
-  const section = (d, level = 2) => `${'#'.repeat(level)} ${mdLine(d.title)}\n\nSource: ${d.url}\n${String(d.text).trim()}\n`;
-  /** Add sections to new file(s) under the byte budget; returns how many sections were kept. */
-  function emit(baseName, header, sections, { split = Infinity } = {}) {
-    let cur = null, part = 0;
-    const out = [];
-    // +20 bytes reserves room for the " (part i of n)" suffix filled in below
-    const open = () => { part++; cur = { head: header(part), body: [], docs: 0 }; cur.size = Buffer.byteLength(cur.head) + 20; out.push(cur); };
-    for (const s of sections) {
-      const sz = Buffer.byteLength(s.md) + 1;
-      if (!cur || cur.docs >= split || cur.size + sz > maxFileBytes) { if (cur && !cur.docs) out.pop(); open(); }
-      const headCost = cur.docs ? 0 : cur.size;
-      if (used + headCost + sz > maxTotalBytes) { droppedSections++; if (s.product) droppedProducts++; continue; }
-      used += headCost + sz;
-      cur.body.push(s.md); cur.docs += s.n || 1; cur.size += sz;
+  if (ctx.det.platform === 'woocommerce' && ctx.det.api) {
+    for (let page = 1; page <= 5; page++) {
+      let r;
+      try { r = await f.getJson(wooUrl(ctx, '/wp/v2/pages', { per_page: 100, page, _fields: 'link,title,content' })); } catch (e) { if (FATAL.has(e.code)) throw e; break; }
+      const list = Array.isArray(r.data) ? r.data : [];
+      for (const pg of list) if (pg.link) addSource(pg.link, oneLine(pg.title?.rendered), `<main><h1>${pg.title?.rendered || ''}</h1>${pg.content?.rendered || ''}</main>`);
+      if (list.length < 100) break;
     }
-    const real = out.filter((f) => f.docs);
-    real.forEach((f, i) => {
-      const md = `${f.head.replace('{{N}}', real.length > 1 ? ` (part ${i + 1} of ${real.length})` : '')}\n${f.body.join('\n')}`;
-      const name = real.length > 1 ? nameOf(`${baseName} ${i + 1}`) : nameOf(baseName);
-      const bytes = Buffer.from(md, 'utf8');
-      files.push({ name, bytes, mime: 'text/markdown', docs: f.docs, size: bytes.length });
-    });
   }
-  // policies: one file per policy (more than 12 → the rest share one file)
-  const pol = policies.filter(keep);
-  pol.slice(0, 12).forEach((d) => emit(sentenceCase(mdLine(d.title)) || 'Policy', () => `# ${mdLine(d.title)}: ${store}{{N}}\n\n${stamp}\n`, [{ md: section(d) }]));
-  if (pol.length > 12) emit('Policies', () => `# Policies: ${store}{{N}}\n\n${stamp}\n`, pol.slice(12).map((d) => ({ md: section(d) })));
-  // FAQ: grouped by source page
-  const groups = new Map();
-  for (const d of faqs.filter(keep)) { const k = d.url; if (!groups.has(k)) groups.set(k, { title: d.group || 'FAQ', url: d.url, items: [] }); groups.get(k).items.push(d); }
-  const faqSecs = [...groups.values()].map((g) => ({ n: g.items.length, md: `## ${mdLine(g.title)}\n\nSource: ${g.url}\n\n${g.items.map((d) => `### ${mdLine(d.title)}\n${String(d.text).trim()}\n`).join('\n')}` }));
-  if (faqSecs.length) emit('FAQ', () => `# Frequently asked questions: ${store}{{N}}\n\n${stamp}\n`, faqSecs);
-  const pgs = pages.filter(keep);
-  if (pgs.length) emit('Help pages', () => `# Help and about pages: ${store}{{N}}\n\n${stamp}\n`, pgs.map((d) => ({ md: section(d) })));
-  if (products.length) emit('Products', () => `# Products: ${store}{{N}}\n\n${stamp} Prices and stock are as listed on the day of import.\n`, products.map((d) => ({ md: section(d), product: true })), { split: perFile });
-  if (droppedSections) capped.bytes = { limit: maxTotalBytes, droppedSections, droppedProducts };
-  return { files, capped: Object.keys(capped).length ? capped : null };
+  if (ctx.det.platform === 'magento' && ctx.det.api) {
+    try {
+      const qq = `{${MAGENTO_CMS.map((id, i) => `p${i}: cmsPage(identifier:${JSON.stringify(id)}){title content url_key}`).join(' ')}}`;
+      const j = await magentoGql(ctx, qq, {});
+      for (const pg of Object.values(j.data || {})) if (pg?.content && pg.url_key) addSource(`${ctx.base}/${pg.url_key}`, pg.title || pg.url_key, `<main><h1>${pg.title || ''}</h1>${pg.content}</main>`);
+    } catch (e) { if (FATAL.has(e.code)) throw e; }
+  }
+  plan.sources.sort((a, b) => a.rank - b.rank || a.url.localeCompare(b.url));
+}
+
+// ------------------------------------------------------------------------------------------------ readers
+/** Run fn over items with at most `width` in progress (the fetcher itself keeps ≤ 4 requests in flight). */
+async function pool(items, fn, width = 12) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, async () => { while (i < items.length) await fn(items[i++]); }));
+}
+const isHtml = (r) => /html|xml/i.test(String(r.headers['content-type'] || 'text/html'));
+const isPdfBytes = (b) => b && b.length > 5 && b.subarray(0, 5).toString('latin1') === '%PDF-';
+/** A usable canonical: same site, and not the home page for a deeper page (some themes point every page at /). */
+function goodCanonical(ctx, canon, pageUrl) {
+  if (!canon || !ctx.f.hostOkFor(canon)) return null;
+  try { if (new URL(canon).pathname === '/' && new URL(pageUrl).pathname !== '/') return null; } catch { return null; }
+  return canon;
+}
+function addPdf(ctx, p) {
+  const u = normalizeUrl(p.url);
+  if (!u || !ctx.f.pdfOkFor(u)) return;
+  const k = urlKey(u);
+  if (!ctx.pdfs.has(k)) ctx.pdfs.set(k, { url: u, text: oneLine(p.text || ''), from: p.from || null });
+}
+async function readPageSource(ctx, s) {
+  const { f, report } = ctx;
+  if (ctx.timeUp) { ctx.inc(report.leftOut.time, s.kind); return; }
+  const key = urlKey(s.url);
+  if (ctx.seen.has(key)) { report.skipped.duplicate++; return; }
+  ctx.seen.add(key);
+  let html, url = s.url;
+  const pre = ctx.prefetched.get(key) || ctx.plan.prefetched.get(key);
+  if (pre && htmlToText(pre.html, { main: true }).replace(/\s+/g, ' ').length >= 80) html = pre.html;
+  else {
+    let r;
+    try { r = await f.get(s.url, { accept: 'text/html,application/xhtml+xml' }); } catch (e) { ctx.pageError(e, s.kind); return; }
+    if (isPdfBytes(r.body)) { addPdf(ctx, { url: s.url, text: s.text }); return; }
+    if (!isHtml(r)) { report.skipped.failed++; return; }
+    html = r.text();
+    url = normalizeUrl(r.url) || s.url;
+    const canon = goodCanonical(ctx, canonicalOf(html, url), url);
+    if (canon) { const ck = urlKey(canon); if (ck !== key && ctx.seen.has(ck)) { report.skipped.duplicate++; return; } ctx.seen.add(ck); url = canon; }
+  }
+  let kind = s.kind;
+  if (kind === 'page' || kind === 'help') { const k2 = classifyUrl(url, { platform: ctx.det.platform, text: pre?.title || titleOfHtml(html) }); if (['faq', 'policy', 'help'].includes(k2)) kind = k2; }
+  const doc = readPageHtml(html, url, { kind, title: pre?.title || null });
+  for (const p of doc.pdfs) addPdf(ctx, p);
+  if (!doc.sections.some((x) => String(x.text || '').replace(/\s+/g, ' ').length >= 20)) { report.skipped.empty++; return; }
+  ctx.progress(doc.kind);
+  await ctx.writer.add(doc);
+}
+async function readPages(ctx, sources, cap) {
+  const list = sources.slice(0, cap);
+  for (const s of sources.slice(cap)) ctx.inc(ctx.report.leftOut.cap, s.kind);
+  await pool(list, (s) => readPageSource(ctx, s));
+}
+function shouldEnrich(ctx, descLen) {
+  const mode = ctx.enrich;
+  if (mode === 'none' || ctx.enrichStopped) return false;
+  if (mode === 'all') return true;
+  const thin = descLen < 400;
+  if (mode === 'thin') return thin;
+  // auto: thin feed copy always; every product page when the whole catalogue fits in 40% of the time left
+  if (ctx.enrichAll == null) ctx.enrichAll = (ctx.productTotal || 1) * Math.max(ctx.f.pace, 100) < 0.4 * ctx.f.timeLeft();
+  return thin || ctx.enrichAll;
+}
+async function buildProduct(ctx, rec) {
+  const { f, report } = ctx;
+  let doc = null;
+  const descLen = htmlToText(rec.descriptionHtml || '', { main: false }).length;
+  if (!ctx.timeUp && shouldEnrich(ctx, descLen)) {
+    try {
+      const r = await f.get(rec.url, { accept: 'text/html,application/xhtml+xml' });
+      if (isHtml(r)) { doc = readProductHtml(r.text(), rec.url, rec); report.enriched++; }
+    } catch (e) {
+      if (FATAL.has(e.code)) throw e;
+      if (e.budget) { ctx.timeUp = true; ctx.enrichStopped = true; }
+      else if (e.code === 'robots') report.skipped.robots++;
+      else if (e.code !== 'not_found') report.enrichFailed++;
+    }
+  }
+  doc ||= productDoc(rec);
+  for (const p of doc.pdfs || []) addPdf(ctx, p);
+  ctx.progress('product');
+  await ctx.writer.add(doc);
+}
+async function readProductUrl(ctx, url, { requireLd = false } = {}) {
+  const { f, report } = ctx;
+  if (ctx.timeUp) { ctx.inc(report.leftOut.time, 'product'); return; }
+  let r;
+  try { r = await f.get(url, { accept: 'text/html,application/xhtml+xml' }); } catch (e) { ctx.pageError(e, 'product'); return; }
+  if (!isHtml(r)) { report.skipped.failed++; return; }
+  const html = r.text();
+  let finalUrl = normalizeUrl(r.url) || url;
+  const canon = goodCanonical(ctx, canonicalOf(html, finalUrl), finalUrl);
+  if (canon) {
+    const ck = urlKey(canon);
+    if (ck !== urlKey(url) && ctx.seenProducts.has(ck)) { report.skipped.duplicate++; return; }
+    ctx.seenProducts.add(ck); finalUrl = canon;
+  }
+  const doc = readProductHtml(html, finalUrl, null, { requireLd });
+  if (!doc) { report.skipped.notProduct++; return; }
+  doc.url = finalUrl;
+  for (const p of doc.pdfs || []) addPdf(ctx, p);
+  ctx.progress('product');
+  await ctx.writer.add(doc);
+}
+async function readProducts(ctx) {
+  const { caps, report, plan } = ctx;
+  const max = caps.maxProducts;
+  const take = (url) => {
+    const k = urlKey(url);
+    if (!k || ctx.seenProducts.has(k)) { report.skipped.duplicate++; return false; }
+    if (ctx.productCount >= max) { ctx.productsMore = true; ctx.inc(report.leftOut.cap, 'product'); return false; }
+    ctx.seenProducts.add(k); ctx.productCount++;
+    return true;
+  };
+  const feed = ctx.det.api ? FEEDS[ctx.det.platform] : null;
+  if (feed) {
+    for await (const recs of feed(ctx)) {
+      const batch = recs.filter((rec) => rec.url && take(rec.url));
+      ctx.totals.product = Math.max(ctx.totals.product, ctx.productCount);
+      await pool(batch, (rec) => buildProduct(ctx, rec));
+      if (ctx.timeUp) { report.leftOut.time.product = (report.leftOut.time.product || 0) + Math.max(0, (ctx.totals.product || 0) - ctx.productCount); break; }
+    }
+    if (ctx.feedFailed) ctx.warnings.push(`This ${ctx.det.platform} store's product feed didn't answer, so products were read from their pages.`);
+  }
+  // every product page the feed did not cover (sitemaps, nav links): read it whole
+  const rest = [...new Set(plan.productUrls)].filter((u) => !ctx.seenProducts.has(urlKey(u)));
+  ctx.totals.product = Math.max(ctx.totals.product, ctx.productCount + rest.length);
+  const requireLd = ctx.det.platform === 'magento';
+  await pool(rest, async (u) => { if (take(u)) await readProductUrl(ctx, u, { requireLd }); });
+}
+const PDF_PRI = /manual|instruction|spec|datasheet|data-sheet|size|chart|guide|care|warrant|assembly|install|safety|user/i;
+async function readPdfs(ctx) {
+  const { f, report, caps } = ctx;
+  for (const s of ctx.plan.sources.filter((x) => x.kind === 'pdf')) addPdf(ctx, s);
+  const all = [...ctx.pdfs.values()].sort((a, b) => (PDF_PRI.test(`${a.url} ${a.text}`) ? 0 : 1) - (PDF_PRI.test(`${b.url} ${b.text}`) ? 0 : 1) || a.url.localeCompare(b.url));
+  ctx.totals.pdf = all.length;
+  for (const p of all.slice(caps.maxPdfs)) ctx.inc(report.leftOut.cap, 'pdf');
+  await pool(all.slice(0, caps.maxPdfs), async (p) => {
+    if (ctx.timeUp) { ctx.inc(report.leftOut.time, 'pdf'); return; }
+    let r;
+    try { r = await f.get(p.url, { accept: 'application/pdf', maxBytes: f.config.maxPdfBytes }); } catch (e) { ctx.pageError(e, 'pdf'); return; }
+    if (!isPdfBytes(r.body)) { report.skipped.failed++; return; }
+    const name = decodeURIComponent(new URL(p.url).pathname.split('/').pop() || 'document.pdf').replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ');
+    ctx.progress('pdf');
+    await ctx.writer.add({ kind: 'pdf', url: p.url, title: p.text && p.text.length > 2 ? p.text : name, bytes: r.body, from: p.from });
+  }, 4);
 }
 
 // ------------------------------------------------------------------------------------------------ orchestration
-/** Import a store: detect, collect, build Markdown. See the integration block at the top of this file. */
+const PAGE_KINDS = ['policy', 'faq', 'help'];
+/** Import a website: detect, find and rank sources, read them best first, build one file per page. See the top. */
 export async function importStore(input, o = {}) {
   const emit = (ev, data) => { try { o.onEvent?.(ev, data); } catch {} };
   try {
     const start = normalizeStoreUrl(input);
     const remaining = o.remainingBytes ?? LIMITS.maxTotalBytes;
     if (!(remaining > 0)) throw err('quota');
-    const caps = { maxProducts: Math.min(o.maxProducts ?? LIMITS.maxProducts, LIMITS.maxProducts), maxPages: Math.min(o.maxPages ?? LIMITS.maxPages, LIMITS.maxPages),
-      maxTotalBytes: Math.max(0, Math.min(o.maxTotalBytes ?? LIMITS.maxTotalBytes, LIMITS.maxTotalBytes, remaining)) };
-    const f = createStoreFetcher({ ...(o.net || {}), signal: o.signal, onProgress: (p) => emit('fetching', p) });
+    const cap = (k) => Math.max(0, Math.min(o[k] ?? LIMITS[k], LIMITS[k]));
+    const caps = { maxProducts: cap('maxProducts'), maxPages: cap('maxPages'), maxCollections: cap('maxCollections'), maxBlog: cap('maxBlog'), maxPdfs: cap('maxPdfs'),
+      maxOtherPages: cap('maxOtherPages'), maxTotalBytes: Math.max(0, Math.min(o.maxTotalBytes ?? LIMITS.maxTotalBytes, LIMITS.maxTotalBytes, remaining)) };
+    const f = createStoreFetcher({ budgetMs: LIMITS.budgetMs, ...(o.net || {}), ...(o.budgetMs ? { budgetMs: o.budgetMs } : {}), signal: o.signal, onProgress: (p) => emit('fetching', p) });
     f.allowSite(start.hostname);
     const det = await detectPlatform(start, f.fetch);
     f.allowSite(new URL(det.base).hostname);
-    if (det.platform === 'shopify') f.allowHost('cdn.shopify.com');
-    if (det.platform === 'squarespace') { f.allowHost('static1.squarespace.com'); f.allowHost('images.squarespace-cdn.com'); }
+    if (det.platform === 'shopify') f.allowPdfHost('cdn.shopify.com');
+    if (det.platform === 'squarespace') { f.allowPdfHost('static1.squarespace.com'); f.allowPdfHost('images.squarespace-cdn.com'); }
+    if (det.platform === 'bigcommerce') f.allowPdfHost('cdn11.bigcommerce.com');
     emit('detect', { platform: det.platform, api: det.api, base: det.base, name: det.name });
 
-    const skipped = { robots: 0, failed: 0, budget: 0 };
-    const ctx = { f, base: det.base, det, caps, warnings: [], api: det.api, seenPages: new Set(), pageCount: 0, productPageCount: 0, productsMore: false, pagesMore: false,
-      pageSize: o.pageSize, timeCapped: false,
-      pageError(e) {
+    const report = { found: null, read: {}, written: {}, bytes: 0, enriched: 0, enrichFailed: 0,
+      skipped: { robots: 0, failed: 0, notFound: 0, duplicate: 0, empty: 0, notProduct: 0 }, leftOut: { time: {}, quota: {}, cap: {} }, timeUp: false };
+    let lastReading = 0;
+    const ctx = { f, base: det.base, det, caps, report, warnings: [], seen: new Set(), seenProducts: new Set(), pdfs: new Map(), prefetched: new Map(),
+      productCount: 0, productsMore: false, timeUp: false, enrich: o.enrich || 'auto', pageSize: o.pageSize, totals: {},
+      inc: (obj, k, n = 1) => { obj[k] = (obj[k] || 0) + n; },
+      pageError(e, kind) {
         if (FATAL.has(e.code)) throw e;
-        if (e.code === 'robots') skipped.robots++;
-        else if (e.budget) { skipped.budget++; ctx.timeCapped = true; }
-        else if (e.code !== 'not_found') skipped.failed++;
+        if (e.code === 'robots') report.skipped.robots++;
+        else if (e.budget || (e.code === 'timeout' && f.timeLeft() <= 0)) { ctx.timeUp = true; ctx.inc(report.leftOut.time, kind); }
+        else if (e.code === 'not_found') report.skipped.notFound++;
+        else report.skipped.failed++;
+      },
+      progress(kind) {
+        ctx.inc(report.read, kind);
+        const t = Date.now();
+        if (t - lastReading < 250) return;
+        lastReading = t;
+        emit('reading', { kind, done: report.read[kind], total: Math.max(ctx.totals[kind] || 0, report.read[kind]), read: { ...report.read } });
       } };
-    let docs = await COLLECTORS[det.platform](ctx);
-    const counts = { products: docs.filter((d) => d.kind === 'product').length, pages: docs.filter((d) => d.kind === 'page').length,
-      policies: docs.filter((d) => d.kind === 'policy').length, faqs: docs.filter((d) => d.kind === 'faq').length };
-    f.flushProgress();
-    emit('found', counts);
-    if (!docs.length) throw err('no_content');
+    const plan = await findSources(f, det, { inflate: (b) => zlib.gunzipSync(b, { maxOutputLength: f.config.maxBytes }), registrable: registrableDomain,
+      allowHelpHost: (h) => f.allowHost(h), feedTotal: () => feedTotalOf(ctx) });
+    ctx.plan = plan;
+    f.setCrawlDelay(plan.robots.crawlDelay);
+    await prefetchPlatformPages(ctx);
+    for (const k of KINDS) ctx.totals[k] = plan.counts[k];
+    ctx.productTotal = plan.counts.product;
+    report.found = { ...plan.counts };
+    const total = Object.values(plan.counts).reduce((a, b) => a + b, 0);
+    emit('plan', { counts: plan.counts, samples: plan.samples, total, robots: plan.robots, helpdesks: plan.helpdesks.map(({ type, origin }) => ({ type, origin })), feedTotal: plan.feedTotal });
+    emit('found', { products: plan.counts.product, pages: plan.counts.help + plan.counts.page, policies: plan.counts.policy, faqs: plan.counts.faq, help: plan.counts.help,
+      pdfs: plan.counts.pdf, collections: plan.counts.collection, blog: plan.counts.blog });
+    const publicPlan = { counts: plan.counts, samples: plan.samples, robots: plan.robots, helpdesks: plan.helpdesks, feedTotal: plan.feedTotal, notes: plan.notes,
+      sources: plan.sources.slice(0, 200).map((s) => ({ url: s.url, kind: s.kind, via: s.via })) };
+    if (o.planOnly) return { platform: det.platform, api: det.api, base: det.base, host: plan.host, name: det.name, plan: publicPlan, files: [], counts: {}, report, capped: null, skipped: report.skipped, warnings: ctx.warnings };
+    if (total === 0 && !det.api) throw err('no_content');
 
-    const built = buildMarkdownFiles(docs, { ...caps, storeName: det.name || new URL(det.base).hostname, base: det.base, slug: new URL(det.base).hostname,
-      date: o.date, productsMore: ctx.productsMore, pagesMore: ctx.pagesMore, perFileProducts: o.perFileProducts });
-    emit('building', { files: built.files.map((x) => x.name) });
-    let capped = built.capped;
-    if (ctx.timeCapped) capped = { ...(capped || {}), time: true };
-    if (capped) emit('capped', capped);
-    if (!built.files.length) throw err('no_content');
-    const out = { platform: det.platform, api: !!ctx.api, base: det.base, name: det.name, files: built.files, counts, capped, skipped, warnings: ctx.warnings,
-      requests: f.stats.total, maxConcurrent: f.stats.maxActive };
-    emit('done', { files: built.files.map((x) => ({ name: x.name, bytes: x.size, docs: x.docs })), platform: det.platform, counts });
-    return out;
+    const writer = createWriter({ maxTotalBytes: caps.maxTotalBytes, storeName: det.name || plan.host, siteHost: plan.host, onFiles: o.onFiles, emit,
+      batchFiles: o.batchFiles || 40, batchBytes: o.batchBytes || 2 * MB });
+    ctx.writer = writer;
+    // best sources first: policies and FAQ, help, then every product, PDFs, collections, blog, other pages
+    await readPages(ctx, plan.sources.filter((s) => PAGE_KINDS.includes(s.kind)), caps.maxPages);
+    await writer.flushAll();
+    await readProducts(ctx);
+    await writer.flushAll();
+    await readPdfs(ctx);
+    await readPages(ctx, plan.sources.filter((s) => s.kind === 'collection'), caps.maxCollections);
+    await readPages(ctx, plan.sources.filter((s) => s.kind === 'blog'), caps.maxBlog);
+    await readPages(ctx, plan.sources.filter((s) => s.kind === 'page'), caps.maxOtherPages);
+    const files = await writer.finish();
+    f.flushProgress();
+
+    report.written = { ...writer.stats.written };
+    report.bytes = writer.stats.used;
+    report.leftOut.quota = { ...writer.stats.leftOut };
+    report.timeUp = ctx.timeUp;
+    report.products = { found: Math.max(plan.counts.product, ctx.totals.product || 0), read: report.read.product || 0, written: writer.stats.written.product || 0 };
+    report.throttled = f.stats.throttled;
+    report.requests = f.stats.total;
+    const counts = { products: report.written.product || 0, pages: (report.written.help || 0) + (report.written.page || 0), policies: report.written.policy || 0,
+      faqs: report.written.faq || 0, pdfs: report.written.pdf || 0, collections: report.written.collection || 0, blog: report.written.blog || 0 };
+    const capped = {};
+    if (report.leftOut.cap.product) capped.products = { limit: caps.maxProducts, kept: ctx.productCount, more: true };
+    const pagesCut = PAGE_KINDS.reduce((n, k) => n + (report.leftOut.cap[k] || 0), 0);
+    if (pagesCut) capped.pages = { limit: caps.maxPages, kept: caps.maxPages, more: true };
+    const quotaOut = Object.values(report.leftOut.quota).reduce((a, b) => a + b, 0);
+    if (quotaOut) capped.bytes = { limit: caps.maxTotalBytes, droppedProducts: report.leftOut.quota.product || 0, droppedSections: quotaOut, leftOut: report.leftOut.quota };
+    if (ctx.timeUp) capped.time = { leftOut: report.leftOut.time };
+    if (Object.keys(capped).length) emit('capped', capped);
+    if (!writer.stats.files) throw err(quotaOut ? 'quota' : 'no_content');
+    emit('built', { n: writer.stats.files, bytes: writer.stats.used, written: report.written, files: files.slice(0, 50).map((x) => ({ name: x.name, path: x.path, bytes: x.size, kind: x.kind })), report });
+    return { platform: det.platform, api: !!det.api && !ctx.feedFailed, base: det.base, host: plan.host, name: det.name, plan: publicPlan, files, counts, report,
+      capped: Object.keys(capped).length ? capped : null, skipped: report.skipped, warnings: ctx.warnings, requests: f.stats.total, maxConcurrent: f.stats.maxActive };
   } catch (e) {
-    const se = e instanceof StoreImportError ? e : err('upstream', undefined, { cause: e });
+    // a cancel wins; an error from the caller's onFiles (e.g. knowDrive refused a batch) keeps its own code
+    const se = e instanceof StoreImportError ? e : (o.signal?.aborted || e?.code === 'aborted') ? err('aborted')
+      : e?.status && e?.code ? e : err('upstream', undefined, { cause: e });
     emit('error', { code: se.code, message: se.message });
     throw se;
   }

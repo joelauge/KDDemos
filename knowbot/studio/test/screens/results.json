@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-08T20:57:30.559Z",
+  "at": "2026-11-08T21:16:30.360Z",
   "speed": 4,
   "results": [
     {
@@ -8,7 +8,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "333 ms to first Builder message"
+      "detail": "237 ms to first Builder message"
     },
     {
       "cell": "desktop-light-full",
@@ -64,7 +64,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "196 ms"
+      "detail": "174 ms"
     },
     {
       "cell": "desktop-light-full",
@@ -168,7 +168,7 @@
       "name": "first cited answer < 45 s from landing",
       "ok": true,
       "soft": false,
-      "detail": "17.0 s"
+      "detail": "16.9 s"
     },
     {
       "cell": "desktop-light-full",
@@ -472,7 +472,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_teguokrpyysj27km&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A32925%2Fstudio%2F%3Ft%3Dtr_teguokrpyysj27km%26launched%3D1%26k%3DeyJ0IjoidHJfdGVndW9rcnB5eXNqMjdrbSIsImUiOjE3OTQ3NzYxNTg2MDd9.HpBRzjhGzBwqf9O1_UZCBpQc%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_sku2b2xxxwv4vac6&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A40011%2Fstudio%2F%3Ft%3Dtr_sku2b2xxxwv4vac6%26launched%3D1%26k%3DeyJ0IjoidHJfc2t1MmIyeHh4d3Y0dmFjNiIsImUiOjE3OTQ3NzcyOTg1NjJ9.Kb4itBNfIekZolHuuFFQjfI0%23launched"
     },
     {
       "cell": "desktop-light-full",
@@ -512,12 +512,12 @@
       "name": "progress: platform found, then counts",
       "ok": true,
       "soft": false,
-      "detail": "Shopify store found: Lumen Bikes. Reading products and help pages…\n\nFind\nRead\nBuild\nAdd\nCancel"
+      "detail": "Enter your website\nAny website or online store\n\nShopify store found: Lumen Bikes. Reading products and help pages…\n\nFind\nRead\nBuild\nAdd\nCancel"
     },
     {
       "cell": "desktop-light-full",
       "step": "18-store",
-      "name": "import done: \"Imported N files from …\"",
+      "name": "import done: \"Imported N … from …\"",
       "ok": true,
       "soft": false,
       "detail": "Imported 4 files from Lumen Bikes. They're learning now; each answer will link the store page it quotes."
@@ -536,7 +536,7 @@
       "name": "librarian answer links the store page it quotes",
       "ok": true,
       "soft": false,
-      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:46029/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
+      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:45885/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
     },
     {
       "cell": "desktop-light-full",
@@ -568,7 +568,7 @@
       "name": "B0 text visible",
       "ok": true,
       "soft": false,
-      "detail": "195 ms to first Builder message"
+      "detail": "143 ms to first Builder message"
     },
     {
       "cell": "mobile-light-full",
@@ -632,7 +632,7 @@
       "name": "BotChip becomes Lumen Help within 3 s",
       "ok": true,
       "soft": false,
-      "detail": "140 ms"
+      "detail": "122 ms"
     },
     {
       "cell": "mobile-light-full",
@@ -1024,7 +1024,7 @@
       "name": "redirect URL has trial= and bot=Lumen+Help",
       "ok": true,
       "soft": false,
-      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_xyvfbliqdx3azosw&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A41939%2Fstudio%2F%3Ft%3Dtr_xyvfbliqdx3azosw%26launched%3D1%26k%3DeyJ0IjoidHJfeHl2ZmJsaXFkeDNhem9zdyIsImUiOjE3OTQ3NzYyMDA3Mjl9.RVJn47LDgtOpfwRJ3rsNaVl8%23launched"
+      "detail": "https://knowdrive.ai/signup?plan=knowbot&trial=tr_o5isn4nm6gfj6fd2&bot=Lumen+Help&email=smoke%40example.com&price=249&return=http%3A%2F%2F127.0.0.1%3A42067%2Fstudio%2F%3Ft%3Dtr_o5isn4nm6gfj6fd2%26launched%3D1%26k%3DeyJ0IjoidHJfbzVpc240bm02Z2ZqNmZkMiIsImUiOjE3OTQ3NzczNDEwMzV9.axRu3D3DWAWT418nXuXZjLBC%23launched"
     },
     {
       "cell": "mobile-light-full",
@@ -1072,12 +1072,12 @@
       "name": "progress: platform found, then counts",
       "ok": true,
       "soft": false,
-      "detail": "Shopify store found: Lumen Bikes. Reading products and help pages…\n\nFind\nRead\nBuild\nAdd\nCancel"
+      "detail": "Enter your website\nAny website or online store\n\nShopify store found: Lumen Bikes. Reading products and help pages…\n\nFind\nRead\nBuild\nAdd\nCancel"
     },
     {
       "cell": "mobile-light-full",
       "step": "18-store",
-      "name": "import done: \"Imported N files from …\"",
+      "name": "import done: \"Imported N … from …\"",
       "ok": true,
       "soft": false,
       "detail": "Imported 4 files from Lumen Bikes. They're learning now; each answer will link the store page it quotes."
@@ -1096,7 +1096,7 @@
       "name": "librarian answer links the store page it quotes",
       "ok": true,
       "soft": false,
-      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:33261/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
+      "detail": "Good news, I found what you're looking for! In [“Refund policy”](http://127.0.0.1:45159/policies/refund-policy), it says: “Unridden bikes can be returned within 30 days of delivery for a full refund” [1]. Feel free to open the link for the full details."
     },
     {
       "cell": "mobile-light-full",

@@ -2970,21 +2970,48 @@ store.registerCard('email-capture', (data, el) => {
   });
 });
 
-// ------------------------------------------------------------------ "Enter a Store URL" (POST /store, storeimport.mjs)
-// One card in the Builder: address + "I own or manage this store" → a StageTrack-style run (Find · Read · Build · Add)
-// fed by the importer's own events. Files then arrive through the normal events stream and atomize like uploads.
-const STORE_PLATFORM = { shopify: 'Shopify store', woocommerce: 'WooCommerce store', magento: 'Magento store', squarespace: 'Squarespace store', generic: 'Store website' };
+// ------------------------------------------------------------------ "Enter your website" (the finder + background import)
+// One card in the Builder: address + "I own or manage this website" → the finder's plan (what it found, by kind, with
+// checkboxes and an estimate) → "Import" starts a background job on the server that keeps running when this tab
+// closes; its progress (finding · reading i of N · building · adding k of M) arrives on the trial's events stream
+// ('store' events, api.js emits 'store:job') with a GET /store/job poll as the fallback. A refresh reconnects to the
+// running job. The final summary lists what was imported, skipped (robots.txt), failed and left out (space, caps).
+// Servers without the finder (POST /store/plan 404) get the earlier one-shot POST /store import (runLegacy below).
+// The CONTRACT is written out in api.js (planStore / startStoreJob / storeJob / cancelStoreJob).
+const STORE_PLATFORM = { shopify: 'Shopify store', woocommerce: 'WooCommerce store', magento: 'Magento store', squarespace: 'Squarespace store',
+  bigcommerce: 'BigCommerce store', wix: 'Wix site', generic: 'Website' };
 const STORE_STEPS = [{ key: 'find', label: 'Find' }, { key: 'read', label: 'Read' }, { key: 'build', label: 'Build' }, { key: 'add', label: 'Add' }];
-let storeCardApi = null;   // the open card ({ focus(url), running() }) — one at a time
+// the finder's source kinds, best knowledge first (policies / FAQ / help > products > collections > blog)
+const STORE_KINDS = {
+  policies: { one: 'policy', many: 'policies', label: 'Policies', rank: 0 },
+  faq: { one: 'FAQ page', many: 'FAQ pages', label: 'FAQ pages', rank: 1 },
+  help: { one: 'help page', many: 'help pages', label: 'Help pages', rank: 2 },
+  products: { one: 'product', many: 'products', label: 'Products', rank: 3 },
+  pdfs: { one: 'PDF', many: 'PDFs', label: 'PDFs (manuals, spec sheets, size charts)', rank: 4 },
+  collections: { one: 'collection', many: 'collections', label: 'Collections', rank: 5 },
+  pages: { one: 'other page', many: 'other pages', label: 'Other pages', rank: 6 },
+  blog: { one: 'blog post', many: 'blog posts', label: 'Blog posts', rank: 7 },
+};
+const STORE_PHASE_STEP = { discovering: 'find', finding: 'find', reading: 'read', fetching: 'read', building: 'build', uploading: 'add', adding: 'add', done: 'add' };
+const STORE_TERMINAL = new Set(['done', 'failed', 'cancelled', 'canceled', 'error']);
+let storeCardApi = null;   // the open card ({ el, focus(url), running(), attach(job) }) — one at a time
 const storeHost = (u) => String(u || '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^www\./i, '').replace(/[/?#].*$/, '').slice(0, 60);
 const nPlural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString('en-US')} ${Number(n) === 1 ? one : many}`;
+const storeNum = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.round(Number(v))) : 0);
+const storeKindOf = (k) => STORE_KINDS[k] || { one: 'page', many: 'pages', label: String(k || 'Pages').replace(/^./, (c) => c.toUpperCase()), rank: 9 };
+const storeKindCount = (k, n) => nPlural(n, storeKindOf(k).one, storeKindOf(k).many);
+/** Only http(s) links are ever rendered (a plan or job row is server data). */
+const storeSafeUrl = (u) => { try { const x = new URL(String(u || '')); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
+const andList = (parts) => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || '');
+const storeMB = (b) => { const mb = Number(b || 0) / 1048576; return mb >= 10 ? `${Math.round(mb)} MB` : mb >= 0.1 ? `${mb.toFixed(1)} MB` : 'under 0.1 MB'; };
+const fmtMinutes = (m) => { const v = Math.max(1, Math.round(Number(m) || 0)); return v >= 90 ? `about ${Math.round(v / 6) / 10} hours` : `about ${nPlural(v, 'minute')}`; };
 function storeFoundLine(c = {}) {
   const parts = [];
   if (c.products) parts.push(nPlural(c.products, 'product'));
   if (c.pages || c.faqs) parts.push(nPlural((c.pages || 0) + (c.faqs ? 1 : 0), 'help page'));
   if (c.faqs) parts.push(nPlural(c.faqs, 'FAQ answer'));
   if (c.policies) parts.push(nPlural(c.policies, 'policy', 'policies'));
-  return parts.length ? `Found ${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]}` : 'Found nothing to import yet';
+  return parts.length ? `Found ${andList(parts)}` : 'Found nothing to import yet';
 }
 function storeCappedLine(cp = {}) {
   const out = [];
@@ -2995,48 +3022,117 @@ function storeCappedLine(cp = {}) {
   if (cp.time) t += ' The store was slow, so a few pages were skipped.';
   return t.trim();
 }
+/** The plan's kinds, cleaned and sorted best-first (server rank, else ours); empty kinds are dropped. */
+function planKinds(plan) {
+  return (Array.isArray(plan?.kinds) ? plan.kinds : [])
+    .map((k) => ({ ...k, kind: String(k.kind || 'pages'), count: storeNum(k.count), rank: Number.isFinite(Number(k.rank)) ? Number(k.rank) : storeKindOf(k.kind).rank }))
+    .filter((k) => k.count > 0)
+    .sort((a, b) => a.rank - b.rank);
+}
+/** "Found 1,284 products, 32 help pages, 6 policies and 4 PDFs" (owner's order: the biggest catalog first reads best). */
+function planFoundLine(kinds) {
+  if (!kinds.length) return 'Found nothing to import on this site yet';
+  const byKnowledge = [...kinds].sort((a, b) => (a.kind === 'products' ? -1 : b.kind === 'products' ? 1 : a.rank - b.rank));
+  return `Found ${andList(byKnowledge.map((k) => storeKindCount(k.kind, k.count)))}`;
+}
+/** The estimate for the ticked kinds: the plan's per-kind numbers when it has them, else its total scaled by pages. */
+function planEstimate(plan, kinds, on) {
+  const sel = kinds.filter((k) => on.has(k.kind));
+  const all = kinds.reduce((n, k) => n + (storeNum(k.pages) || k.count), 0) || 1;
+  const pages = sel.reduce((n, k) => n + (storeNum(k.pages) || k.count), 0);
+  const est = plan?.estimate || {};
+  const share = pages / all;
+  const bytes = sel.every((k) => k.bytes != null) && sel.length ? sel.reduce((n, k) => n + storeNum(k.bytes), 0) : storeNum(est.bytes) * share;
+  const minutes = sel.every((k) => k.minutes != null) && sel.length ? sel.reduce((n, k) => n + Number(k.minutes || 0), 0) : Number(est.minutes || 0) * share;
+  return { pages, bytes, minutes: minutes || Math.max(1, pages / 120) };
+}
+/** One job snapshot, whatever field names the server uses (see the CONTRACT in api.js). */
+function normJob(j) {
+  if (!j || typeof j !== 'object') return null;
+  const p = j.progress || j.counts || {};
+  const state = String(j.state || j.status || 'running');
+  const recent = (Array.isArray(j.recent) ? j.recent : []).slice(-8).map((x) => (typeof x === 'string' ? { title: x, url: null } : { title: String(x?.title || x?.name || ''), url: storeSafeUrl(x?.url) })).filter((x) => x.title);
+  return {
+    id: String(j.id || j.jobId || ''), state, terminal: STORE_TERMINAL.has(state), phase: String(j.phase || j.stage || (STORE_TERMINAL.has(state) ? 'done' : 'discovering')),
+    url: j.url || '', host: j.host || storeHost(j.url || j.base || ''), name: j.name || null, platform: j.platform || null,
+    discovered: storeNum(p.discovered ?? p.found ?? j.discovered), read: storeNum(p.read ?? p.done ?? p.fetched), total: storeNum(p.total ?? p.toRead),
+    built: storeNum(p.built), files: storeNum(p.files ?? p.filesTotal), uploaded: storeNum(p.uploaded),
+    recent, summary: j.summary || j.result || null, error: j.error || null, spec: j.spec || null, endedAt: j.endedAt || null,
+    newFiles: Array.isArray(j.newFiles) ? j.newFiles : Array.isArray(j.files) ? j.files : null,
+  };
+}
+const STORE_SEEN_KEY = 'kb-store-job-seen';
+const storeSeen = (id) => { try { return localStorage.getItem(STORE_SEEN_KEY) === id; } catch { return false; } };
+const markStoreSeen = (id) => { try { if (id) localStorage.setItem(STORE_SEEN_KEY, id); } catch { /* private mode */ } };
+
 /** A store card already open and idle takes the new request (prefilled) instead of a second card. */
 function focusOpenStoreCard(url) {
   if (!storeCardApi || !storeCardApi.el.isConnected) { storeCardApi = null; return false; }
   storeCardApi.focus(url);
   return true;
 }
-function openStoreImport({ url = '' } = {}) {
+function openStoreImport({ url = '', job = null } = {}) {
   if (isMobile()) setTab('setup', { slide: true });
-  if (focusOpenStoreCard(url)) return;
-  localSay("Paste your store's web address. I'll read its products, help pages and policies (public pages only, as your visitors see them) and turn them into files your bot quotes, with a link back to each page.",
-    { reply: true, card: { type: 'store-import', data: { url } }, chips: [] });
+  if (!job && focusOpenStoreCard(url)) return;
+  if (job && storeCardApi && storeCardApi.el.isConnected) { storeCardApi.attach(job); return; }
+  localSay(job ? `Your import from ${storeHost(job.url) || 'your website'} is still running on our side. Here's where it is:`
+    : "Paste your website's address. I'll find its products, help pages, policies and manuals (public pages only, as your visitors see them), show you what I found, then turn them into files your bot quotes, with a link back to each page.",
+  { reply: true, card: { type: 'store-import', data: { url: job?.url || url, job } }, chips: [] });
 }
+// A refresh (or another device) reconnects to the trial's running import; a finished one whose summary this browser
+// never saw is shown once.
+// CONTRACT-GAP (F): GET /api/studio/config should say storeJobs:true once the finder routes exist; until it does,
+// nothing here probes them (a 404 on every page load would be noise) and the card runs the one-shot import.
+const storeJobsOn = () => !!(getState().config && (getState().config.storeJobs || getState().config.features?.storeJobs));
+trialP.then(async () => {
+  for (let i = 0; i < 20 && !storeJobsOn(); i++) await sleep(250);   // the config request may still be in flight
+  if (!storeJobsOn()) return;
+  let r = null;
+  try { r = await api.storeJob(); } catch { return; }
+  const j = normJob(r?.job);
+  if (!j || !j.id) return;
+  if (!j.terminal || (!storeSeen(j.id) && j.endedAt && Date.now() - Number(j.endedAt) * (Number(j.endedAt) < 1e12 ? 1000 : 1) < 3600000)) openStoreImport({ job: r.job });
+});
+on('store:job', (raw) => {
+  const j = normJob(raw);
+  if (!j || !j.id) return;
+  if (storeCardApi && storeCardApi.el.isConnected) storeCardApi.attach(raw);
+  else if (!j.terminal) openStoreImport({ job: raw });   // a job started on another device or tab
+});
+
 store.registerCard('store-import', (data, el) => {
   const id = uid('si');
   const input = h('input', { type: 'text', inputmode: 'url', id, class: 'st-text', placeholder: 'yourwebsite.com', autocomplete: 'url', spellcheck: 'false', autocapitalize: 'off',
     maxlength: '2048', value: data?.url || '', 'aria-describedby': `${id}-msg` });
   const own = h('input', { type: 'checkbox', id: `${id}-own`, class: 'st-si-own' });
   const msg = h('p', { id: `${id}-msg`, class: 'st-field-msg', role: 'status' });
-  const go = h('button', { type: 'submit', class: 'st-btn st-btn-primary' }, h('span', { html: icon('arrowRight', 15) }), h('span', { class: 'st-btn-label' }, 'Import website'));
-  const instead = h('button', { type: 'button', class: 'st-btn st-btn-ghost' }, 'Upload files instead');
+  const go = h('button', { type: 'submit', class: 'st-btn st-btn-primary' }, h('span', { html: icon('arrowRight', 15) }), h('span', { class: 'st-btn-label' }, 'Find sources'));
   const form = h('form', { class: 'st-si-form', novalidate: true },
     h('label', { for: id, class: 'st-si-label' }, "Your website's address"),
     h('div', { class: 'st-si-row' }, input, go),
     h('label', { class: 'st-si-check', for: `${id}-own` }, own, h('span', null, 'I own or manage this website')),
     h('div', { class: 'st-si-foot' }, msg)); // "Upload files instead" lives in the Builder's chips below the card (one, not two)
-  // the run: StageTrack-like nodes, a status line, a progress bar, the found / capped lines
+  // the run: StageTrack-like nodes, a status line, a progress bar, the found / capped lines, the recent names
   const nodes = STORE_STEPS.map((st) => h('li', { class: 'st-si-node', dataset: { step: st.key, state: 'todo' } },
     h('span', { class: 'st-si-dot', 'aria-hidden': 'true' }), h('span', { class: 'st-si-node-l' }, st.label)));
   const track = h('ol', { class: 'st-si-track', 'aria-label': 'Import steps' }, ...nodes);
-  const status = h('p', { class: 'st-si-status', role: 'status', 'aria-live': 'polite' });
+  // the status line changes many times a second on a big store: it is not a live region (phase changes are announced)
+  const status = h('p', { class: 'st-si-status' });
   const barFill = h('i');
-  const bar = h('div', { class: 'st-si-bar', role: 'progressbar', 'aria-label': 'Pages read', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', hidden: true }, barFill);
+  const bar = h('div', { class: 'st-si-bar', role: 'progressbar', 'aria-label': 'Import progress', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', hidden: true }, barFill);
   const found = h('p', { class: 'st-si-found', hidden: true });
   const capped = h('p', { class: 'st-si-capped', hidden: true });
-  const cancel = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Cancel');
+  const recentList = h('ul', { class: 'st-si-recent-l' });
+  const recent = h('div', { class: 'st-si-recent', hidden: true }, h('p', { class: 'st-si-recent-h' }, 'Just read'), recentList);
+  const plan = h('div', { class: 'st-si-plan', hidden: true });
+  const summary = h('div', { class: 'st-si-sum', hidden: true });
   const actions = h('div', { class: 'st-si-actions', hidden: true });
-  const run = h('div', { class: 'st-si-run', hidden: true }, status, track, bar, found, capped, actions);
+  const run = h('div', { class: 'st-si-run', hidden: true }, status, track, bar, found, capped, recent, summary, actions);
   const card = h('div', { class: 'st-card st-si' },
-    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Enter your website'), h('span', { class: 'st-card-meta', title: 'Shopify, WooCommerce, Magento, Squarespace or any public site' }, 'Any website or online store')),
-    form, run);
+    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Enter your website'), h('span', { class: 'st-card-meta', title: 'Shopify, WooCommerce, Magento, BigCommerce, Squarespace, Wix or any public site' }, 'Any website or online store')),
+    form, plan, run);
   el.append(card);
-  let ac = null, busy = false, lastUrl = '';
+  let ac = null, busy = false, lastUrl = '', curPlan = null, jobId = null, lastJobAt = 0, pollTimer = 0, lastPhase = '', finished = false;
   const reveal = (node) => {
     if (!node.hidden) return;
     node.hidden = false;
@@ -3046,61 +3142,257 @@ store.registerCard('store-import', (data, el) => {
     const i = STORE_STEPS.findIndex((x) => x.key === key);
     nodes.forEach((n, j) => { n.dataset.state = j < i ? 'done' : j === i ? state : (state === 'failed' ? n.dataset.state === 'done' ? 'done' : 'todo' : 'todo'); });
   };
-  const say = (t) => { status.textContent = t; };
+  const say = (t) => { setText(status, t); };
   const setBar = (done, total) => {
-    const p = total > 0 ? Math.max(0.04, Math.min(1, done / total)) : 0;
+    const p = total > 0 ? Math.max(0.03, Math.min(1, done / total)) : 0;
     bar.style.setProperty('--p', String(p));
-    bar.setAttribute('aria-valuenow', String(Math.round(p * 100)));
+    setAttr(bar, 'aria-valuenow', String(Math.round(p * 100)));
   };
   const showActions = (...btns) => { actions.replaceChildren(...btns); actions.hidden = !btns.length; };
+  const btn = (label, cls, fn) => { const b = h('button', { type: 'button', class: `st-btn ${cls} st-btn-sm` }, label); b.addEventListener('click', fn); return b; };
+  const stopPoll = () => { clearTimeout(pollTimer); pollTimer = 0; };
+  const resetRun = () => {
+    found.hidden = true; capped.hidden = true; bar.hidden = true; recent.hidden = true; summary.hidden = true; summary.replaceChildren();
+    recentList.replaceChildren(); setBar(0, 0); lastPhase = ''; finished = false;
+    nodes.forEach((n) => { n.dataset.state = 'todo'; });
+  };
   const tryAnother = () => {
-    run.hidden = true; form.hidden = false; card.classList.remove('is-error', 'is-done');
+    stopPoll(); jobId = null; curPlan = null; busy = false;
+    run.hidden = true; plan.hidden = true; form.hidden = false; card.classList.remove('is-error', 'is-done');
     input.focus(); input.select();
   };
   const uploadInstead = () => { addUserMessage('Upload files instead'); dispatchAction({ type: 'request_upload' }, { fromClick: true }); };
-  instead.addEventListener('click', uploadInstead);
-  cancel.addEventListener('click', () => { if (ac) ac.abort(); });
   function fail(message) {
-    busy = false; ac = null;
+    busy = false; ac = null; stopPoll();
     card.classList.add('is-error');
+    plan.hidden = true; reveal(run);
     const cur = nodes.find((n) => n.dataset.state === 'active');
     if (cur) cur.dataset.state = 'failed';
     say(message);
     bar.hidden = true;
-    const again = h('button', { type: 'button', class: 'st-btn st-btn-primary st-btn-sm' }, 'Try another URL');
-    const up = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Upload files instead');
-    again.addEventListener('click', tryAnother);
-    up.addEventListener('click', uploadInstead);
-    showActions(again, up);
+    const again = btn('Try another URL', 'st-btn-primary', tryAnother);
+    showActions(again, btn('Upload files instead', 'st-btn-ghost', uploadInstead));
     announce(message, 'assertive');
     queueMicrotask(() => again.focus({ preventScroll: true }));
   }
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (busy) return;
-    const v = input.value.trim();
-    msg.className = 'st-field-msg'; msg.textContent = '';
-    if (!v || v.length > 2048 || /\s/.test(v)) {
-      msg.textContent = "That doesn't look like a web address. Try something like yourwebsite.com."; msg.className = 'st-field-msg is-bad';
-      input.setAttribute('aria-invalid', 'true'); input.focus(); return;
+
+  // ---- 1. the finder: what is on this site, before anything is imported
+  async function find(v) {
+    busy = true; lastUrl = v; ac = new AbortController();
+    form.hidden = true; plan.hidden = true; card.classList.remove('is-error', 'is-done');
+    resetRun();
+    showActions(btn('Cancel', 'st-btn-ghost', () => { if (ac) ac.abort(); }));
+    reveal(run);
+    setStep('find', 'active');
+    say(`Looking at ${storeHost(v)}…`);
+    let p;
+    try {
+      await trialP;
+      if (!storeJobsOn()) { runLegacy(v); return; }
+      p = await api.planStore(v, { owner: true, signal: ac.signal, onEvent: (type, d) => {
+        if (type === 'detect') say(`${STORE_PLATFORM[d?.platform] || 'Website'} found${d?.name ? `: ${d.name}` : ''}. Finding its products, help pages and policies…`);
+        else if (type === 'discovering') say(`Finding sources on ${storeHost(v)}… ${nPlural(storeNum(d?.found ?? d?.discovered ?? d?.count), 'page')} so far`);
+      } });
+    } catch (err) {
+      if (err?.code === 'no_plan') { runLegacy(v); return; }
+      if (err?.code === 'aborted' || ac?.signal?.aborted) { busy = false; ac = null; tryAnother(); announce('Stopped. Nothing was imported.'); return; }
+      fail(err?.message && err.status !== 0 ? err.message : "Couldn't reach the studio. Nothing was imported; try again.");
+      return;
     }
-    input.removeAttribute('aria-invalid');
-    if (!own.checked) {
-      msg.textContent = 'Tick the box to confirm you own or manage this store.'; msg.className = 'st-field-msg is-bad';
-      own.focus(); return;
+    busy = false; ac = null;
+    showPlan(p);
+  }
+
+  // ---- 2. the plan: counts by kind, a checkbox each (all on), an estimate, then Import
+  function showPlan(p) {
+    curPlan = p;
+    const kinds = planKinds(p);
+    run.hidden = true;
+    const on = new Set(kinds.map((k) => k.kind));
+    const head = planFoundLine(kinds);
+    const where = p.name || p.host || storeHost(p.url || lastUrl);
+    const estEl = h('p', { class: 'st-si-est', id: `${id}-est` });
+    const importBtn = h('button', { type: 'button', class: 'st-btn st-btn-primary st-btn-sm', 'aria-describedby': `${id}-est` }, h('span', { html: icon('arrowRight', 14) }), h('span', { class: 'st-btn-label' }, 'Import'));
+    const paint = () => {
+      const e = planEstimate(p, kinds, on);
+      setText(estEl, on.size ? `About ${nPlural(e.pages, 'page')} · ${storeMB(e.bytes)} · ${fmtMinutes(e.minutes)}. It keeps running if you close this tab.` : 'Tick at least one kind of page to import.');
+      importBtn.disabled = !on.size;
+    };
+    const rows = kinds.map((k) => {
+      const kid = `${id}-k-${k.kind}`;
+      const box = h('input', { type: 'checkbox', id: kid, class: 'st-si-kbox', checked: true, dataset: { kind: k.kind } });
+      box.addEventListener('change', () => { if (box.checked) on.add(k.kind); else on.delete(k.kind); paint(); });
+      const ex = (Array.isArray(k.examples) ? k.examples : []).slice(0, 2).map((x) => String(x?.title || x || '').trim()).filter(Boolean);
+      const link = storeSafeUrl(k.url);
+      return h('li', { class: 'st-si-kind', dataset: { kind: k.kind } },
+        h('label', { for: kid, class: 'st-si-kl' }, box,
+          h('span', { class: 'st-si-kname' }, k.label || storeKindOf(k.kind).label),
+          h('span', { class: 'st-si-kcount sb-num' }, storeNum(k.count).toLocaleString('en-US'))),
+        ex.length ? h('span', { class: 'st-si-kex' }, ex.join(' · ')) : null,
+        link ? h('a', { class: 'st-si-klink', href: link, target: '_blank', rel: 'noopener noreferrer' }, `View ${(k.label || storeKindOf(k.kind).label).replace(/\s*\(.*\)$/, '').toLowerCase()} on the site`, h('span', { class: 'st-sr' }, ' (opens in a new tab)')) : null);
+    });
+    const notes = [];
+    if (storeNum(p.robots?.blocked)) notes.push(`${nPlural(p.robots.blocked, 'page')} the site's robots.txt asks us not to read will be skipped.`);
+    for (const n of (Array.isArray(p.notes) ? p.notes : []).slice(0, 3)) if (n) notes.push(String(n));
+    const back = btn('Change address', 'st-btn-ghost', tryAnother);
+    importBtn.addEventListener('click', () => startJob(p, kinds.filter((k) => on.has(k.kind)).map((k) => k.kind)));
+    plan.replaceChildren(
+      h('p', { class: 'st-si-plan-h', id: `${id}-plan-h` }, `${head} on ${where}.`),
+      kinds.length ? h('fieldset', { class: 'st-si-kinds' }, h('legend', { class: 'st-sr' }, 'What to import'),
+        h('p', { class: 'st-si-plan-sub', 'aria-hidden': 'true' }, 'Import, best knowledge first:'), h('ul', { class: 'st-si-kl-list' }, ...rows)) : null,
+      ...notes.map((t) => h('p', { class: 'st-si-note' }, t)),
+      kinds.length ? estEl : null,
+      h('div', { class: 'st-si-actions' }, kinds.length ? importBtn : null, back, kinds.length ? null : btn('Upload files instead', 'st-btn-ghost', uploadInstead)));
+    paint();
+    reveal(plan);
+    announce(`${head}. Choose what to import, then press Import.`);
+    queueMicrotask(() => (kinds.length ? importBtn : back).focus({ preventScroll: true }));
+  }
+
+  // ---- 3. the background job
+  async function startJob(p, kinds) {
+    if (busy || !kinds.length) return;
+    busy = true;
+    document.documentElement.setAttribute('data-intent', '');
+    plan.hidden = true; resetRun(); reveal(run); setStep('find', 'active');
+    say(`Starting the import from ${storeHost(p.url || lastUrl)}…`);
+    showActions();
+    try {
+      const r = await api.startStoreJob({ planId: p.planId || p.id || null, url: p.url || lastUrl, kinds, owner: true });
+      attach(r?.job || r);
+    } catch (err) {
+      fail(err?.message && err.status !== 0 ? err.message : "Couldn't reach the studio. Nothing was imported; try again.");
     }
+  }
+  function cancelJob(b) {
+    b.disabled = true; setText(b, 'Cancelling…');
+    api.cancelStoreJob().then((r) => { if (r?.job) attach(r.job); }).catch(() => { b.disabled = false; setText(b, 'Cancel import'); toast({ kind: 'warn', text: "Couldn't cancel just now. Try again." }); });
+  }
+  /** Paints one job snapshot (from the events stream, the poll, or the start / cancel reply). */
+  function attach(raw) {
+    const j = normJob(raw);
+    if (!j) return;
+    if (jobId && j.id && j.id !== jobId) { if (j.terminal) return; resetRun(); }   // another job: a stale end is ignored
+    else if (finished) return;
+    jobId = j.id || jobId; lastJobAt = Date.now();
+    if (j.url) lastUrl = j.url;
+    busy = !j.terminal;
+    form.hidden = true; plan.hidden = true; reveal(run);
+    card.classList.remove('is-error');
+    if (j.terminal) { stopPoll(); done(j); return; }
+    const step = STORE_PHASE_STEP[j.phase] || 'find';
+    setStep(step, 'active');
+    const host = j.name || j.host || storeHost(lastUrl);
+    if (j.phase === 'reading' || j.phase === 'fetching') {
+      reveal(bar); setBar(j.read, j.total);
+      say(j.total ? `Reading ${j.read.toLocaleString('en-US')} of ${nPlural(j.total, 'page')} on ${host}…` : `Reading pages on ${host}…`);
+    } else if (j.phase === 'building') {
+      reveal(bar); setBar(j.built, j.files || j.total);
+      say(j.built ? `Building files… ${nPlural(j.built, 'page')} written` : 'Building files…');
+    } else if (j.phase === 'uploading' || j.phase === 'adding') {
+      reveal(bar); setBar(j.uploaded, j.files);
+      say(j.files ? `Adding files ${j.uploaded.toLocaleString('en-US')} of ${j.files.toLocaleString('en-US')} to your bot…` : 'Adding files to your bot…');
+    } else {
+      bar.hidden = true;
+      say(j.discovered ? `Finding pages on ${host}… ${nPlural(j.discovered, 'page')} so far` : `Finding pages on ${host}…`);
+    }
+    if (j.phase !== lastPhase) { lastPhase = j.phase; announce(status.textContent); }
+    if (j.recent.length) {
+      const key = j.recent.map((x) => x.title).join('\n');
+      if (recentList.dataset.key !== key) {
+        recentList.dataset.key = key;
+        recentList.replaceChildren(...j.recent.slice(-5).reverse().map((x) => h('li', null, x.url
+          ? h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer', title: x.title }, x.title, h('span', { class: 'st-sr' }, ' (opens in a new tab)'))
+          : h('span', { title: x.title }, x.title))));
+      }
+      reveal(recent);
+    }
+    if (!actions.querySelector('[data-cancel]')) {
+      const c = btn('Cancel import', 'st-btn-ghost', () => cancelJob(c));
+      c.dataset.cancel = '1';
+      showActions(c);
+    }
+    schedulePoll();
+  }
+  // the events stream is the live path; a poll covers a dropped stream (or a server that does not push 'store')
+  function schedulePoll() {
+    stopPoll();
+    pollTimer = setTimeout(async () => {
+      pollTimer = 0;
+      if (!card.isConnected || finished) return;
+      if (Date.now() - lastJobAt >= 4500) {
+        try { const r = await api.storeJob(); if (r?.job) attach(r.job); else schedulePoll(); return; }
+        catch { /* keep trying while the card is open */ }
+      }
+      schedulePoll();
+    }, 5000);
+  }
+  // ---- 4. the summary: imported (by kind, with a link to each), skipped by robots.txt, failed, left out
+  function done(j) {
+    finished = true; busy = false;
+    const s = j.summary || {};
+    const imported = (Array.isArray(s.imported) ? s.imported : []).filter((x) => storeNum(x?.count) > 0)
+      .sort((a, b) => storeKindOf(a.kind).rank - storeKindOf(b.kind).rank);
+    const nFiles = imported.reduce((n, x) => n + storeNum(x.files), 0) || j.uploaded || 0;
+    const where = j.name || j.host || storeHost(lastUrl);
+    markStoreSeen(j.id);
+    bar.hidden = true; recent.hidden = true;
+    if (j.state === 'failed' || j.state === 'error') {
+      if (!nFiles) { fail(j.error?.message || "The import stopped before it added anything. Try again in a moment."); return; }
+    }
+    nodes.forEach((n) => { n.dataset.state = 'done'; });
+    card.classList.add('is-done');
+    const cancelled = j.state === 'cancelled' || j.state === 'canceled';
+    const pages = imported.reduce((n, x) => n + storeNum(x.count), 0);
+    const head = cancelled ? `Import cancelled. ${nPlural(pages, 'page')} from ${where} ${pages === 1 ? 'was' : 'were'} already added and stay${pages === 1 ? 's' : ''}.`
+      : j.state === 'failed' || j.state === 'error' ? `The import stopped early, but ${nPlural(pages, 'page')} from ${where} ${pages === 1 ? 'was' : 'were'} added.`
+        : `Imported ${pages ? andList(imported.map((x) => storeKindCount(x.kind, x.count))) : nPlural(nFiles, 'file')} from ${where}. They're learning now; each answer links the page it quotes.`;
+    say(head);
+    const items = [];
+    for (const x of imported) {
+      const link = storeSafeUrl(x.url);
+      items.push(h('li', { class: 'st-si-sum-i is-ok', dataset: { kind: x.kind } },
+        h('span', { class: 'st-si-sum-k' }, storeKindOf(x.kind).label.replace(/\s*\(.*\)$/, '')),
+        h('span', { class: 'st-si-sum-n sb-num' }, storeNum(x.count).toLocaleString('en-US')),
+        link ? h('a', { href: link, target: '_blank', rel: 'noopener noreferrer', class: 'st-si-sum-a' }, 'View on the site', h('span', { class: 'st-sr' }, ` (${storeKindOf(x.kind).many}, opens in a new tab)`)) : null));
+    }
+    const urlsOf = (arr) => (Array.isArray(arr) ? arr : []).map(storeSafeUrl).filter(Boolean).slice(0, 3);
+    const linkList = (urls) => (urls.length ? h('span', { class: 'st-si-sum-ex' }, ...urls.flatMap((u, i) => [i ? ' · ' : null,
+      h('a', { href: u, target: '_blank', rel: 'noopener noreferrer' }, storeHost(u) + (new URL(u).pathname.length > 1 ? new URL(u).pathname.slice(0, 48) : ''), h('span', { class: 'st-sr' }, ' (opens in a new tab)'))])) : null);
+    const robots = storeNum(s.skipped?.robots ?? s.skipped);
+    if (robots) items.push(h('li', { class: 'st-si-sum-i is-skip' }, h('span', { class: 'st-si-sum-k' }, "Skipped (the site's robots.txt)"), h('span', { class: 'st-si-sum-n sb-num' }, robots.toLocaleString('en-US')), linkList(urlsOf(s.skipped?.urls))));
+    const failedN = storeNum(s.failed?.count ?? s.failed);
+    if (failedN) items.push(h('li', { class: 'st-si-sum-i is-fail' }, h('span', { class: 'st-si-sum-k' }, "Couldn't be read"), h('span', { class: 'st-si-sum-n sb-num' }, failedN.toLocaleString('en-US')), linkList(urlsOf(s.failed?.urls))));
+    const lo = s.leftOut || s.left_out || {};
+    if (storeNum(lo.quota)) items.push(h('li', { class: 'st-si-sum-i is-left' }, h('span', { class: 'st-si-sum-k' }, `Left out: didn't fit in your trial's 100 MB${lo.bytes ? ` (${storeMB(lo.bytes)} more)` : ''}`), h('span', { class: 'st-si-sum-n sb-num' }, storeNum(lo.quota).toLocaleString('en-US'))));
+    if (storeNum(lo.cap)) items.push(h('li', { class: 'st-si-sum-i is-left' }, h('span', { class: 'st-si-sum-k' }, 'Left out: over the 10,000 product limit'), h('span', { class: 'st-si-sum-n sb-num' }, storeNum(lo.cap).toLocaleString('en-US'))));
+    if (storeNum(lo.time)) items.push(h('li', { class: 'st-si-sum-i is-left' }, h('span', { class: 'st-si-sum-k' }, 'Left out: the site was slow and the import ran out of time'), h('span', { class: 'st-si-sum-n sb-num' }, storeNum(lo.time).toLocaleString('en-US'))));
+    if (items.length) { summary.replaceChildren(h('ul', { class: 'st-si-sum-l', 'aria-label': 'Import summary' }, ...items)); reveal(summary); }
+    const again = btn('Import again', 'st-btn-ghost', tryAnother);
+    showActions(again);
+    announce(head);
+    if (nFiles || pages) {
+      emit('files:added', { source: 'store', count: nFiles || pages });
+      refreshStoreGroups();
+      if (j.spec) applySpec(j.spec, { by: 'setup', version: Number(j.spec.version) || undefined });
+      sendEvent('store_imported', { name: j.name || null, n: nFiles || pages });
+    }
+  }
+
+  // ---- the one-shot import (servers without the finder): POST /store streams the whole import on this connection
+  async function runLegacy(v) {
     busy = true; lastUrl = v; ac = new AbortController();
     document.documentElement.setAttribute('data-intent', '');
     form.hidden = true; card.classList.remove('is-error', 'is-done');
-    found.hidden = true; capped.hidden = true; bar.hidden = true; setBar(0, 0);
-    showActions(cancel);
+    resetRun();
+    showActions(btn('Cancel', 'st-btn-ghost', () => { if (ac) ac.abort(); }));
     reveal(run);
     setStep('find', 'active');
     say(`Looking at ${storeHost(v)}…`);
     let uploaded = 0;
     try {
       await trialP;
-      const done = await api.importStore(v, { owner: true, signal: ac.signal, onEvent: (type, d) => {
+      const res = await api.importStore(v, { owner: true, signal: ac.signal, onEvent: (type, d) => {
         if (type === 'detect') { setStep('read', 'active'); say(`${STORE_PLATFORM[d?.platform] || 'Store website'} found${d?.name ? `: ${d.name}` : ''}. Reading products and help pages…`); }
         else if (type === 'fetching') { reveal(bar); setBar(d?.done || 0, d?.total || 0); }
         else if (type === 'found') { found.textContent = `${storeFoundLine(d)}.`; reveal(found); }
@@ -3112,34 +3404,151 @@ store.registerCard('store-import', (data, el) => {
       busy = false; ac = null;
       nodes.forEach((n) => { n.dataset.state = 'done'; });
       card.classList.add('is-done');
-      const n = (done?.files || []).length || uploaded;
-      const where = done?.name || storeHost(lastUrl);
+      const n = (res?.files || []).length || uploaded;
+      const where = res?.name || storeHost(lastUrl);
       say(`Imported ${nPlural(n, 'file')} from ${where}. They're learning now; each answer will link the store page it quotes.`);
-      const again = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Import again');
-      again.addEventListener('click', tryAnother);
-      showActions(again);
+      showActions(btn('Import again', 'st-btn-ghost', tryAnother));
       announce(`Imported ${nPlural(n, 'file')} from ${where}.`);
       emit('files:added', { source: 'store', count: n });
+      refreshStoreGroups();
       // r8 (D2): the store names the bot (og:site_name), shown as a ConfigDiff by the Builder like the sample path
-      if (n && done?.spec) applySpec(done.spec, { by: 'setup', version: Number(done.spec.version) || undefined });
-      if (n) sendEvent('store_imported', { name: done?.name || null, n });
+      if (n && res?.spec) applySpec(res.spec, { by: 'setup', version: Number(res.spec.version) || undefined });
+      if (n) sendEvent('store_imported', { name: res?.name || null, n });
     } catch (err) {
       if (err?.code === 'aborted' || err?.name === 'AbortError' || ac?.signal?.aborted) { fail('The import was cancelled.'); return; }
       fail(err?.message && err.status !== 0 ? err.message : "Couldn't reach the studio. Nothing was imported; try again.");
     }
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const v = input.value.trim();
+    msg.className = 'st-field-msg'; msg.textContent = '';
+    if (!v || v.length > 2048 || /\s/.test(v)) {
+      msg.textContent = "That doesn't look like a web address. Try something like yourwebsite.com."; msg.className = 'st-field-msg is-bad';
+      input.setAttribute('aria-invalid', 'true'); input.focus(); return;
+    }
+    input.removeAttribute('aria-invalid');
+    if (!own.checked) {
+      msg.textContent = 'Tick the box to confirm you own or manage this website.'; msg.className = 'st-field-msg is-bad';
+      own.focus(); return;
+    }
+    find(v);
   });
   storeCardApi = {
     el: card,
+    running: () => busy,
+    attach,
     focus(url) {
-      if (busy) { card.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' }); return; }
+      // a running import or a plan waiting for its Import click is kept (a second request only brings it into view)
+      if (busy || (!plan.hidden && (!url || storeHost(url) === storeHost(lastUrl)))) { card.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' }); return; }
       if (url) input.value = url;
       if (form.hidden) tryAnother(); else { input.focus(); if (url) input.select(); }
       card.scrollIntoView({ block: 'nearest', behavior: motion.reduced() ? 'auto' : 'smooth' });
     },
   };
-  queueMicrotask(() => { if (!isMobile() || data?.url) input.focus({ preventScroll: true }); });
-  return { update(d) { if (d?.url) storeCardApi?.focus(d.url); } };
+  if (data?.job) { own.checked = true; attach(data.job); }
+  else queueMicrotask(() => { if (!isMobile() || data?.url) input.focus({ preventScroll: true }); });
+  return { update(d) { if (d?.job) storeCardApi?.attach(d.job); else if (d?.url) storeCardApi?.focus(d.url); } };
 });
+
+// ------------------------------------------------------------------ Sources list: imported website files, grouped
+// A big store is thousands of files; the Sources list (D, ingest.js) shows one row per file. Here the website's files
+// fold into one group row per kind ("Products · 4,812 files", "Help pages · 32 files"), expandable, once a kind has
+// STORE_GROUP_MIN files. The kind comes from the server row (storeKind / group, CONTRACT for F) or else the name.
+// CONTRACT-GAP (D, ingest.js): a native grouped row (and building rows lazily) would beat this DOM pass; D builds one
+//   row per frame, so 5,000 files take ~80 s to appear. CONTRACT-GAP (F): public file rows should carry
+//   origin:'store' (they do) plus storeKind ('products' | 'help' | 'policies' | 'pdfs' | …) and a sourceUrl.
+const STORE_GROUP_MIN = 4;
+const storeRowKind = new Map();   // file id -> kind (only files the website import made)
+const storeGroupOpen = new Set(); // kinds the visitor expanded
+function storeKindFromRow(r) {
+  const k = r.storeKind || r.group || r.kind_group || null;
+  if (k && STORE_KINDS[k]) return k;
+  const n = String(r.name || '').toLowerCase();
+  if (/\.pdf$/.test(n)) return 'pdfs';
+  if (/polic|terms|privacy|refund|shipping/.test(n)) return 'policies';
+  if (/faq/.test(n)) return 'faq';
+  if (/help|support|contact|about/.test(n)) return 'help';
+  if (/collection|categor/.test(n)) return 'collections';
+  if (/blog|news|journal/.test(n)) return 'blog';
+  if (/product/.test(n)) return 'products';
+  return 'pages';
+}
+async function refreshStoreGroups() {
+  (window.__sgDebug ||= []).push(["refresh", Date.now()]);
+  let r;
+  try { r = await api.listFiles(); } catch { return; }
+  storeRowKind.clear();
+  window.__sgDebug.push(["rows", (r?.files || []).length]);
+  for (const row of r?.files || []) if (row && row.id && (row.origin === 'store' || (row.tags || []).includes?.('src:store'))) storeRowKind.set(row.id, storeKindFromRow(row));
+  paintStoreGroups();
+}
+let storeGroupRaf = 0;
+function paintStoreGroups() {
+  if (storeGroupRaf) return;
+  storeGroupRaf = requestAnimationFrame(() => { storeGroupRaf = 0; groupStoreRows(); });
+}
+function groupStoreRows() {
+  const list = document.querySelector('#in-intake-slot .in-rows');
+  if (!list) return;
+  const files = getState().files || {};
+  const byKind = new Map();
+  for (const li of list.querySelectorAll(':scope > li.in-row[data-local]')) {
+    const f = files[li.dataset.local];
+    const k = f && f.id ? storeRowKind.get(f.id) : null;
+    if (!k) { if (li.dataset.sgroup) { delete li.dataset.sgroup; li.classList.remove('st-sg-hide'); } continue; }
+    if (!byKind.has(k)) byKind.set(k, []);
+    byKind.get(k).push(li);
+  }
+  const live = new Set();
+  for (const [k, lis] of byKind) {
+    const grouped = lis.length >= STORE_GROUP_MIN;
+    const open = storeGroupOpen.has(k);
+    let head = list.querySelector(`:scope > li.st-sg[data-sgroup="${k}"]`);
+    if (!grouped) { head?.remove(); lis.forEach((li) => { delete li.dataset.sgroup; li.classList.remove('st-sg-hide'); }); continue; }
+    live.add(k);
+    const label = `${storeKindOf(k).label.replace(/\s*\(.*\)$/, '')} · ${nPlural(lis.length, 'file')}`;
+    if (!head) {
+      const b = h('button', { type: 'button', class: 'st-sg-btn', 'aria-expanded': 'false' },
+        h('span', { class: 'st-sg-ico', 'aria-hidden': 'true', html: icon('link', 14) }), h('span', { class: 'st-sg-l' }), h('span', { class: 'st-sg-chev', 'aria-hidden': 'true' }));
+      b.addEventListener('click', () => { if (storeGroupOpen.has(k)) storeGroupOpen.delete(k); else storeGroupOpen.add(k); groupStoreRows(); });
+      head = h('li', { class: 'st-sg', dataset: { sgroup: k } }, b);
+    }
+    if (head.nextElementSibling !== lis[0]) list.insertBefore(head, lis[0]);
+    const b = head.firstElementChild;
+    setText(b.querySelector('.st-sg-l'), `${label}${open ? '' : ' (from your website)'}`);
+    setAttr(b, 'aria-expanded', open ? 'true' : 'false');
+    for (const li of lis) { dset(li, 'sgroup', k); li.classList.toggle('st-sg-hide', !open); }
+  }
+  for (const head of list.querySelectorAll(':scope > li.st-sg')) if (!live.has(head.dataset.sgroup)) head.remove();
+}
+{
+  // D re-renders rows in place and adds new ones to .in-rows: a light observer folds them as they land
+  let mo = null;
+  const watch = () => {
+    const list = document.querySelector('#in-intake-slot .in-rows');
+    if (!list || mo) return !!list;
+    mo = new MutationObserver((recs) => { if (storeRowKind.size && recs.some((r) => [...r.addedNodes].some((n) => n.nodeType === 1 && !n.classList.contains('st-sg')))) paintStoreGroups(); });
+    mo.observe(list, { childList: true });
+    return true;
+  };
+  trialP.then(() => { refreshStoreGroups(); if (!watch()) { let tries = 0; const t = setInterval(() => { if (watch() || ++tries > 40) clearInterval(t); }, 250); } });
+  let lastUploaded = -1, refreshAt = 0, refreshTimer = 0;
+  on('store:job', (raw) => {
+    const j = normJob(raw);
+    if (!j) return;
+    for (const f of j.newFiles || []) if (f && f.id && f.origin !== 'sample') storeRowKind.set(f.id, storeKindFromRow(f));
+    if (j.newFiles?.length) paintStoreGroups();
+    // without per-file rows in the job, the file list is re-read at most every 10 s while files are being added
+    if (!j.newFiles && j.uploaded !== lastUploaded) {
+      lastUploaded = j.uploaded;
+      if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = 0; refreshAt = Date.now(); refreshStoreGroups(); }, Math.max(0, 10000 - (Date.now() - refreshAt)));
+    }
+  });
+  on('files:added', () => { if (storeRowKind.size) paintStoreGroups(); });
+}
 
 store.registerCard('expired', (data, el) => {
   el.append(h('div', { class: 'st-card st-expired' },
@@ -3782,7 +4191,7 @@ on('file:stage', (d) => {
   }
   if (f.stalledFor >= 45000 && !stalled.has(f.localId)) {
     stalled.add(f.localId);
-    const stage = { uploaded: 'uploading', extracted: 'chunking', chunked: 'atomizing', atomized: 'vectorizing', vectorizing: 'vectorizing' }[f.phase] || 'extracting';
+    const stage = { uploaded: 'uploading', extracted: 'chunking', chunked: 'atomizing', atomized: 'encoding your knowledge', vectorizing: 'encoding your knowledge' }[f.phase] || 'extracting';
     if (!narrationQuiet()) localSay(`**${f.name}** is still ${stage === 'uploading' ? 'extracting' : stage}. Big PDFs and audio can take a few minutes. You can test with the files that are ready.`, { key: `stall:${f.name}`, chips: [
       { id: 'ask', label: 'Ask a question', run: focusBotComposer, local: true },
       { id: 'add_more', label: 'Add more files', action: { type: 'request_upload' }, local: true },

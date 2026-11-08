@@ -42,7 +42,7 @@ const STAGES = [
   { key: 'extract', label: 'Extract' },
   { key: 'chunk', label: 'Chunk' },
   { key: 'atomize', label: 'Atomize' },
-  { key: 'vectorize', label: 'Vectorize' },
+  { key: 'vectorize', label: 'Encode' },
   { key: 'ready', label: 'Ready' },
 ];
 const RANK = { rejected: -2, failed: -1, queued: 0, uploading: 1, uploaded: 2, extracted: 3, chunked: 4, atomized: 5, vectorizing: 6, ready: 7 };
@@ -50,7 +50,7 @@ const TERMINAL = new Set(['ready', 'failed', 'rejected']);
 const SERVER_STAGES = new Set(['uploaded', 'extracted', 'chunked', 'atomized', 'vectorizing', 'ready', 'failed']);
 // Which StageTrack node is "in progress" for each phase (index into STAGES).
 const ACTIVE_NODE = { queued: -1, uploading: 0, uploaded: 1, extracted: 2, chunked: 3, atomized: 4, vectorizing: 4, ready: 6 };
-const DOING = { uploading: 'uploading', uploaded: 'extracting', extracted: 'chunking', chunked: 'atomizing', atomized: 'vectorizing', vectorizing: 'vectorizing', queued: 'waiting' };
+const DOING = { uploading: 'uploading', uploaded: 'extracting', extracted: 'chunking', chunked: 'atomizing', atomized: 'encoding your knowledge', vectorizing: 'encoding your knowledge', queued: 'waiting' };
 
 const DEFAULT_TYPES = [
   { kind: 'pdf', ext: ['pdf'] }, { kind: 'docx', ext: ['docx'] }, { kind: 'pptx', ext: ['pptx'] }, { kind: 'xlsx', ext: ['xlsx'] },
@@ -2102,7 +2102,7 @@ export function mount(ctx) {
   // Legend chips are keyed (a count change rewrites one text node, never the whole row). They show only when the
   // Sources rows are folded away (chip) or in the ribbon: next to open rows they would just repeat the file list.
   const legendEls = new Map();
-  const SHORT_DOING = { queued: 'queued', uploading: 'upload', uploaded: 'extract', extracted: 'chunk', chunked: 'atomize', atomized: 'vectors', vectorizing: 'vectors' };
+  const SHORT_DOING = { queued: 'queued', uploading: 'upload', uploaded: 'extract', extracted: 'chunk', chunked: 'atomize', atomized: 'encoding', vectorizing: 'encoding' };
   // the phone ribbon's fallback when the per-file chips cannot all fit with their counts
   const legendSum = h('span', { class: 'map-chip map-chip-sum', role: 'listitem' }, h('i', { 'aria-hidden': 'true' }), h('span', { class: 'map-chip-c in-num' }));
   let legendOrder = '';
@@ -2279,7 +2279,7 @@ export function mount(ctx) {
     return el >= STALL_MS ? el : 0;
   }
   const fmtDur = (ms) => { const t = Math.floor(ms / 1000), mm = Math.floor(t / 60), ss = t % 60; return mm ? `${mm}m ${ss}s` : `${ss}s`; };
-  const STAGE_WORD = { uploaded: 'Extracting', extracted: 'Chunking', chunked: 'Atomizing', atomized: 'Vectorizing', vectorizing: 'Vectorizing' };
+  const STAGE_WORD = { uploaded: 'Extracting', extracted: 'Chunking', chunked: 'Atomizing', atomized: 'Encoding your knowledge', vectorizing: 'Encoding your knowledge' };
   function phaseLabel(f) {
     const m = rowMeta.get(f.localId) || {};
     if (unreachable && f.id && !TERMINAL.has(f.phase) && f.phase !== 'uploading' && f.phase !== 'queued') return 'Waiting for connection';
@@ -2296,8 +2296,8 @@ export function mount(ctx) {
       case 'chunked': return f.chunks ? `Atomizing · chunks ${fmtInt(f.chunks)}` : 'Atomizing…';
       case 'atomized': return f.chunks ? `chunks ${fmtInt(f.chunks)} · atoms ${fmtInt(f.atoms || 0)}` : `Atomized · ${plural(f.atoms || 0, 'atom')}`;
       case 'vectorizing': {
-        const t = `atoms ${fmtInt(f.atoms || 0)} · vectors ${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`;
-        return t.length <= 25 ? t : `vectors ${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`;
+        const t = `atoms ${fmtInt(f.atoms || 0)} · encoded ${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`;
+        return t.length <= 25 ? t : `encoded ${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`;
       }
       case 'ready': return `Ready · ${plural(f.atoms || 0, 'atom')}`;
       case 'failed': return 'Failed';
@@ -2484,7 +2484,7 @@ export function mount(ctx) {
     setText(r.nodes[1].count, f.pages ? `${f.pages} pages` : '');
     if (f.chunks && RANK[f.phase] >= 4 || (f.phase === 'failed' && f.chunks)) { setHidden(r.nodes[2].count, false); setText(r.nodes[2].count, `chunks ${fmtN(f.chunks || 0)}`); } else setText(r.nodes[2].count, '');
     if (f.atoms) { tick(r.nodes[3].count, f.atoms, (n) => `atoms ${fmtN(n)}`); } else { setText(r.nodes[3].count, ''); setDs(r.nodes[3].count, 'value', '0'); }
-    if (f.atoms && RANK[f.phase] >= 5) tick(r.nodes[4].count, f.vectorized || 0, (n) => `vectors ${fmtN(n)}/${fmtN(f.atoms)}`); else { setText(r.nodes[4].count, ''); setDs(r.nodes[4].count, 'value', '0'); }
+    if (f.atoms && RANK[f.phase] >= 5) tick(r.nodes[4].count, f.vectorized || 0, (n) => `encoded ${fmtN(n)}/${fmtN(f.atoms)}`); else { setText(r.nodes[4].count, ''); setDs(r.nodes[4].count, 'value', '0'); }
     setText(r.nodes[5].count, '');
 
     // note + actions per state
@@ -2520,7 +2520,7 @@ export function mount(ctx) {
         text = `Taking longer than usual · still ${DOING[f.phase] || 'working'} after ${mmss(Number(f.stalledFor))} · you can ask about ready files meanwhile`;
         kind = 'stall';
       } else if (f.phase === 'vectorizing' && stallElapsed(f)) {
-        text = `Still ${DOING[f.phase] || 'working'} · ${mmss(stallElapsed(f))} so far · the vector count updates when the batch finishes`;
+        text = `Still ${DOING[f.phase] || 'working'} · ${mmss(stallElapsed(f))} so far · the count updates when the batch finishes`;
         kind = 'muted';
       }
     } else if (f.phase === 'queued') { text = 'Waiting for an upload slot…'; kind = 'muted'; }

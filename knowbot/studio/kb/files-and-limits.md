@@ -16,7 +16,7 @@ In KnowBot Studio a single file can be up to 95 MB, and one trial bot can hold u
 
 Source: /studio/
 
-Each file goes through real processing stages, shown live in Studio: uploaded, extracted, chunked, atomized, vectorizing and ready. Atoms are the small passages KnowBot searches and quotes. You can ask your bot questions as soon as the first file is ready; answers then come from the files that are ready so far.
+Each file goes through real processing stages, shown live in Studio: uploaded, extracted, chunked, atomized, encoding your knowledge and ready. Atoms are the small passages KnowBot searches and quotes. You can ask your bot questions as soon as the first file is ready; answers then come from the files that are ready so far.
 
 ## When a file fails
 

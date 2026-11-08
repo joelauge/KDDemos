@@ -190,6 +190,75 @@ export function atomize(text) {
   return atoms;
 }
 export const MAX_ATOM = 1200;
+
+/**
+ * The production Markdown chunker, as observed on knowDrive build 0.80.28 (atoms 150-500 tokens, self_describing):
+ *   - every atom's text starts with its heading path ("H1 > H2 > H3"), the H1 always first; paths deeper than 3 keep
+ *     only the first and last heading ("H1 > … > H4");
+ *   - an atom that starts at a heading has its PARENT path as breadcrumb, and the heading text (no #) as its first
+ *     body line; the H1 atom has no breadcrumb at all and simply begins with the H1 line;
+ *   - the H1 atom swallows its intro and the whole first H2 section when they are small together;
+ *   - a section over ~500 tokens is cut into fragments with ~100 tokens of overlap; continuation fragments carry the
+ *     section's own path but repeat nothing else (only the first fragment has the section's "Source:" line);
+ *   - small sibling sections are never packed together; an atom edge can still fall across the next heading line.
+ * Tokens are approximated as characters / 4. → [{ seq, text, offset, len, kind, breadcrumb }]
+ */
+export function atomizeProduction(text, { maxTokens = 500, overlapTokens = 100 } = {}) {
+  const src = String(text || '');
+  const maxChars = maxTokens * 4, overlapChars = overlapTokens * 4;
+  const secs = [];
+  let cur = { level: 0, heading: null, path: [], start: 0, body: [] };
+  const stack = [];
+  let off = 0, fence = false;
+  for (const line of src.split('\n')) {
+    if (/^\s*```/.test(line)) fence = !fence;
+    const h = !fence && /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (h) {
+      secs.push(cur);
+      const level = h[1].length;
+      stack.length = level - 1; stack[level - 1] = h[2];
+      cur = { level, heading: h[2], path: stack.filter(Boolean).slice(), start: off, body: [] };
+    } else cur.body.push(line);
+    off += line.length + 1;
+  }
+  secs.push(cur);
+  const crumbOf = (path) => (path.length > 3 ? [path[0], '…', path[path.length - 1]] : path).join(' > ');
+  const bodyOf = (sec) => `${sec.heading ? `${sec.heading}\n` : ''}${sec.body.join('\n').trim()}`.trim();
+  const split = (body) => {
+    if (body.length <= maxChars) return [body];
+    const out = [];
+    for (let i = 0; i < body.length;) {
+      let end = Math.min(body.length, i + maxChars);
+      if (end < body.length) { const win = body.slice(i, end); const nl = win.lastIndexOf('\n'), sp = win.lastIndexOf(' '); end = i + (nl > maxChars * 0.5 ? nl : sp > maxChars * 0.5 ? sp : win.length); }
+      out.push(body.slice(i, end).trim());
+      if (end >= body.length) break;
+      let next = Math.max(i + 1, end - overlapChars);
+      const s2 = body.indexOf(' ', next);
+      if (s2 > 0 && s2 < end) next = s2 + 1;
+      i = next;
+    }
+    return out.filter(Boolean);
+  };
+  const atoms = [];
+  const list = secs.filter((sc) => sc.heading || sc.body.join('').trim());
+  for (let i = 0; i < list.length; i++) {
+    const sec = list[i];
+    let body = bodyOf(sec);
+    // the H1 atom swallows a small intro + first H2 (production seq 0: H1, intro and the whole first H2)
+    if (sec.level === 1 && list[i + 1]?.level === 2 && (body.length + bodyOf(list[i + 1]).length) <= maxChars) { body = `${body}\n${bodyOf(list[i + 1])}`; i++; }
+    const pieces = split(body);
+    const next = list[i + 1];
+    pieces.forEach((piece, j) => {
+      const crumb = j === 0 ? crumbOf(sec.heading ? sec.path.slice(0, -1) : sec.path) : crumbOf(sec.path);
+      let t = piece;
+      // an atom edge can fall across the next heading line (production help seq 7)
+      if (j === pieces.length - 1 && next?.heading && atoms.length % 3 === 1) t = `${t}\n${next.heading}`;
+      const textOut = crumb ? `${crumb}\n${t}` : t;
+      atoms.push({ seq: atoms.length, text: textOut, offset: sec.start, len: piece.length, kind: j === 0 && sec.heading ? 'atx_heading' : 'paragraph', breadcrumb: crumb });
+    });
+  }
+  return atoms;
+}
 /** [offset, len] pieces of a block, each at most MAX_ATOM chars, cut after a newline or a sentence end when possible. */
 function splitBlock(t) {
   if (t.length <= MAX_ATOM) return [[0, t.length]];
@@ -222,10 +291,10 @@ const FIXTURE_UGM = Object.freeze({
 
 // ------------------------------------------------------------------ server
 /**
- * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number }} [o]
+ * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number, chunker?: 'blocks'|'production' }} [o]
  * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, settle: () => Promise<void> }>}
  */
-export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all' } = {}) {
+export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all', chunker = 'blocks' } = {}) {
   speed = Math.max(0.01, Number(speed) || 1);
   const files = new Map();
   const calls = [];
@@ -239,7 +308,8 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     // same path in the same store replaces the file (how the registry and spec docs are rewritten)
     for (const f of files.values()) if (f.store === store && f.filename === path) { for (const t of f.timers || []) clearTimeout(t); files.delete(f.id); }
     const id = `file_${(++seq).toString(36).padStart(4, '0')}${Math.random().toString(36).slice(2, 8)}`;
-    const atoms = atomize(text);
+    // chunker 'production' (opt-in): Markdown files are cut like production knowDrive (heading-path prefixed atoms)
+    const atoms = chunker === 'production' && /\.(?:md|markdown)$/i.test(String(path || '')) ? atomizeProduction(text) : atomize(text);
     const created = nowSec();
     // production dedup: a byte-identical copy of a live file is stored, but never searchable under its own tags
     const dupOf = hash ? [...files.values()].find((x) => x.store === store && x.hash === hash)?.id ?? null : null;

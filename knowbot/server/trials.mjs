@@ -29,7 +29,7 @@ import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypt
 import * as kbLib from '../lib/knowbot.js';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
-import { importStore, normalizeStoreUrl, ERROR_COPY as STORE_ERROR_COPY } from './storeimport.mjs';
+import { importStore, normalizeStoreUrl, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS } from './storeimport.mjs';
 import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
@@ -293,6 +293,23 @@ export function sourceSegments(text) {
   }
   push();
   return out.length ? out.map(({ level, ...x }) => (level ? { ...x, level } : x)) : [{ text: String(text ?? '').trim(), url: null, heading: null }];
+}
+
+// Website-import pages (storeimport.mjs) are one page per file under "# <title> · <url>". knowDrive prefixes every
+// atom with its heading path (H1 first, also when deep paths are shortened to "H1 > … > last"); the H1 atom itself
+// begins with the H1 line. So a hit's page URL is in its breadcrumb's first segment or in its first text line.
+const PAGE_HEAD_RE = /^(?:#{1,6}\s+)?(.+?) · (https?:\/\/[^\s<>"]+)\s*$/;
+/** { title, url } of a website-import page from a hit's breadcrumb or first text line, else null (pure). */
+export function storePageHead(crumb, text) {
+  const first = (s) => String(s || '').split(' > ')[0].trim();
+  let m = crumb ? PAGE_HEAD_RE.exec(first(crumb)) : null;
+  if (!m) { const line = String(text || '').split('\n').find((l) => l.trim()); m = line ? PAGE_HEAD_RE.exec(first(line)) : null; }
+  return m ? { title: m[1].trim(), url: m[2] } : null;
+}
+/** Drop the page's H1 / breadcrumb-prefix lines ("<title> · <url>[ > …]") from an atom's text (pure). */
+export function stripPageHead(text, url) {
+  if (!url) return String(text ?? '');
+  return String(text ?? '').split('\n').filter((l) => { const m = PAGE_HEAD_RE.exec(l.split(' > ')[0].trim()); return !(m && m[2] === url); }).join('\n').replace(/^\s+/, '');
 }
 
 /** Fail closed: a hit must carry trial:<id>, and none of the excluded tags (the fake ignores filters on purpose). */
@@ -1110,6 +1127,26 @@ export function createStudio(o = {}) {
     }
     return j.files?.[0] ?? j.data?.[0] ?? j;
   }
+  /**
+   * Several files in ONE /ingest call, under one tag set (production batch semantics: tags, mime_type, then the file
+   * parts; each file's store path is its part's filename). → the created rows, in part order.
+   */
+  async function ingestMany({ tags, mime, items, signal }) {
+    const fd = new FormData();
+    fd.append('tags', tags.join(','));
+    if (mime) fd.append('mime_type', mime);
+    for (const it of items) fd.append('file', new Blob([it.bytes], { type: mime || 'application/octet-stream' }), it.storePath);
+    let res;
+    try { res = await kdFetch('/api/v1/ingest', { method: 'POST', headers: { 'x-vector-store-id': store }, body: fd, timeout: 180000, signal }); }
+    catch (e) { if (signal?.aborted) throw Object.assign(new Error('aborted'), { code: 'aborted' }); fail(502, 'upstream', `knowDrive ingest failed: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`); }
+    const text = await res.text();
+    let j = {}; try { j = JSON.parse(text); } catch {}
+    if (!res.ok) {
+      const map = { 413: [413, 'file_too_large'], 415: [415, 'type'], 422: [415, 'type'] }[res.status] || [502, 'upstream'];
+      fail(map[0], map[1], `knowDrive rejected the files: ${clip(j.error?.message || text, 200)}`);
+    }
+    return Array.isArray(j.files) ? j.files : Array.isArray(j.data) ? j.data : j.id ? [j] : [];
+  }
   async function batchTags(fileIds, add, remove) {
     if (!fileIds.length) return 0;
     let n = 0;
@@ -1285,7 +1322,11 @@ export function createStudio(o = {}) {
   // ------------------------------------------------------------------------- files
   function rowToFile(T, r) {
     const tags = r.tags || [];
-    const name = String(r.filename || '').startsWith(rootOf(T.id)) ? String(r.filename).slice(rootOf(T.id).length) : String(r.filename || '').split('/').pop();
+    const rel = String(r.filename || '').startsWith(rootOf(T.id)) ? String(r.filename).slice(rootOf(T.id).length) : String(r.filename || '').split('/').pop();
+    // a website-import page (site/<host>/<kind>/<slug>.md) is shown by its page title ("Lumen Bikes · Refund policy.md")
+    const storePage = tags.includes('src:store') ? (tags.find((t) => t.startsWith('page:'))?.slice(5) || null) : null;
+    const man = storePage ? T.storeManifest?.get(r.id) : null;
+    const name = storePage ? (man?.name || `${titleFromName(rel)}.${extOf(rel) || 'md'}`) : rel;
     const key = tags.find((t) => t.startsWith('tfile:'))?.slice(6) || T.keys.get(r.id) || null;
     if (key) T.keys.set(r.id, key);
     let stage = deriveStage(r);
@@ -1313,7 +1354,8 @@ export function createStudio(o = {}) {
       id: r.id, key, name, bytes: Number(r.bytes ?? r.size ?? 0), mime: r.mime_type || MIME_OF[ext] || 'application/octet-stream', kind: KIND_OF.get(ext) || 'txt',
       stage, kdStage: fileStage(r), chunks: r.chunk_count ?? r.chunks ?? null, atoms,
       vectorized: Number(r.atoms_vectorized ?? (stage === 'ready' ? atoms : 0)), pages: r.page_count ?? r.metadata?.pages ?? null,
-      sample: tags.some((x) => x.startsWith('sample:')), ...(tags.includes('src:store') ? { origin: 'store' } : {}), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
+      sample: tags.some((x) => x.startsWith('sample:')), ...(tags.includes('src:store') ? { origin: 'store' } : {}),
+      ...(storePage ? { page: storePage, path: rel, url: man?.url || T.flags.storePdfUrls?.[r.id] || null } : {}), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
       stageAt: { ...stamps }, createdAt: isoOf(r.created_at), updatedAt: isoOf(r.updated_at || r.created_at),
     };
     // knowDrive vectorizes a file's atoms as one queued batch and reports the count only when it finishes, so a flat
@@ -1380,15 +1422,36 @@ export function createStudio(o = {}) {
   function writeFrame(res, id, event, data) { try { res.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {} }
   const sig = (f) => JSON.stringify([f.stage, f.chunks, f.atoms, f.vectorized, f.error?.code || null, f.stalledFor ? 1 : 0, f.enabled, !!f.summary]);
 
+  /**
+   * A website import can add thousands of product pages. The first STORE_ROWS of them are ordinary rows; the rest are
+   * one `storegroup` row ({kind:'product', total, ready, failed, learning, atoms, vectorized, shown}) so the Studio
+   * shows "Products (4,812 files)" and the events stream stays small. Only the first STORE_PREVIEWS product pages get
+   * an atom preview and a summary (an LLM call each); every policy, FAQ and help page still gets both.
+   */
+  const STORE_ROWS = Number(o.storeRowsShown ?? 40), STORE_PREVIEWS = 3;
+  function storeView(files) {
+    const prods = files.filter((f) => f.origin === 'store' && f.page === 'product');
+    const quiet = new Set(prods.slice(STORE_ROWS).map((f) => f.id));
+    const preview = new Set(prods.slice(STORE_PREVIEWS).map((f) => f.id)); // product ids WITHOUT previews
+    const group = prods.length ? { kind: 'product', total: prods.length, shown: Math.min(prods.length, STORE_ROWS), ready: prods.filter((f) => f.stage === 'ready').length,
+      failed: prods.filter((f) => f.stage === 'failed').length, learning: prods.filter((f) => !TERMINAL.has(f.stage)).length,
+      atoms: prods.reduce((n, f) => n + (f.atoms || 0), 0), vectorized: prods.reduce((n, f) => n + (f.vectorized || 0), 0), bytes: prods.reduce((n, f) => n + (f.bytes || 0), 0) } : null;
+    return { quiet, noPreview: preview, group };
+  }
   async function pollOnce(T) {
     let files;
     try { files = await filesOf(T, { maxAgeMs: 0 }); } catch (e) { log(`[studio] poll ${T.id}: ${e.message}`); return { changed: false, allTerminal: false }; }
     let changed = false;
     const seen = new Set();
+    const sv = storeView(files);
+    const gs = JSON.stringify(sv.group);
+    if ((T.storeGroupEmitted ?? 'null') !== gs) { T.storeGroupEmitted = gs; pushEvent(T, 'storegroup', sv.group || { kind: 'product', total: 0 }); }
     for (const f of files) {
       seen.add(f.id);
+      if (sv.quiet.has(f.id)) continue;
       const s = sig(f);
       if (T.lastEmitted.get(f.id) !== s) { T.lastEmitted.set(f.id, s); pushEvent(T, 'file', f); changed = true; }
+      if (sv.noPreview.has(f.id)) continue;
       if (!T.atomsSent.has(f.id) && f.atoms > 0 && ['atomized', 'vectorizing', 'ready'].includes(f.stage)) {
         T.atomsSent.add(f.id);
         atomsEvent(T, f).catch((e) => { T.atomsSent.delete(f.id); log(`[studio] atoms ${f.id}: ${e.message}`); });
@@ -1454,10 +1517,13 @@ export function createStudio(o = {}) {
     } else {
       let files = [];
       try { files = await filesOf(T, { maxAgeMs: 0 }); } catch (e) { log(`[studio] hello ${T.id}: ${e.message}`); }
-      for (const f of files) T.lastEmitted.set(f.id, sig(f));
+      const sv = storeView(files);
+      const shown = files.filter((f) => !sv.quiet.has(f.id));
+      for (const f of shown) T.lastEmitted.set(f.id, sig(f));
       const usage = usageOf(T, files);
       T.usageEmitted = JSON.stringify(usage);
-      writeFrame(res, T.seq, 'hello', { files, usage, reset: since != null, converted: !!T.converted, convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null });
+      writeFrame(res, T.seq, 'hello', { files: shown, usage, reset: since != null, converted: !!T.converted, convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null,
+        ...(sv.group ? { groups: [sv.group] } : {}), ...(T.storeJob ? { storeJob: { id: T.storeJob.id, state: T.storeJob.state, seq: T.storeJob.seq } } : {}) });
     }
     T.clients.add(client);
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} writeFrame(res, T.seq, 'ping', {}); }, pingMs);
@@ -1897,14 +1963,19 @@ export function createStudio(o = {}) {
   function storeQuestionsOf(f, atoms) {
     const out = [];
     const push = (q) => { const t = clip(oneLine(q), 140); if (t && !out.includes(t)) out.push(t); };
-    const title = String(f.name || '').replace(/\.md$/i, '').split(' · ').slice(1).join(' · ').replace(/\s+\d+$/, '').trim();
+    // one page per file ("# <title> · <url>"): the page title comes from the H1; older imports from "<Store> · <Title>.md"
+    const head = (atoms || []).map((a) => storePageHead(a.meta?.breadcrumb, a.text)).find(Boolean);
+    const title = head?.title || String(f.name || '').replace(/\.md$/i, '').split(' · ').slice(1).join(' · ').replace(/\s+\d+$/, '').trim();
     const heads = [];
     for (const a of atoms || []) {
-      for (const c of String(a.meta?.breadcrumb || '').split(' > ')) if (c && !heads.includes(c.trim())) heads.push(c.trim());
+      for (const c of String(a.meta?.breadcrumb || '').split(' > ')) if (c && !PAGE_HEAD_RE.test(c.trim()) && !heads.includes(c.trim())) heads.push(c.trim());
       for (const m of String(a.text || '').matchAll(/^#{2,4}\s+(.+)$/gm)) if (!heads.includes(m[1].trim())) heads.push(m[1].trim());
     }
     for (const h of heads) if (/\?$/.test(h) && h.split(/\s+/).length <= 12) push(h);   // FAQ questions, as written
-    if (/^products?\b/i.test(title)) {
+    if (f.page === 'product' && title) {
+      const esc = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if ((atoms || []).some((a) => new RegExp(`${esc} price:`, 'i').test(String(a.text || '')))) push(`How much is the ${title}?`);
+    } else if (/^products?\b/i.test(title)) {
       for (const h of heads) {
         if (/\?$|:|^(?:products?|frequently asked|help)/i.test(h) || h.split(/\s+/).length > 6) continue;
         if ((atoms || []).some((a) => new RegExp(`${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} price:`, 'i').test(String(a.text || '')))) push(`How much is the ${h}?`);
@@ -1954,7 +2025,9 @@ export function createStudio(o = {}) {
         }
       }
     }
-    for (const f of ready.filter((x) => !x.sample)) {
+    // a website import's product pages are many: the first three stand in for them (each file costs searches)
+    let productPages = 0;
+    for (const f of ready.filter((x) => !x.sample && (x.page !== 'product' || ++productPages <= 3))) {
       let atoms = [];
       try { atoms = await sampleAtoms(T, f, { per: 8, windows: 3 }); } catch {}
       if (!atoms.length) { try { atoms = await fileAtomsRaw(T, f.id, { limit: 24, offset: 0 }); } catch {} }
@@ -2145,13 +2218,68 @@ export function createStudio(o = {}) {
   }
   // ------------------------------------------------------------------------- "Enter a Store URL" (storeimport.mjs)
   /**
-   * POST /trials/:id/store {url} → SSE: detect, fetching, found, building, capped, built, uploaded, done | error + done.
-   * A re-import replaces the trial's earlier src:store files (only once the new import built something). The import
-   * runs within the trial's remaining quota (the files it replaces count as free). 6 per hour per trial, 20 per IP.
+   * The website import runs as ONE background job per trial (T.storeJob). It survives the request closing.
+   *   POST   /trials/:id/store {url, owner}  starts the job and streams its events (SSE, ids = job sequence numbers).
+   *                                          409 busy while a job runs.
+   *   GET    /trials/:id/store?since=<seq>   re-attaches to the current (or last) job: replays its events after <seq>
+   *                                          (or Last-Event-ID), then streams live until `done`. 404 when none ran.
+   *   DELETE /trials/:id/store               cancels the running job; files already uploaded stay (reported).
+   * Every job event also reaches the trial's events stream as `store` {job, type, seq, data} (progress ~2/s), so an
+   * open Studio follows (and resumes) the import without the POST connection.
+   * Job events: detect, plan, found, fetching, reading, building, uploaded {k, files, file, uploaded}, capped, built,
+   *   error {code, message}, done {files, fileCount, usage, platform, name, base, counts, capped, report, spec, error?}.
+   * Files go up in batches as soon as they are built (one /ingest call per batch of up to 40 product pages, one per
+   * other page so each keeps its own on/off switch), so atomizing starts long before the crawl ends. A re-import
+   * replaces the trial's earlier src:store files once the new import has its first batch. Budgets: time
+   * (o.storeBudgetMs / KNOWBOT_STORE_BUDGET_MS, default 20 min), the 100 MB trial quota (checked before every batch,
+   * never exceeded; what did not fit is reported), 10,000 products. 6 imports per hour per trial, 20 per IP.
    * o.storeNet (tests only) is passed to the importer's fetcher (allowAddresses/allowPorts/resolve); production
    * leaves it unset, so loopback, private and metadata addresses stay refused.
    */
-  async function storeImport(req, res, T) {
+  const storeBudgetMs = Math.max(1000, Number(o.storeBudgetMs ?? env.KNOWBOT_STORE_BUDGET_MS) || STORE_LIMITS.budgetMs);
+  const STORE_PROGRESS = new Set(['fetching', 'reading']);
+  const hostTagOf = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'site';
+  const lightRow = (f) => ({ id: f.id, name: f.name, origin: 'store', page: f.page || null, stage: f.stage, bytes: f.bytes });
+  function jobEmit(T, job, event, data) {
+    const ev = { id: ++job.seq, event, data };
+    if (STORE_PROGRESS.has(event)) { const i = job.events.findIndex((x) => x.event === event); if (i >= 0) job.events.splice(i, 1); } // replay keeps the latest
+    job.events.push(ev);
+    if (job.events.length > 400) job.events.splice(0, job.events.length - 400);
+    for (const l of [...job.listeners]) { try { l(ev); } catch {} }
+    const t = now();
+    if (!STORE_PROGRESS.has(event) || t - (job.lastPush[event] || 0) >= 500) {
+      job.lastPush[event] = t;
+      const slim = event === 'done' ? { ...data, files: undefined, fileCount: data.fileCount } : event === 'uploaded' ? { k: data.k, uploaded: data.uploaded, n: data.files?.length || 0 } : data;
+      pushEvent(T, 'store', { job: job.id, type: event, seq: ev.id, data: slim });
+    }
+  }
+  /** SSE: the job's events after `since`, then live until `done`. */
+  function streamJob(req, res, job, since = 0) {
+    res.writeHead(200, SSE_HEADERS);
+    let closed = false;
+    const write = (ev) => { if (!closed) writeFrame(res, ev.id, ev.event, ev.data); };
+    for (const ev of job.events) if (ev.id > since) write(ev);
+    if (job.state !== 'running') { closed = true; try { res.end(); } catch {} return; }
+    const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, pingMs); ping.unref?.();
+    const end = () => { if (closed) return; closed = true; clearInterval(ping); job.listeners.delete(listener); try { res.end(); } catch {} };
+    const listener = (ev) => { write(ev); if (ev.event === 'done') end(); };
+    job.listeners.add(listener);
+    res.on('close', () => { if (!closed) { closed = true; clearInterval(ping); job.listeners.delete(listener); } });
+  }
+  async function storeImport(req, res, T, url) {
+    const m = req.method;
+    if (m === 'GET') {
+      const job = T.storeJob;
+      if (!job) fail(404, 'not_found', 'No website import has run for this bot yet.');
+      const since = Number(url.searchParams.get('since') ?? req.headers['last-event-id'] ?? 0) || 0;
+      return streamJob(req, res, job, since);
+    }
+    if (m === 'DELETE') {
+      const job = T.storeJob;
+      if (!job || job.state !== 'running') fail(409, 'bad_request', 'No website import is running for this bot.');
+      job.ac.abort();
+      return sendJson(res, 202, { cancelled: true, job: job.id });
+    }
     // fixer r8 (D10): the address is validated before any slot is charged, and an import that fails before it found
     // anything (bad or blocked address, unknown host) gives its per-trial slot back; the per-IP cap stays (abuse)
     const body = await readBody(req);
@@ -2159,75 +2287,143 @@ export function createStudio(o = {}) {
     let wellFormed = true;
     try { normalizeStoreUrl(body.url); } catch { wellFormed = false; }   // reported as an SSE bad_url error below, free
     if (body.owner === false) fail(400, 'bad_request', 'Please confirm you own or manage this store.');
-    if (T.storeBusy) fail(409, 'bad_request', 'A store import is already running for this bot.');
+    if (T.storeJob?.state === 'running') fail(409, 'busy', STORE_ERROR_COPY.busy, { job: T.storeJob.id });
     if (wellFormed) {
       limitOrThrow(`store ${T.id}`, limits.storeHour, 3600000, 'store imports for this bot');
       limitOrThrow(`storeip ${ip(req)}`, limits.storeIpHour, 3600000, 'store imports from this address');
     }
-    let foundAny = false;
-    const refundTrialSlot = () => { const arr = windows.get(`store ${T.id}`); if (arr && arr.length) arr.pop(); };
     const files = await filesOf(T, { maxAgeMs: 0 });
     const previous = (T.rows || []).filter((r) => (r.tags || []).includes('src:store') && (r.tags || []).includes(`trial:${T.id}`));
     const prevBytes = previous.reduce((n, r) => n + (Number(r.bytes) || 0), 0);
     const remaining = QUOTA_BYTES - (usageOf(T, files).bytes - prevBytes);
     if (remaining <= 0) fail(413, 'quota', STORE_ERROR_COPY.quota);
-    T.storeBusy = true;
-    const ac = new AbortController();
-    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-    res.writeHead(200, SSE_HEADERS);
-    let n = 0;
-    const send = (event, data) => { if (!ac.signal.aborted) writeFrame(res, ++n, event, data); };
-    const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, pingMs); ping.unref?.();
+    const job = { id: randB32(8), url: body.url, state: 'running', startedAt: now(), finishedAt: null, seq: 0, events: [], listeners: new Set(), ac: new AbortController(), lastPush: {} };
+    T.storeJob = job; T.storeBusy = true;
     T.lastActivityAt = now();
-    try {
-      const r = await importStore(body.url, { remainingBytes: remaining, signal: ac.signal, net: o.storeNet,
-        onEvent: (ev, d) => { if (ev === 'found') foundAny = true; if (ev !== 'error') send(ev === 'done' ? 'built' : ev, d); } });
-      // replace the earlier import only now that this one built files
-      for (const row of previous) {
-        try { await deleteRow(row.id); } catch {}
-        T.rows = (T.rows || []).filter((x) => x.id !== row.id);
-        const sources = { ...T.spec.sources }; delete sources[row.id];
-        T.spec = { ...T.spec, sources };
-        T.summaries.delete(row.id); T.atomCache.delete(row.id);
-      }
+    streamJob(req, res, job, 0); // attached before the job starts, so the POST sees every event
+    runStoreJob(T, job, { url: body.url, previous, wellFormed, sharedBytes: usageOf(T, files).bytes - (T.rows || []).reduce((n, r) => n + (Number(r.bytes) || 0), 0) })
+      .catch((e) => log(`[studio] store job ${T.id}: ${e?.message}`));
+  }
+  async function runStoreJob(T, job, { url, previous, wellFormed, sharedBytes }) {
+    const send = (ev, d) => jobEmit(T, job, ev, d);
+    const signal = job.ac.signal;
+    let foundAny = false, replaced = false, k = 0, uploaded = 0, quotaOut = 0;
+    const rows = [];
+    const leftOutQuota = {};
+    const prevIds = new Set(previous.map((r) => r.id));
+    const stamp = `${T.id}:store:${job.id}`;
+    T.storeManifest ||= new Map();
+    const refundTrialSlot = () => { const arr = windows.get(`store ${T.id}`); if (arr && arr.length) arr.pop(); };
+    const rowsBytes = () => (T.rows || []).reduce((n, r) => n + (Number(r.bytes) || 0), 0);
+    async function replacePrevious() {
+      if (replaced) return;
+      replaced = true;
+      const list = [...previous];
+      await Promise.all(Array.from({ length: Math.min(4, list.length) }, async () => {
+        for (let row = list.shift(); row; row = list.shift()) {
+          try { await deleteRow(row.id); } catch {}
+          T.rows = (T.rows || []).filter((x) => x.id !== row.id);
+          const sources = { ...T.spec.sources }; delete sources[row.id];
+          T.spec = { ...T.spec, sources };
+          T.summaries.delete(row.id); T.atomCache.delete(row.id); T.storeManifest.delete(row.id);
+          if (T.flags.storePdfUrls) delete T.flags.storePdfUrls[row.id];
+        }
+      }));
       if (previous.length) { T.questionsCache = null; saveSpecSoon(T); }
-      const rows = [];
-      const stamp = `${T.id}:store:${now()}`;
-      for (const f of r.files) {
-        if (ac.signal.aborted) break;
-        if (!sniffOk('md', f.bytes)) continue;
-        // a byte-identical copy of a file already in the store is not searchable under new tags (production): every
-        // import gets an invisible, import-specific whitespace tail, like the sample copies
-        const file = await uploadInto(T, { name: f.name, bytes: uniqueCopy(f.bytes, `${stamp}:${f.name}`), mime: 'text/markdown', extraTags: ['src:store'], signal: ac.signal });
-        rows.push(file);
-        send('uploaded', { file });
+    }
+    const taken = () => new Set((T.rows || []).filter((r) => !prevIds.has(r.id)).map((r) => String(r.filename || '').toLowerCase()));
+    /** One batch of built files (one page kind) → knowDrive, within the quota. */
+    async function onFiles({ kind, files }) {
+      if (signal.aborted) throw Object.assign(new Error('aborted'), { code: 'aborted' });
+      await replacePrevious();
+      const have = taken();
+      let used = rowsBytes() + sharedBytes + T.inflight;
+      const items = [];
+      for (const f of files) {
+        const bytes = uniqueCopy(f.bytes, `${stamp}:${f.path}`);
+        if (used + bytes.length > QUOTA_BYTES) { quotaOut++; leftOutQuota[kind] = (leftOutQuota[kind] || 0) + 1; continue; }
+        let rel = safeRelPath(f.path);
+        if (have.has(`${rootOf(T.id)}${rel}`.toLowerCase())) rel = dedupeName(rel, new Set([...have].map((x) => x.slice(rootOf(T.id).length))));
+        have.add(`${rootOf(T.id)}${rel}`.toLowerCase());
+        used += bytes.length;
+        items.push({ f, rel, bytes });
       }
+      if (!items.length) return;
+      const groups = kind === 'product' ? [items] : items.map((x) => [x]);   // products share one /ingest call (and one tfile key)
+      const newRows = [];
+      for (const group of groups) {
+        if (signal.aborted) throw Object.assign(new Error('aborted'), { code: 'aborted' });
+        const key = randB32(10);
+        const tags = [...trialTags(T), `tfile:${key}`, 'src:store', `site:${hostTagOf(group[0].f.host)}`, `page:${kind}`];
+        const mime = group[0].f.mime;
+        // a batch already on its way is let finish (an aborted upload could still land, untracked); cancel stops the next
+        const got = await ingestMany({ tags, mime, items: group.map((x) => ({ storePath: `${rootOf(T.id)}${x.rel}`, bytes: x.bytes })) });
+        for (const [i, x] of group.entries()) {
+          const path = `${rootOf(T.id)}${x.rel}`;
+          const g = got.find((r) => r && r.filename === path) || got[i] || {};
+          const id = g.id || g.file_id;
+          if (!id) continue;
+          T.keys.set(id, key);
+          T.storeManifest.set(id, { url: x.f.url, title: x.f.title, kind, name: x.f.name, path: x.rel });
+          if (kind === 'pdf') { T.flags.storePdfUrls = { ...(T.flags.storePdfUrls || {}) }; if (Object.keys(T.flags.storePdfUrls).length < 300) T.flags.storePdfUrls[id] = x.f.url; }
+          const row = { id, filename: path, bytes: x.bytes.length, mime_type: mime, status: g.status || 'in_progress', phase: g.phase || 'pending',
+            atom_count: g.atom_count ?? 0, atoms_vectorized: g.atoms_vectorized ?? 0, chunk_count: g.chunk_count ?? 0, tags, created_at: g.created_at || Math.floor(now() / 1000) };
+          T.stageAt.set(id, { uploaded: now() });
+          T.rows = [...(T.rows || []).filter((r) => r.id !== id), row]; T.rowsAt = now();
+          const file = rowToFile(T, row);
+          newRows.push(file); rows.push(file); uploaded++;
+        }
+      }
+      T.questionsCache = null; T.lastActivityAt = now();
+      k++;
+      send('uploaded', { k, uploaded, kind, files: newRows.length <= 40 ? newRows : newRows.map(lightRow), file: newRows[0] });
+      if (k === 1 || k % 10 === 0) kickPoller(T);
+    }
+    const doneFiles = () => (rows.length <= 300 ? rows : rows.map(lightRow));
+    try {
+      const r = await importStore(url, { remainingBytes: QUOTA_BYTES - (rowsBytes() - previous.reduce((n, x) => n + (Number(x.bytes) || 0), 0)) - sharedBytes, signal, net: o.storeNet,
+        budgetMs: storeBudgetMs, enrich: o.storeEnrich, onFiles,
+        onEvent: (ev, d) => { if (ev === 'found' || ev === 'plan') foundAny = true; if (ev !== 'error') send(ev, d); } });
       kickPoller(T);
       if (rows.length) applyStoreDraft(T, r.name);
+      const report = { ...r.report, uploaded, leftOut: { ...r.report.leftOut, quota: { ...r.report.leftOut.quota } } };
+      for (const [kind, n] of Object.entries(leftOutQuota)) report.leftOut.quota[kind] = (report.leftOut.quota[kind] || 0) + n;
+      let capped = r.capped;
+      if (quotaOut) capped = { ...(capped || {}), bytes: { limit: QUOTA_BYTES, droppedProducts: (capped?.bytes?.droppedProducts || 0) + (leftOutQuota.product || 0), droppedSections: (capped?.bytes?.droppedSections || 0) + quotaOut, leftOut: report.leftOut.quota } };
+      T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, platform: r.platform, name: r.name || null, files: uploaded,
+        found: r.report.found, written: r.report.written, leftOut: report.leftOut, timeUp: !!r.report.timeUp };
+      saveSpecSoon(T);
       const all = await filesOf(T);
-      send('done', { files: rows, usage: usageOf(T, all), platform: r.platform, name: r.name, base: r.base, counts: r.counts, capped: r.capped, spec: publicSpec(T) });
+      job.state = 'done'; job.finishedAt = now(); T.storeBusy = false;
+      send('done', { files: doneFiles(), fileCount: rows.length, usage: usageOf(T, all), platform: r.platform, name: r.name, base: r.base, counts: r.counts, plan: r.plan?.counts || null,
+        capped, report, spec: publicSpec(T) });
     } catch (e) {
       const code = e?.code && STORE_ERROR_COPY[e.code] ? e.code : e instanceof StudioError ? e.code : 'upstream';
-      const message = e?.code && STORE_ERROR_COPY[e.code] ? e.message : e instanceof StudioError ? e.message : STORE_ERROR_COPY.upstream;
+      const message = e?.code && STORE_ERROR_COPY[e.code] ? (e.message && e.message !== 'aborted' ? e.message : STORE_ERROR_COPY[e.code]) : e instanceof StudioError ? e.message : STORE_ERROR_COPY.upstream;
       if (!(e instanceof StudioError) && !e?.code) log(`[studio] store import failed: ${e?.message}`);
       if (!foundAny && wellFormed) refundTrialSlot();
+      if (rows.length) { kickPoller(T); T.flags.storeLast = { at: new Date(now()).toISOString(), url, files: uploaded, cancelled: code === 'aborted', error: code }; saveSpecSoon(T); }
+      job.state = code === 'aborted' ? 'cancelled' : 'error'; job.finishedAt = now(); T.storeBusy = false;
       send('error', { code, message });
-      send('done', { files: [], error: true });
-    } finally {
-      T.storeBusy = false;
-      clearInterval(ping);
-      try { res.end(); } catch {}
+      let usage = null;
+      try { usage = usageOf(T, await filesOf(T)); } catch {}
+      send('done', { files: doneFiles(), fileCount: rows.length, error: true, cancelled: code === 'aborted', usage, spec: rows.length ? publicSpec(T) : undefined });
     }
   }
 
   /**
    * The sources the answer step quotes from, one per "Source:" section of each kept hit: { file_id, filename, title,
-   * url, score, text, page?, section? } plus srcHit[i] (the hit source i came from). url: the section's own
-   * "Source: <url>" line, else the nearest earlier one in the same section of the file (atoms list, cached), else the
-   * row's metadata; section: the section heading, else the hit's last breadcrumb segment; page: the hit's page.
+   * url, score, text, page?, section? } plus srcHit[i] (the hit source i came from).
+   * url, website-import pages (one page per file, "# <title> · <url>"): the URL in the H1, read from the hit's
+   *   breadcrumb (knowDrive puts the heading path, H1 first, on every atom) or from the atom's first line (the H1 atom
+   *   has no breadcrumb), else its "Source: <url>" line, else the import manifest (PDFs). Older imports: the section's
+   *   own "Source: <url>" line, else the nearest earlier one in the same section (atoms list, cached), else the row's
+   *   metadata. section: the section heading, else the hit's last breadcrumb segment; page: the hit's page.
    */
   async function answerSources(T, kept, { titleOf, fileName }) {
     const sources = [], srcHit = [];
+    const pageHeadOf = (h) => storePageHead(h.crumb, h.text);
+    const manifestOf = (h) => T.storeManifest?.get(h.fileId) || (T.flags.storePdfUrls?.[h.fileId] ? { url: T.flags.storePdfUrls[h.fileId] } : null);
     const needsLookup = (h) => { const r = (T.rows || []).find((x) => x.id === h.fileId); return !!r && (r.tags || []).includes('src:store'); };
     const lookupUrl = async (h) => {
       if (h.seq == null || !needsLookup(h)) return null;
@@ -2246,6 +2442,22 @@ export function createStudio(o = {}) {
       return null;
     };
     for (const h of kept) {
+      const head = needsLookup(h) ? pageHeadOf(h) : null;
+      const man = needsLookup(h) ? manifestOf(h) : null;
+      if (head || (man && man.url && !lastSourceUrl(h.text))) {
+        // one page per file: every segment of this atom belongs to the page in its H1
+        const crumbs = h.crumb ? h.crumb.split(' > ').map((x) => x.trim()).filter(Boolean) : [];
+        const pageUrl = head?.url || lastSourceUrl(h.text) || man?.url || h.url || null;
+        for (const sg of sourceSegments(h.text)) {
+          const text = stripPageHead(stripSourceLines(sg.text), pageUrl);
+          if (!text.trim()) continue;
+          const section = sg.heading && (sg.level || 2) >= 2 ? sg.heading : crumbs.length > 1 && crumbs[crumbs.length - 1] !== '…' ? crumbs[crumbs.length - 1] : null;
+          sources.push({ file_id: h.fileId, filename: fileName(h.fileId), title: head?.title || man?.title || titleOf(h), url: pageUrl, score: h.similarity ?? 0, text,
+            ...(h.page != null ? { page: h.page } : {}), ...(section ? { section } : {}) });
+          srcHit.push(h);
+        }
+        continue;
+      }
       const segs = sourceSegments(h.text);
       const crumbs = h.crumb ? h.crumb.split(' > ').map((x) => x.trim()).filter(Boolean) : [];
       const crumbSection = crumbs.length > 1 ? crumbs[crumbs.length - 1] : null;
@@ -3830,7 +4042,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       allow('POST', 'DELETE');
     }
 
-    if (sub === 'store') { allow('POST'); return storeImport(req, res, T); }
+    if (sub === 'store') { allow('POST', 'GET', 'DELETE'); return storeImport(req, res, T, url); }
     if (sub === 'events') { allow('GET'); return openEvents(req, res, T, url); }
     if (sub === 'channels' && fid && sub2 === 'test') {
       allow('POST');
