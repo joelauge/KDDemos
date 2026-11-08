@@ -210,15 +210,22 @@ export function atomizeProduction(text, { maxTokens = 500, overlapTokens = 100 }
   let cur = { level: 0, heading: null, path: [], start: 0, body: [] };
   const stack = [];
   let off = 0, fence = false;
+  const open = (level, heading, start) => {
+    secs.push(cur);
+    stack.length = level - 1; stack[level - 1] = heading;
+    cur = { level, heading, path: stack.filter(Boolean).slice(), start, body: [] };
+  };
+  let prevStart = 0;
   for (const line of src.split('\n')) {
     if (/^\s*```/.test(line)) fence = !fence;
     const h = !fence && /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (h) {
-      secs.push(cur);
-      const level = h[1].length;
-      stack.length = level - 1; stack[level - 1] = h[2];
-      cur = { level, heading: h[2], path: stack.filter(Boolean).slice(), start: off, body: [] };
-    } else cur.body.push(line);
+    // CommonMark setext headings (like production's parser): a text line underlined by === (H1) or --- (H2)
+    const last = cur.body.length ? cur.body[cur.body.length - 1] : null;
+    const setext = !fence && !h && last != null && last.trim() && !/^\s*(?:[-*+]\s|>|\d+[.)]\s)/.test(last) && /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
+    if (h) open(h[1].length, h[2], off);
+    else if (setext) { cur.body.pop(); open(setext[1][0] === '=' ? 1 : 2, last.trim(), prevStart); }
+    else cur.body.push(line);
+    prevStart = off;
     off += line.length + 1;
   }
   secs.push(cur);

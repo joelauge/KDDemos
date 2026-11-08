@@ -26,6 +26,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms = 5000, what = 'condition') => { const t = Date.now(); while (Date.now() - t < ms) { const v = await fn(); if (v) return v; await sleep(15); } throw new Error(`timed out waiting for ${what}`); };
+// The server logs with console.log (its `logger` option is not wired through), so these servers run non-quiet and the
+// lines are captured here instead of printed: tests assert on what was logged.
+const LOGS = [];
+console.log = (...a) => { LOGS.push(a.map(String).join(' ')); if (LOGS.length > 20000) LOGS.splice(0, 10000); };
 const PUBLIC = 'https://kb.example.test';
 const PHONE = '+14155550199';
 const DOC = `# Returns Policy
@@ -114,8 +118,8 @@ async function boot(env = {}) {
   const kd = await startFakeKnowDrive({ speed: 20 });
   const llm = await startFakeLLM({ slowMs: 9000 });
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-voicelive-'));
-  const logs = [];
-  const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, logger: (s) => logs.push(String(s)), env: {
+  const logs = LOGS;
+  const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: false, watch: false, env: {
     KNOWDRIVE_BASE_URL: kd.url, KNOWDRIVE_API_KEY: 'fake-key', KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials', KNOWBOT_STUDIO_SAMPLE_MODE: 'live',
     KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen', KNOWBOT_PUBLIC_URL: PUBLIC, ...env,
   }, studio: { sweep: false } });

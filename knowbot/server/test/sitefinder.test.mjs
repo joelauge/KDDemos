@@ -3,7 +3,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
-import { normalizeUrl, urlKey, classifyUrl, sitemapHint, helpDeskOf, anchorsOf, canonicalOf, robotsCrawlDelay, crawlSitemaps, findSources, KIND_RANK } from '../sitefinder.mjs';
+import { normalizeUrl, urlKey, classifyUrl, sitemapHint, helpDeskOf, anchorsOf, canonicalOf, robotsCrawlDelay, crawlSitemaps, findSources, chromeHtmlOf, compareSources, KIND_RANK } from '../sitefinder.mjs';
 import { parseRobots, robotsAllows, registrableDomain } from '../storeimport.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1
@@ -65,7 +65,11 @@ describe('classification', () => {
     assert.equal(c('/pages/lookbook', { platform: 'shopify' }), 'page');
     assert.equal(c('/product/toad-vault/', { platform: 'woocommerce' }), 'product');
     assert.equal(c('/product-category/vaults/', { platform: 'woocommerce' }), 'collection');
-    assert.equal(c('/velo-jersey.html', { platform: 'magento' }), 'product');
+    assert.equal(c('/velo-jersey.html', { platform: 'magento' }), 'candidate', 'Magento .html: a product only once its page shows Product JSON-LD');
+    assert.equal(c('/velo-jersey.html', { platform: 'magento', hint: 'product' }), 'product', 'a product sitemap is trusted');
+    assert.equal(c('/shop/lamps', { platform: 'generic' }), 'candidate', '/shop/<x> may be a category');
+    assert.equal(c('/catalog/lamps', { platform: 'bigcommerce' }), 'candidate');
+    assert.equal(c('/shop', { platform: 'generic' }), 'collection');
     assert.equal(c('/customer-service', { platform: 'magento' }), 'help');
     assert.equal(c('/product-page/lamp', { platform: 'wix' }), 'product');
     assert.equal(c('/shop/p/lamp', { platform: 'squarespace' }), 'product');
@@ -147,7 +151,7 @@ describe('findSources: the ranked plan', () => {
     assert.equal(plan.robots.disallowed, 1, 'the disallowed product is reported, not planned');
     assert.equal(kindOf(`${B}/products/secret`), undefined);
     assert.equal(plan.counts.product, 2, 'the locale copy folds into /products/a');
-    assert.deepEqual(plan.productUrls.sort(), [`${B}/products/a`, `${B}/products/b`, `${B}/products/secret`].sort(), 'the locale copy is folded while crawling');
+    assert.deepEqual(plan.productUrls.sort(), [`${B}/products/a`, `${B}/products/b`].sort(), 'the locale copy is folded while crawling; the disallowed page is not planned');
     assert.equal(kindOf(`${B}/pages/faq`), 'faq');
     assert.equal(kindOf(`${B}/pages/shipping`), 'policy');
     assert.equal(kindOf(`${B}/pages/returns-exchanges`), 'policy');
@@ -173,5 +177,58 @@ describe('findSources: the ranked plan', () => {
     assert.equal(kindOf(`${B}/policies/refund-policy`), 'policy');
     assert.ok(plan.guesses >= 2);
     assert.equal(plan.samples.product.length, 2);
+  });
+});
+
+describe('findSources: ranking, help desks and candidates (review fixes)', () => {
+  test('a sitemap "page" that a footer link reclassifies as a policy takes the policy rank and sorts with the policies, before help-desk articles', async () => {
+    const B = 'https://shop.test';
+    const home = `<html><body><header><nav><a href="/collections/all">Shop</a></nav></header><main>Hi</main>
+      <footer><a href="/pages/info">Shipping &amp; Returns</a><a href="https://shop.zendesk.com/hc/en-us">Help centre</a></footer></body></html>`;
+    const arts = Array.from({ length: 30 }, (_, i) => ({ html_url: `https://shop.zendesk.com/hc/en-us/articles/${i + 1}-Returns-question-${i + 1}`, title: `Returns question ${i + 1}`, body: '<p>x</p>' }));
+    const f = stubWeb({
+      [`${B}/sitemap.xml`]: { body: urlset([`${B}/pages/info`, `${B}/pages/zz-help`, `${B}/products/a`]) },
+      'https://shop.zendesk.com/api/v2/help_center/articles.json?per_page=100': { type: 'application/json', body: { next_page: null, articles: arts } },
+    }, { robots: `Sitemap: ${B}/sitemap.xml\n` });
+    const det = { platform: 'shopify', api: true, base: B, name: 'Shop', home: { url: `${B}/`, html: home } };
+    const plan = await findSources(f, det, { registrable: registrableDomain, allowHelpHost: (h) => f.allowHost(h) });
+    const info = plan.sources.find((s) => s.url === `${B}/pages/info`);
+    assert.equal(info.kind, 'policy');
+    assert.equal(info.rank, KIND_RANK.policy, 'the rank follows the new kind');
+    const policies = plan.sources.filter((s) => s.kind === 'policy');
+    assert.equal(policies[0].url, `${B}/pages/info`, 'the menu-linked policy sorts first, before 30 desk articles');
+    assert.ok(policies.length > 10);
+    // compareSources never trusts a stale rank
+    assert.ok(compareSources({ kind: 'policy', rank: 6, via: ['sitemap'], url: 'b' }, { kind: 'help', rank: 1, via: ['nav'], url: 'a' }) < 0);
+  });
+
+  test('hosted desks: only menu-linked help counts, one desk per import (named like the site first); others are reported, never read', async () => {
+    const B = 'https://lumen.test';
+    const home = `<html><body><header><nav><a href="/">Home</a></nav></header>
+      <main><p>Pay later with <a href="https://payco.zendesk.com/hc/en-us">PayCo help</a>.</p></main>
+      <footer><a href="https://acme-partner.gorgias.help/">Support</a><a href="https://lumen.zendesk.com/hc/en-us">Help centre</a></footer></body></html>`;
+    const f = stubWeb({ 'https://lumen.zendesk.com/api/v2/help_center/articles.json?per_page=100': { type: 'application/json', body: { next_page: null, articles: [{ html_url: 'https://lumen.zendesk.com/hc/en-us/articles/1-Track', title: 'Track', body: '<p>t</p>' }] } } },
+      { site: 'lumen.test' });
+    const det = { platform: 'shopify', api: true, base: B, name: 'Lumen', home: { url: `${B}/`, html: home } };
+    const plan = await findSources(f, det, { registrable: registrableDomain, allowHelpHost: (h) => f.allowHost(h) });
+    assert.deepEqual(plan.helpdesks.map((d) => d.origin), ['https://lumen.zendesk.com']);
+    assert.deepEqual(plan.skippedDesks.map((d) => [d.origin, d.reason]).sort(), [['https://acme-partner.gorgias.help', 'one help desk per import'], ['https://payco.zendesk.com', 'not linked from the site menus as its help']]);
+    assert.ok(!f.log.some((u) => /payco|acme-partner/.test(u)), f.log.join(' '));
+    assert.match(chromeHtmlOf(home), /lumen\.zendesk\.com/);
+    assert.doesNotMatch(chromeHtmlOf(home), /payco/);
+  });
+
+  test('Magento and /shop/<x> candidates are counted apart ("up to"), never inflating the product count', async () => {
+    const B = 'https://velo.test';
+    const f = stubWeb({ [`${B}/sitemap.xml`]: { body: urlset([`${B}/velo-jersey.html`, `${B}/apparel.html`, `${B}/men.html`, `${B}/customer-service`]) } }, { site: 'velo.test', robots: `Sitemap: ${B}/sitemap.xml\n` });
+    const det = { platform: 'magento', api: true, base: B, name: 'Velo', home: { url: `${B}/`, html: '<html></html>' } };
+    const plan = await findSources(f, det, { registrable: registrableDomain, feedTotal: async () => 1 });
+    assert.equal(plan.counts.product, 1, 'the feed total, not the .html pages');
+    assert.equal(plan.candidates, 3);
+    assert.deepEqual(plan.upTo, { product: 4 });
+    assert.equal(plan.candidateUrls.length, 3);
+    // no feed: candidates stand in for the product count, flagged approximate
+    const g = await findSources(f, { ...det, api: false }, { registrable: registrableDomain });
+    assert.equal(g.counts.product, 3); assert.deepEqual(g.approx, ['product']);
   });
 });

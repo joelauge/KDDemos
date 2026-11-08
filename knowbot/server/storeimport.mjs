@@ -1187,7 +1187,9 @@ async function prefetchPlatformPages(ctx) {
     ctx.prefetched.set(urlKey(u), { html, title: oneLine(title) });
     const kind = classifyUrl(u, { platform: ctx.det.platform, text: title });
     if (!['faq', 'policy', 'help'].includes(kind)) return;
-    if (!plan.sources.some((s) => urlKey(s.url) === urlKey(u))) { plan.sources.push({ url: u, kind, rank: KIND_RANK[kind], via: ['api'], text: oneLine(title) }); plan.counts[kind]++; }
+    const cur = plan.sources.find((s) => urlKey(s.url) === urlKey(u));
+    if (!cur) { plan.sources.push({ url: u, kind, rank: KIND_RANK[kind], via: ['api'], text: oneLine(title) }); plan.counts[kind]++; }
+    else if ((KIND_RANK[kind] ?? 9) < (KIND_RANK[cur.kind] ?? 9) && cur.kind !== 'product') { if (plan.counts[cur.kind]) plan.counts[cur.kind]--; plan.counts[kind]++; cur.kind = kind; cur.rank = KIND_RANK[kind]; }
   };
   if (ctx.det.platform === 'woocommerce' && ctx.det.api) {
     for (let page = 1; page <= 5; page++) {
@@ -1205,7 +1207,7 @@ async function prefetchPlatformPages(ctx) {
       for (const pg of Object.values(j.data || {})) if (pg?.content && pg.url_key) addSource(`${ctx.base}/${pg.url_key}`, pg.title || pg.url_key, `<main><h1>${pg.title || ''}</h1>${pg.content}</main>`);
     } catch (e) { if (FATAL.has(e.code)) throw e; }
   }
-  plan.sources.sort((a, b) => a.rank - b.rank || a.url.localeCompare(b.url));
+  plan.sources.sort(compareSources);
 }
 
 // ------------------------------------------------------------------------------------------------ readers
@@ -1255,20 +1257,51 @@ async function readPageSource(ctx, s) {
   ctx.progress(doc.kind);
   await ctx.writer.add(doc);
 }
+/**
+ * Read up to `cap` of these (ranked) sources. The site's own pages are kept first (menu-linked ones first within each
+ * kind, see compareSources); help-desk articles take what is left of the cap, so a 2,000-article desk can never crowd
+ * out the policy and FAQ pages the site's menus link.
+ */
 async function readPages(ctx, sources, cap) {
-  const list = sources.slice(0, cap);
-  for (const s of sources.slice(cap)) ctx.inc(ctx.report.leftOut.cap, s.kind);
-  await pool(list, (s) => readPageSource(ctx, s));
+  const desk = (s) => s.via?.includes('helpdesk') && !s.via.some((v) => v === 'nav' || v === 'link' || v === 'sitemap');
+  const own = sources.filter((s) => !desk(s)).sort(compareSources), hd = sources.filter(desk).sort(compareSources);
+  const ownList = own.slice(0, cap), deskList = hd.slice(0, Math.max(0, cap - ownList.length));
+  for (const s of [...own.slice(ownList.length), ...hd.slice(deskList.length)]) ctx.inc(ctx.report.leftOut.cap, s.kind);
+  await pool([...ownList, ...deskList], (s) => readPageSource(ctx, s));
 }
+/** ms one more product page costs: the pacing interval, or the measured rate once ~10 pages were read. */
+function pageCostMs(ctx) {
+  const e = ctx.enrichClock;
+  const measured = e.n >= 10 ? (Date.now() - e.t0) / e.n : 0;
+  return Math.max(ctx.f.pace, measured, e.n >= 10 ? 1 : 100);
+}
+/** Time the readers after the products still need (PDFs, collections, blog, other pages), kept back from enrichment. */
+function reserveMs(ctx) {
+  const want = (k, cap) => (ctx.kinds && !ctx.kinds.has(k) ? 0 : Math.min(ctx.totals[k] || 0, cap));
+  const pdfs = ctx.kinds && !ctx.kinds.has('pdf') ? 0 : Math.min(Math.max(ctx.totals.pdf || 0, ctx.pdfs.size), ctx.caps.maxPdfs);
+  const n = pdfs + want('collection', ctx.caps.maxCollections) + want('blog', ctx.caps.maxBlog) + want('page', ctx.caps.maxOtherPages);
+  return Math.min(0.25 * Math.max(0, ctx.f.timeLeft()), n * Math.max(ctx.f.pace, 100)) + 2000;
+}
+/**
+ * Read this product's page as well as its feed record? A running budget, decided per product: thin feed copy (< 400
+ * characters) is read while any time is left; richer copy is read while the time left (minus a reserve for the readers
+ * that follow) still covers the thin products still to come, so a 10,000-product store gets as many full pages as
+ * the 20-minute budget allows, thin ones first, instead of all-or-nothing.
+ */
 function shouldEnrich(ctx, descLen) {
   const mode = ctx.enrich;
+  const thin = descLen < 400;
+  ctx.enrichSeen++; if (thin) ctx.enrichThin++;
   if (mode === 'none' || ctx.enrichStopped) return false;
   if (mode === 'all') return true;
-  const thin = descLen < 400;
   if (mode === 'thin') return thin;
-  // auto: thin feed copy always; every product page when the whole catalogue fits in 40% of the time left
-  if (ctx.enrichAll == null) ctx.enrichAll = (ctx.productTotal || 1) * Math.max(ctx.f.pace, 100) < 0.4 * ctx.f.timeLeft();
-  return thin || ctx.enrichAll;
+  const per = pageCostMs(ctx);
+  const avail = ctx.f.timeLeft() - reserveMs(ctx);
+  const remaining = Math.max(0, (ctx.productTotal || 0) - ctx.enrichSeen);
+  const thinShare = ctx.enrichSeen >= 20 ? ctx.enrichThin / ctx.enrichSeen : 0.5;
+  const ok = thin ? avail > per : avail - remaining * thinShare * per > per;
+  if (!ok) ctx.report.enrichSkipped++;
+  return ok;
 }
 async function buildProduct(ctx, rec) {
   const { f, report } = ctx;
@@ -1276,8 +1309,10 @@ async function buildProduct(ctx, rec) {
   const descLen = htmlToText(rec.descriptionHtml || '', { main: false }).length;
   if (!ctx.timeUp && shouldEnrich(ctx, descLen)) {
     try {
+      if (!ctx.enrichClock.t0) ctx.enrichClock.t0 = Date.now();
       const r = await f.get(rec.url, { accept: 'text/html,application/xhtml+xml' });
-      if (isHtml(r)) { doc = readProductHtml(r.text(), rec.url, rec); report.enriched++; }
+      ctx.enrichClock.n++;
+      if (isHtml(r)) { doc = readProductHtml(r.text(), rec.url, rec); report.enriched++; report.productPagesRead++; }
     } catch (e) {
       if (FATAL.has(e.code)) throw e;
       if (e.budget) { ctx.timeUp = true; ctx.enrichStopped = true; }
@@ -1289,57 +1324,97 @@ async function buildProduct(ctx, rec) {
   for (const p of doc.pdfs || []) addPdf(ctx, p);
   ctx.progress('product');
   await ctx.writer.add(doc);
+  return true;
 }
-async function readProductUrl(ctx, url, { requireLd = false } = {}) {
+/**
+ * One product page read whole (no feed record). candidate: a maybe-product (Magento .html, /shop/<x>): kept as a product
+ * only with Product JSON-LD, else read as a collection page (when collections are wanted and under their cap).
+ * → 'product' | 'collection' | 'time' (not attempted: the budget is used up) | null (failed, duplicate, not a product)
+ */
+async function readProductUrl(ctx, url, { requireLd = false, candidate = false } = {}) {
   const { f, report } = ctx;
-  if (ctx.timeUp) { ctx.inc(report.leftOut.time, 'product'); return; }
+  if (ctx.timeUp) return 'time';
   let r;
-  try { r = await f.get(url, { accept: 'text/html,application/xhtml+xml' }); } catch (e) { ctx.pageError(e, 'product'); return; }
-  if (!isHtml(r)) { report.skipped.failed++; return; }
+  try { r = await f.get(url, { accept: 'text/html,application/xhtml+xml' }); }
+  catch (e) { if (e.budget || (e.code === 'timeout' && f.timeLeft() <= 0)) { ctx.timeUp = true; return 'time'; } ctx.pageError(e, 'product'); return null; }
+  if (!isHtml(r)) { report.skipped.failed++; return null; }
   const html = r.text();
   let finalUrl = normalizeUrl(r.url) || url;
   const canon = goodCanonical(ctx, canonicalOf(html, finalUrl), finalUrl);
   if (canon) {
     const ck = urlKey(canon);
-    if (ck !== urlKey(url) && ctx.seenProducts.has(ck)) { report.skipped.duplicate++; return; }
+    if (ck !== urlKey(url) && ctx.seenProducts.has(ck)) { report.skipped.duplicate++; return null; }
     ctx.seenProducts.add(ck); finalUrl = canon;
   }
-  const doc = readProductHtml(html, finalUrl, null, { requireLd });
-  if (!doc) { report.skipped.notProduct++; return; }
+  const doc = readProductHtml(html, finalUrl, null, { requireLd: requireLd || candidate });
+  if (!doc) {
+    report.skipped.notProduct++;
+    // a category page found among the candidates is still knowledge: kept as a collection page
+    if (candidate && (!ctx.kinds || ctx.kinds.has('collection')) && ctx.collectionsRead < ctx.caps.maxCollections && !ctx.seen.has(urlKey(finalUrl))) {
+      ctx.seen.add(urlKey(finalUrl));
+      const page = readPageHtml(html, finalUrl, { kind: 'collection' });
+      for (const p of page.pdfs) addPdf(ctx, p);
+      if (page.sections.reduce((n, x) => n + String(x.text || '').replace(/\s+/g, ' ').trim().length, 0) >= 12) {
+        ctx.collectionsRead++; ctx.progress(page.kind); await ctx.writer.add(page); return 'collection';
+      }
+    }
+    return null;
+  }
   doc.url = finalUrl;
+  report.productPagesRead++;
   for (const p of doc.pdfs || []) addPdf(ctx, p);
   ctx.progress('product');
   await ctx.writer.add(doc);
+  return 'product';
 }
+/**
+ * Every product: the platform feed first (structured data, its own page read on top while the budget allows), then
+ * every product page the feed did not cover (sitemaps, nav links), then candidates. The product cap counts products
+ * actually written (claimed slots in flight included, so it is never exceeded); a candidate that turns out to be a
+ * category frees its slot. When the time budget runs out, what was not read is counted ONCE (leftOut.time.product).
+ */
 async function readProducts(ctx) {
   const { caps, report, plan } = ctx;
   const max = caps.maxProducts;
-  const take = (url) => {
+  let pending = 0, done = 0;
+  const claim = (url) => {
     const k = urlKey(url);
     if (!k || ctx.seenProducts.has(k)) { report.skipped.duplicate++; return false; }
-    if (ctx.productCount >= max) { ctx.productsMore = true; ctx.inc(report.leftOut.cap, 'product'); return false; }
-    ctx.seenProducts.add(k); ctx.productCount++;
+    if (ctx.productCount + pending >= max) { ctx.productsMore = true; ctx.inc(report.leftOut.cap, 'product'); return false; }
+    ctx.seenProducts.add(k); pending++;
     return true;
   };
+  const settle = (outcome) => { pending--; if (outcome === 'product') ctx.productCount++; if (outcome !== 'time') done++; };
   const feed = ctx.det.api ? FEEDS[ctx.det.platform] : null;
   if (feed) {
     for await (const recs of feed(ctx)) {
-      const batch = recs.filter((rec) => rec.url && take(rec.url));
-      ctx.totals.product = Math.max(ctx.totals.product, ctx.productCount);
-      await pool(batch, (rec) => buildProduct(ctx, rec));
-      if (ctx.timeUp) { report.leftOut.time.product = (report.leftOut.time.product || 0) + Math.max(0, (ctx.totals.product || 0) - ctx.productCount); break; }
+      const batch = recs.filter((rec) => rec.url && claim(rec.url));
+      await pool(batch, async (rec) => { let ok = false; try { ok = await buildProduct(ctx, rec); } finally { settle(ok ? 'product' : null); } });
+      ctx.totals.product = Math.max(ctx.totals.product || 0, ctx.productCount);
+      if (ctx.timeUp) break;
     }
     if (ctx.feedFailed) ctx.warnings.push(`This ${ctx.det.platform} store's product feed didn't answer, so products were read from their pages.`);
   }
-  // every product page the feed did not cover (sitemaps, nav links): read it whole
+  // product pages the feed did not cover: read whole. A platform whose product paths are certain (Shopify, Woo, Wix,
+  // Squarespace) keeps any page; elsewhere a page must carry Product JSON-LD to be written as a product.
+  const sure = ['shopify', 'woocommerce', 'wix', 'squarespace'].includes(ctx.det.platform);
   const rest = [...new Set(plan.productUrls)].filter((u) => !ctx.seenProducts.has(urlKey(u)));
-  ctx.totals.product = Math.max(ctx.totals.product, ctx.productCount + rest.length);
-  const requireLd = ctx.det.platform === 'magento';
-  await pool(rest, async (u) => { if (take(u)) await readProductUrl(ctx, u, { requireLd }); });
+  const cands = [...new Set(plan.candidateUrls || [])].filter((u) => !ctx.seenProducts.has(urlKey(u)) && !rest.includes(u));
+  ctx.totals.product = Math.max(ctx.totals.product || 0, ctx.productCount + rest.length);
+  for (const [list, candidate] of [[rest, false], [cands, true]]) {
+    if (ctx.timeUp) break;
+    await pool(list, async (u) => {
+      if (ctx.timeUp || !claim(u)) return;
+      let out = null;
+      try { out = await readProductUrl(ctx, u, { requireLd: !sure, candidate }); } finally { settle(out); }
+    });
+  }
+  if (ctx.timeUp) report.leftOut.time.product = Math.max(0, (ctx.totals.product || 0) - done);
 }
 const PDF_PRI = /manual|instruction|spec|datasheet|data-sheet|size|chart|guide|care|warrant|assembly|install|safety|user/i;
 async function readPdfs(ctx) {
   const { f, report, caps } = ctx;
+  if (ctx.kinds && !ctx.kinds.has('pdf')) return;
   for (const s of ctx.plan.sources.filter((x) => x.kind === 'pdf')) addPdf(ctx, s);
   const all = [...ctx.pdfs.values()].sort((a, b) => (PDF_PRI.test(`${a.url} ${a.text}`) ? 0 : 1) - (PDF_PRI.test(`${b.url} ${b.text}`) ? 0 : 1) || a.url.localeCompare(b.url));
   ctx.totals.pdf = all.length;
@@ -1376,11 +1451,14 @@ export async function importStore(input, o = {}) {
     if (det.platform === 'bigcommerce') f.allowPdfHost('cdn11.bigcommerce.com');
     emit('detect', { platform: det.platform, api: det.api, base: det.base, name: det.name });
 
-    const report = { found: null, read: {}, written: {}, bytes: 0, enriched: 0, enrichFailed: 0,
-      skipped: { robots: 0, failed: 0, notFound: 0, duplicate: 0, empty: 0, notProduct: 0 }, leftOut: { time: {}, quota: {}, cap: {} }, timeUp: false };
+    const report = { found: null, read: {}, written: {}, bytes: 0, enriched: 0, enrichFailed: 0, enrichSkipped: 0, productPagesRead: 0,
+      skipped: { robots: 0, failed: 0, notFound: 0, duplicate: 0, empty: 0, notProduct: 0 }, leftOut: { time: {}, quota: {}, cap: {}, excluded: {} }, timeUp: false };
     let lastReading = 0;
+    // kinds: the page kinds the visitor ticked (null = every kind); unknown names are ignored
+    const kinds = Array.isArray(o.kinds) && o.kinds.length ? new Set(o.kinds.filter((k) => KINDS.includes(k))) : null;
     const ctx = { f, base: det.base, det, caps, report, warnings: [], seen: new Set(), seenProducts: new Set(), pdfs: new Map(), prefetched: new Map(),
-      productCount: 0, productsMore: false, timeUp: false, enrich: o.enrich || 'auto', pageSize: o.pageSize, totals: {},
+      productCount: 0, productsMore: false, timeUp: false, enrich: o.enrich || 'auto', pageSize: o.pageSize, totals: {}, kinds, collectionsRead: 0,
+      enrichSeen: 0, enrichThin: 0, enrichClock: { t0: 0, n: 0 },
       inc: (obj, k, n = 1) => { obj[k] = (obj[k] || 0) + n; },
       pageError(e, kind) {
         if (FATAL.has(e.code)) throw e;
@@ -1405,26 +1483,30 @@ export async function importStore(input, o = {}) {
     ctx.productTotal = plan.counts.product;
     report.found = { ...plan.counts };
     const total = Object.values(plan.counts).reduce((a, b) => a + b, 0);
-    emit('plan', { counts: plan.counts, samples: plan.samples, total, robots: plan.robots, helpdesks: plan.helpdesks.map(({ type, origin }) => ({ type, origin })), feedTotal: plan.feedTotal });
+    emit('plan', { counts: plan.counts, samples: plan.samples, total, robots: plan.robots, helpdesks: plan.helpdesks.map(({ type, origin }) => ({ type, origin })), feedTotal: plan.feedTotal,
+      candidates: plan.candidates, upTo: plan.upTo, approx: plan.approx, skippedDesks: plan.skippedDesks, ...(kinds ? { kinds: [...kinds] } : {}) });
     emit('found', { products: plan.counts.product, pages: plan.counts.help + plan.counts.page, policies: plan.counts.policy, faqs: plan.counts.faq, help: plan.counts.help,
       pdfs: plan.counts.pdf, collections: plan.counts.collection, blog: plan.counts.blog });
-    const publicPlan = { counts: plan.counts, samples: plan.samples, robots: plan.robots, helpdesks: plan.helpdesks, feedTotal: plan.feedTotal, notes: plan.notes,
-      sources: plan.sources.slice(0, 200).map((s) => ({ url: s.url, kind: s.kind, via: s.via })) };
+    const publicPlan = { counts: plan.counts, samples: plan.samples, total, robots: plan.robots, helpdesks: plan.helpdesks, skippedDesks: plan.skippedDesks, feedTotal: plan.feedTotal, notes: plan.notes,
+      candidates: plan.candidates, upTo: plan.upTo, approx: plan.approx, sources: plan.sources.slice(0, 200).map((s) => ({ url: s.url, kind: s.kind, via: s.via })) };
     if (o.planOnly) return { platform: det.platform, api: det.api, base: det.base, host: plan.host, name: det.name, plan: publicPlan, files: [], counts: {}, report, capped: null, skipped: report.skipped, warnings: ctx.warnings };
     if (total === 0 && !det.api) throw err('no_content');
 
     const writer = createWriter({ maxTotalBytes: caps.maxTotalBytes, storeName: det.name || plan.host, siteHost: plan.host, onFiles: o.onFiles, emit,
       batchFiles: o.batchFiles || 40, batchBytes: o.batchBytes || 2 * MB });
     ctx.writer = writer;
-    // best sources first: policies and FAQ, help, then every product, PDFs, collections, blog, other pages
-    await readPages(ctx, plan.sources.filter((s) => PAGE_KINDS.includes(s.kind)), caps.maxPages);
+    // best sources first: policies and FAQ, help, then every product, PDFs, collections, blog, other pages; kinds the
+    // visitor did not tick are never read (reported as leftOut.excluded)
+    const want = (k) => !kinds || kinds.has(k);
+    if (kinds) for (const k of KINDS) if (!kinds.has(k) && plan.counts[k]) report.leftOut.excluded[k] = plan.counts[k];
+    await readPages(ctx, plan.sources.filter((s) => PAGE_KINDS.includes(s.kind) && want(s.kind)), caps.maxPages);
     await writer.flushAll();
-    await readProducts(ctx);
+    if (want('product')) await readProducts(ctx);
     await writer.flushAll();
     await readPdfs(ctx);
-    await readPages(ctx, plan.sources.filter((s) => s.kind === 'collection'), caps.maxCollections);
-    await readPages(ctx, plan.sources.filter((s) => s.kind === 'blog'), caps.maxBlog);
-    await readPages(ctx, plan.sources.filter((s) => s.kind === 'page'), caps.maxOtherPages);
+    if (want('collection')) await readPages(ctx, plan.sources.filter((s) => s.kind === 'collection'), Math.max(0, caps.maxCollections - ctx.collectionsRead));
+    if (want('blog')) await readPages(ctx, plan.sources.filter((s) => s.kind === 'blog'), caps.maxBlog);
+    if (want('page')) await readPages(ctx, plan.sources.filter((s) => s.kind === 'page'), caps.maxOtherPages);
     const files = await writer.finish();
     f.flushProgress();
     if (o.signal?.aborted) throw err('aborted');
@@ -1440,6 +1522,9 @@ export async function importStore(input, o = {}) {
       faqs: report.written.faq || 0, pdfs: report.written.pdf || 0, collections: report.written.collection || 0, blog: report.written.blog || 0 };
     const capped = {};
     if (report.leftOut.cap.product) capped.products = { limit: caps.maxProducts, kept: ctx.productCount, more: true };
+    // product pages read in full (feed + page) vs products written, when the time budget kept some to feed copy only
+    if (report.enrichSkipped && ctx.productCount) capped.enrich = { read: report.productPagesRead, of: ctx.productCount };
+    report.enrich = { read: report.productPagesRead, of: ctx.productCount };
     const pagesCut = PAGE_KINDS.reduce((n, k) => n + (report.leftOut.cap[k] || 0), 0);
     if (pagesCut) capped.pages = { limit: caps.maxPages, kept: caps.maxPages, more: true };
     const quotaOut = Object.values(report.leftOut.quota).reduce((a, b) => a + b, 0);
