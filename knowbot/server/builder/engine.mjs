@@ -241,10 +241,12 @@ export function createBuilderEngine(o = {}) {
   const defaultChips = typeof o.defaultChips === 'function' ? o.defaultChips : builtinChips;
   const dontKnow = () => `I don't have that in the KnowBot guide, so I won't guess. A person on our team can help: ${contact}.`;
 
+  let turnLog = null; // per-turn override (turn(state, input, { logQuestion })) so the caller can scope the record
   function logQ(state, question, outcome, citations, topScore) {
-    if (typeof o.logQuestion !== 'function') return;
+    const fn = typeof turnLog === 'function' ? turnLog : o.logQuestion;
+    if (typeof fn !== 'function') return;
     try {
-      const p = o.logQuestion({ question, outcome, citations: citations.map((c) => ({ n: c.n, file: c.name || c.title || null })), topScore: topScore ?? null, channel: 'builder', callerKey: state?.trialId || null });
+      const p = fn({ question, outcome, citations: citations.map((c) => ({ n: c.n, file: c.name || c.title || null })), topScore: topScore ?? null, channel: 'builder', callerKey: state?.trialId || null });
       p?.catch?.(() => {});
     } catch { /* never affects the turn */ }
   }
@@ -252,6 +254,7 @@ export function createBuilderEngine(o = {}) {
   async function turn(state = {}, input = {}, opts = {}) {
     const t0 = now();
     const scripted = typeof opts.scripted === 'function' ? opts.scripted : o.scripted;
+    turnLog = typeof opts.logQuestion === 'function' ? opts.logQuestion : null;
     const msg = typeof input.message === 'string' ? oneLine(input.message).slice(0, 1000) : '';
     const toolCalls = [];
     const results = [];               // [{name, input, res, source}]
@@ -390,6 +393,15 @@ export function createBuilderEngine(o = {}) {
     }
   }
   return { turn, model, systemPrompt: SYSTEM, tools: tools.defs };
+}
+
+/**
+ * Until the Builder chat renders citation chips, a reply with [n] markers carries its sources as a last line:
+ * "Sources: [1] Pricing and trial · The price to launch". Replies without citations are returned unchanged.
+ */
+export function withSourceLine(reply, citations = []) {
+  if (!citations.length) return reply;
+  return `${reply}\n\nSources: ${citations.map((c) => `[${c.n}] ${[c.title, c.section].filter(Boolean).join(' · ') || 'KnowBot guide'}`).join('; ')}`;
 }
 
 /** What the model sees of a tool result: no internal objects, offered buttons described as not yet tapped. */

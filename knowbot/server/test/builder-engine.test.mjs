@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBuilderTools, normalizeWebsiteUrl, checkInput, TOOL_DEFS } from '../builder/tools.mjs';
 import { preparse, parseFields, findUrl, chipFor, isProductQuestion } from '../builder/preparse.mjs';
-import { createBuilderEngine, createAnthropicComplete, gateReply, sentencesOf, summarizeState, systemPrompt, DEFAULT_MODEL } from '../builder/engine.mjs';
+import { createBuilderEngine, createAnthropicComplete, gateReply, sentencesOf, summarizeState, systemPrompt, withSourceLine, DEFAULT_MODEL } from '../builder/engine.mjs';
 import { createLocalKb, loadSections } from '../builder/local-kb.mjs';
 import { startFakeAnthropic, toolUse, text } from './fake-anthropic.mjs';
 
@@ -308,6 +308,11 @@ test('engine: product facts keep valid citations; uncited or invented ones are d
   assert.equal(logged[0].outcome, 'answered');
   assert.equal(logged[0].question, 'How much does it cost to launch?');
   assert.equal(logged[0].callerKey, 'tr_abcdefghijklmnop');
+  assert.match(withSourceLine(out.reply, out.citations), /\n\nSources: \[1\] /);
+  // a per-turn logger overrides the engine's (the Studio scopes the record per trial)
+  const mine = [];
+  await e.turn(readyState(), { message: 'Is there a free trial?' }, { logQuestion: (q) => mine.push(q) });
+  assert.equal(mine.length, 1); assert.equal(logged.length, 1);
 });
 test('engine: a product question with no cited answer says it does not know and offers a person', async () => {
   const logged = [];
