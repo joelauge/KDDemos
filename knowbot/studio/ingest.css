@@ -349,8 +349,7 @@
 
 .in-note { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
 .in-note[hidden] { display: none; }
-.in-note[data-kind="bad"] { color: var(--text); }
-.in-note[data-kind="warn"], .in-note[data-kind="stall"] { color: var(--warn); font-variant-numeric: tabular-nums; }
+.in-note.alert { margin-top: 8px; font-size: 12.5px; font-variant-numeric: tabular-nums; }   /* look: KnowDrive .alert */
 .in-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .in-actions[hidden] { display: none; }
 .in-sum { margin: 8px 0 1px 30px; align-self: start; }
@@ -407,9 +406,9 @@
 .in-chip-more:empty { display: none !important; }
 
 /* empty state: the drop hint (fades in at 1.2 s) */
-.in-empty {
-  display: flex; align-items: center; gap: 12px; margin: 10px 0; padding: 10px 12px; border-radius: 12px;
-  border: 1.5px dashed var(--line-2); background: color-mix(in srgb, var(--panel) 70%, transparent);
+.in-empty {   /* look: KnowDrive .empty-state; the dashed edge says "drop files here" */
+  display: flex; align-items: center; gap: 12px; margin: 10px 0; padding: 10px 12px; text-align: left;
+  border: 1.5px dashed var(--line-2);
   opacity: 0; transform: translateY(4px); transition: opacity 400ms var(--ease-out), transform 400ms var(--ease-out);
 }
 .in-empty.is-in { opacity: 1; transform: none; }

@@ -892,7 +892,7 @@ export function mount(ctx) {
     const cards = kept.map((x) => sourceCard(A, x));
     const out = [...cards, ...shownOver.map((x) => sourceCard(A, x, { budget: true }))];
     // Integrator: with no candidates at all (e.g. the only relevant file is switched off), say so instead of a lone divider.
-    if (!hits.length) out.push(h('p', { class: 'pf-empty' }, ico('shield', 14), h('span', null, `No passage in your enabled files came near the floor (${floorPct}). Nothing was invented.`)));
+    if (!hits.length) out.push(h('p', { class: 'empty-state pf-empty' }, ico('shield', 14), h('span', null, `No passage in your enabled files came near the floor (${floorPct}). Nothing was invented.`)));
     else if (below.length || (!kept.length && !shownOver.length)) out.push(h('div', { class: 'pf-floor', role: 'separator', 'aria-label': `Floor ${floorPct}: nothing below this line is used` }, h('span', { class: 'sb-num' }, `floor ${floorPct}`)));
     for (const x of below) out.push(sourceCard(A, x, { below: true }));
     if (rest > 0) out.push(h('button', { type: 'button', class: 'pf-more', onclick: () => { emit('view:set', { view: 'proof' }); openTrace(A, true); } }, h('b', { class: 'sb-num' }, `+${rest}`), h('span', null, 'considered')));
@@ -2235,8 +2235,8 @@ export function mount(ctx) {
     if (reuse) { drawer.data = data; fillDrawer(data); return; }
     const mode = drawerMode();
     const titleId = uid('pf-dt');
-    const panel = h('section', { class: 'pf-dpanel', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabindex: '-1' });
-    const scrim = h('div', { class: 'pf-scrim', 'aria-hidden': 'true', onclick: () => closeDrawer() });
+    const panel = h('section', { class: 'drawer pf-dpanel', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabindex: '-1' });
+    const scrim = h('div', { class: 'drawer-backdrop pf-scrim', 'aria-hidden': 'true', onclick: () => closeDrawer() });
     const root = h('div', { class: 'pf-drawer', dataset: { mode } }, mode === 'dock' ? null : scrim, panel);
     drawer = { root, panel, scrim, data, invoker: invoker || document.activeElement, titleId, inerted: [] };
     const name = d.answerId && d.n != null ? `proof-${d.answerId}-${d.n}`.replace(/[^a-zA-Z0-9_-]/g, '') : null;
@@ -2743,7 +2743,8 @@ export function mount(ctx) {
     el.innerHTML = '';
     if (!kind) { el.hidden = true; return; }
     el.hidden = false;
-    const bar = h('div', { class: `sb-banner is-${kind}` }, content);
+    // KnowDrive's inline alert bar: partial = info, all ready again = success, answering without failed files = warning
+    const bar = h('div', { class: `alert alert-${kind === 'partial' ? 'info' : kind === 'reask' ? 'success' : 'warn'} sb-banner is-${kind}` }, content);
     el.append(bar);
     clearTimeout(reaskTimer);
     // the re-ask offer is a one-time nudge: it retires itself after 20 s (or on the next question, see startAsk)
@@ -2842,11 +2843,11 @@ export function mount(ctx) {
       // r4: a live (converted / launched) bot has no sample files to offer: the plain sentence, never "Add a file or ."
       const addLink = h('button', { type: 'button', class: 'sb-link', onclick: () => builderAction({ type: 'request_upload' }) }, 'Add a file');
       el.append(samplesOffered()
-        ? h('p', { class: 'sb-empty' },
+        ? h('p', { class: 'empty-state sb-empty' },
           h('span', null, 'Your bot answers only from what you add. '), addLink, h('span', null, ' or '),
           h('button', { type: 'button', class: 'sb-link', onclick: () => builderAction({ type: 'attach_samples', set: 'lumen-bikes' }) }, 'try the sample files'),
           h('span', null, '.'))
-        : h('p', { class: 'sb-empty' }, h('span', null, 'Your bot answers only from what you add. '), addLink, h('span', null, ' and it starts answering.')));
+        : h('p', { class: 'empty-state sb-empty' }, h('span', null, 'Your bot answers only from what you add. '), addLink, h('span', null, ' and it starts answering.')));
       requestAnimationFrame(fitGhost);
       return;
     }

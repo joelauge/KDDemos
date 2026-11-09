@@ -1200,7 +1200,7 @@ export function mount(ctx) {
     const emailIn = h('input', { type: 'email', id: 'co-email', name: 'email', class: 'input co-input', autocomplete: 'email', inputmode: 'email', spellcheck: 'false', required: true,
       'aria-describedby': 'co-email-hint', placeholder: 'you@company.com' });
     emailIn.value = t.email || '';
-    const emailErr = h('p', { class: 'co-field-err', id: 'co-email-err', hidden: true });
+    const emailErr = h('p', { class: 'form-error co-field-err', id: 'co-email-err', hidden: true });
     const submit = h('button', { type: 'submit', class: 'co-cta co-cta-lg' }, h('span', { class: 'co-spin', 'aria-hidden': 'true' }), h('span', { class: 'co-cta-label', dataset: { coPrice: 'submit' } }, `Continue to secure checkout · ${pr.text}`), h('span', { class: 'co-cta-ico', html: icon('lock', 15) }));
     const errBox = h('div', { class: 'co-err', role: 'alert', hidden: true });
     const samples = sampleOnly();
@@ -1513,7 +1513,7 @@ export function mount(ctx) {
     const card = h('div', { class: 'co-success' },
       h('div', { class: 'co-success-head' }, dot, h('div', null, h('b', null, `${botName()} is live`), h('small', null, 'Hosted, embeddable and answering only from your files'))),
       h('div', { class: 'co-row' }, h('span', { class: 'co-row-k' }, 'Hosted link'), h('a', { class: 'co-row-v co-mono', href: botUrl, target: '_blank', rel: 'noopener' }, botUrl.replace(/^https?:\/\//, '')), copyButton(botUrl, 'Copy', { small: true, what: 'Link copied', aria: 'Copy hosted link' })),
-      data.ownFiles === 0 ? h('div', { class: 'co-success-empty', role: 'note' },
+      data.ownFiles === 0 ? h('div', { class: 'alert alert-warn co-success-empty', role: 'note' },
         h('span', { class: 'co-success-empty-ico', html: icon('upload', 16) }),
         h('div', null, h('b', null, 'Sample files were removed at launch'), h('small', null, `${botName()} keeps your settings, tests and tone. Add your docs and it starts answering from them.`)),
         h('button', { type: 'button', class: 'btn btn-primary co-btn co-btn-primary is-small', onclick: () => addOwnFiles() }, h('span', { html: icon('upload', 14) }), 'Add your files')) : null,

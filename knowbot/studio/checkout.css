@@ -299,7 +299,8 @@
 .co-input { width: 100%; min-height: 46px; font-size: 15px; line-height: 1.2; transition: border-color var(--dur-1), box-shadow var(--dur-1); }   /* look: KnowDrive .input */
 .co-input[aria-invalid="true"] { border-color: var(--accent-red); }
 .co-hint { margin: 0; font-size: 12.5px; color: var(--dim); }
-.co-field-err { margin: 0; font-size: 12.5px; font-weight: 500; color: var(--bad); }
+.co-field-err { font-size: 12.5px; }   /* look: KnowDrive .form-error */
+:root[data-theme="dark"] .form-error { color: var(--bad); }   /* the package's red is 3.5:1 on the dark ground */
 .co-cta-lg { margin-top: 6px; min-height: 52px; font-size: 15.5px; }
 .co-err { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); background: var(--warn-soft); color: var(--strong); font-size: 13px; }
 .co-err[hidden] { display: none; }
@@ -375,8 +376,7 @@
 .co-codewrap { border-radius: 12px; border: 1px solid var(--line); overflow: hidden; background: var(--panel-2); }
 .co-code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .co-code { margin: 0; padding: 10px 12px; font-size: 12px; line-height: 1.55; color: var(--strong); white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; }
-.co-success-empty { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 10px; align-items: start; padding: 10px 12px; border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line)); background: var(--warn-soft); }
+.co-success-empty { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 10px; align-items: start; padding: 10px 12px; }   /* look: KnowDrive .alert (warning) */
 .co-success-empty-ico { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--panel); color: var(--warn); }
 .co-success-empty > div { display: grid; gap: 2px; }
 .co-success-empty b { font: 600 13.5px/1.3 var(--font); color: var(--strong); }

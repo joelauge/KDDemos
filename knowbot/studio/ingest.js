@@ -401,7 +401,7 @@ export function mount(ctx) {
   const rowsEl = h('ul', { class: 'in-rows', id: panelId, 'aria-label': 'Files' });
   // limits come from config (quota.fileBytes / quota.bytes), the same numbers validation and the server use
   const emptyT = h('p', { class: 'in-empty-t' });
-  const empty = h('div', { class: 'in-empty' },
+  const empty = h('div', { class: 'empty-state in-empty' },
     h('div', { class: 'in-empty-art', 'aria-hidden': 'true', html: icon('upload', { size: 20 }) }),
     h('div', { class: 'in-empty-copy' },
       emptyT,
@@ -2461,6 +2461,8 @@ export function mount(ctx) {
     setDs(r.li, 'stall', stall);
     setText(r.note, text);
     setDs(r.note, 'kind', kind);
+    // failures, retries and stalls are KnowDrive inline alerts; the calm "still working" line stays plain text
+    { const cls = `in-note${kind === 'bad' ? ' alert alert-danger' : kind === 'warn' || kind === 'stall' ? ' alert alert-warn' : ''}`; if (r.note.className !== cls) r.note.className = cls; }
     setHidden(r.note, !text);
     // rows with something to say (stall, retry, failure) never fold into the compact one-line form
     setDs(r.li, 'note', text && kind !== 'muted' ? 'yes' : '');

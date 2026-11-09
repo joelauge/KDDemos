@@ -1823,11 +1823,12 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       h('p', { class: 'gl-ratelim' }, h('span', { html: icon('bolt', 13) }),
         per ? h('span', null, h('b', null, `${per} requests per minute`), ' for this key. Every response carries ', h('code', { class: 'gl-mono' }, 'x-ratelimit-limit'), ', ', h('code', { class: 'gl-mono' }, 'x-ratelimit-remaining'), ' and ', h('code', { class: 'gl-mono' }, 'x-ratelimit-reset'), '; a 429 adds ', h('code', { class: 'gl-mono' }, 'retry-after'), ' (seconds).')
           : h('span', null, 'Every key is rate-limited per minute. Responses carry ', h('code', { class: 'gl-mono' }, 'x-ratelimit-*'), ' headers; a 429 adds ', h('code', { class: 'gl-mono' }, 'retry-after'), ' (seconds).')),
-      h('div', { class: 'gl-ref gl-ref-err', role: 'table', 'aria-label': 'Error codes' },
-        h('div', { class: 'gl-ref-r is-head', role: 'row' }, h('span', { role: 'columnheader' }, 'Status'), h('span', { role: 'columnheader' }, 'Code'), h('span', { role: 'columnheader' }, 'Meaning'), h('span', { role: 'columnheader' }, 'Example')),
-        rows.map(([st, code, m, ex]) => h('div', { class: 'gl-ref-r', role: 'row' },
-          h('span', { role: 'cell' }, h('span', { class: `gl-status ${st === '429' ? 'is-prev' : 'is-bad'}` }, st)),
-          h('code', { class: 'gl-mono', role: 'cell' }, code), h('span', { role: 'cell' }, m), h('code', { class: 'gl-mono gl-ref-t', role: 'cell' }, ex)))),
+      // KnowDrive's .data-table inside a .card (the container motif); the card scrolls sideways on a phone
+      h('div', { class: 'card gl-ref-wrap', tabindex: '0', role: 'region', 'aria-label': 'Error codes' }, h('table', { class: 'data-table is-static gl-ref gl-ref-err' },
+        h('thead', null, h('tr', null, ['Status', 'Code', 'Meaning', 'Example'].map((t) => h('th', { scope: 'col' }, t)))),
+        h('tbody', null, rows.map(([st, code, m, ex]) => h('tr', null,
+          h('td', null, h('span', { class: `gl-status ${st === '429' ? 'is-prev' : 'is-bad'}` }, st)),
+          h('td', null, h('code', { class: 'gl-mono' }, code)), h('td', null, m), h('td', null, h('code', { class: 'gl-mono gl-ref-t' }, ex))))))),
       h('div', { class: 'gl-code' },
         h('div', { class: 'gl-code-bar' }, h('span', { class: 'gl-code-label' }, 'Error body (every status)')),
         h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'Example error body' }, h('code', { html: highlightJson({ error: { message: `Rate limit reached (${per || 30} requests per minute for this key). Retry in 12s.`, type: 'rate_limit_error', code: 'rate_limit_exceeded', param: null, status: 429 } }) }))));
@@ -1843,9 +1844,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       ['proof.quoted[]', '{n, text, file}', 'The verbatim lines the answer was built from'],
       ['usage.latencyMs', 'number', 'Server time for this answer'],
     ];
-    return h('div', { class: 'gl-ref', role: 'table', 'aria-label': 'Response fields' },
-      h('div', { class: 'gl-ref-r is-head', role: 'row' }, h('span', { role: 'columnheader' }, 'Field'), h('span', { role: 'columnheader' }, 'Type'), h('span', { role: 'columnheader' }, 'Meaning')),
-      rows.map(([f, t, m]) => h('div', { class: 'gl-ref-r', role: 'row' }, h('code', { class: 'gl-mono', role: 'cell' }, f), h('code', { class: 'gl-mono gl-ref-t', role: 'cell' }, t), h('span', { role: 'cell' }, m))));
+    return h('div', { class: 'card gl-ref-wrap', tabindex: '0', role: 'region', 'aria-label': 'Response fields' }, h('table', { class: 'data-table is-static gl-ref' },
+      h('thead', null, h('tr', null, ['Field', 'Type', 'Meaning'].map((t) => h('th', { scope: 'col' }, t)))),
+      h('tbody', null, rows.map(([f, t, m]) => h('tr', null, h('td', null, h('code', { class: 'gl-mono' }, f)), h('td', null, h('code', { class: 'gl-mono gl-ref-t' }, t)), h('td', null, m))))));
   }
 
   // ------------------------------------------------------------ go

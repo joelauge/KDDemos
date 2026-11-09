@@ -2552,8 +2552,9 @@ function openSpec(focusField) {
   setState({ ui: { ...s.ui, specOpen: true } }, 'spec:open');
   const titleId = 'st-spec-title';
   specEl = h('div', { class: 'st-drawer', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId });
-  const scrim = h('div', { class: 'st-scrim', onclick: () => closeSpec() });
-  const panel = h('div', { class: 'st-drawer-panel' });
+  // KnowDrive's slide-in drawer look (.drawer-backdrop / .drawer); it opens from the Builder side, under the header
+  const scrim = h('div', { class: 'drawer-backdrop st-scrim', onclick: () => closeSpec() });
+  const panel = h('div', { class: 'drawer st-drawer-panel' });
   specEl.append(scrim, panel);
   panel.append(
     h('div', { class: 'st-drawer-head' },
@@ -3042,7 +3043,7 @@ store.registerCard('email-capture', (data, el) => {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const v = input.value.trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) { msg.textContent = 'That email looks incomplete. Try name@company.com.'; msg.className = 'st-field-msg is-bad'; input.setAttribute('aria-invalid', 'true'); input.focus(); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) { msg.textContent = 'That email looks incomplete. Try name@company.com.'; msg.className = 'form-error st-field-msg is-bad'; input.setAttribute('aria-invalid', 'true'); input.focus(); return; }
     input.removeAttribute('aria-invalid');
     sendBtn.disabled = true; sendBtn.setAttribute('aria-busy', 'true'); $('.st-btn-label', sendBtn).textContent = 'Sending…';
     msg.textContent = ''; msg.className = 'st-field-msg';
@@ -3061,7 +3062,7 @@ store.registerCard('email-capture', (data, el) => {
     } catch (err) {
       sendBtn.disabled = false; sendBtn.removeAttribute('aria-busy'); $('.st-btn-label', sendBtn).textContent = 'Send me the link';
       msg.textContent = err.status === 0 ? "Couldn't reach the studio. Your bot is safe; try again." : (err.message || "Couldn't save that email.");
-      msg.className = 'st-field-msg is-bad';
+      msg.className = 'form-error st-field-msg is-bad';
     }
   });
 });
@@ -3566,12 +3567,12 @@ store.registerCard('store-import', (data, el) => {
     const v = input.value.trim();
     msg.className = 'st-field-msg'; msg.textContent = '';
     if (!v || v.length > 2048 || /\s/.test(v)) {
-      msg.textContent = "That doesn't look like a web address. Try something like yourwebsite.com."; msg.className = 'st-field-msg is-bad';
+      msg.textContent = "That doesn't look like a web address. Try something like yourwebsite.com."; msg.className = 'form-error st-field-msg is-bad';
       input.setAttribute('aria-invalid', 'true'); input.focus(); return;
     }
     input.removeAttribute('aria-invalid');
     if (!own.checked) {
-      msg.textContent = 'Tick the box to confirm you own or manage this website.'; msg.className = 'st-field-msg is-bad';
+      msg.textContent = 'Tick the box to confirm you own or manage this website.'; msg.className = 'form-error st-field-msg is-bad';
       own.focus(); return;
     }
     find(v);
@@ -3794,8 +3795,8 @@ store.registerCard('insights', (data, el) => {
   const topCol = h('section', { class: 'st-ins-col', 'aria-label': 'Most asked' }, h('h3', null, 'Most asked'));
   const gapCol = h('section', { class: 'st-ins-col st-ins-gaps', 'aria-label': 'Gaps, refused questions' }, h('h3', null, h('span', { html: icon('shield', 13) }), ' Gaps · refused'));
   const topList = h('ol', { class: 'st-ins-list' }); const gapList = h('ol', { class: 'st-ins-list' });
-  const topEmpty = h('p', { class: 'st-field-hint' }, 'No answered questions yet.');
-  const gapEmpty = h('p', { class: 'st-field-hint' }, 'No gaps: every question so far was answered from your files.');
+  const topEmpty = h('p', { class: 'empty-state st-field-hint st-ins-empty' }, 'No answered questions yet.');
+  const gapEmpty = h('p', { class: 'empty-state st-field-hint st-ins-empty' }, 'No gaps: every question so far was answered from your files.');
   const offNote = h('p', { class: 'st-field-hint st-ins-off', hidden: true });
   topCol.append(topList, topEmpty); gapCol.append(gapList, gapEmpty, offNote);
   const card = h('div', { class: 'card st-card st-insights' },
@@ -4932,16 +4933,18 @@ function confirmStartOver() {
   ensureOverlay();
   const files = Object.values(getState().files || {}).filter((f) => f && !f.sample).length;
   const titleId = 'st-restart-title', descId = 'st-restart-desc';
-  const err = h('p', { class: 'st-restart-err', role: 'alert', hidden: true });
+  const err = h('p', { class: 'alert alert-danger st-restart-err', role: 'alert', hidden: true });
   const cancel = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost', onclick: () => close() }, 'Cancel');
   const go = h('button', { type: 'button', class: 'btn btn-danger st-btn st-btn-danger', onclick: () => run() }, h('span', { html: icon('refresh', 15), 'aria-hidden': 'true' }), h('span', { class: 'st-btn-label' }, 'Delete and start over'));
   const panel = h('div', { class: 'st-confirm-panel' },
     h('h2', { id: titleId }, 'Start over from scratch?'),
     h('p', { id: descId }, `This permanently deletes ${botName()}, ${files ? `your ${files} uploaded file${files === 1 ? '' : 's'}, ` : ''}its settings, this conversation and the questions it has logged. Any link you saved to this bot will stop working. This can't be undone.`),
     err,
-    h('div', { class: 'st-confirm-actions' }, cancel, go));
-  startOverEl = h('div', { class: 'st-confirm', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': titleId, 'aria-describedby': descId },
-    h('div', { class: 'st-scrim', onclick: () => close() }), panel);
+    h('div', { class: 'actions st-confirm-actions' }, cancel, go));
+  // KnowDrive's .confirm-dialog (scrim + centred panel + .actions); the click-away layer is a <span> so the
+  // package's ".confirm-dialog > div" panel rule only reaches the panel
+  startOverEl = h('div', { class: 'confirm-dialog st-confirm', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': titleId, 'aria-describedby': descId },
+    h('span', { class: 'st-confirm-away', 'aria-hidden': 'true', onclick: () => close() }), panel);
   slots.overlay.append(startOverEl);
   motion.animate(panel, [{ transform: 'translateY(8px) scale(.98)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: motion.DUR[2], easing: 'out' });
   const rec = openDialog(startOverEl, { onClose: () => { startOverEl && startOverEl.remove(); startOverEl = null; }, initialFocus: () => cancel });
@@ -5012,7 +5015,7 @@ async function createTrialWithRetry() {
       return r;
     } catch (err) {
       if (err.status === 503 && err.code === 'no_store') {
-        setHint(h('span', null, icon('warn', 14), " The studio isn't connected to a knowDrive store on this server."));
+        setHint(h('span', { class: 'alert alert-danger st-hint-row' }, h('span', { html: icon('warn', 14) }), " The studio isn't connected to a knowDrive store on this server."));
         return null;
       }
       const limited = err.status === 429;
@@ -5033,7 +5036,7 @@ function countdown(sec, fmt = null) {
     const retry = h('button', { type: 'button', class: 'st-link-btn', onclick: () => retryNowFn && retryNowFn() }, 'Retry now');
     const paint = () => { label.textContent = fmt ? fmt(left) : `Couldn't reach the studio. Retrying in ${left}s…`; };
     paint();
-    setHint(h('span', { class: 'st-hint-row' }, h('span', { html: icon('warn', 14) }), label, retry));
+    setHint(h('span', { class: 'alert alert-warn st-hint-row' }, h('span', { html: icon('warn', 14) }), label, retry));   // KnowDrive inline alert
     clearInterval(retryTimerId);
     retryTimerId = setInterval(() => { left--; if (left <= 0) { clearInterval(retryTimerId); label.textContent = 'Retrying…'; resolve(); } else paint(); }, 1000);
   });

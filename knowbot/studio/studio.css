@@ -44,6 +44,9 @@
   --panel: var(--bg-surface);
   --panel-2: #16161f;                   /* between --bg-surface and --bg-elevated (read by no script) */
   --raise: var(--bg-elevated);          /* KnowDrive's dark --surface-hover (#2a2a3c) puts --text-muted at 4.25:1 (contract 4.2); this keeps 5.1:1 */
+  /* KnowDrive declares --text-secondary light-only (#5a5a6e, "a dark value goes with #127c"), so .empty-state,
+     .status-card-body and .muted read 3:1 on the dark ground; the Studio gives it the dark muted value meanwhile */
+  --text-secondary: var(--text-muted);
   --good: var(--accent-green);          /* 9.8:1 on the dark ground */
   --warn: #fbbf24;
   --bad: #f87171;                       /* --accent-red is 3.5:1 on dark: too faint for text */
@@ -393,13 +396,10 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-bothead-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .st-bothead-banner { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; }
 .st-bothead-banner > #st-bot-banner { min-width: 0; max-width: 100%; }
-.st-bothead-banner .sb-banner {
-  min-height: 30px; padding: 3px 6px 3px 12px; border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); border-radius: 999px;
+.st-bothead-banner .sb-banner {   /* look: KnowDrive .alert; the header's compact one-line form only here */
+  min-height: 30px; padding: 3px 6px 3px 10px;
   flex-wrap: nowrap; white-space: nowrap; overflow: hidden; font-size: 12.5px; gap: 8px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
 }
-.st-bothead-banner .sb-banner.is-warn { border-color: color-mix(in srgb, var(--warn) 30%, var(--line)); }
-.st-bothead-banner .sb-banner.is-reask { border-color: color-mix(in srgb, var(--good) 30%, var(--line)); }
 .st-bothead-banner .sb-banner > span:not(.sb-banner-seg) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .st-bothead-banner .sb-banner .sb-btn { white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .st-bothead-banner .sb-banner-seg { margin-left: 4px; flex: none; }
@@ -603,7 +603,7 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-copyrow { display: flex; gap: 8px; }
 .st-copyrow .st-text { flex: 1 1 auto; font-size: 12.5px; }
 .st-field-msg { margin: 0; font-size: 12.5px; color: var(--muted); }
-.st-field-msg.is-bad { color: var(--bad); }
+.st-field-msg.is-bad { font-size: 12.5px; }   /* look: KnowDrive .form-error */
 
 .st-insights { container-type: inline-size; }
 .st-insights .st-card-head { flex-wrap: wrap; row-gap: 2px; }
@@ -665,11 +665,11 @@ textarea.st-text { resize: vertical; }
 
 /* spec drawer: a right-side drawer over the Builder pane (desktop), a bottom sheet on mobile */
 .st-drawer { position: fixed; inset: 0; z-index: 70; }
-.st-drawer > .st-scrim { background: rgb(2 6 23 / .32); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.st-drawer > .st-scrim { position: absolute; z-index: auto; backdrop-filter: none; -webkit-backdrop-filter: none; }   /* look: .drawer-backdrop */
+/* look: KnowDrive .drawer; the Studio's spec drawer opens on the Builder (left) side, under the header */
 .st-drawer-panel {
-  position: absolute; top: calc(var(--st-header-h) + var(--st-spine-h)); bottom: 0; left: max(0px, calc((100vw - 1680px) / 2));
-  width: min(440px, 100vw); display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line);
-  box-shadow: 24px 0 48px -24px rgb(2 6 23 / .35);
+  position: absolute; top: calc(var(--st-header-h) + var(--st-spine-h)); right: auto; bottom: 0; left: max(0px, calc((100vw - 1680px) / 2));
+  width: min(440px, 100vw); z-index: auto; overflow: hidden; border-left: 0; border-right: 1px solid var(--border-base);
 }
 .st-drawer-head { display: flex; align-items: flex-start; gap: 10px; padding: 16px var(--st-gutter) 12px; border-bottom: 1px solid var(--line); }
 .st-drawer-head h2 { margin: 0; font: 700 17px/1.2 var(--display); color: var(--strong); }
@@ -1288,22 +1288,21 @@ textarea.st-text { resize: vertical; }
 /* r8 (D11): a question asked several ways is one insights row with a quiet "asked N ways" note */
 .st-ins-ways { flex: none; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-2); font: 500 10.5px/1.5 var(--font); white-space: nowrap; }
 .st-ins-off { margin-top: 6px; }
+.st-ins-empty { padding: 12px; text-align: left; }
 /* ---------------------------------------------------------------- Start over (header button + confirmation) */
 .st-restart { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line-2);
   background: transparent; color: var(--body, var(--strong)); font: 600 13px/1 var(--font); cursor: pointer; transition: background-color var(--dur-1), color var(--dur-1), border-color var(--dur-1); }
 .st-restart:hover { background: var(--raise); color: var(--strong); }
 .st-restart:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
-.st-confirm { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 16px; }
-.st-confirm > .st-scrim { position: absolute; inset: 0; }
-.st-confirm-panel { position: relative; width: min(460px, 100%); padding: 22px 22px 18px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line-2);
-  box-shadow: 0 24px 60px rgba(2, 6, 23, .28); color: var(--strong); }
-.st-confirm-panel h2 { margin: 0 0 8px; font: 700 18px/1.3 var(--font-display, var(--font)); }
-.st-confirm-panel p { margin: 0 0 14px; font: 400 14px/1.55 var(--font); color: var(--body, var(--strong)); }
-.st-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.st-btn-danger:disabled, .st-confirm .st-btn:disabled { opacity: .7; cursor: progress; }
-.st-restart-err { margin: 0 0 12px !important; padding: 8px 10px; border-radius: 8px; background: rgba(180, 35, 24, .08); color: #b42318 !important; }
-:root[data-theme="dark"] .st-restart-err { color: #fda29b !important; background: rgba(253, 162, 155, .1); }
-@media (max-width: 899px) { .st-confirm { place-items: end center; } .st-confirm-panel { width: 100%; border-radius: 16px 16px 12px 12px; } .st-confirm-actions .st-btn { flex: 1 1 auto; min-height: 44px; } }
+.st-confirm { z-index: 90; padding: 16px; }   /* look: KnowDrive .confirm-dialog */
+.st-confirm-away { position: absolute; inset: 0; }
+.st-confirm-panel { position: relative; width: min(460px, 100%); gap: 0 !important; color: var(--text-heading); }
+.st-confirm-panel h2 { margin: 0 0 8px; font: 700 18px/1.3 var(--font); }
+.st-confirm-panel p { margin: 0 0 14px; font: 400 14px/1.55 var(--font); color: var(--text-body); }
+.st-confirm-actions { flex-wrap: wrap; }
+.st-confirm .btn:disabled { opacity: .7; cursor: progress; }
+.st-restart-err { margin: 0 0 12px !important; }
+@media (max-width: 899px) { .st-confirm { align-items: flex-end; } .st-confirm-panel { width: 100%; max-width: none !important; } .st-confirm-actions .st-btn { flex: 1 1 auto; min-height: 44px; } }
 
 /* ---- "Enter your website": the finder's plan, the background job, the summary (owner U) ---- */
 .st-si-plan, .st-si-sum, .st-si-recent { display: grid; gap: 10px; min-width: 0; }
