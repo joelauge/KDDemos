@@ -546,11 +546,11 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 
 /* composer */
 .st-composer-wrap { flex: none; padding: 10px var(--st-gutter) calc(14px + var(--kb-inset)); border-top: 1px solid var(--line); background: var(--panel); }
-.st-composer {
-  display: flex; align-items: flex-end; gap: 6px; padding: 6px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--panel);
-  box-shadow: var(--st-shadow-1); transition: border-color var(--dur-1), box-shadow var(--dur-2);
+.st-composer {   /* look: KnowDrive .input (the box is the text field); layout only here */
+  display: flex; align-items: flex-end; gap: 6px; padding: 6px; transition: border-color var(--dur-1), box-shadow var(--dur-2);
 }
-.st-composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line-2)); box-shadow: 0 0 0 4px var(--accent-soft); }
+/* .input's focus state, carried by the box while its textarea has focus */
+.st-composer:focus-within, .sb-comp-box:focus-within { border-color: var(--accent-purple); box-shadow: var(--focus-ring); }
 .st-composer.is-busy {
   border: 1px solid transparent;
   background: linear-gradient(var(--panel), var(--panel)) padding-box,

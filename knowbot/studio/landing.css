@@ -120,14 +120,11 @@
 .kl.has-value .kl-ph { visibility: hidden; }
 @keyframes kl-blink { 50% { opacity: 0; } }
 
-.kl-go {
-  display: inline-flex; align-items: center; justify-content: center; gap: 10px; flex: none; height: 60px; padding: 0 26px 0 28px;
-  border-radius: 999px; background: var(--btn); color: #fff; cursor: pointer;
-  font: 700 17px/1 var(--display); letter-spacing: -.01em; white-space: nowrap;
-  box-shadow: 0 1px 0 rgb(255 255 255 / .18) inset, 0 10px 24px -10px rgb(79 70 229 / .7);
+.kl-go {   /* look: KnowDrive .btn.btn-primary; size, and the pill shape that sits in the pill-shaped box, only here */
+  gap: 10px; flex: none; height: 60px; padding: 0 26px 0 28px; border-radius: 999px;
+  font-size: 17px; line-height: 1; letter-spacing: -.01em; white-space: nowrap;
   transition: background-color var(--dur-1), transform var(--dur-1) var(--ease-out);
 }
-.kl-go:hover { background: var(--btn-hover); }
 .kl-go:hover .kl-ico { transform: translateX(3px); }
 .kl-go .kl-ico { transition: transform var(--dur-2) var(--ease-out); }
 .kl-go:active { transform: scale(.97); }
@@ -135,13 +132,11 @@
 
 /* three quiet ways in */
 .kl-alts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 10px; margin-top: 16px; }
-.kl-alt {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 999px; cursor: pointer;
-  font: 500 14.5px/1 var(--font); color: var(--text); background: transparent; border: 1px solid var(--line);
+.kl-alt {   /* look: KnowDrive .btn.btn-ghost; size only here */
+  gap: 8px; min-height: 44px; padding: 0 16px; font-size: 14.5px; line-height: 1;
   transition: background-color var(--dur-1), border-color var(--dur-1), color var(--dur-1), transform var(--dur-1);
 }
 .kl-alt .kl-ico { color: var(--accent-2); }
-.kl-alt:hover { background: var(--panel); border-color: var(--line-2); color: var(--strong); }
 .kl-alt:active { transform: scale(.97); }
 .kl-alt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 999px; }
 

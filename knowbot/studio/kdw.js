@@ -151,7 +151,13 @@ export function mountRowMenu(host, props) {
     m.style.top = `${Math.max(8, below ? r.bottom + 4 : r.top - 4 - mh)}px`;
     m.style.left = `${Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8))}px`;
   };
-  const onScroll = (e) => { const m = menuEl(); if (m && !m.contains(e.target)) close(); };
+  // a scroll moves the menu with its trigger; once the trigger has scrolled out of view the menu closes
+  const onScroll = (e) => {
+    const m = menuEl(), t = trigger();
+    if (!m || !t || m.contains(e.target)) return;
+    const r = t.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight || !r.width) close(); else place(m);
+  };
   // CSS containment (contain: layout/paint) on an ancestor would trap and clip a fixed menu: lift it while open
   let lifted = [];
   const lift = () => { for (let n = host.parentElement; n && n !== document.body; n = n.parentElement) { const c = getComputedStyle(n).contain; if (c && c !== 'none') { n.setAttribute('data-kdw-uncontain', ''); lifted.push(n); } } };

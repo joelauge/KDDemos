@@ -622,7 +622,7 @@ function renderSetupPane() {
   const attach = h('button', { type: 'button', class: 'st-iconbtn st-attach', 'aria-label': 'Add files', title: 'Add files', html: icon('paperclip', 18),
     onclick: () => { emit('intake:open', {}); if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); } });
   const send = h('button', { type: 'submit', class: 'st-send', 'aria-label': 'Send to the Builder', html: icon('arrowUp', 18) });
-  formEl = h('form', { id: 'st-setup-form', class: 'st-composer', onsubmit: (e) => { e.preventDefault(); submitComposer(); } },
+  formEl = h('form', { id: 'st-setup-form', class: 'input st-composer', onsubmit: (e) => { e.preventDefault(); submitComposer(); } },
     attach, composerEl, send);
   composerEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submitComposer(); }

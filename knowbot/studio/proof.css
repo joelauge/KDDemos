@@ -533,11 +533,9 @@
 /* ------------------------------------------------------------------ composer (#sb-composer-slot) */
 #sb-composer-slot { position: relative; }
 .sb-composer { position: relative; padding: 8px var(--st-gutter) 12px; }
-.sb-comp-box {
-  display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 14px; border-radius: 16px; border: 1px solid var(--line-2);
-  background: var(--panel); box-shadow: var(--st-shadow-1); transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+.sb-comp-box {   /* look: KnowDrive .input; layout only here (focus state in studio.css) */
+  display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 14px; transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
-.sb-comp-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .sb-input {
   flex: 1 1 auto; min-height: 30px; max-height: 132px; padding: 6px 0; border: 0; outline: 0; resize: none; background: transparent;
   color: var(--strong); font: 400 15px/1.45 var(--font);
@@ -686,7 +684,8 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
 }
 .pf-drawer[data-mode="dock"] .pf-dpanel { position: absolute; inset: 0; width: auto; border-left: 0; box-shadow: none; }
 .pf-grip { display: none; }
-.pf-dhead { display: grid; grid-template-columns: 52px minmax(0, 1fr) 36px; gap: 12px; align-items: start; padding: 16px 16px 12px; border-bottom: 1px solid var(--line); }
+/* the head keeps its ring | title | close grid (KnowDrive's .drawer > header is a column: the close would drop below) */
+.pf-dpanel > .pf-dhead { display: grid; grid-template-columns: 52px minmax(0, 1fr) 36px; gap: 12px; align-items: start; padding: 16px 16px 12px; border-bottom: 1px solid var(--border-base); }
 .pf-ring {
   --p: 0%;
   position: relative; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%;

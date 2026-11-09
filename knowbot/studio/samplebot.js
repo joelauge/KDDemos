@@ -3123,7 +3123,7 @@ export function mount(ctx) {
   const personaPill = h('span', { class: 'sb-persona', hidden: true });
   const hint = h('span', { class: 'sb-hint', id: hintId });
   const moreBtn = h('button', { type: 'button', class: 'sb-more', 'aria-label': 'More options', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, ico('more', 16));
-  const compBox = h('div', { class: 'sb-comp-box' }, h('label', { class: 'st-sr', for: inputId }, 'Ask your bot'), ta, send);
+  const compBox = h('div', { class: 'input sb-comp-box' }, h('label', { class: 'st-sr', for: inputId }, 'Ask your bot'), ta, send);
   const compMeta = h('div', { class: 'sb-comp-meta' }, scopeBtn, personaPill, hint, moreBtn);
   const form = h('form', { class: 'sb-composer', novalidate: true }, compBox, compMeta);
   dom.composer.innerHTML = '';
