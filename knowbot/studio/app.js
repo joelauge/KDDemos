@@ -629,7 +629,7 @@ function renderSetupPane() {
   });
   composerEl.addEventListener('input', autoGrow);
   const head = h('div', { class: 'st-setup-head' },
-    h('span', { class: 'st-glyph st-glyph-lg', 'aria-hidden': 'true', html: icon('builder', 16) }),
+    h('span', { class: 'st-glyph st-glyph-lg st-glyph-kd', 'aria-hidden': 'true', html: icon('logo', 18) }),
     h('div', { class: 'st-setup-title' }, h('h2', null, 'Builder'), h('p', { id: 'st-setup-sub' }, setupSubtitle())));
   el.append(head, hintEl, logEl, h('div', { class: 'st-composer-wrap' }, formEl));
   if (typed) { composerEl.value = typed; autoGrow(); }
@@ -1026,7 +1026,7 @@ function createAssistant({ typing = false, id, still = false, decision = null } 
   const chips = chipsEl();
   chips.hidden = true;
   const el = h('article', { class: 'st-msg st-msg-a', dataset: { id: id || uid('a') } },
-    h('div', { class: 'st-glyph', 'aria-hidden': 'true', html: icon('builder', 14) }),
+    h('div', { class: 'st-glyph st-glyph-kd', 'aria-hidden': 'true', html: icon('logo', 15) }),
     h('div', { class: 'st-msg-main' }, h('span', { class: 'st-sr' }, 'Builder: '), textEl, srEl, cardsEl, chips));
   const rec = { id: el.dataset.id, role: 'assistant', text: '', cards: [], chips: null, el, textEl, srEl, cardsEl, chipsEl: chips, buf: '', done: false };
   if (typing) {
