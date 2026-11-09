@@ -28,7 +28,7 @@ By default a live key can make 60 requests per minute and a trial key 20 request
 
 Source: /v1
 
-`GET /v1/models` lists the bot a key can use, in OpenAI's list shape. `GET /v1/openapi.json` describes the API in OpenAPI 3.1. `POST /v1/bots/:botId/voice` takes audio (or text) and returns a transcript, the answer and spoken audio when Google speech is configured. Each answer has a public proof page at `/p/<id>`.
+`GET /v1/models` lists the bot a key can use, in OpenAI's list shape. `GET /v1/openapi.json` describes the API in OpenAPI 3.1. `POST /v1/bots/:botId/voice` takes audio (or text) and returns a transcript, the answer and, when available, spoken audio. Each answer has a public proof page at `/p/<id>`.
 
 ## Code samples
 

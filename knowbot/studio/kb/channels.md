@@ -28,7 +28,7 @@ The telephone (Phone) channel uses Twilio Voice and works for any KnowBot, a tri
 
 Source: /studio/
 
-Phone calls are voice-to-voice with Gemini Live: the call audio streams to Gemini Live, which listens and speaks itself, and before every answer it looks the question up in the bot's files and reads back the cited answer. If it ever speaks a figure, such as a price or a date, without having looked the question up, that turn is flagged as ungrounded in the bot's question insights. A call ends with a short goodbye after 15 minutes by default, and only a limited number of calls can be open at once. KnowBot runs the voice service for you, so there is nothing extra to set up. Every question asked by phone shows up in the bot's question insights under Phone.
+Phone calls are live voice to voice: the bot listens and speaks in real time, and before every answer it looks the question up in the bot's files and reads back the cited answer. If it ever speaks a figure, such as a price or a date, without having looked the question up, that turn is flagged as ungrounded in the bot's question insights. A call ends with a short goodbye after 15 minutes by default, and only a limited number of calls can be open at once. KnowBot runs the voice service for you, so there is nothing extra to set up. Every question asked by phone shows up in the bot's question insights under Phone.
 
 ## Texted checkout links on calls
 
@@ -52,7 +52,7 @@ The email channel answers messages received through an inbound-parse webhook fro
 
 Source: /studio/
 
-The voice chatbot lets a visitor talk to the bot in their browser and hear the answer. In KnowBot Studio, "Try it" works with no account. It uses Google speech services when they are configured and the browser's own speech recognition and speech synthesis otherwise.
+The voice chatbot lets a visitor talk to the bot in their browser and hear the answer. In KnowBot Studio, "Try it" works with no account. It uses the same live voice as phone calls: the visitor talks naturally, and the bot answers out loud from the bot's files while the sources show on screen as links.
 
 ## When a channel is not set up
 

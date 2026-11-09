@@ -2183,10 +2183,11 @@ describe('Enter a Store URL: an import survives a server restart (persisted job,
     const after = rowsOf(t);
     assert.equal(after.length, 28);
     assert.equal(new Set(after.map((f) => f.filename)).size, 28, 'no page written twice');
-    // every product page's own copy was read (enrich defaults to all), each at most twice (a read cut by the deadline)
+    // every product page's own copy was read (enrich defaults to all); a read cut by a round's deadline is read again in
+    // the next round, so at most once per round (plus the one that finished)
     for (const f of after.filter((x) => /\/product\/slow-\d+\.md$/.test(x.filename))) {
       const p = `/products/${f.filename.split('/').pop().replace(/\.md$/, '')}`;
-      assert.ok((shop.hits.get(p) || 0) >= 1 && (shop.hits.get(p) || 0) <= 2, `${p} read ${shop.hits.get(p)} times`);
+      assert.ok((shop.hits.get(p) || 0) >= 1 && (shop.hits.get(p) || 0) <= rounds.length + 1, `${p} read ${shop.hits.get(p)} times in ${rounds.length + 1} rounds`);
     }
     const spec = await specOf(t);
     assert.equal(spec.flags.storeJob.state, 'done');

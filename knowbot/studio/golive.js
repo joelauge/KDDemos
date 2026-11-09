@@ -432,10 +432,10 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Twilio CLI', lang: 'sh', code: `twilio phone-numbers:update +15551234567 \\\n  --sms-url="${ch('sms')}"` },
           { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token   # verifies X-Twilio-Signature' },
         ] },
-      { id: 'phone', name: 'Telephone', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Twilio Media Streams · Gemini Live voice-to-voice', hue: 3, url: ch('voice'), status: 'Needs a Twilio number', tryLabel: 'Call simulator',
+      { id: 'phone', name: 'Telephone', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Your Twilio number · live voice', hue: 3, url: ch('voice'), status: 'Needs a Twilio number', tryLabel: 'Call simulator',
         needs: ['A Twilio account and a voice-capable phone number (KnowBot runs the voice for you)'],
         steps: ['In Twilio, open your number and set “A call comes in” to Webhook, HTTP POST, with the URL below.',
-          'KnowBot answers with <Connect><Stream>: the call is streamed to Gemini Live, which listens and speaks in real time and looks up every answer in your files.',
+          'KnowBot picks up and talks with the caller in real time, looking up every answer in your files and naming the source.',
           'Every question asked on a call is logged to your question insights.'],
         configs: [
           { label: 'Twilio Console', lang: 'text', code: `Phone Numbers → Active numbers → (your number) → Voice\n  A call comes in:  Webhook\n  URL:              ${ch('voice')}\n  HTTP:             POST` },
@@ -469,19 +469,15 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Inline panel', lang: 'html', code: `<div id="help"></div>\n${embed.replace('<script ', '<script data-mode="inline" data-target="#help" ')}` },
           { label: 'Full-page link', lang: 'text', code: `${siteBase}demo/chat.html?instance=${id}` },
         ] },
-      // Web voice assistant (lib/voice-widget.js over GET /v1/bots/:id/voice/live, server/channels/webvoice.mjs): Gemini Live
-      // voice to voice when GEMINI_API_KEY is set on the server, else browser speech; sources as chips while it speaks.
-      { id: 'voice', name: 'Web voice assistant', blurb: 'Visitors talk to your bot from a mic button on your site and hear the answer, with its sources on screen as it speaks.', provider: liveVoice() ? 'Gemini Live voice to voice' : googleVoice() ? 'Google Cloud speech' : 'Browser speech · live voice when configured', hue: 5, url: `${apiRoot}/v1/bots/${id}/voice`, status: 'Try it now', tryLabel: 'Talk to your bot',
+      // Web voice assistant (lib/voice-widget.js over GET /v1/bots/:id/voice/live, server/channels/webvoice.mjs): the same
+      // live voice engine as the phone. Customer-facing copy never names the voice provider (owner rule).
+      { id: 'voice', name: 'Web voice assistant', blurb: 'Visitors talk to your bot from a mic button on your site and hear the answer, with its sources on screen as it speaks.', provider: 'Live voice · on your website', hue: 5, url: webVoiceUrl(), status: 'Try it now', tryLabel: 'Talk to your bot',
         needs: ['Nothing: paste one line on your site (KnowBot runs the voice for you)'],
-        steps: ['Paste the embed below on your site: a mic button that opens the voice assistant (tap to talk, or hold to talk).', 'It streams the visitor\'s voice over a WebSocket and speaks the answer from your sources, naming each one; the sources show as links while it speaks.', 'Without a Gemini key it still works: the browser recognizes speech and reads the cited answer aloud. Or record a clip and POST it to the voice endpoint below.'],
+        steps: ['Paste the embed below on your site: a mic button that opens the voice assistant (tap to talk, or hold to talk).', 'It talks with the visitor in real time, the same live voice as your phone line, and speaks the answer from your sources, naming each one; the sources show as links while it speaks.'],
         configs: [
           // a trial bot needs its trial key in the embed (masked on screen, real on Copy); a launched bot's voice socket is public
           { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-talk="hold" for push-to-talk; data-target="#id" to place it inline -->` },
           { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
-          // CONTRACT-GAP (F): response shape of POST /v1/bots/:id/voice is not fixed in SPEC 11.3; documented as below.
-          // Same trial key as the Developers tab: masked on screen (Show key reveals it), the real key on Copy.
-          { label: 'Browser (fetch)', lang: 'js', secret: true, code: (mode) => `// clip: a Blob from MediaRecorder (audio/webm)\nconst res = await fetch("${apiRoot}/v1/bots/${id}/voice", {\n  method: "POST",\n  headers: { Authorization: "Bearer ${keyFor(mode)}", "Content-Type": clip.type },\n  body: clip,\n});\nconst { transcript, answer, citations, audio, mime } = await res.json();\nnew Audio(\`data:\${mime};base64,\${audio}\`).play();` },
-          { label: 'Environment', lang: 'sh', code: 'GEMINI_API_KEY=your_gemini_api_key        # live voice to voice (web voice assistant + phone)\nGOOGLE_STT_API_KEY=your_google_api_key   # optional: the clip endpoint\nGOOGLE_TTS_API_KEY=your_google_api_key\nGOOGLE_TTS_VOICE=en-US-Neural2-F' },
         ] },
     ]));
   };
@@ -536,7 +532,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function chStatus(c) {
     const info = dev().channels && dev().channels[CH_KEY[c.id]];
     if (!info) return { tone: /Try|Live/.test(c.status) ? 'go' : 'off', label: c.status, needs: null, known: false };
-    const needs = Array.isArray(info.needs) ? info.needs.filter(Boolean) : [];
+    // KnowBot's own voice settings are never the customer's to set, and the provider is never named on screen
+    const needs = Array.isArray(info.needs) ? info.needs.filter((n) => n && !/GEMINI|GOOGLE/i.test(String(n))) : [];
+    if (!info.configured && !needs.length) return { tone: 'off', label: 'Coming soon on this server', needs, known: true, info };
     if (info.configured && !needs.length) return { tone: 'go', label: TESTABLE[c.id] ? 'Ready · send a test' : 'Ready · try it now', needs, known: true, info };
     if (info.configured) return { tone: 'warn', label: `Receives · needs ${needs.length === 1 ? '1 setting' : `${needs.length} settings`}`, needs, known: true, info };
     return { tone: 'off', label: needs.length === 1 ? `Needs ${needs[0]}` : needs.length ? `Needs ${needs.length} settings` : c.status, needs, known: true, info };
@@ -692,7 +690,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const label = h('span', null, 'Send test webhook');
     const btn = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small gl-tw-btn' }, h('span', { class: 'gl-tw-ico', html: icon('play', 13) }), label);
     const q = () => (exampleExchange()?.question || starterQs()[0] || validatedQ || '');
-    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming Twilio call (the reply streams it to Gemini Live)' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS (Twilio shape)', ch === 'voice' ? '.' : ', asking your first starter question.');
+    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming Twilio call (the reply connects it to live voice)' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS (Twilio shape)', ch === 'voice' ? '.' : ', asking your first starter question.');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       btn.disabled = true; btn.classList.add('is-busy'); label.textContent = 'Sending…';
@@ -1030,17 +1028,14 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function webVoiceTry(el) {
     const host = h('div', { class: 'gl-webvoice' });
     const note = h('p', { class: 'gl-tw-hint', role: 'status' }, 'Loading the voice assistant…');
-    const classic = h('details', { class: 'gl-json' }, h('summary', null, 'Clip endpoint (record → POST /voice)'));
-    let classicMounted = false;
-    classic.addEventListener('toggle', () => { if (classic.open && !classicMounted) { classicMounted = true; voices.push(voiceTry(classic, { mode: 'browser' })); } });
-    el.append(note, host, classic);
+    el.append(note, host);
     let widget = null, stopped = false;
     voices.push({ stop() { stopped = true; try { widget && widget.destroy(); } catch { /* ignore */ } widget = null; } });
     loadDev().then(() => import(`${siteBase}lib/voice-widget.js?v=484b978`)).then(({ mountVoice }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.textContent = 'The voice assistant needs your trial key; it is not available right now. The clip endpoint below still works.'; return; }
-      note.textContent = liveVoice() ? 'Live voice: speak and it answers out loud, with the sources as links while it speaks.' : 'This server has no Gemini key, so your browser recognizes speech and reads the answer aloud. Same sources, same citations.';
+      note.textContent = liveVoice() ? 'Live voice, the same as your phone line: speak and it answers out loud, with the sources as links while it speaks.' : 'Live voice is unavailable right now, so your browser listens and speaks instead. Same sources, same citations.';
       widget = mountVoice(host, { endpoint: webVoiceUrl(), bot: botId(), key: d.key, name: botName() });
     }).catch(() => { if (!stopped) note.textContent = "The voice assistant couldn't load here. The clip endpoint below still works."; });
   }
@@ -1077,12 +1072,12 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(stage, status, degraded, caps, typed.form,
       h('div', { class: 'gl-vopts' }, h('label', { class: 'gl-switch', for: speakToggle.id }, speakToggle, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), 'Speak answers'), engineNote),
       h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), phone
-        ? 'Each turn is answered by your bot from its files, with its source. A real call is streamed voice-to-voice to Gemini Live through your voice webhook; the TwiML that webhook returns is shown below.'
+        ? 'Each turn is answered by your bot from its files, with its source. A real call is answered in live voice through your voice webhook; the TwiML that webhook returns is shown below.'
         : 'Runs in your browser: speech recognition → your bot → spoken answer with its source. Nothing is recorded or stored.'));
 
     const paintEngine = () => {
-      const rec = googleVoice() && dev().key && 'MediaRecorder' in window ? 'Google Cloud speech' : SR_CTOR ? 'Browser speech recognition' : 'Typed input (no speech recognition in this browser)';
-      const out = googleVoice() && dev().key ? 'Google voice' : synth ? 'browser voice' : 'captions only';
+      const rec = googleVoice() && dev().key && 'MediaRecorder' in window ? 'Server speech recognition' : SR_CTOR ? 'Browser speech recognition' : 'Typed input (no speech recognition in this browser)';
+      const out = googleVoice() && dev().key ? 'server voice' : synth ? 'browser voice' : 'captions only';
       engineNote.textContent = `${rec} · ${out}`;
     };
     paintEngine();
@@ -1247,7 +1242,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         clearYou();
         const ok = await googleListen(gen).catch(() => false);
         if (ok !== false) return;
-        status.textContent = 'Google voice is unavailable right now, using your browser\'s speech instead.';
+        status.textContent = 'Live voice is unavailable right now, using your browser\'s speech instead.';
       }
       if (!SR_CTOR) { degrade('This browser has no speech recognition (try Chrome or Edge). Answers are still spoken.'); if (phone && state.call) setS('idle', 'Type what the caller says. The bot answers out loud.'); return; }
       if (!hasMicApi) { degrade('Answers are still spoken.'); return; }
@@ -1346,7 +1341,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       closeMic();
       if (gen !== state.gen) return true;
       const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
-      setS('thinking', 'Transcribing with Google…');
+      setS('thinking', 'Transcribing…');
       startLoop();
       const vPath = `/v1/bots/${encodeURIComponent(botId())}/voice`;
       const tv = performance.now();
@@ -1415,7 +1410,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           // the call webhook streams the call (<Connect><Stream>) or, when the line isn't set up, says so and hangs up:
           // neither is an answer to this turn, so the turn is answered via the chat API and the real TwiML is shown
           const callTwiml = /<Connect>|<Hangup\/>/.test(body);
-          if (callTwiml) { why = /<Connect>/.test(body) ? 'real calls stream voice-to-voice to Gemini Live' : 'the phone line is not set up on this server (GEMINI_API_KEY)'; twiml = body; }
+          if (callTwiml) { why = /<Connect>/.test(body) ? 'real calls are answered in live voice' : 'the phone line is not set up on this server yet'; twiml = body; }
           const spoken = callTwiml ? '' : says[0] || '';
           if (spoken) {
             const src = /^According to ([^,]{2,80}),/.exec(spoken);
@@ -1424,7 +1419,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
             paintTwiml(body);
             return { r: { text: spoken, refused, citations: [], srcNote: refused ? null : src ? `Named on the call: ${src[1]}` : null }, audio: null };
           }
-          if (plays.length) why = 'Google voice audio is played on the real line';
+          if (plays.length) why = 'the voice audio is played on the real line';
         }
       } catch (err) { if (err && err.status === 429) throw err; }
       const r = await askChannel(q);
@@ -1452,7 +1447,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           if (res.status === 429) { const e = new Error('rate'); e.status = 429; e.retryAfter = Number(res.headers.get('retry-after')) || null; throw e; }
           if (res.ok) {
             const j = await res.json();
-            paintReq({ method: 'POST', path: pub(vPath), status: res.status, ms, note: j.audio ? 'Google voice' : 'browser voice' });
+            paintReq({ method: 'POST', path: pub(vPath), status: res.status, ms, note: j.audio ? 'server voice' : 'browser voice' });
             const r = { text: j.answer ?? j.text ?? '', refused: !!j.refused, citations: (j.citations || []).map((c, i) => ({ n: c.n ?? i + 1, file: c.file, title: c.title, excerpt: c.excerpt })), spoken: j.spoken || null };
             return { r, audio: j.audio ? `data:${j.mime || 'audio/mpeg'};base64,${j.audio}` : null };
           }
