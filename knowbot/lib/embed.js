@@ -2,7 +2,7 @@
 // <script type="module" src=".../lib/embed.js" data-api="http://localhost:8787" data-mode="widget|inline|fullpage|voice"
 //         data-target="#id" data-engine="server|webllm" data-org="..." data-name="KnowBot" data-starters="Q1|Q2"
 //         data-instance="acme"></script>   (data-instance: answer only from that chat instance's knowDrive folder)
-import { mount, ensureCss } from './widget.js?v=4a6819a';
+import { mount, ensureCss } from './widget.js?v=2a19db0';
 
 const me = new URL(import.meta.url);
 const script = [...document.querySelectorAll('script[src]')].find((s) => s.src === me.href)
@@ -26,7 +26,7 @@ const apiBase = apiParam || d.api || (me.port === '8787' ? me.origin : location.
 const engine = d.engine === 'webllm' ? { type: 'webllm', ...(d.model ? { model: d.model } : {}) } : d.engine === 'openai'
   ? { type: 'openai', baseUrl: d.llm, model: d.model } : { type: 'server' };
 
-ensureCss(d.css || new URL('./knowbot.css?v=4a6819a', me).href);
+ensureCss(d.css || new URL('./knowbot.css?v=2a19db0', me).href);
 const instance = /^[a-z0-9-]{1,40}$/.test(d.instance || '') ? d.instance : null;
 // An instance's name, greeting and starter questions come from the server unless the page sets them.
 const instanceConfig = async () => {
@@ -37,7 +37,7 @@ const instanceConfig = async () => {
 // data-instance) names the bot, data-key a trial key when the bot is a Studio trial, data-talk="hold" for push-to-talk.
 const startVoice = async () => {
   const inst = await instanceConfig();
-  const { mountVoice } = await import('./voice-widget.js?v=4a6819a');
+  const { mountVoice } = await import('./voice-widget.js?v=2a19db0');
   window.knowbotVoice = mountVoice(d.target || null, {
     apiBase, endpoint: d.endpoint || undefined, bot: d.bot || instance || '', key: d.key || undefined,
     name: d.name || inst?.botName || inst?.name || 'KnowBot', talk: d.talk === 'hold' ? 'hold' : 'toggle', position: d.position,
