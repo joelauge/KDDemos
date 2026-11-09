@@ -121,3 +121,88 @@ export function gaugeProps(f, { failNode = null } = {}) {
   const atomsVectorized = atomCount === undefined ? undefined : f.phase === 'ready' ? Math.min(vec || atoms, atoms) : vec > 0 ? Math.min(vec, atoms) : undefined;
   return { phase, atomCount, atomsVectorized, bytes, name, tabIndex: -1 };
 }
+
+// ------------------------------------------------------------------ RowActionMenu, with the keyboard of a menu
+
+/**
+ * KnowDrive's <RowActionMenu> in `host`, plus what the Studio's own row menus did and the component leaves out
+ * (to raise with KnowDrive): focus moves to the first action when the menu opens, ArrowUp/ArrowDown/Home/End move
+ * between actions, Escape returns focus to the trigger, and focus leaving the menu closes it. The open menu is placed
+ * with position: fixed next to its trigger (flipped above when there's no room below) so a scrolling list never clips
+ * it, and a scroll closes it, like the gauge's card.
+ * props: { label, actions: [{ label, onSelect, tone? }] } (label may hold DOM nodes, e.g. an icon and a word).
+ */
+export function mountRowMenu(host, props) {
+  const trigger = () => host.querySelector('.row-actions-trigger');
+  // an action closes the menu: focus goes back to the trigger first (never to <body>)
+  const wrap = (p) => ({ ...p, actions: (p.actions || []).map((a) => ({ ...a, onSelect: () => { trigger()?.focus({ preventScroll: true }); a.onSelect(); } })) });
+  const w = mountWidget(host, 'RowActionMenu', wrap(props));
+  const menuEl = () => host.querySelector('.row-actions-menu');
+  const items = () => [...host.querySelectorAll('.row-actions-item')];
+  const close = () => { if (menuEl()) trigger()?.click(); };
+  const place = (m) => {
+    const t = trigger();
+    if (!t) return;
+    const r = t.getBoundingClientRect();
+    m.style.position = 'fixed';
+    m.style.right = 'auto';
+    const mw = m.offsetWidth, mh = m.offsetHeight;
+    const below = r.bottom + 4 + mh <= window.innerHeight - 8;
+    m.style.top = `${Math.max(8, below ? r.bottom + 4 : r.top - 4 - mh)}px`;
+    m.style.left = `${Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8))}px`;
+  };
+  const onScroll = (e) => { const m = menuEl(); if (m && !m.contains(e.target)) close(); };
+  // CSS containment (contain: layout/paint) on an ancestor would trap and clip a fixed menu: lift it while open
+  let lifted = [];
+  const lift = () => { for (let n = host.parentElement; n && n !== document.body; n = n.parentElement) { const c = getComputedStyle(n).contain; if (c && c !== 'none') { n.setAttribute('data-kdw-uncontain', ''); lifted.push(n); } } };
+  const unlift = () => { for (const n of lifted) n.removeAttribute('data-kdw-uncontain'); lifted = []; };
+  const mo = new MutationObserver(() => {
+    const m = menuEl();
+    if (m && !m.dataset.kdwPlaced) {
+      m.dataset.kdwPlaced = '1';
+      lift();
+      place(m);
+      window.addEventListener('scroll', onScroll, true);
+      items()[0]?.focus({ preventScroll: true });
+    } else if (!m && lifted.length) { window.removeEventListener('scroll', onScroll, true); unlift(); }
+    else if (!m) window.removeEventListener('scroll', onScroll, true);
+  });
+  mo.observe(host, { childList: true, subtree: true });
+  const onKey = (e) => {
+    const m = menuEl();
+    if (!m) return;
+    const list = items();
+    const i = list.indexOf(document.activeElement);
+    let j = null;
+    if (e.key === 'ArrowDown') j = (i + 1) % list.length;
+    else if (e.key === 'ArrowUp') j = (i - 1 + list.length) % list.length;
+    else if (e.key === 'Home') j = 0;
+    else if (e.key === 'End') j = list.length - 1;
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); trigger()?.focus({ preventScroll: true }); return; }
+    if (j != null && list.length) { e.preventDefault(); list[j].focus(); }
+  };
+  const onFocusOut = (e) => { if (menuEl() && !host.contains(e.relatedTarget)) close(); };
+  host.addEventListener('keydown', onKey);
+  host.addEventListener('focusout', onFocusOut);
+  return {
+    ready: w.ready,
+    update: (p) => w.update(wrap(p)),
+    unmount() { mo.disconnect(); unlift(); window.removeEventListener('scroll', onScroll, true); host.removeEventListener('keydown', onKey); host.removeEventListener('focusout', onFocusOut); w.unmount(); },
+  };
+}
+
+/**
+ * KnowDrive's <StatusCard> in `host` (tone: security | time | info | ok | neutral). children / actions may be DOM nodes
+ * (a live countdown keeps ticking: the node is moved, not copied). If React can't load, the same words still show.
+ */
+export function mountStatusCard(host, { tone = 'neutral', title, children = null, actions = null } = {}) {
+  const w = mountWidget(host, 'StatusCard', { tone, title, children, actions });
+  w.ready.catch(() => {
+    if (host.childElementCount) return;
+    const p = document.createElement('p');
+    p.textContent = title;
+    host.append(p);
+    for (const x of [children, actions].flat()) if (x != null) host.append(x instanceof Node ? x : document.createTextNode(String(x)));
+  });
+  return w;
+}

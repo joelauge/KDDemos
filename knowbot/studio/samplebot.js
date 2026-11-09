@@ -77,6 +77,8 @@
 //   Its check "06-popover · Proof view is now on" after a hover also needs to move after the 07 Enter (r6 critic:
 //   hover must show only the popover; the view turns on at the first click / Enter).
 
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=4a6819a';
+
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const STEP_ORDER = ['embed', 'search', 'rank', 'select', 'quote'];
 const PERSONAS = [
@@ -1854,7 +1856,7 @@ export function mount(ctx) {
       panel._filled = true;
       const byN = new Map((f.citations || []).map((c) => [c.n, c]));
       panel.append(
-      h('div', { class: 'pf-tablewrap', tabindex: '0', role: 'region', 'aria-label': 'Claim ledger table' }, h('table', { class: 'pf-table' },
+      h('div', { class: 'pf-tablewrap', tabindex: '0', role: 'region', 'aria-label': 'Claim ledger table' }, h('table', { class: 'data-table is-static pf-table' },
         h('caption', { class: 'st-sr' }, 'Claim ledger: every sentence and the exact quote it was copied from'),
         h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Claim'), h('th', { scope: 'col' }, 'Exact quote'), h('th', { scope: 'col' }, 'File · locator'), h('th', { scope: 'col' }, 'Match'), h('th', { scope: 'col' }, h('span', { class: 'st-sr' }, 'Check')))),
         h('tbody', null, claims.map((c) => {
@@ -1992,7 +1994,7 @@ export function mount(ctx) {
         h('td', { class: 'sb-num', title: x.rrf != null ? `hybrid rank score ${Number(x.rrf).toFixed(3)}` : null }, m == null ? 'keyword match' : m)));
     });
     if (!floorDone) rows.push(h('tr', { class: 'pf-floor-row' }, h('td', { colspan: '5' }, h('span', { class: 'sb-num' }, `floor ${pct(fl)}`), ' · every hit above was eligible')));
-    return h('div', { class: 'pf-tablewrap pf-kept', id, hidden: true, tabindex: '0', role: 'region', 'aria-label': 'Ranked hits table' }, h('table', { class: 'pf-table pf-table-tight' },
+    return h('div', { class: 'pf-tablewrap pf-kept', id, hidden: true, tabindex: '0', role: 'region', 'aria-label': 'Ranked hits table' }, h('table', { class: 'data-table is-static pf-table pf-table-tight' },
       h('caption', { class: 'st-sr' }, 'Ranked hits with their match scores and the floor'),
       h('thead', null, h('tr', null, ['Rank', 'File', 'Atom', 'Seq', 'Match'].map((t) => h('th', { scope: 'col' }, t)))),
       h('tbody', null, rows)));
@@ -2053,9 +2055,12 @@ export function mount(ctx) {
     releaseSignature(A);
     const limited = err && (err.status === 429 || err.code === 'rate_limited');
     const expired = err && (err.code === 'expired' || err.status === 401);
-    const box = h('div', { class: 'sb-err', role: 'alert' });
+    // the answer's failure state: KnowDrive's <StatusCard> (time: expired or rate-limited; neutral: can't answer now)
+    const box = h('div', { class: 'sb-err' });
+    let card = null;
     const retry = () => {
       A.retry = null;
+      if (card) card.unmount();
       box.remove();
       A.error = null; A.status = 'pending'; A.final = null; A.steps = []; A.retrieval = null; A.text = ''; A.lineEls = [];
       A.t0 = performance.now(); A.el.root.dataset.status = 'pending'; A.el.root.setAttribute('aria-busy', 'true');
@@ -2066,11 +2071,11 @@ export function mount(ctx) {
       run(A);
     };
     if (expired) {
-      box.append(ico('clock', 15), h('span', null, 'This trial expired, so your bot can’t answer any more.'));
+      card = mountStatusCard(box, { tone: 'time', title: 'This trial expired', children: 'Your bot can’t answer any more.' });
     } else if (limited) {
       let s = Math.max(1, Math.round(err.retryAfter || 10));
       const sEl = h('b', { class: 'sb-num' }, String(s));
-      box.append(ico('clock', 15), h('span', null, 'That’s a lot of questions at once. Trying again in ', sEl, 's.'));
+      card = mountStatusCard(box, { tone: 'time', title: 'That’s a lot of questions at once', children: h('span', null, 'Trying again in ', sEl, 's.') });
       const timer = setInterval(() => { s--; sEl.textContent = String(Math.max(0, s)); if (s <= 0) { clearInterval(timer); if (box.isConnected && !destroyed) retry(); } }, 1000);
       A.el.status.innerHTML = ''; A.el.srcRow.innerHTML = ''; A.el.strip.innerHTML = '';
       A.el.body.append(box);
@@ -2084,8 +2089,7 @@ export function mount(ctx) {
       A.errText = offline ? 'You’re offline. Your question wasn’t lost: it’s asked again when you reconnect.'
         : server ? 'Your bot hit an error answering this. Your question wasn’t lost.'
           : 'Couldn’t reach your bot. Your question wasn’t lost.';
-      box.append(ico('warn', 15), h('span', null, A.errText),
-        h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: retry }, ico('refresh', 13), 'Retry'));
+      card = mountStatusCard(box, { tone: 'neutral', title: A.errText, actions: h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: retry }, ico('refresh', 13), 'Retry') });
       A.retry = retry;   // the 'online' event re-runs it when this is still the latest thing in the thread
     }
     A.el.status.innerHTML = '';
@@ -2371,7 +2375,7 @@ export function mount(ctx) {
     const items = r?.items || [];
     let span = null;
     if (!items.length) {
-      if (err) body.append(h('div', { class: 'sb-err' }, ico('warn', 15), h('span', null, 'Couldn’t load this passage.'), h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: () => { body.innerHTML = ''; body.append(drawerSkeleton()); renderDrawerPassage(data, body, foot); } }, ico('refresh', 13), 'Retry')));
+      if (err) body.append(h('div', { class: 'alert alert-danger sb-err', role: 'alert' }, ico('warn', 15), h('span', null, 'Couldn’t load this passage.'), h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: () => { body.innerHTML = ''; body.append(drawerSkeleton()); renderDrawerPassage(data, body, foot); } }, ico('refresh', 13), 'Retry')));
       const fallback = q?.text || data.hit?.excerpt || '';
       if (fallback) body.append(h('div', { class: 'pf-atom is-main' }, h('span', { class: 'pf-atom-seq sb-num' }, data.seq != null ? `atom #${data.seq + 1}` : 'atom'), h('p', null, h('mark', { class: 'pf-mark is-on' }, fallback))));
     } else {
@@ -3196,9 +3200,10 @@ export function mount(ctx) {
   // ---- menus (scope + ⋯), role=menu with arrow keys; Esc and outside click close them
 
   let menu = null;
+  const menuGauges = [];
   function openMenu(btn, build) {
     closeMenu();
-    const el = h('div', { class: 'sb-menu', role: 'menu' });
+    const el = h('div', { class: 'row-actions-menu sb-menu', role: 'menu' });   // look: KnowDrive row menu
     build(el);
     btn.setAttribute('aria-expanded', 'true');
     form.append(el);
@@ -3225,13 +3230,14 @@ export function mount(ctx) {
   function closeMenu(refocus) {
     if (!menu) return;
     const m = menu; menu = null;
+    for (const g of menuGauges.splice(0)) g.unmount();
     document.removeEventListener('pointerdown', onMenuOutside, true);
     m.btn.setAttribute('aria-expanded', 'false');
     m.el.remove();
     if (refocus) m.btn.focus();
   }
   const menuItem = (label, { role = 'menuitem', checked = null, onSelect, icoName, sub: subtext } = {}) => {
-    const b = h('button', { type: 'button', class: 'sb-mi', role, tabindex: '-1', 'aria-checked': checked == null ? null : String(!!checked) },
+    const b = h('button', { type: 'button', class: 'row-actions-item sb-mi', role, tabindex: '-1', 'aria-checked': checked == null ? null : String(!!checked) },
       checked == null ? (icoName ? ico(icoName, 14) : null) : h('span', { class: 'sb-mi-check', 'aria-hidden': 'true' }, checked ? ico('check', 13) : null),
       h('span', { class: 'sb-mi-l' }, label, subtext ? h('small', null, subtext) : null));
     b.addEventListener('click', () => onSelect && onSelect(b));
@@ -3256,7 +3262,11 @@ export function mount(ctx) {
           } });
         it.style.setProperty('--hue', hueVar(f.hue));
         if (disabled) it.disabled = true;
-        el.append(it);
+        // the file's KnowDrive FileGauge beside its item (a sibling, never inside the menuitem: no nested controls;
+        // the item's own text already says ready / learning / failed to a screen reader)
+        const g = h('span', { class: 'sb-mi-gauge', 'aria-hidden': 'true' });
+        menuGauges.push(mountWidget(g, 'FileGauge', gaugeProps(f)));
+        el.append(h('div', { class: 'sb-mi-row', role: 'none' }, it, g));
       }
       const fid = uid('sb-mf');
       el.append(h('p', { class: 'sb-menu-foot', id: fid, 'aria-hidden': 'true' }, 'Off files are never searched. Your bot refuses instead of guessing.'));

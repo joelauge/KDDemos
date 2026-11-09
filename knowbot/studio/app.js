@@ -29,7 +29,7 @@ import * as motion from './motion.js?v=4a6819a';
 import * as icons from './icons.js?v=4a6819a';
 import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=4a6819a';
 import { mountShapes } from './shapes.js?v=4a6819a';
-import { mountWidget, gaugeProps } from './kdw.js?v=4a6819a';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=4a6819a';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -3781,9 +3781,10 @@ function storeGroupPanel(kind) {
 }
 
 store.registerCard('expired', (data, el) => {
-  el.append(h('div', { class: 'card st-card st-expired' },
-    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('clock', 14) }), h('span', null, 'Trial expired')),
-    h('p', null, 'This trial expired and its files were deleted.')));
+  // KnowDrive's <StatusCard> (tone "time"); the .st-expired host keeps the card's hook
+  const host = h('div', { class: 'st-expired' });
+  el.append(host);
+  mountStatusCard(host, { tone: 'time', title: 'Trial expired', children: 'This trial expired and its files were deleted.' });
 });
 
 store.registerCard('insights', (data, el) => {

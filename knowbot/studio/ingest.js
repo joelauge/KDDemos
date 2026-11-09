@@ -37,7 +37,7 @@
 // CONTRACT-GAP (B, studio.css): once an answer exists the intake slot gets max 22% and the thread min 55%, so a
 //   user-expanded Sources panel shows ~1 row. D marks that state with #in-intake-slot[data-open="user"].
 
-import { mountWidget, gaugeProps } from './kdw.js?v=4a6819a';
+import { mountWidget, mountRowMenu, gaugeProps } from './kdw.js?v=4a6819a';
 
 const RANK = { rejected: -2, failed: -1, queued: 0, uploading: 1, uploaded: 2, extracted: 3, chunked: 4, atomized: 5, vectorizing: 6, ready: 7 };
 const TERMINAL = new Set(['ready', 'failed', 'rejected']);
@@ -434,9 +434,8 @@ export function mount(ctx) {
     h('div', { class: 'in-drop-frame' },
       h('span', { class: 'in-drop-ico', html: icon('upload', { size: 26 }) }),
       h('p', { class: 'in-drop-t' }), h('p', { class: 'in-drop-s' })));
-  const menu = h('div', { class: 'in-menu', role: 'menu', hidden: true, tabindex: '-1' });
   dropSlot.innerHTML = '';
-  dropSlot.append(dropOverlay, menu);
+  dropSlot.append(dropOverlay);
 
   const collapsedByUser = { value: false, auto: true };
 
@@ -2076,15 +2075,19 @@ export function mount(ctx) {
     band.dataset.table = tableOn ? 'on' : '';
     if (tableOn) renderTable();
   }
+  let tableGauges = [];
+  const tableGauge = (f) => { const g = h('span', { class: 'map-tbl-gauge' }); tableGauges.push(mountWidget(g, 'FileGauge', gaugeProps(f, { failNode: f.phase === 'failed' ? (meta(f.localId).failedNode ?? failNodeOf(f)) : null }))); return g; };
   function renderTable() {
+    for (const g of tableGauges.splice(0)) g.unmount();
     if (!tableOn) return;
     const files = liveFiles();
-    const t = h('table', { class: 'map-tbl' },
+    // KnowDrive's .data-table (is-static: its rows do nothing on click); the Stage cell carries the file's gauge
+    const t = h('table', { class: 'data-table is-static map-tbl' },
       h('caption', { class: 'in-sr' }, 'Files and atoms in your bot’s knowledge'),
       h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'File'), h('th', { scope: 'col' }, 'Stage'), h('th', { scope: 'col', class: 'is-num' }, 'Atoms'), h('th', { scope: 'col', class: 'is-num' }, 'Vectors'), h('th', { scope: 'col' }, 'Searched'))),
       h('tbody', null, files.length ? files.map((f) => h('tr', null,
         h('th', { scope: 'row' }, h('i', { class: 'map-tbl-dot', style: { '--hue': `var(--f${f.hue % 8})` }, 'aria-hidden': 'true' }), mid(f.name, 34)),
-        h('td', null, phaseLabel(f)),
+        h('td', null, h('span', { class: 'map-tbl-stage' }, tableGauge(f), phaseLabel(f))),
         h('td', { class: 'is-num in-num' }, fmtInt(f.atoms || 0)),
         h('td', { class: 'is-num in-num' }, `${fmtInt(f.vectorized || 0)}/${fmtInt(f.atoms || 0)}`),
         h('td', null, f.phase === 'failed' ? 'No (failed)' : f.phase !== 'ready' ? (RANK[f.phase] >= 6 ? 'Partly' : 'Not yet') : isEnabled(f) ? 'Yes' : 'Off'))) : h('tr', null, h('td', { colspan: '5' }, 'No files yet.'))));
@@ -2317,8 +2320,9 @@ export function mount(ctx) {
     const readT = h('span', { class: 'in-read-t' });
     const read = h('span', { class: 'in-read', hidden: true, 'aria-hidden': 'true' }, readT);
     const status = h('span', { class: 'in-status in-num' });
-    const kebab = h('button', { type: 'button', class: 'in-iconbtn in-kebab', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-label': `Actions for ${f.name}`, html: icon('more', { size: 16 }) });
-    listen(kebab, 'click', (e) => { e.stopPropagation(); openMenu(f.localId, kebab); });
+    // per-file actions: KnowDrive's <RowActionMenu> (kdw.js adds the menu keyboard and fixed placement)
+    const kebab = h('span', { class: 'in-kebab' });
+    const rowMenu = mountRowMenu(kebab, rowMenuProps(f));
     const main = h('div', { class: 'in-row-main' }, incLabel, ico, h('div', { class: 'in-namewrap' }, name, tag, size, read), status, kebab);
 
     // the file's processing state: KnowDrive's FileGauge (four stage pips + F/V search badges, a report card on hover,
@@ -2333,7 +2337,7 @@ export function mount(ctx) {
     const summary = h('div', { class: 'in-sum', hidden: true });
     const detail = h('div', { class: 'in-detail' }, detailInner, summary);
     li.append(main, detail);
-    const refs = { li, inc, incLabel, ico, name, tag, size, read, readT, status, kebab, track, gauge, gaugeKey: '', note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '', readKey: '' };
+    const refs = { li, inc, incLabel, ico, name, tag, size, read, readT, status, kebab, track, gauge, gaugeKey: '', rowMenu, menuKey: '', note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '', readKey: '' };
     rowEls.set(f.localId, refs);
     return refs;
   }
@@ -2396,6 +2400,7 @@ export function mount(ctx) {
     if (r.inc.disabled !== !canScope) r.inc.disabled = !canScope;
     { const t = phaseLabel(f); if (r.status.textContent !== t) r.status.textContent = t; }
     setHidden(r.kebab, f.phase === 'queued');
+    { const mk = menuKeyOf(f); if (mk !== r.menuKey) { r.menuKey = mk; r.rowMenu.update(rowMenuProps(f)); } }
     // reading line: from upload until the atoms exist (then the map's shatter shows the real chunks)
     const rl = reading.get(lid);
     // the quoted first line stays on the row after the atoms exist (Ready included), truncated and without the scan
@@ -2543,6 +2548,7 @@ export function mount(ctx) {
     rowEls.delete(lid);
     if (!r) return;
     r.gauge.unmount();
+    r.rowMenu.unmount();
     const go = () => {
       const sibs = () => [...rowsEl.children].filter((x) => x !== r.li);
       if (motion.flip && !reduced()) motion.flip(sibs, () => r.li.remove(), { duration: 380 });
@@ -3303,7 +3309,7 @@ export function mount(ctx) {
     } else emit('file:removed', { localId: lid, id: null });
     if (!quiet) say(`${f.name} removed`, 'ingest');
     // focus lands somewhere sensible
-    if (!panel.contains(document.activeElement)) { const next = rowsEl.querySelector('.in-kebab, button'); if (next && document.activeElement === document.body) next.focus({ preventScroll: true }); }
+    if (!panel.contains(document.activeElement)) { const next = rowsEl.querySelector('.row-actions-trigger, button'); if (next && document.activeElement === document.body) next.focus({ preventScroll: true }); }
   }
   function replaceFile(lid, file) {
     const idx = getState().fileOrder.indexOf(lid);
@@ -3313,59 +3319,27 @@ export function mount(ctx) {
 
   // ---------------------------------------------------------------- kebab menu
 
-  let menuFor = null;
-  function openMenu(lid, btn) {
-    if (menuFor && menuFor.lid === lid) { closeMenu(true); return; }
-    closeMenu(false);
-    const f = getState().files[lid];
-    if (!f) return;
+  function menuItemsOf(f) {
     const items = [];
     if (f.id && RANK[f.phase] >= 5) items.push({ id: 'atoms', label: 'View atoms', ico: 'atom' });
     if (f.phase === 'failed') items.push({ id: 'retry', label: 'Retry', ico: 'refresh' });
     if (f.phase !== 'queued') items.push({ id: 'replace', label: 'Replace', ico: 'upload' });
     items.push({ id: 'remove', label: 'Remove', ico: 'x', danger: true });
     if (f.sample) items.push({ id: 'samples', label: 'Remove all sample files', ico: 'x', danger: true });
-    menu.innerHTML = '';
-    menu.setAttribute('aria-label', `Actions for ${f.name}`);
-    const els = items.map((it) => {
-      const b = h('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: `in-mi${it.danger ? ' is-danger' : ''}` }, h('span', { html: icon(it.ico, { size: 15 }) }), it.label);
-      b.addEventListener('click', () => { closeMenu(true); menuAction(lid, it.id); });
-      menu.append(b);
-      return b;
-    });
-    menu.hidden = false;
-    const host = dropSlot.getBoundingClientRect();
-    const br = btn.getBoundingClientRect();
-    const mh = menu.offsetHeight, mw = menu.offsetWidth;
-    let top = br.bottom - host.top + 4;
-    if (top + mh > host.height - 8) top = br.top - host.top - mh - 4;
-    menu.style.top = `${Math.max(8, top)}px`;
-    menu.style.left = `${clamp(br.right - host.left - mw, 8, host.width - mw - 8)}px`;
-    btn.setAttribute('aria-expanded', 'true');
-    menuFor = { lid, btn, els };
-    els[0].focus();
-    if (!reduced()) anim(menu, [{ opacity: 0, transform: 'translateY(-4px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: 160, easing: 'out' });
+    return items;
   }
-  function closeMenu(focusBack) {
-    if (!menuFor) return;
-    const { btn } = menuFor;
-    menu.hidden = true;
-    btn.setAttribute('aria-expanded', 'false');
-    menuFor = null;
-    if (focusBack && btn.isConnected) btn.focus({ preventScroll: true });
+  const menuKeyOf = (f) => `${f.name}|${menuItemsOf(f).map((x) => x.id).join(',')}`;
+  function rowMenuProps(f) {
+    const lid = f.localId;
+    return {
+      label: `Actions for ${f.name}`,
+      actions: menuItemsOf(f).map((it) => ({
+        label: [h('span', { class: 'in-mi-ico', 'aria-hidden': 'true', html: icon(it.ico, { size: 15 }) }), it.label],
+        tone: it.danger ? 'danger' : undefined,
+        onSelect: () => menuAction(lid, it.id),
+      })),
+    };
   }
-  listen(menu, 'keydown', (e) => {
-    if (!menuFor) return;
-    const els = menuFor.els;
-    const i = els.indexOf(document.activeElement);
-    if (e.key === 'ArrowDown') { e.preventDefault(); els[(i + 1) % els.length].focus(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); els[(i - 1 + els.length) % els.length].focus(); }
-    else if (e.key === 'Home') { e.preventDefault(); els[0].focus(); }
-    else if (e.key === 'End') { e.preventDefault(); els[els.length - 1].focus(); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(true); }
-    else if (e.key === 'Tab') closeMenu(false);
-  });
-  listen(document, 'pointerdown', (e) => { if (menuFor && !menu.contains(e.target) && e.target !== menuFor.btn && !menuFor.btn.contains(e.target)) closeMenu(false); }, true);
   async function menuAction(lid, id) {
     const f = getState().files[lid];
     if (!f) return;
@@ -4322,7 +4296,7 @@ export function mount(ctx) {
     if (events) { try { events.close(); } catch { /* ignore */ } }
     for (const m of rowMeta.values()) { clearTimeout(m.retryTimer); if (m.upload) { try { m.upload.abort(); } catch { /* ignore */ } } }
     clearInterval(clock);
-    for (const r of rowEls.values()) r.gauge.unmount();
+    for (const r of rowEls.values()) { r.gauge.unmount(); r.rowMenu.unmount(); }
     try { ro && ro.disconnect(); chromeRO && chromeRO.disconnect(); io && io.disconnect(); mo.disconnect(); } catch { /* ignore */ }
     mapSlot.innerHTML = ''; intakeSlot.innerHTML = ''; dropSlot.innerHTML = '';
   }

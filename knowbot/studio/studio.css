@@ -51,6 +51,23 @@
 
 /* ------------------------------------------------------------------ KnowDrive widget islands (kdw.js) */
 .kdw-slot { display: contents; }      /* a DOM node handed to a React widget (e.g. a Tabs panel) adds no box */
+[data-kdw-uncontain] { contain: none !important; }   /* lifted while a fixed row menu is open (kdw.js mountRowMenu) */
+/* AA fixes on the package's text colours (raised with KnowDrive): status colours used as TEXT go through the Studio's
+   AA roles (--good / --bad), and the info alert, whose ground is the theme-invariant light --brand-bg, gets the dark
+   accent ground in dark mode. Measured: green text 3.3:1 on its light tint, red 3.5:1 on the dark ground. */
+.alert-success { color: var(--good); }
+:root[data-theme="dark"] .alert-danger, :root[data-theme="dark"] .row-actions-item.danger { color: var(--bad); }
+:root[data-theme="dark"] .alert-info { background: var(--surface-accent); color: var(--text-accent); }
+/* an amber warning tone the package lacks (stalls, retries, partial readiness): same anatomy as .alert-* */
+.alert-warn { background: var(--surface-warning); border-left-color: var(--amber); color: var(--warn); }
+/* a table whose rows do nothing on click: no pointer, no hover band (the package makes every row look clickable) */
+.data-table.is-static tbody tr { cursor: auto; }
+.data-table.is-static tbody tr:hover { background: none; }
+/* row headers (<th scope="row">) read as cells, not as the uppercase column-header band the package gives every th */
+.data-table tbody th { text-transform: none; letter-spacing: normal; font-size: inherit; background: none; color: var(--text-heading); font-weight: 600; }
+/* .chip as a status pill: Studio labels are sentences ("Saved · 7 days"), so no per-word capitals */
+.chip.is-label { text-transform: none; }
+.chip.no-dot::before { content: none; }
 
 /* ------------------------------------------------------------------ base (was dashboard.css) */
 *, *::before, *::after { box-sizing: border-box; }
@@ -587,7 +604,6 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-copyrow .st-text { flex: 1 1 auto; font-size: 12.5px; }
 .st-field-msg { margin: 0; font-size: 12.5px; color: var(--muted); }
 .st-field-msg.is-bad { color: var(--bad); }
-.st-expired p { margin: 0; color: var(--muted); }
 
 .st-insights { container-type: inline-size; }
 .st-insights .st-card-head { flex-wrap: wrap; row-gap: 2px; }
