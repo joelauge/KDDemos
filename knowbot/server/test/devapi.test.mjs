@@ -513,3 +513,24 @@ describe('KNOWBOT_PROOF_URL: proof links on the public site, never the API host'
     } finally { await S.close(); }
   });
 });
+
+describe('insights count every surface, not only web chat', () => {
+  test('an SMS preview on a trial bot shows up in the trial insights at once, and the Studio hears an asked event', async () => {
+    const S = await boot();
+    try {
+      const t = await (await S.api('/api/studio/trials', { method: 'POST', headers: { 'x-forwarded-for': '198.51.100.41' } })).json();
+      const tok = { authorization: `Bearer ${t.token}` };
+      assert.equal((await S.api(`/api/studio/trials/${t.trialId}/files`, { method: 'POST', headers: { ...tok, 'x-filename': 'returns.md', 'content-type': 'application/octet-stream' }, body: DOC })).status, 201);
+      await S.kd.settle();
+      const dk = await (await S.api(`/api/studio/trials/${t.trialId}/devkey`, { headers: tok })).json();
+      const post = (question) => S.api(`/v1/bots/${t.trialId}/preview`, { method: 'POST', headers: { authorization: `Bearer ${dk.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'sms', question }) });
+      assert.equal((await post(Q)).status, 200);
+      assert.equal((await post('What is the capital of Australia?')).status, 200);
+      const ins = await (await S.api(`/api/studio/trials/${t.trialId}/insights`, { headers: tok })).json();
+      assert.ok(ins.total >= 2, `counted ${ins.total}`);
+      assert.ok(ins.top.some((x) => x.q === Q), 'the SMS question is listed');
+      const T = S.kb.studio?.trials?.get(t.trialId);
+      if (T) assert.ok(T.events.some((e) => e.event === 'asked' && e.data.channel === 'sms'), 'asked event for the Studio');
+    } finally { await S.close(); }
+  });
+});

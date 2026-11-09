@@ -4689,7 +4689,17 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }, Number(o.resumeDelayMs ?? 1000)) : null;
   resumeTimer?.unref?.();
 
-  return { handle, close, sweep, trials, signToken, verifyToken, signRestore, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
+  /** Another surface (SMS / WhatsApp / email preview, web voice, the phone simulator) answered a trial's bot: count it in
+   *  the session's question list too, so insights show it before knowDrive's question log is searchable. */
+  function noteAsk(trialId, { question, outcome, channel } = {}) {
+    const T = trials.get(trialId);
+    const q = String(question || '').trim();
+    if (!T || !q || !Array.isArray(T.asked)) return;
+    T.asked.push({ q, outcome: outcome === 'refused' ? 'refused' : 'answered', at: now(), channel: channel || null });
+    if (T.asked.length > 500) T.asked.shift();
+    pushEvent(T, 'asked', { channel: channel || null, outcome: outcome === 'refused' ? 'refused' : 'answered' });
+  }
+  return { handle, close, sweep, trials, signToken, verifyToken, signRestore, noteAsk, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };

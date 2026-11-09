@@ -3889,6 +3889,8 @@ async function copyText(text, btn) {
 // ------------------------------------------------------------------ question insights (SPEC 11.1)
 
 let askedCount = 0, insightsShown = 0;
+// a question answered on another surface (SMS / WhatsApp / email shapes, web voice, the phone simulator) counts too
+on('insights:asked', () => { askedCount++; queueInsights(); });
 let insightsRec = null, insightsTimer = 0, followupsPending = 0;
 /** Setup traffic is not "asking": the off-topic probe, Builder-asked questions and guard refusals. */
 function isProbeAsk(a, fin) {

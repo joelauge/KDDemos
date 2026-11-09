@@ -478,6 +478,7 @@ export function openEvents({ onEvent, onStatus } = {}) {
       try {
         if (type === 'store') emit('store:event', data);
         else if (type === 'storegroup') emit('store:group', data);
+        else if (type === 'asked') emit('insights:asked', data);
         else if (type === 'hello') {
           if (Array.isArray(data.files)) emit('store:rows', { rows: data.files.filter((r) => r && r.origin === 'store'), reset: true });
           for (const g of Array.isArray(data.groups) ? data.groups : []) emit('store:group', g);

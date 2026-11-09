@@ -521,6 +521,7 @@ export function createDevApi(o = {}) {
         ? logQuestion({ ...base, kd: kd ? { ...kd, store: studio.store } : null, store: studio?.store, scopeTags: [`trial:${target.id}`, 'kind:trial', `expires:${yyyymmdd(target.expiresAt)}`], root: `knowbot/trials/${target.id}/` })
         : logQuestion({ ...base, kd, store: kd?.store, scopeTags: [`bot:${target.id}`], root: `knowbot/_bots/${target.id}/` });
       track(p);
+      if (target.kind === 'trial') studio?.noteAsk?.(target.id, { question: base.question, outcome: base.outcome, channel: ch });
     } catch (e) { log(`[devapi] question log failed: ${e.message}`); }
   }
 
