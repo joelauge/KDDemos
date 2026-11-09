@@ -2163,7 +2163,7 @@ describe('Enter a Store URL: an import survives a server restart (persisted job,
 
   test('a slow site that outruns the time budget goes on in further rounds until every product page is written once', async () => {
     const shop = await fakeShop({ slow: 24, slowMs: 700 });   // its own: slow enough to outrun a 1 s budget, its own hit counts
-    after(() => shop.close());
+    try {
     const a = await instance({ studio: { storeBudgetMs: 1000, storeMaxRounds: 40 } });
     const t = await a.c.trial();
     const res = await a.c.json(t, '/store', 'POST', { url: shop.base, owner: true });
@@ -2192,6 +2192,7 @@ describe('Enter a Store URL: an import survives a server restart (persisted job,
     assert.equal(spec.flags.storeJob.state, 'done');
     assert.equal(spec.flags.storeJob.rounds, rounds.length);
     await a.S.close();
+    } finally { await shop.close(); }
   });
 
   test('start-up resumes on its own (busy meanwhile); cancel is persisted and a cancelled import never resumes', async () => {
