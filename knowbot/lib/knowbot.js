@@ -1336,6 +1336,8 @@ const normNum = (t) => String(t).replace(/[,\s]/g, '').replace(/\.0+$/, '');
 export function verifySummary(summary, { quotedLines = [], picks = [], citeOf = () => 1, question = '', titles = [] } = {}) {
   let s = cleanLine(String(summary || '')).slice(0, 600);
   if (!s) return { ok: false, reason: 'empty' };
+  // markers written after the full stop ("… price. [L9] [L54]") belong to that sentence: "… price [L9] [L54]."
+  s = s.replace(/([.!?])((?:\s*\[L?\d{1,3}\])+)/gi, (all, p, marks) => `${marks}${p}`).replace(/\s+(\[L?\d)/gi, ' $1');
   // a sentence without its own marker takes the marker of the sentence before it (or the first one in the summary);
   // its facts are still checked against the quotes below
   {
@@ -1457,6 +1459,10 @@ export async function researchAnswer({ question, sources = [], search, agent, pe
     if (picks.length >= RESEARCH.maxQuoteLines) break;
   }
   if (!picks.length) return { ...none, selected: [], research };
+  // one file, one copy of a line: the same words quoted twice from one file ("$319.99 $361.90" for two variants) add nothing
+  const seenText = new Set();
+  const kept = picks.filter((n) => { const l = byN.get(n); const k = `${fileKeyOf(pool[l.source])}|${cleanLine(l.text).toLowerCase()}`; if (seenText.has(k)) return false; seenText.add(k); return true; });
+  picks.length = 0; picks.push(...kept);
   const chosen = picks.slice(0, RESEARCH.maxQuoteLines).map((n) => byN.get(n));
   const citations = [], idx = new Map();
   const cite = (si, line) => {

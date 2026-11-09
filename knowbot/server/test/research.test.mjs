@@ -166,3 +166,21 @@ test('a summary with decimal prices survives requireCitations whole (a decimal p
   const out = lib.requireCitations(fin);
   assert.match(out.text, /^The Toad Vault costs 50\.00 USD to 300\.00 USD \[1\]\. It comes in Cherry \[1\]\./);
 });
+
+test('verifySummary: markers written after the full stop stay with their sentence (no stray markers)', () => {
+  const q = ['$319.99 $361.90 USD', '$319.99 $361.90 USD'];
+  const v = lib.verifySummary('The Ultimate Bundle is $319.99 USD, down from $361.90. [L9] [L54]', { quotedLines: q, picks: [9, 54], citeOf: (n) => (n === 9 ? 1 : 2), question: "What's the price of the ultimate bundle?" });
+  assert.equal(v.ok, true, v.reason);
+  assert.equal(v.text, 'The Ultimate Bundle is $319.99 USD, down from $361.90 [1] [2].');
+});
+
+test('the same words quoted twice from one file are kept once', async () => {
+  const agent = async (params) => {
+    const all = JSON.stringify(params.messages);
+    const ns = [...all.matchAll(/L(\d+) \$319\.99 \$361\.90/g)].map((m) => +m[1]);
+    return { content: [{ type: 'tool_use', id: 'a', name: 'answer', input: { found: true, quotes: ns.map((n) => ({ from: n })) } }] };
+  };
+  const fin = await lib.researchAnswer({ question: 'How much is the ultimate bundle?', sources: [BUNDLES], agent });
+  assert.equal(fin.selected.length, 1);
+  assert.equal((fin.text.match(/\$319\.99 \$361\.90/g) || []).length, 1);
+});
