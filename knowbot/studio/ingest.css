@@ -57,14 +57,13 @@
 .map-sep { color: var(--dim); }
 .map-scale { font-size: 11.5px; color: var(--dim); }
 .map-hud-r { display: flex; align-items: center; gap: 6px; flex: none; }
+/* look: KnowDrive .btn.btn-ghost; the pressed state below is the Studio's toggle */
 .map-btn {
-  position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
-  font: 500 12px/1 var(--font); cursor: pointer; /* no backdrop-filter: the canvas under it redraws every frame */
+  position: relative; height: 28px; padding: 0 10px;
+  font-size: 12px; line-height: 1; font-weight: 600; /* no backdrop-filter: the canvas under it redraws every frame */
   transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
 }
 .map-btn::after { content: ''; position: absolute; inset: -8px -2px; }
-.map-btn:hover { color: var(--strong); border-color: var(--line-2); }
 .map-btn:active { transform: translateY(1px); }
 .map-btn[aria-pressed="true"] { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
 .map-btn > span:first-child { display: inline-flex; }
@@ -219,18 +218,13 @@
 .in-head-r { display: flex; align-items: center; gap: 6px; flex: none; }
 
 /* buttons (D's own; same shape language as the shell) */
+/* look: KnowDrive widgets.css (.btn family); layout and motion only here */
 .in-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px;
-  border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); font: 500 13px/1 var(--font); cursor: pointer; white-space: nowrap;
+  height: 30px; padding: 0 12px; font-size: 13px; line-height: 1; white-space: nowrap;
   transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 .in-btn > span { display: inline-flex; }
-.in-btn:hover { background: var(--raise); }
 .in-btn:active { transform: translateY(1px); }
-.in-btn-primary { background: var(--btn); border-color: var(--btn); color: #fff; }
-.in-btn-primary:hover { background: var(--btn-hover); border-color: var(--btn-hover); }
-.in-btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
-.in-btn-ghost:hover { color: var(--strong); background: var(--raise); }
 .in-btn-add { height: 28px; padding: 0 10px 0 8px; font-size: 12.5px; }
 .in-iconbtn {
   display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent;
@@ -336,7 +330,7 @@
 
 /* NEVER 'visibility: visible' anywhere in this file: on phones the inactive tab pane is hidden with
    visibility:hidden, and a descendant set to visible would paint through it (round-4: stage dots over the Builder). */
-/* stage track + Ready summary share one cell: the row keeps one height from the first stage to Ready (no shift);
+/* gauge + Ready summary share one cell: the row keeps one height from the first stage to Ready (no shift);
    Ready cross-fades the finished track out and the summary in (opacity/transform only) */
 .in-detail { display: grid; grid-template-columns: minmax(0, 1fr); }
 .in-detail > * { grid-area: 1 / 1; min-width: 0; }
@@ -345,47 +339,12 @@
 /* a Ready row with its summary: the finished track leaves the cell (never printed under the preview sentence and
    topic chips; the summary's own fade-in carries the moment) */
 .in-panel:not([data-compact="yes"]) .in-row[data-phase="ready"][data-sum="yes"] .in-detail-in { display: none; }
-.in-row[data-phase="rejected"] .in-track { display: none; }
+.in-row[data-phase="rejected"] .in-gauge { display: none; }
 
-.in-track { list-style: none; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 10px 0 2px; padding: 0; }
-.in-node { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0; text-align: center; color: var(--dim); }
-.in-dot {
-  position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; border-radius: 50%;
-  border: 1.5px solid var(--line-2); background: var(--panel);
-  transition: background-color var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
-}
-.in-dot svg { display: block; fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.in-dot .in-ck, .in-dot .in-x { opacity: 0; }
-.in-node[data-state="done"] .in-dot { background: var(--accent); border-color: var(--accent); }
-.in-node[data-state="done"] .in-ck { opacity: 1; stroke-dasharray: 1; }
-.in-node[data-state="active"] .in-dot { border-color: var(--accent); }
-/* the --glow pulse runs on a pseudo-element's transform/opacity (compositor), not on box-shadow (a repaint per frame) */
-.in-node[data-state="active"] .in-dot::before {
-  content: ''; position: absolute; inset: -6px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 22%, transparent);
-  opacity: 0; transform: scale(.5); animation: in-pulse 1.2s var(--ease-in-out) infinite; pointer-events: none;
-}
-.in-node[data-state="active"] .in-dot::after { content: ''; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
-.in-node[data-state="failed"] .in-dot { background: var(--warn); border-color: var(--warn); }
-.in-node[data-state="failed"] .in-x { opacity: 1; }
-.in-node-l { margin-top: 5px; font-size: 11.5px; line-height: 1.2; white-space: nowrap; transition: color var(--dur-2) var(--ease-out); }
-.in-node[data-state="done"] .in-node-l { color: var(--text); }
-.in-node[data-state="active"] .in-node-l { color: var(--strong); font-weight: 600; }
-.in-node[data-state="failed"] .in-node-l { color: var(--warn); font-weight: 600; }
-.in-node-c { min-height: 14px; margin-top: 2px; font-size: 10.5px; line-height: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-@keyframes in-pulse {
-  0%, 100% { opacity: 0; transform: scale(.5); }
-  45% { opacity: 1; transform: scale(1); }
-}
-/* connector i runs from node i-1 to node i */
-.in-conn { position: absolute; top: 5px; right: calc(50% + 9px); left: calc(-50% + 9px); height: 2px; border-radius: 2px; background: var(--line); overflow: hidden; }
-.in-conn > i { position: absolute; inset: 0; background: var(--accent); transform-origin: left center; transform: scaleX(var(--pf, 0)); transition: transform 400ms var(--ease-out); }
-.in-conn[data-work="busy"]::after, .in-conn[data-work="measured"]::after {
-  content: ''; position: absolute; inset: 0; width: 45%;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 70%, transparent), transparent);
-  animation: in-sweep 1.2s linear infinite;
-}
-@keyframes in-sweep { from { transform: translateX(-100%); } to { transform: translateX(230%); } }
-[data-signature="retrieval"] .in-node[data-state="active"] .in-dot::before, [data-signature="retrieval"] .in-conn::after { animation-play-state: paused; }
+/* the file's processing state: KnowDrive's <FileGauge> (kdw.js). Its look is the package's (widgets.css "File gauge");
+   this only places it: under the name line in a full row, inline between name and status in a compact row */
+.in-gauge { display: flex; align-items: center; min-height: 18px; margin: 8px 0 0 30px; }
+.in-gauge-skel { display: inline-block; width: 70px; height: 10px; border-radius: 5px; background: var(--raise); }
 
 .in-note { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
 .in-note[hidden] { display: none; }
@@ -415,13 +374,7 @@
 .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) > .in-detail { order: 1; }
 .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-detail-in { opacity: 1 !important; transform: none !important; visibility: inherit !important; }
 .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-sum, .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-note, .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-actions { display: none; }
-.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-track { grid-template-columns: repeat(6, 16px); margin: 0; }
-.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node-l, .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node-c { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-dot { width: 10px; height: 10px; }
-.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-dot svg { width: 8px; height: 8px; }
-.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node[data-state="active"] .in-dot::before { inset: -5px; }
-.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-node[data-state="active"] .in-dot::after { width: 3px; height: 3px; }
-.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-conn { top: 4px; left: calc(-50% + 5px); right: calc(50% + 5px); }
+.in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-gauge { margin: 0; }
 
 /* collapsed one-line Sources chip */
 .in-chip {
@@ -471,7 +424,7 @@
 /* skeleton rows (reserve the final height while the sample files are fetched) */
 .in-row.is-skel { box-shadow: none; }
 .in-row.is-skel::before { opacity: .35; }
-.in-row.is-skel .in-node-l, .in-row.is-skel .in-status { color: var(--dim); }
+.in-row.is-skel .in-status { color: var(--dim); }
 .in-skel-b { display: inline-block; height: 12px; border-radius: 6px; background: var(--raise); animation: in-skel 1.1s var(--ease-in-out) infinite alternate; }
 @keyframes in-skel { from { opacity: 1; } to { opacity: .45; } }
 .in-input { display: none !important; }
@@ -543,7 +496,7 @@
 
 /* ================================================================== Builder cards: file-summary, file-error */
 
-.in-card { margin-top: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2); max-width: 72ch; }
+.in-card { margin-top: 8px; padding: 12px 14px; max-width: 72ch; }   /* look: KnowDrive .card */
 .in-card-h { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font: 600 13.5px/1.3 var(--font); color: var(--strong); min-width: 0; }
 .in-card-ico { display: inline-flex; color: var(--good); flex: none; }
 .in-card-m { font-weight: 400; font-size: 12px; color: var(--muted); }
@@ -556,6 +509,7 @@
 .in-card-fn { margin: 0; font-size: 13.5px; color: var(--strong); display: flex; flex-wrap: wrap; align-items: baseline; }
 .in-card-name { font-weight: 500; overflow-wrap: anywhere; }
 .in-card-fa { font-size: 11.5px; color: var(--muted); }
+.in-card-gauge { display: inline-flex; align-self: center; margin: 0 6px; }
 .in-card-fl { margin: 3px 0 0; font-size: 13px; line-height: 1.5; color: var(--text); }
 .in-card-ask { margin-top: 8px; }
 .in-ask { height: auto; min-height: 30px; padding: 6px 10px; white-space: normal; text-align: left; line-height: 1.35; color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); background: var(--panel); }
@@ -570,8 +524,6 @@
 /* ================================================================== narrow containers + mobile */
 
 @container in-panel (max-width: 560px) {
-  .in-node-c { display: none; }
-  .in-node-l { font-size: 10.5px; }
   .in-size { display: none; }
   .in-btn-add > span:last-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .in-btn-add { width: 30px; padding: 0; }
@@ -619,14 +571,10 @@
      the strict (size) containment of the desktop cell would size this auto-width cell to 0 */
   .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"], [data-stall="yes"]) .in-status { contain: layout paint; width: auto; max-width: calc(100% - 96px); }
   .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-kebab { grid-column: 3; grid-row: 1 / span 2; }
-  .in-panel[data-compact="yes"] .in-row:not([data-note="yes"], [data-phase="failed"], [data-phase="rejected"]) .in-track { grid-template-columns: repeat(6, 14px); }
 }
 @container in-panel (max-width: 480px) {
   .in-read { display: none !important; }
   .in-row:is([data-reading="yes"], [data-reading="done"]) .in-name { max-width: none; flex: 0 1 auto; }
-}
-@container in-panel (max-width: 400px) {
-  .in-node-l { font-size: 9.5px; letter-spacing: -.1px; }
 }
 
 @media (max-width: 899px) {
@@ -694,11 +642,8 @@
 
 :root[data-motion="reduce"] .in-detail-in { transition: opacity 150ms linear, visibility 0s linear 0s; transform: none !important; }
 :root[data-motion="reduce"] .in-skel-b { animation: none; }
-:root[data-motion="reduce"] .in-node[data-state="active"] .in-dot { box-shadow: 0 0 0 3px var(--accent-soft); }
-:root[data-motion="reduce"] .in-node[data-state="active"] .in-dot::before { animation: none; display: none; }
-:root[data-motion="reduce"] .in-conn::after { animation: none; display: none; }
-:root[data-motion="reduce"] .in-conn > i { transition: none; }
-:root[data-motion="reduce"] .in-dot, :root[data-motion="reduce"] .in-node-l { transition-duration: 150ms; }
+/* the gauge's own pulse follows the OS setting (widgets.css); the Studio's Motion switch stops it too */
+:root[data-motion="reduce"] .file-gauge-pip .ring { animation: none !important; }
 :root[data-motion="reduce"] .in-empty { transition: opacity 150ms linear; transform: none; }
 :root[data-motion="reduce"] .in-drop::before { animation: none; }
 :root[data-motion="reduce"] .in-seg i { transition: none; }
@@ -707,15 +652,13 @@
 :root[data-motion="reduce"] .in-read::after { animation: none; display: none; }
 :root[data-motion="reduce"] .in-bd .in-bd-i, :root[data-motion="reduce"] .in-bd.is-done { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) .in-node[data-state="active"] .in-dot::before { animation: none; display: none; }
-  :root:not([data-motion="full"]) .in-conn::after { animation: none; display: none; }
   :root:not([data-motion="full"]) .in-drop::before { animation: none; }
   :root:not([data-motion="full"]) .in-bd .in-bd-i { animation: none; }
   :root:not([data-motion="full"]) .in-read::after, :root:not([data-motion="full"]) .in-doc-scan { animation: none; display: none; }
 }
 
 @media (forced-colors: active) {
-  .in-seg, .in-dot, .map-chip i, .in-chip-f i { forced-color-adjust: none; }
+  .in-seg, .map-chip i, .in-chip-f i { forced-color-adjust: none; }
   .in-row { border: 1px solid CanvasText; }
 }
 

@@ -1,0 +1,24 @@
+/* ── Destructive controls (GC16) ─ */
+.danger-zone {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--surface-danger-subtle);
+}
+.danger-zone h3 { margin: 0; font-size: var(--text-md); color: var(--accent-red); }
+.danger-zone .btn { align-self: flex-start; }  /* buttons stay compact, not full-width in the column flex */
+.confirm-dialog {
+  position: fixed; inset: 0; background: var(--scrim);
+  display: flex; align-items: center; justify-content: center; z-index: 60;
+}
+.confirm-dialog > div {
+  background: var(--bg-base);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  max-width: 28rem;
+  display: flex; flex-direction: column; gap: var(--space-4);
+  box-shadow: var(--elev-modal);
+}
+.confirm-dialog .actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+

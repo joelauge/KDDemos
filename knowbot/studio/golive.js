@@ -17,6 +17,8 @@
 // listed first. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
 // engine and phone prompt as a real call.
 
+import { mountWidget } from './kdw.js?v=71838ff';
+
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
 
@@ -28,7 +30,7 @@ export function ensureCss() {
     if (document.querySelector('link[data-gl-css]')) { resolve(); return; }
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = new URL('./golive.css?v=6333a2c', import.meta.url).href;
+    link.href = new URL('./golive.css?v=71838ff', import.meta.url).href;
     link.dataset.glCss = '1';
     link.onload = () => resolve();
     link.onerror = () => resolve();
@@ -265,29 +267,17 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   const xBtn = inline ? (helpers.onBack ? h('button', { type: 'button', class: 'gl-back', onclick: () => helpers.onBack() }, h('span', { html: icon('chat', 15) }), 'Back to chat') : null)
     : h('button', { type: 'button', class: 'gl-x', 'aria-label': 'Close channels and API', html: icon('x', 18), onclick: close });
   const idPill = h('span', { class: 'gl-idpill' }, h('span', { class: 'gl-idpill-k' }, 'bot id'), h('code', { class: 'gl-mono' }, botId()));
-  const tabsEl = h('div', { class: 'gl-tabs', role: 'tablist', 'aria-label': 'Go live' });
-  const ink = h('span', { class: 'gl-tabs-ink', 'aria-hidden': 'true' });
+  // Channels | Developers: KnowDrive's <Tabs> (kdw.js island). The component owns the strip, the selection, the
+  // keyboard (ArrowLeft/ArrowRight wrap, Home/End) and the ARIA; each panel's content is the gl-panel element this
+  // module builds (once, on first selection) and keeps, so its state survives switching tabs.
   const panels = {};
-  const tabBtns = {};
+  const tabLabels = {};
   const TABS = [['channels', 'Channels', 'chat'], ['developers', 'Developers', 'code']];
   for (const [id, label, ic] of TABS) {
-    const b = h('button', { type: 'button', role: 'tab', id: `gl-tab-${id}`, class: 'gl-tab', 'aria-selected': 'false', 'aria-controls': `gl-panel-${id}`, tabindex: '-1' },
-      h('span', { html: icon(ic, 15) }), label);
-    b.addEventListener('click', () => select(id));
-    tabBtns[id] = b; tabsEl.append(b);
-    panels[id] = h('div', { class: 'gl-panel', role: 'tabpanel', id: `gl-panel-${id}`, 'aria-labelledby': `gl-tab-${id}`, tabindex: '0', hidden: true });
+    panels[id] = h('div', { class: 'gl-panel', id: `gl-panel-${id}` });
+    tabLabels[id] = [h('span', { class: 'gl-tab-ico', html: icon(ic, 15) }), label];
   }
-  tabsEl.append(ink);
-  tabsEl.addEventListener('keydown', (e) => {
-    const ids = TABS.map((t) => t[0]);
-    const i = ids.indexOf(cur.tab);
-    let n = null;
-    if (e.key === 'ArrowRight') n = ids[(i + 1) % ids.length];
-    else if (e.key === 'ArrowLeft') n = ids[(i - 1 + ids.length) % ids.length];
-    else if (e.key === 'Home') n = ids[0];
-    else if (e.key === 'End') n = ids[ids.length - 1];
-    if (n) { e.preventDefault(); select(n); tabBtns[n].focus(); }
-  });
+  const tabProps = (value) => ({ label: inline ? 'Set up' : 'Go live', value, onChange: (id) => select(id), tabs: TABS.map(([id]) => ({ id, label: tabLabels[id], content: panels[id] })) });
 
   const head = h('header', { class: 'gl-head' },
     h('div', { class: 'gl-head-main' },
@@ -295,10 +285,15 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       h('h2', { class: 'gl-title', id: titleId }, inline ? `Set up ${botName()}` : `Put ${botName()} everywhere`),
       h('p', { class: 'gl-sub' }, inline ? 'Pick a place for your bot to answer. Each one has its setup steps and a way to try it right here. ' : 'Same files, same citations, same canonical refusal on every channel. ', idPill)),
     xBtn);
-  const body = h('div', { class: 'gl-body' }, panels.channels, panels.developers);
+  // the scroller: the tab strip (sticky at its top) and the panels render into it
+  const body = h('div', { class: 'gl-body' });
+  const tabs = mountWidget(body, 'Tabs', tabProps(tab === 'developers' ? 'developers' : 'channels'));
+  cleanups.push(() => tabs.unmount());
+  // React could not load (offline vendor files): the panels still show, stacked, without a strip
+  tabs.ready.catch(() => { if (!body.childElementCount) body.append(panels.channels, panels.developers); });
   const dialog = inline
-    ? h('section', { class: 'gl-sheet gl-inline', 'aria-labelledby': titleId }, head, tabsEl, body)
-    : h('div', { class: 'gl-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, head, tabsEl, body);
+    ? h('section', { class: 'gl-sheet gl-inline', 'aria-labelledby': titleId }, head, body)
+    : h('div', { class: 'gl-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, head, body);
   const scrim = h('div', { class: 'gl-scrim', 'aria-hidden': 'true', onclick: close });
   const layer = h('div', { class: 'gl-layer' }, scrim, dialog);
   const prevInert = slots.app ? slots.app.inert : false;
@@ -334,28 +329,12 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     if (ch) cur.channel = ch;
     const prev = cur.tab;
     cur.tab = id;
-    for (const [k, b] of Object.entries(tabBtns)) { const on = k === id; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; panels[k].hidden = !on; }
+    if (tabs.props.value !== id) tabs.update(tabProps(id));
     if (!built[id]) { built[id] = true; (id === 'channels' ? buildChannels : buildDevelopers)(panels[id]); }
     else if (id === 'channels' && ch) selectChannel(ch);
-    moveInk();
     if (prev && prev !== id) motion.animate(panels[id], [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out' });
     body.scrollTop = 0;
   }
-  function moveInk() {
-    const b = tabBtns[cur.tab];
-    if (!b) return;
-    const r = b.getBoundingClientRect(), p = tabsEl.getBoundingClientRect();
-    const x = r.left - p.left + tabsEl.scrollLeft;
-    const was = ink.dataset.x != null ? { x: Number(ink.dataset.x), w: Number(ink.dataset.w) } : null;
-    ink.style.width = `${r.width}px`;
-    ink.style.transform = `translateX(${x}px)`;
-    if (was && (was.x !== x || was.w !== r.width)) motion.animate(ink, [{ transform: `translateX(${was.x}px) scaleX(${was.w / Math.max(1, r.width)})`, transformOrigin: 'left' }, { transform: `translateX(${x}px)`, transformOrigin: 'left' }], { duration: motion.DUR[3], easing: 'spring', essential: false });
-    ink.dataset.x = String(x); ink.dataset.w = String(r.width);
-  }
-  const onResize = () => moveInk();
-  window.addEventListener('resize', onResize);
-  cleanups.push(() => window.removeEventListener('resize', onResize));
-
   function trap(e, root) {
     const f = $$('a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])', root)
       .filter((n) => n.offsetParent !== null || n === document.activeElement);
@@ -508,10 +487,10 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         ? h('p', null, h('b', null, 'Your bot can answer in 6 places.'), ' Pick one to see how to set it up, and try it right here. Every place uses the same files and shows its sources.')
         : h('p', null, h('b', null, '6 channel templates.'), ' Webhook URLs are prefilled with your bot id. Connect the accounts when you\'re ready; every channel logs to your question insights.'));
     chGrid = h('div', { class: 'gl-chgrid', role: 'list', 'aria-label': 'Channels' });
-    chDetail = h('section', { class: 'gl-chdetail', id: 'gl-chdetail', 'aria-live': 'polite' });
+    chDetail = h('section', { class: 'card gl-chdetail', id: 'gl-chdetail', 'aria-live': 'polite' });
     const list = CH();
     list.forEach((c, i) => {
-      const card = h('button', { type: 'button', class: 'gl-chcard', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: c.id }, style: { '--gl-hue': `var(--f${c.hue})`, '--i': i } },
+      const card = h('button', { type: 'button', class: 'card gl-chcard', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: c.id }, style: { '--gl-hue': `var(--f${c.hue})`, '--i': i } },
         h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: GLYPH[c.id] }),
         h('span', { class: 'gl-chcard-text' }, h('b', null, c.name, c.mine ? h('span', { class: 'gl-mine' }, 'Yours') : null), h('small', null, c.provider)),
         h('span', { class: 'gl-chcard-status' }, c.status));
@@ -651,7 +630,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     let idx = 0;
     const codeOf = (it, mode) => (typeof it.code === 'function' ? it.code(mode) : it.code);
     const showLab = h('span', null, devState.reveal ? 'Hide key' : 'Show key');
-    const show = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small gl-showkey', 'aria-pressed': String(devState.reveal), hidden: true },
+    const show = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small gl-showkey', 'aria-pressed': String(devState.reveal), hidden: true },
       h('span', { html: icon('eye', 14) }), showLab);
     show.addEventListener('click', () => { devState.reveal = !devState.reveal; show.setAttribute('aria-pressed', String(devState.reveal)); showLab.textContent = devState.reveal ? 'Hide key' : 'Show key'; paint(); });
     const paint = () => {
@@ -688,7 +667,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const ch = TESTABLE[c.id];
     const out = h('div', { class: 'gl-tw-out', 'aria-live': 'polite' });
     const label = h('span', null, 'Send test webhook');
-    const btn = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small gl-tw-btn' }, h('span', { class: 'gl-tw-ico', html: icon('play', 13) }), label);
+    const btn = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small gl-tw-btn' }, h('span', { class: 'gl-tw-ico', html: icon('play', 13) }), label);
     const q = () => (exampleExchange()?.question || starterQs()[0] || validatedQ || '');
     const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming Twilio call (the reply connects it to live voice)' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS (Twilio shape)', ch === 'voice' ? '.' : ', asking your first starter question.');
     btn.addEventListener('click', async () => {
@@ -771,7 +750,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
   function askForm({ placeholder, button = 'Send', onAsk, chips = true, label = 'Question' }) {
     const id = `gl-in-${rid()}`;
-    const input = h('input', { id, class: 'gl-input', type: 'text', autocomplete: 'off', placeholder, maxlength: '500' });
+    const input = h('input', { id, class: 'input gl-input', type: 'text', autocomplete: 'off', placeholder, maxlength: '500' });
     const btn = h('button', { type: 'submit', class: 'gl-send', 'aria-label': button }, h('span', { html: icon('send', 15) }));
     const form = h('form', { class: 'gl-askform' }, h('label', { class: 'co-sr', for: id }, label), input, btn);
     form.addEventListener('submit', (e) => { e.preventDefault(); const q = input.value.trim(); if (!q) { input.focus(); return; } input.value = ''; onAsk(q); });
@@ -1016,7 +995,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(note, host);
     let sim = null, stopped = false;
     voices.push({ stop() { stopped = true; try { sim && sim.stop(); } catch { /* ignore */ } sim = null; } });
-    loadDev().then(() => import('./phonesim.js?v=6333a2c')).then(({ mountPhone }) => {
+    loadDev().then(() => import('./phonesim.js?v=71838ff')).then(({ mountPhone }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.remove(); voices.push(voiceTry(el, { mode: 'phone' })); return; }
@@ -1655,7 +1634,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       return;
     }
     const exp = d.expiresAt ? new Date(d.expiresAt) : null;
-    const reveal = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small', 'aria-pressed': String(devState.reveal) }, h('span', { html: icon('eye', 14) }), devState.reveal ? 'Hide' : 'Show');
+    const reveal = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small', 'aria-pressed': String(devState.reveal) }, h('span', { html: icon('eye', 14) }), devState.reveal ? 'Hide' : 'Show');
     reveal.addEventListener('click', () => { devState.reveal = !devState.reveal; repaint(); });
     el.append(
       h('div', { class: 'gl-key-row' }, h('code', { class: 'gl-mono gl-key-v' }, h('span', { class: 'co-sr' }, devState.reveal ? 'Trial key: ' : 'Trial key, hidden: '), keyFor()), reveal, copyButton(d.key, 'Copy key', { small: true, what: 'Trial key copied', aria: 'Copy key' })),
@@ -1718,7 +1697,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
 
   function buildRun(el) {
     const id = `gl-runq-${rid()}`;
-    const input = h('input', { id, class: 'gl-input', type: 'text', maxlength: '500', value: defaultQ() });
+    const input = h('input', { id, class: 'input gl-input', type: 'text', maxlength: '500', value: defaultQ() });
     let touched = false;
     input.addEventListener('input', () => { touched = true; });
     setTimeout(() => { if (!touched && !closing && input.value !== defaultQ()) { input.value = defaultQ(); if (!snipQ) paintSnippets($('.gl-snips', panels.developers)); } }, 900);
@@ -1729,12 +1708,12 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       b.addEventListener('click', () => { ep = k; $$('.gl-seg-b', epSel).forEach((x) => x.setAttribute('aria-checked', String(x.dataset.k === k))); });
       epSel.append(b);
     }
-    const runBtn = h('button', { type: 'submit', class: 'co-btn co-btn-primary gl-runbtn' }, h('span', { html: icon('play', 14) }), 'Run');
+    const runBtn = h('button', { type: 'submit', class: 'btn btn-primary co-btn co-btn-primary gl-runbtn' }, h('span', { html: icon('play', 14) }), 'Run');
     const out = h('div', { class: 'gl-out', 'aria-live': 'polite' });
     // fixer r2 (D11): the result is announced where the eye is: a status line beside Run ("200 · 41 ms"), and the
     // response block is scrolled into view (smooth, or instant in reduced motion).
     const runMeta = h('span', { class: 'gl-runmeta', role: 'status' });
-    const form = h('form', { class: 'gl-runform' }, h('label', { class: 'gl-label', for: id }, 'Question'), h('div', { class: 'gl-runrow' }, input, runBtn), h('div', { class: 'gl-runfoot' }, epSel, runMeta));
+    const form = h('form', { class: 'gl-runform' }, h('label', { class: 'flabel gl-label', for: id }, 'Question'), h('div', { class: 'gl-runrow' }, input, runBtn), h('div', { class: 'gl-runfoot' }, epSel, runMeta));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const q = input.value.trim();
@@ -1871,7 +1850,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
 
   // ------------------------------------------------------------ go
   select(tab === 'developers' ? 'developers' : 'channels', channel || (mine.size ? CH()[0].id : null));
-  requestAnimationFrame(() => { moveInk(); if (!inline) tabBtns[cur.tab]?.focus(); });
+  // the sheet opens with focus on the selected tab (the strip renders in a frame or two, once React has loaded)
+  if (!inline) tabs.ready.then(() => { let n = 0; const go = () => { const t = body.querySelector('[role="tab"][aria-selected="true"]'); if (t) t.focus(); else if (++n < 30 && !closing) requestAnimationFrame(go); }; requestAnimationFrame(go); }).catch(() => {});
   if (inline) return { close: doClose, select };
   current = { close: doClose, select };
   return doClose;

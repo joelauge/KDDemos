@@ -1,0 +1,9 @@
+/* ── Card (§2.1) ─────────────────────────────────────── */
+.card {
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-lg);
+}
+.card.pad { padding: var(--space-4) var(--space-5); }
+.ctitle { font-weight: 800; color: var(--text-heading); }
+

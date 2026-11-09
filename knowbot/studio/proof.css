@@ -4,17 +4,13 @@
 
 /* ------------------------------------------------------------------ shared atoms */
 .sb-num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+/* look: KnowDrive widgets.css (.btn family); layout and motion only here */
 .sb-btn {
-  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 10px;
-  border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); font: 500 13px/1 var(--font);
-  cursor: pointer; white-space: nowrap; transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
+  height: 34px; padding: 0 12px; font-size: 13px; line-height: 1;
+  white-space: nowrap; transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
 }
-.sb-btn:hover { background: var(--raise); border-color: var(--line-2); }
 .sb-btn:active { transform: translateY(1px); }
-.sb-btn:disabled { opacity: .55; cursor: default; }
-.sb-btn-sm { height: 30px; padding: 0 10px; font-size: 12.5px; border-radius: 9px; }
-.sb-btn-primary { background: var(--btn); border-color: var(--btn); color: #fff; }
-.sb-btn-primary:hover { background: var(--btn-hover); border-color: var(--btn-hover); }
+.sb-btn-sm { height: 30px; padding: 0 10px; font-size: 12.5px; }
 /* secondary emphasis: outlined, never filled (one visual primary per screen; the Builder owns it) */
 .sb-btn-outline { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); color: var(--accent-2); }
 .sb-btn-outline:hover { background: var(--accent-soft); border-color: var(--accent); }
@@ -514,13 +510,13 @@
 .sb-sugg[data-fade-l="true"] { --fl: 32px; }
 .sb-sugg[data-fade-r="true"] { --fr: 32px; }
 .sb-sugg::-webkit-scrollbar { display: none; }
+/* look: KnowDrive .chipbtn; layout, motion and the asked/probe states only here */
 .sb-chip {
-  display: inline-flex; align-items: center; gap: 6px; flex: none; height: var(--st-chip-h, 34px); padding: 0 12px; border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); background: var(--panel); color: var(--strong);
-  font: 500 13px/1 var(--font); white-space: nowrap; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; flex: none; height: var(--st-chip-h, 34px); padding: 0 12px;
+  font-size: 13px; line-height: 1; white-space: nowrap;
   transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
 }
-.sb-chip:hover { background: var(--accent-soft); border-color: var(--accent); transform: translateY(-1px); }
+.sb-chip:hover { border-color: var(--accent-purple); color: var(--text-heading); transform: translateY(-1px); }
 .sb-chip.is-asked { color: var(--muted); border-color: var(--line); }
 .sb-chip[aria-disabled="true"] { cursor: default; background: transparent; transform: none; }
 .sb-chip[aria-disabled="true"] > .st-ico { color: var(--good); }

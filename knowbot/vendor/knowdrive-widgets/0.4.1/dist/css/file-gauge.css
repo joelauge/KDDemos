@@ -1,0 +1,59 @@
+/* ── File gauge (GC12) — <FileGauge>: four stage pips + F/V search badges ─
+   A pip's SHAPE is its stage state; the tone class COLOURS the outcome through
+   `color`, which the pips inherit (badges, label and card text set their own).
+   The report card is portalled out of the gauge, so it carries the tone class
+   itself and every card rule is rooted at the card. */
+.file-gauge {
+  display: inline-flex; align-items: center; gap: var(--space-1); flex: none;
+  padding: 1px var(--space-1); margin: 0; border: 0; border-radius: var(--radius-sm);
+  background: none; font: inherit; line-height: 1; white-space: nowrap;
+  vertical-align: middle; cursor: default;
+}
+.file-gauge:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.file-gauge.tone-ok, .file-gauge-card.tone-ok { color: var(--accent-green); }
+.file-gauge.tone-working, .file-gauge-card.tone-working { color: var(--accent-purple); }
+.file-gauge.tone-failed, .file-gauge-card.tone-failed { color: var(--accent-red); }
+.file-gauge.tone-muted, .file-gauge-card.tone-muted { color: var(--text-muted); }
+
+.file-gauge-pips { display: inline-flex; gap: 2px; }
+.file-gauge-pip { display: block; flex: none; }
+.file-gauge-pip.done .dot { fill: currentColor; }
+.file-gauge-pip .ring { fill: none; stroke-width: 1.5; }
+.file-gauge-pip.todo .ring, .file-gauge-pip.active .ring, .file-gauge-pip.partial .ring,
+.file-gauge-pip.skipped .ring { stroke: var(--text-faint); }
+.file-gauge-pip.waiting .ring { stroke: var(--accent-purple); stroke-dasharray: 1.6 1.4; }
+.file-gauge-pip .fill { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.file-gauge-pip .slash, .file-gauge-pip .cross { stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
+.file-gauge-pip.skipped { color: var(--text-muted); }
+.file-gauge-pip.failed { color: var(--accent-red); }
+/* An unmeasured active stage pulses; a measured one draws its arc and holds still. */
+.file-gauge-pip.active:not(:has(.fill)) .ring { stroke: var(--accent-purple); animation: file-gauge-pulse 1.3s ease-in-out infinite; }
+@keyframes file-gauge-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .file-gauge-pip.active:not(:has(.fill)) .ring { animation: none; }
+}
+
+.file-gauge-badge {
+  font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.02em; line-height: 1;
+  padding: 1px 3px; border: 1px solid var(--border-base); border-radius: calc(var(--radius-sm) / 2);
+}
+.file-gauge-badge.no { color: var(--text-faint); }
+.file-gauge-badge.yes { color: var(--text-accent); border-color: var(--text-accent); }
+.file-gauge-badge.partial { color: var(--text-accent); border-color: var(--text-accent); border-style: dashed; }
+.file-gauge-label { font-size: var(--text-2xs); color: var(--text-body); }
+
+.file-gauge-card {
+  position: fixed; z-index: 400; width: 240px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-surface); border: 1px solid var(--border-base); border-radius: var(--radius-md);
+  box-shadow: var(--elev-dropdown);
+  font-size: var(--text-xs); line-height: var(--leading-snug);
+  white-space: normal; text-align: left; cursor: default;
+}
+.file-gauge-card-name { font-weight: 700; color: var(--text-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-gauge-card-row { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: var(--space-2); }
+.file-gauge-card-stage { color: var(--text-body); }
+.file-gauge-card-row.skipped .file-gauge-card-stage { color: var(--text-muted); }
+.file-gauge-card-detail { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.file-gauge-card-hint { margin-top: var(--space-1); color: var(--text-muted); }

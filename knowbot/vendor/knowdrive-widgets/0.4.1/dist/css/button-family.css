@@ -1,0 +1,22 @@
+/* ── Button family (§2.1 status-card button tones) ─ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-primary { background: var(--accent-purple); color: #fff; box-shadow: var(--elev-brand-btn); }
+.btn-dark    { background: var(--text-heading); color: #fff; }
+.btn-ghost   { background: var(--bg-base); border-color: var(--border-base); color: var(--text-heading); }
+.btn-danger  { background: var(--accent-red); color: #fff; }
+.btn-dghost  { background: var(--bg-base); color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 30%, transparent); }
+.btn-ghost:hover:not(:disabled),
+.btn-dghost:hover:not(:disabled) { background: var(--surface-hover); }
+

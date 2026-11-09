@@ -1,0 +1,4 @@
+/* ── Text link (§2.1 system primitive) ─ */
+.link { color: var(--accent-purple); text-decoration: none; cursor: pointer; }
+.link:hover { text-decoration: underline; }
+

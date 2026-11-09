@@ -1,0 +1,21 @@
+/* ── Text input + field label + field group (§2.1 / GC17) ─ */
+.input {
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  color: var(--text-heading);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font: inherit;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent-purple);
+  box-shadow: var(--focus-ring);
+}
+.flabel { color: var(--text-muted); font-size: var(--text-base); font-weight: 500; }
+.field { display: flex; flex-direction: column; gap: var(--space-1); }
+.field.error .input { border-color: var(--accent-red); }
+/* .input also styles <select> and <input type=number|search>. Checkbox gets its own
+   accent treatment (a boxed .input would render a padded box, not a checkmark). */
+.checkbox { accent-color: var(--accent-purple); width: 1rem; height: 1rem; cursor: pointer; }
+

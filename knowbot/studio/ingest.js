@@ -2,7 +2,7 @@
 //
 // What lives here:
 //   - IntakePanel (#in-intake-slot): CapacityBar (100 MB, one hue segment per file), FileRows with the 6-node
-//     StageTrack driven by real server stages, stall timers, failure reasons + recovery, include toggles,
+//     KnowDrive FileGauge (kdw.js) driven by real server stages, stall timers, failure reasons + recovery, include toggles,
 //     kebab menu (View atoms / Retry / Replace / Remove), collapse to a one-line Sources chip when all Ready.
 //   - Intake: client validation, upload queue (concurrency 2, XHR progress, 1/3/9 s backoff), drop overlay,
 //     paste, hidden picker. Samples attach/remove.
@@ -37,19 +37,11 @@
 // CONTRACT-GAP (B, studio.css): once an answer exists the intake slot gets max 22% and the thread min 55%, so a
 //   user-expanded Sources panel shows ~1 row. D marks that state with #in-intake-slot[data-open="user"].
 
-const STAGES = [
-  { key: 'upload', label: 'Upload' },
-  { key: 'extract', label: 'Extract' },
-  { key: 'chunk', label: 'Chunk' },
-  { key: 'atomize', label: 'Atomize' },
-  { key: 'vectorize', label: 'Encode' },
-  { key: 'ready', label: 'Ready' },
-];
+import { mountWidget, gaugeProps } from './kdw.js?v=71838ff';
+
 const RANK = { rejected: -2, failed: -1, queued: 0, uploading: 1, uploaded: 2, extracted: 3, chunked: 4, atomized: 5, vectorizing: 6, ready: 7 };
 const TERMINAL = new Set(['ready', 'failed', 'rejected']);
 const SERVER_STAGES = new Set(['uploaded', 'extracted', 'chunked', 'atomized', 'vectorizing', 'ready', 'failed']);
-// Which StageTrack node is "in progress" for each phase (index into STAGES).
-const ACTIVE_NODE = { queued: -1, uploading: 0, uploaded: 1, extracted: 2, chunked: 3, atomized: 4, vectorizing: 4, ready: 6 };
 const DOING = { uploading: 'uploading', uploaded: 'extracting', extracted: 'chunking', chunked: 'atomizing', atomized: 'encoding your knowledge', vectorizing: 'encoding your knowledge', queued: 'waiting' };
 
 const DEFAULT_TYPES = [
@@ -390,8 +382,8 @@ export function mount(ctx) {
   const headTitle = h('h2', { class: 'in-title', id: titleId }, 'Sources');
   const headMeta = h('span', { class: 'in-head-meta in-num' });
   const replayPill = h('span', { class: 'in-replay', hidden: true }, h('span', { html: icon('play', { size: 11 }) }), h('span', { class: 'in-replay-t' }));
-  const removeSamplesBtn = h('button', { type: 'button', class: 'in-btn in-btn-ghost in-rm-samples', hidden: true, onclick: () => removeSamples() }, 'Remove sample files');
-  const addBtn = h('button', { type: 'button', class: 'in-btn in-btn-add', onclick: () => pick() }, h('span', { class: 'in-btn-ico', html: icon('plus', { size: 15 }) }), h('span', null, 'Add files'));
+  const removeSamplesBtn = h('button', { type: 'button', class: 'btn btn-ghost in-btn in-btn-ghost in-rm-samples', hidden: true, onclick: () => removeSamples() }, 'Remove sample files');
+  const addBtn = h('button', { type: 'button', class: 'btn btn-ghost in-btn in-btn-add', onclick: () => pick() }, h('span', { class: 'in-btn-ico', html: icon('plus', { size: 15 }) }), h('span', null, 'Add files'));
   const collapseBtn = h('button', { type: 'button', class: 'in-iconbtn in-collapse', 'aria-expanded': 'true', 'aria-controls': panelId, title: 'Collapse sources', 'aria-label': 'Collapse sources', onclick: () => setCollapsed(!collapsedByUser.value) }, h('span', { html: icon('chevronDown', { size: 16 }) }));
   head.append(h('div', { class: 'in-head-l' }, headTitle, headMeta, replayPill), h('div', { class: 'in-head-r' }, removeSamplesBtn, addBtn, collapseBtn));
 
@@ -415,7 +407,7 @@ export function mount(ctx) {
       emptyT,
       h('p', { class: 'in-types' }, h('span', { class: 'in-sr' }, 'Supported types: '), TYPE_CHIPS.map((t) => h('span', { class: 'in-type' }, t)))),
     // secondary (outline) until the visitor picks the upload path: the landing has one filled primary, the Builder's
-    h('button', { type: 'button', class: 'in-btn in-choose', onclick: () => pick() }, h('span', { html: icon('upload', { size: 15 }) }), 'Choose files'));
+    h('button', { type: 'button', class: 'btn btn-ghost in-btn in-choose', onclick: () => pick() }, h('span', { html: icon('upload', { size: 15 }) }), 'Choose files'));
   // Collapsed one-line Sources chip. Its accessible name IS its visible text (no aria-label to drift from it);
   // the state and the action live in aria-describedby.
   const chipDescId = uid('in-chipd');
@@ -463,11 +455,11 @@ export function mount(ctx) {
   const hudCountWrap = h('span', { class: 'map-countwrap', hidden: true }, h('span', { class: 'map-sep', 'aria-hidden': 'true' }, '·'), hudCount, hudUnit, hudRead);
   const hudEmpty = h('span', { class: 'map-emptyl' }, h('span', { class: 'map-sep', 'aria-hidden': 'true' }, '·'), ' empty');
   const hudScale = h('span', { class: 'map-scale in-num', hidden: true });
-  const tableBtn = h('button', { type: 'button', class: 'map-btn', 'aria-pressed': 'false', onclick: () => toggleTable() }, h('span', { html: icon('table', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Table view'));
-  const pinBtn = h('button', { type: 'button', class: 'map-btn map-pin', 'aria-pressed': 'false', onclick: () => togglePin() }, h('span', { html: icon('pin', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Pin'));
+  const tableBtn = h('button', { type: 'button', class: 'btn btn-ghost map-btn', 'aria-pressed': 'false', onclick: () => toggleTable() }, h('span', { html: icon('table', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Table view'));
+  const pinBtn = h('button', { type: 'button', class: 'btn btn-ghost map-btn map-pin', 'aria-pressed': 'false', onclick: () => togglePin() }, h('span', { html: icon('pin', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Pin'));
   // ribbon -> tap / Expand opens the band for a look (not persisted); Collapse folds it back. Pin keeps it open.
-  const foldBtn = h('button', { type: 'button', class: 'map-btn map-fold', hidden: true, 'aria-expanded': 'true', onclick: () => setExpanded(false) }, h('span', { html: icon('chevronDown', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Collapse'));
-  const expandBtn = h('button', { type: 'button', class: 'map-btn map-expand', hidden: true, 'aria-expanded': 'false', onclick: () => setExpanded(true) }, h('span', { html: icon('chevronDown', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Expand'));
+  const foldBtn = h('button', { type: 'button', class: 'btn btn-ghost map-btn map-fold', hidden: true, 'aria-expanded': 'true', onclick: () => setExpanded(false) }, h('span', { html: icon('chevronDown', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Collapse'));
+  const expandBtn = h('button', { type: 'button', class: 'btn btn-ghost map-btn map-expand', hidden: true, 'aria-expanded': 'false', onclick: () => setExpanded(true) }, h('span', { html: icon('chevronDown', { size: 14 }) }), h('span', { class: 'map-btn-l' }, 'Expand'));
   // before the first atom exists the HUD tells the truth about what is happening ("chunking · 6 chunks"), never "0 atoms"
   // the separator is its own node: phones drop it with the title, so the HUD never starts with a stray "·"
   const hudStageT = h('span', { class: 'map-stagel-t' });
@@ -2329,18 +2321,10 @@ export function mount(ctx) {
     listen(kebab, 'click', (e) => { e.stopPropagation(); openMenu(f.localId, kebab); });
     const main = h('div', { class: 'in-row-main' }, incLabel, ico, h('div', { class: 'in-namewrap' }, name, tag, size, read), status, kebab);
 
-    // stage track
-    const track = h('ol', { class: 'in-track', 'aria-label': `Processing stages for ${f.name}` });
-    const nodes = STAGES.map((s, i) => {
-      const conn = i ? h('span', { class: 'in-conn', 'aria-hidden': 'true' }, h('i')) : null;
-      const check = h('span', { class: 'in-dot', 'aria-hidden': 'true', html: '<svg viewBox="0 0 12 12" width="10" height="10"><path class="in-ck" d="M2.6 6.3 5 8.6l4.4-5" pathLength="1"/><path class="in-x" d="M3.4 3.4l5.2 5.2M8.6 3.4 3.4 8.6"/></svg>' });
-      const label = h('span', { class: 'in-node-l' }, s.label);
-      const count = h('span', { class: 'in-node-c in-num' });
-      const stateSr = h('span', { class: 'in-sr' });
-      const li2 = h('li', { class: 'in-node', dataset: { node: s.key, state: 'todo' } }, conn, check, label, count, stateSr);
-      track.append(li2);
-      return { li: li2, conn, label, count, stateSr, state: 'todo' };
-    });
+    // the file's processing state: KnowDrive's FileGauge (four stage pips + F/V search badges, a report card on hover,
+    // focus or tap), mounted as a React island by kdw.js from the file's real counts (gaugeProps)
+    const track = h('div', { class: 'in-gauge' });
+    const gauge = mountWidget(track, 'FileGauge', gaugeProps(f, { failNode: f.phase === 'failed' ? failNodeOf(f) : null }));
     const note = h('p', { class: 'in-note' });
     const actions = h('div', { class: 'in-actions' });
     const detailInner = h('div', { class: 'in-detail-in' }, track, note, actions);
@@ -2349,25 +2333,11 @@ export function mount(ctx) {
     const summary = h('div', { class: 'in-sum', hidden: true });
     const detail = h('div', { class: 'in-detail' }, detailInner, summary);
     li.append(main, detail);
-    const refs = { li, inc, incLabel, ico, name, tag, size, read, readT, status, kebab, track, nodes, note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '', readKey: '' };
+    const refs = { li, inc, incLabel, ico, name, tag, size, read, readT, status, kebab, track, gauge, gaugeKey: '', note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '', readKey: '' };
     rowEls.set(f.localId, refs);
     return refs;
   }
 
-  function nodeStates(f) {
-    const m = rowMeta.get(f.localId) || {};
-    const st = new Array(6).fill('todo');
-    if (f.phase === 'rejected') return st;
-    if (f.phase === 'failed') {
-      const fn = m.failedNode ?? failNodeOf(f);
-      for (let i = 0; i < 6; i++) st[i] = i < fn ? 'done' : i === fn ? 'failed' : 'todo';
-      return st;
-    }
-    const a = ACTIVE_NODE[f.phase] ?? -1;
-    for (let i = 0; i < 6; i++) st[i] = i < a ? 'done' : i === a ? 'active' : 'todo';
-    if (f.phase === 'ready') st.fill('done');
-    return st;
-  }
   function failNodeOf(f) {
     // the node after the last stage that really happened
     const at = f.stageAt || {};
@@ -2439,53 +2409,12 @@ export function mount(ctx) {
       if (showRead) { r.readT.textContent = `“${rl[0]}”`; r.read.title = rl.join(' / '); }
     }
 
-    // track nodes
-    const st = nodeStates(f);
-    st.forEach((s, i) => {
-      const n = r.nodes[i];
-      if (n.state !== s) {
-        const was = n.state;
-        n.state = s;
-        n.li.dataset.state = s;
-        if (s === 'active') n.li.setAttribute('aria-current', 'step'); else n.li.removeAttribute('aria-current');
-        n.stateSr.textContent = s === 'done' ? ', done' : s === 'active' ? ', in progress' : s === 'failed' ? ', failed' : '';
-        if (s === 'done' && was !== 'done' && !fresh) {
-          // the check pops in on the compositor (scale + opacity on its svg); a stroke-dashoffset draw invalidated the
-          // SVG resource and re-laid out the document on every stage event
-          const sv = !reduced() && n.li.querySelector('.in-dot svg');
-          if (sv) anim(sv, [{ transform: 'scale(.3)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 240, easing: 'spring', essential: false });
-        }
-      }
-    });
-    // connectors: upload connector carries byte %, vectorize connector carries v/n
-    // connector i runs from node i-1 to node i and carries node i-1's real progress:
-    // Upload → byte %, Vectorize → v/n; stages without a measurable ratio stay empty and shimmer while active.
-    for (let i = 1; i < 6; i++) {
-      const n = r.nodes[i];
-      if (!n.conn) continue;
-      const from = st[i - 1];
-      let p = 0;
-      let known = false;
-      if (from === 'done') { p = 1; known = true; }
-      else if (from === 'active') {
-        if (i === 1) { p = clamp((f.sent || 0) / Math.max(1, f.bytes), 0, 1); known = true; }
-        if (i === 5) { p = f.atoms ? clamp((f.vectorized || 0) / f.atoms, 0, 1) : 0; known = true; }
-      }
-      setVar(n.conn, '--pf', String(p));
-      setDs(n.conn, 'work', from === 'active' ? (known ? 'measured' : 'busy') : '');
+    // the gauge: re-rendered only when what it shows changed (React diffs the rest)
+    {
+      const gp = gaugeProps(f, { failNode: f.phase === 'failed' ? (m.failedNode ?? failNodeOf(f)) : null });
+      const gk = JSON.stringify(gp);
+      if (gk !== r.gaugeKey) { r.gaugeKey = gk; r.gauge.update(gp); }
     }
-    // counters (tween toward the last real value only)
-    // counters tween (600 ms) only where they are visible: compact rows and phones hide them, so no per-frame text writes
-    const tween = motion.ticker && !fresh && panel.dataset.compact !== 'yes' && !isMobile() && !reduced();
-    const tick = (el, v, fmt) => { if (tween) { const k2 = fmt(v); if (el._tk !== k2 || el.dataset.value !== String(v)) { el._tk = k2; motion.ticker(el, v, { ms: 600, format: fmt }); } } else { const t = fmt(v); setDs(el, 'value', String(v)); setText(el, t); } };
-    const fmtN = (n) => fmtInt(n);
-    if (f.phase === 'uploading') setText(r.nodes[0].count, `${f.bytes ? Math.floor((f.sent || 0) / f.bytes * 100) : 0}%`);
-    else setText(r.nodes[0].count, RANK[f.phase] >= 2 || (f.phase === 'failed' && f.id) ? fmtSize(f.bytes) : '');
-    setText(r.nodes[1].count, f.pages ? `${f.pages} pages` : '');
-    if (f.chunks && RANK[f.phase] >= 4 || (f.phase === 'failed' && f.chunks)) { setHidden(r.nodes[2].count, false); setText(r.nodes[2].count, `chunks ${fmtN(f.chunks || 0)}`); } else setText(r.nodes[2].count, '');
-    if (f.atoms) { tick(r.nodes[3].count, f.atoms, (n) => `atoms ${fmtN(n)}`); } else { setText(r.nodes[3].count, ''); setDs(r.nodes[3].count, 'value', '0'); }
-    if (f.atoms && RANK[f.phase] >= 5) tick(r.nodes[4].count, f.vectorized || 0, (n) => `encoded ${fmtN(n)}/${fmtN(f.atoms)}`); else { setText(r.nodes[4].count, ''); setDs(r.nodes[4].count, 'value', '0'); }
-    setText(r.nodes[5].count, '');
 
     // note + actions per state
     renderNote(f, r, m);
@@ -2556,7 +2485,7 @@ export function mount(ctx) {
     r.actions.innerHTML = '';
     r.actions.hidden = !acts.length;
     acts.forEach((a, i) => {
-      const b = h('button', { type: 'button', class: `in-btn${i === 0 && a !== 'remove' ? ' in-btn-primary' : ''} in-act-${a}`, onclick: () => doAction(f.localId, a) },
+      const b = h('button', { type: 'button', class: `btn ${i === 0 && a !== 'remove' ? 'btn-primary' : 'btn-ghost'} in-btn${i === 0 && a !== 'remove' ? ' in-btn-primary' : ''} in-act-${a}`, onclick: () => doAction(f.localId, a) },
         a === 'retry' || a === 'retrynow' || a === 'reconnect' ? h('span', { html: icon('refresh', { size: 14 }) }) : a === 'replace' ? h('span', { html: icon('upload', { size: 14 }) }) : a === 'remove' ? h('span', { html: icon('x', { size: 14 }) }) : null,
         ACTION_LABEL[a] || a);
       b.setAttribute('aria-describedby', r.name.id);
@@ -2584,8 +2513,7 @@ export function mount(ctx) {
     }
   }
   function readyMorph(r) {
-    const n = r.nodes[5];
-    anim(n.li.querySelector('.in-dot'), [{ transform: 'scale(.6)' }, { transform: 'scale(1.18)' }, { transform: 'scale(1)' }], { duration: 300, easing: 'spring', essential: false });
+    anim(r.track, [{ transform: 'scale(.92)' }, { transform: 'scale(1.06)' }, { transform: 'scale(1)' }], { duration: 300, easing: 'spring', essential: false });
     anim(r.status, [{ opacity: 0.2, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out' });
   }
   function failMotion(r) {
@@ -2614,6 +2542,7 @@ export function mount(ctx) {
     const r = rowEls.get(lid);
     rowEls.delete(lid);
     if (!r) return;
+    r.gauge.unmount();
     const go = () => {
       const sibs = () => [...rowsEl.children].filter((x) => x !== r.li);
       if (motion.flip && !reduced()) motion.flip(sibs, () => r.li.remove(), { duration: 380 });
@@ -2775,7 +2704,7 @@ export function mount(ctx) {
         h('div', { class: 'in-row-main' }, h('span', { class: 'in-inc' }), h('span', { class: 'in-ico in-skel-b', style: { width: '18px' } }),
           h('div', { class: 'in-namewrap' }, h('span', { class: 'in-skel-b', style: { width: `${44 + ((i * 37) % 30)}%` } })), h('span', { class: 'in-status in-num' }, 'Queued'), h('span', { class: 'in-iconbtn in-kebab' })),
         h('div', { class: 'in-detail' }, h('div', { class: 'in-detail-in' },
-          h('ol', { class: 'in-track' }, STAGES.map((st, j) => h('li', { class: 'in-node', dataset: { state: 'todo' } }, j ? h('span', { class: 'in-conn' }, h('i')) : null, h('span', { class: 'in-dot' }), h('span', { class: 'in-node-l' }, st.label), h('span', { class: 'in-node-c' })))))));
+          h('div', { class: 'in-gauge' }, h('span', { class: 'in-gauge-skel' })))));
       rowsEl.append(li);
       skelEls.push(li);
     }
@@ -3042,7 +2971,7 @@ export function mount(ctx) {
     const key = `${f.localId}:${f.phase}`;
     if (lastStageSaid.get(f.localId) === key) return;
     lastStageSaid.set(f.localId, key);
-    const word = { uploading: 'uploading', uploaded: 'uploaded, extracting', extracted: 'extracted, chunking', chunked: 'chunked, atomizing', atomized: `${plural(f.atoms || 0, 'atom')}, vectorizing`, vectorizing: 'vectorizing', ready: `ready, ${plural(f.atoms || 0, 'atom')}`, rejected: 'not added' }[f.phase];
+    const word = { uploading: 'uploading', uploaded: 'uploaded, extracting', extracted: 'extracted, chunking', chunked: 'chunked, atomizing', atomized: `${plural(f.atoms || 0, 'atom')}, encoding your knowledge`, vectorizing: 'encoding your knowledge', ready: `ready, ${plural(f.atoms || 0, 'atom')}`, rejected: 'not added' }[f.phase];
     if (word && f.phase !== 'failed') say(`${f.name} ${word}`, 'ingest');
   }
 
@@ -4309,11 +4238,20 @@ export function mount(ctx) {
   // ================================================================== Builder cards (registered by D)
 
   registerCard('file-summary', (data, el) => {
+    let gauges = [];
+    const gaugeFor = (cur, f) => {
+      const host = h('span', { class: 'in-card-gauge' });
+      // the card lists files that just became Ready; the gauge reads the live state when there is one
+      gauges.push(mountWidget(host, 'FileGauge', gaugeProps(cur.phase ? cur : { name: f.name, phase: 'ready', atoms: Number(f.atoms) || 0, vectorized: Number(f.atoms) || 0 })));
+      return host;
+    };
     const render = (d) => {
       const files = Array.isArray(d.files) && d.files.length ? d.files : [d];
+      for (const g of gauges) g.unmount();
+      gauges = [];
       el.innerHTML = '';
       const atoms = files.reduce((s, f) => s + (Number(f.atoms) || 0), 0);
-      const card = h('div', { class: 'in-card in-card-sum' },
+      const card = h('div', { class: 'card in-card in-card-sum' },
         h('p', { class: 'in-card-h' }, h('span', { class: 'in-card-ico', html: icon('checkCircle', { size: 15 }) }),
           files.length === 1 ? 'Learned 1 file' : `Learned ${files.length} files`, h('span', { class: 'in-card-m in-num' }, ` · ${plural(atoms, 'atom')}`)),
         h('ul', { class: 'in-card-files' }, files.map((f) => {
@@ -4323,23 +4261,25 @@ export function mount(ctx) {
           return h('li', { class: 'in-card-f', style: { '--hue': `var(--f${hue % 8})` } },
             h('span', { class: 'in-card-fico', html: htmlKindIcon(cur.kind || f.kind || 'txt', 16) }),
             h('div', { class: 'in-card-fb' },
-              h('p', { class: 'in-card-fn' }, h('span', { class: 'in-card-name', title: f.name }, mid(f.name, 34)), h('span', { class: 'in-card-fa in-num' }, ` · Ready · ${plural(Number(f.atoms) || 0, 'atom')}`)),
+              h('p', { class: 'in-card-fn' }, h('span', { class: 'in-card-name', title: f.name }, mid(f.name, 34)), gaugeFor(cur, f), h('span', { class: 'in-card-fa in-num' }, ` Ready · ${plural(Number(f.atoms) || 0, 'atom')}`)),
               f.oneLine ? h('p', { class: 'in-card-fl' }, f.oneLine) : null,
               (f.topics || []).length ? h('div', { class: 'in-topics' }, f.topics.slice(0, 3).map((t) => h('span', { class: 'in-topic' }, t))) : null,
-              starters.length ? h('div', { class: 'in-card-ask' }, starters.map((q) => h('button', { type: 'button', class: 'in-btn in-btn-ghost in-ask', onclick: () => { emit('samplebot:ask', { question: q, by: 'chip' }); emit('tab:show', { tab: 'bot' }); } }, h('span', { html: icon('arrowRight', { size: 13 }) }), `Ask: “${q}”`))) : null));
+              starters.length ? h('div', { class: 'in-card-ask' }, starters.map((q) => h('button', { type: 'button', class: 'btn btn-ghost in-btn in-btn-ghost in-ask', onclick: () => { emit('samplebot:ask', { question: q, by: 'chip' }); emit('tab:show', { tab: 'bot' }); } }, h('span', { html: icon('arrowRight', { size: 13 }) }), `Ask: “${q}”`))) : null));
         })));
       el.append(card);
       if (!reduced()) motion.stagger && motion.stagger(card.querySelectorAll('.in-card-f'), [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out' }, 60);
     };
     render(data || {});
-    return { update: (d) => render(d || {}), destroy() { el.innerHTML = ''; } };
+    return { update: (d) => render(d || {}), destroy() { for (const g of gauges) g.unmount(); gauges = []; el.innerHTML = ''; } };
   });
 
   registerCard('file-error', (data, el) => {
     const lid = data && data.localId;
     let un = null;
+    let gauge = null;
     const render = () => {
       const f = lid ? getState().files[lid] : null;
+      if (gauge) { gauge.unmount(); gauge = null; }
       el.innerHTML = '';
       const name = (f && f.name) || (data && data.name) || 'This file';
       const err = (f && f.error) || (data && data.error) || {};
@@ -4350,10 +4290,11 @@ export function mount(ctx) {
         const acts = (err.actions && err.actions.length ? err.actions : ['retry', 'replace', 'remove']).filter((a) => ACTION_LABEL[a]);
         body = h('div', null,
           h('p', { class: 'in-card-l' }, err.message || 'Processing failed on our side. Try again.'),
-          h('div', { class: 'in-actions' }, acts.map((a, i) => h('button', { type: 'button', class: `in-btn${i === 0 ? ' in-btn-primary' : ''}`, onclick: () => doAction(lid, a) }, ACTION_LABEL[a]))));
+          h('div', { class: 'in-actions' }, acts.map((a, i) => h('button', { type: 'button', class: `btn ${i === 0 ? 'btn-primary' : 'btn-ghost'} in-btn${i === 0 ? ' in-btn-primary' : ''}`, onclick: () => doAction(lid, a) }, ACTION_LABEL[a]))));
       }
-      el.append(h('div', { class: `in-card in-card-err${f && f.phase === 'failed' ? '' : ' is-resolved'}` },
-        h('p', { class: 'in-card-h' }, h('span', { class: 'in-card-ico', html: icon(f && f.phase !== 'failed' ? 'refresh' : 'warn', { size: 15 }) }), h('span', { class: 'in-card-name', title: name }, mid(name, 34)), f && f.phase === 'failed' ? ' couldn’t be read' : ''),
+      el.append(h('div', { class: `card in-card in-card-err${f && f.phase === 'failed' ? '' : ' is-resolved'}` },
+        h('p', { class: 'in-card-h' }, h('span', { class: 'in-card-ico', html: icon(f && f.phase !== 'failed' ? 'refresh' : 'warn', { size: 15 }) }), h('span', { class: 'in-card-name', title: name }, mid(name, 34)), f && f.phase === 'failed' ? ' couldn’t be read' : '',
+          f ? (() => { const host = h('span', { class: 'in-card-gauge' }); gauge = mountWidget(host, 'FileGauge', gaugeProps(f, { failNode: f.phase === 'failed' ? (meta(lid).failedNode ?? failNodeOf(f)) : null })); return host; })() : null),
         body));
     };
     render();
@@ -4361,7 +4302,7 @@ export function mount(ctx) {
     const sigOf = () => { const f = lid ? getState().files[lid] : null; return f ? `${f.phase}|${f.error && f.error.message}|${f.atoms}` : 'gone'; };
     sig = sigOf();
     if (lid) un = on('change:files', () => { const s2 = sigOf(); if (s2 !== sig) { sig = s2; render(); } });
-    return { update: () => render(), destroy() { if (un) un(); el.innerHTML = ''; } };
+    return { update: () => render(), destroy() { if (un) un(); if (gauge) gauge.unmount(); el.innerHTML = ''; } };
   });
 
   // ================================================================== boot
@@ -4381,6 +4322,7 @@ export function mount(ctx) {
     if (events) { try { events.close(); } catch { /* ignore */ } }
     for (const m of rowMeta.values()) { clearTimeout(m.retryTimer); if (m.upload) { try { m.upload.abort(); } catch { /* ignore */ } } }
     clearInterval(clock);
+    for (const r of rowEls.values()) r.gauge.unmount();
     try { ro && ro.disconnect(); chromeRO && chromeRO.disconnect(); io && io.disconnect(); mo.disconnect(); } catch { /* ignore */ }
     mapSlot.innerHTML = ''; intakeSlot.innerHTML = ''; dropSlot.innerHTML = '';
   }

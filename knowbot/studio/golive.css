@@ -19,15 +19,13 @@
 .gl-x { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 12px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
 .gl-x:hover { background: var(--raise); color: var(--strong); }
 
-.gl-tabs { position: relative; display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
-.gl-tab { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 0 12px; border: 0; background: none; color: var(--muted); font: 600 14px/1 var(--font); cursor: pointer; border-radius: 10px 10px 0 0; }
-.gl-tab span { display: inline-flex; }
-.gl-tab:hover { color: var(--strong); }
-.gl-tab[aria-selected="true"] { color: var(--strong); }
-.gl-tab[aria-selected="true"] span { color: var(--accent-2); }
-.gl-tabs-ink { position: absolute; left: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); pointer-events: none; }
-
-.gl-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 24px 28px; }
+.gl-body { --gl-px: 24px; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 var(--gl-px) 28px; }
+/* Channels | Developers is KnowDrive's <Tabs> (widgets.css .tabs/.tab/.tab-panel; golive.js mounts it into .gl-body).
+   Placement only: the strip runs edge to edge at the top of the scroller and stays there while the panel scrolls. */
+.gl-body > .tabs { position: sticky; top: 0; z-index: 3; margin: 0 calc(-1 * var(--gl-px)) 18px; padding: 0 calc(var(--gl-px) - 4px); background: var(--panel); overflow-x: auto; scrollbar-width: none; }
+.gl-body > .tabs .tab { flex: none; min-height: 44px; }
+.gl-tab-ico { display: inline-flex; }
+.gl-body > .tab-panel { padding-top: 0; }
 .gl-panel { display: grid; gap: 18px; outline: none; }
 .gl-panel[hidden] { display: none; }
 .gl-intro p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); max-width: 72ch; }
@@ -39,7 +37,7 @@
 .gl-h4 { margin: 14px 0 8px; font: 600 10.5px/1.3 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--dim); }
 .gl-h4:first-child { margin-top: 0; }
 
-.gl-tab:focus-visible, .gl-chcard:focus-visible, .gl-code-tab:focus-visible, .gl-pre:focus-visible, .gl-x:focus-visible, .gl-qchip:focus-visible, .gl-send:focus-visible,
+.gl-chcard:focus-visible, .gl-code-tab:focus-visible, .gl-pre:focus-visible, .gl-x:focus-visible, .gl-qchip:focus-visible, .gl-send:focus-visible,
 .gl-mic:focus-visible, .gl-wcite:focus-visible, .gl-sw:focus-visible, .gl-seg-b:focus-visible, .gl-input:focus-visible, .gl-panel:focus-visible, .gl-switch input:focus-visible + .gl-switch-ui {
   outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -47,8 +45,8 @@
 .gl-chgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .gl-chitem { display: flex; min-width: 0; }
 .gl-chcard { --gl-hue: var(--accent); position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; row-gap: 8px; align-items: center;
-  width: 100%; padding: 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--text); text-align: left; cursor: pointer;
-  box-shadow: var(--st-shadow-1); transition: transform var(--dur-1) var(--ease-out), border-color var(--dur-2), box-shadow var(--dur-2), background-color var(--dur-2); }
+  width: 100%; padding: 12px; color: var(--text); text-align: left; cursor: pointer;   /* look: KnowDrive .card */
+  transition: transform var(--dur-1) var(--ease-out), border-color var(--dur-2), box-shadow var(--dur-2), background-color var(--dur-2); }
 /* fixer r2 (D7): one hover/selected ring for every card (indigo accent), whatever the channel's icon hue */
 .gl-chcard { --gl-ring: var(--accent); }
 .gl-chcard:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--gl-ring) 45%, var(--line-2)); box-shadow: var(--st-shadow-2); }
@@ -67,7 +65,7 @@
 .gl-chcard-status.is-go { color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, transparent); background: var(--good-soft); }
 .gl-chcard-status.is-go::before { background: var(--good); }
 
-.gl-chdetail { --gl-hue: var(--accent); display: grid; gap: 14px; padding: 18px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel-2); contain: layout paint; }
+.gl-chdetail { --gl-hue: var(--accent); display: grid; gap: 14px; padding: 18px; contain: layout paint; }   /* look: KnowDrive .card */
 .gl-cd-head { display: flex; align-items: center; gap: 14px; }
 .gl-cd-title { margin: 0; font: 700 18px/1.25 var(--display); color: var(--strong); }
 .gl-cd-blurb { margin: 2px 0 0; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
@@ -107,8 +105,7 @@
 .gl-try-head b { font: 700 14.5px/1.3 var(--display); color: var(--strong); }
 .gl-try-k { padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--gl-hue) 14%, transparent); color: var(--strong); font: 600 10.5px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
 .gl-askform { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-.gl-input { width: 100%; min-height: 42px; padding: 0 12px; border-radius: 11px; border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); font: 400 14px/1.2 var(--font); }
-.gl-input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); outline: none; }
+.gl-input { width: 100%; min-height: 42px; font-size: 14px; line-height: 1.2; }   /* look: KnowDrive .input */
 .gl-send { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 11px; border: 0; background: var(--btn); color: #fff; cursor: pointer; transition: background-color var(--dur-1), transform var(--dur-1); }
 .gl-send span { display: inline-flex; }
 .gl-send:hover { background: var(--btn-hover); }
@@ -252,7 +249,7 @@
 @keyframes gl-shimmer { to { transform: translateX(100%); } }
 
 .gl-runform { display: grid; gap: 8px; }
-.gl-label { font: 600 12.5px/1.3 var(--font); color: var(--strong); }
+.gl-label { line-height: 1.3; }   /* look: KnowDrive .flabel */
 .gl-runrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .gl-runbtn { min-height: 42px; padding: 0 16px; }
 .gl-runbtn span { display: inline-flex; }
@@ -296,8 +293,7 @@
   .gl-head { padding: 14px 16px 8px; gap: 8px; }
   .gl-title { font-size: 20px; }
   .gl-x { width: 44px; height: 44px; }
-  .gl-tabs { padding: 0 10px; }
-  .gl-body { padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .gl-body { --gl-px: 16px; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); }
   .gl-chgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .gl-chcard { grid-template-columns: minmax(0, 1fr); padding: 10px; row-gap: 6px; }
   .gl-chcard-ico { grid-row: auto; width: 34px; height: 34px; }
@@ -321,7 +317,7 @@
 
 @media (forced-colors: active) {
   .gl-chcard.is-on { outline: 2px solid Highlight; }
-  .gl-tabs-ink { background: Highlight; }
+  .gl-body > .tabs .tab[aria-selected="true"] { border-bottom-color: Highlight; }
 }
 
 /* grid children never grow past the sheet (long code lines scroll inside their own <pre>) */
@@ -391,11 +387,6 @@
 a.gl-proofchip:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .gl-proofchip.is-ph { color: var(--muted); background: var(--panel); border-style: dashed; border-color: var(--line-2); font-style: normal; }
-/* D7: the active tab is shown only by the ink underline; the focus ring is a full rounded pill inside the tab strip
-   (the strip scrolls horizontally, so an outside ring was clipped into a bracket) */
-.gl-tab { border-radius: 10px; }
-.gl-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
-.gl-tab[aria-selected="true"] { background: none; box-shadow: none; }
 /* D7: the mic label sits 12 px below the mic's halo, never over it */
 .gl-mic-wrap { gap: 18px; margin-top: 22px; }
 .gl-vstage { height: 184px; }
@@ -547,8 +538,8 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .gl-sheet.gl-inline { width: 100%; height: 100%; margin: 0; border-radius: 0; box-shadow: none; border: 0; background: transparent; container-type: inline-size; }
 .gl-sheet.gl-inline::before { display: none; }
 .gl-inline .gl-head { padding: 14px 18px 10px; }
-.gl-inline .gl-tabs { padding: 0 14px; }
-.gl-inline .gl-body { padding: 14px 18px 24px; }
+.gl-inline .gl-body { --gl-px: 18px; padding: 0 18px 24px; }
+.gl-inline .gl-body > .tabs { position: static; background: none; }
 .gl-back { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; flex: none; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--strong); font: 500 13px/1 var(--font); cursor: pointer; }
 .gl-back:hover { background: var(--raise); }
 .gl-mine { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft, rgba(79,70,229,.12)); color: var(--accent); font: 600 10.5px/1.5 var(--font); vertical-align: 2px; }

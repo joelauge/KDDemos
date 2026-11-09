@@ -1,0 +1,23 @@
+/* ── Data table (§2.1) — header per the guide: uppercase, letter-spaced, muted
+   text on a subtle page band (not a heading-color fill). Present a table inside
+   a .card (the container motif): .card:has(> .data-table) clips to the radius. ─ */
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--text-md); }
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-base);
+}
+.data-table th {
+  font-weight: 700;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+}
+.data-table tbody tr { cursor: pointer; }
+.data-table tbody tr:hover { background: var(--surface-hover); }
+.data-table tbody tr:last-child td { border-bottom: 0; }  /* clean edge inside a card */
+.card:has(> .data-table) { overflow: hidden; }             /* clip the table to the card radius */
+

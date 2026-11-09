@@ -1,0 +1,7 @@
+/* ── Shared utilities ─ */
+.muted { color: var(--text-secondary); font-size: var(--text-base); }
+.mono-id {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 600; color: var(--text-heading);
+}
+

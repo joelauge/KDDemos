@@ -1,0 +1,30 @@
+/* ── Slide-in drawer (GC5) ─ */
+.drawer-backdrop { position: fixed; inset: 0; background: var(--scrim); z-index: 50; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(560px, 100%);
+  background: var(--bg-base);
+  border-left: 1px solid var(--border-base);
+  box-shadow: -4px 0 24px var(--elev-color-lg);
+  z-index: 51;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.drawer > header {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-base);
+}
+.drawer > header .close {
+  position: absolute; top: var(--space-3); right: var(--space-3);
+  width: var(--space-6); height: var(--space-6);
+  border: 0; border-radius: var(--radius-sm);
+  background: transparent; font-size: var(--text-xl); line-height: 1; cursor: pointer;
+}
+.drawer > header .close:hover { background: var(--surface-hover); }
+.drawer > section { display: flex; flex-direction: column; gap: var(--space-5); padding: var(--space-5); }
+

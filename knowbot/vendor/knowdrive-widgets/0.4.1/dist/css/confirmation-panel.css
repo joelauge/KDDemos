@@ -1,0 +1,33 @@
+/* ── Confirmation panel (§2.4 "Confirmation / check your inbox panel", D2/D4 adapted — §2.6) ─ */
+.confirm-panel {
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
+  text-align: center;
+}
+.confirm-panel-medallion {
+  display: flex; align-items: center; justify-content: center;
+  width: 3.75rem; height: 3.75rem;
+  margin-bottom: var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--brand-bg);
+  color: var(--accent-purple);
+}
+.confirm-panel-medallion > svg { width: 50%; height: 50%; }
+.confirm-panel-title {
+  margin: 0;
+  font-size: var(--text-lg); font-weight: 800; letter-spacing: -0.01em;
+  line-height: var(--leading-tight);
+  color: var(--text-heading);
+}
+.confirm-panel-body {
+  margin: 0;
+  font-size: var(--text-base); line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+.confirm-panel-body strong { font-weight: 700; color: var(--text-heading); }
+.confirm-panel > .btn { align-self: stretch; margin-top: var(--space-3); }
+.confirm-panel-success .confirm-panel-medallion {
+  border-radius: 999px;
+  background: var(--surface-success);
+  color: var(--accent-green);
+}
+

@@ -23,11 +23,12 @@
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
 
-import * as store from './store.js?v=6333a2c';
-import * as api from './api.js?v=6333a2c';
-import * as motion from './motion.js?v=6333a2c';
-import * as icons from './icons.js?v=6333a2c';
-import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=6333a2c';
+import * as store from './store.js?v=71838ff';
+import * as api from './api.js?v=71838ff';
+import * as motion from './motion.js?v=71838ff';
+import * as icons from './icons.js?v=71838ff';
+import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=71838ff';
+import { mountWidget, gaugeProps } from './kdw.js?v=71838ff';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -243,6 +244,8 @@ function applyTheme(next, { save = true } = {}) {
   if (root.getAttribute('data-theme') === next) return;
   root.classList.add('st-theming');
   root.setAttribute('data-theme', next);
+  // KnowDrive's tokens (vendor/kd-theme/tokens.css) switch on html.dark: one switch drives both
+  root.classList.toggle('dark', next === 'dark');
   if (save) { try { localStorage.setItem('knowbot-theme', next); } catch { /* ignore */ } }
   setState({ ui: { ...getState().ui, theme: next } }, 'theme');
   emit('theme', { theme: next });
@@ -1183,7 +1186,7 @@ function addCard(rec, type, data) {
 function mountCard(holder, type, data) {
   if (!store.hasCard(type)) {
     holder.classList.add('is-pending');
-    holder.append(h('div', { class: 'st-card st-card-skeleton', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')));
+    holder.append(h('div', { class: 'card st-card st-card-skeleton', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')));
     pendingCards.push({ holder, type, data });
     return;
   }
@@ -1270,7 +1273,7 @@ function setChips(rec, chips, { still = false } = {}) {
   if (!list.length) { row.hidden = true; return; }
   if (had) queueMicrotask(() => { const b = (had !== '*' && $(`.st-chip[data-chip="${CSS.escape(had)}"]`, row)) || $('.st-chip', row); if (b && !row.hidden) b.focus({ preventScroll: true }); else handOffFocus(rec); });
   list.forEach((c, i) => {
-    const b = h('button', { type: 'button', class: `st-chip st-chip-${c.kind || 'default'}`, tabindex: i === 0 ? '0' : '-1', dataset: { chip: c.id } },
+    const b = h('button', { type: 'button', class: `${c.kind === 'primary' ? 'btn btn-primary' : 'chipbtn'} st-chip st-chip-${c.kind || 'default'}`, tabindex: i === 0 ? '0' : '-1', dataset: { chip: c.id } },
       c.kind === 'probe' ? h('span', { class: 'st-chip-ico', html: icon('shield', 14) }) : null,
       c.kind === 'primary' ? h('span', { class: 'st-chip-ico', html: icon(c.action?.type === 'attach_samples' ? 'bolt' : c.action?.type === 'show_launch' ? 'rocket' : 'arrowRight', 14) }) : null,
       h('span', null, c.label));
@@ -1322,7 +1325,7 @@ function rovingToolbar(row) {
 
 function onChip(c, rec, btn) {
   if (btn) {
-    $$('.st-chip', rec.chipsEl).forEach((b) => { b.classList.toggle('is-chosen', b === btn); b.tabIndex = b === btn ? 0 : -1; });
+    $$('.st-chip', rec.chipsEl).forEach((b) => { b.classList.toggle('is-chosen', b === btn); b.classList.toggle('active', b === btn && b.classList.contains('chipbtn')); b.tabIndex = b === btn ? 0 : -1; });
     rec.chipsEl.classList.add('has-choice');
   }
   if (typeof c.run === 'function') { try { c.run(); } catch (err) { console.error(err); } if (c.local) return; }
@@ -2553,11 +2556,11 @@ function teardownSpec() {
 
 function field(label, control, hint) {
   const id = control.id || (control.id = uid('f'));
-  return h('div', { class: 'st-field' }, h('label', { for: id, class: 'st-label' }, label), control, hint ? h('p', { class: 'st-field-hint' }, hint) : null);
+  return h('div', { class: 'st-field' }, h('label', { for: id, class: 'flabel st-label' }, label), control, hint ? h('p', { class: 'st-field-hint' }, hint) : null);
 }
 function segmented(name, label, options) {
   const gid = uid('g');
-  return h('fieldset', { class: 'st-field st-fieldset' }, h('legend', { class: 'st-label', id: gid }, label),
+  return h('fieldset', { class: 'st-field st-fieldset' }, h('legend', { class: 'flabel st-label', id: gid }, label),
     h('div', { class: 'st-segctl' }, options.map(([value, text, sub]) => {
       const id = uid('r');
       return h('span', { class: 'st-seg-opt' },
@@ -2568,24 +2571,24 @@ function segmented(name, label, options) {
 
 function buildSpecForm() {
   const f = h('form', { class: 'st-spec-form', onsubmit: (e) => e.preventDefault() });
-  const name = h('input', { name: 'name', class: 'st-text', maxlength: '40', autocomplete: 'off' });
-  const org = h('input', { name: 'org', class: 'st-text', maxlength: '60', autocomplete: 'organization' });
-  const purpose = h('textarea', { name: 'purpose', class: 'st-text', rows: '2', maxlength: '200' });
-  const greeting = h('input', { name: 'greeting', class: 'st-text', maxlength: '160' });
+  const name = h('input', { name: 'name', class: 'input st-text', maxlength: '40', autocomplete: 'off' });
+  const org = h('input', { name: 'org', class: 'input st-text', maxlength: '60', autocomplete: 'organization' });
+  const purpose = h('textarea', { name: 'purpose', class: 'input st-text', rows: '2', maxlength: '200' });
+  const greeting = h('input', { name: 'greeting', class: 'input st-text', maxlength: '160' });
   const hues = h('div', { class: 'st-hues', role: 'radiogroup', 'aria-label': 'Avatar color' },
     Array.from({ length: 8 }, (_, i) => h('span', { class: 'st-hue' },
       h('input', { type: 'radio', name: 'hue', id: `st-hue-${i}`, value: String(i), class: 'st-radio' }),
       h('label', { for: `st-hue-${i}`, style: { '--hue': `var(--f${i})` } }, h('span', { class: 'st-sr' }, `Color ${i + 1}`)))));
-  const initials = h('input', { name: 'initials', class: 'st-text st-text-initials', maxlength: '2', autocomplete: 'off', 'aria-label': 'Avatar initials' });
+  const initials = h('input', { name: 'initials', class: 'input st-text st-text-initials', maxlength: '2', autocomplete: 'off', 'aria-label': 'Avatar initials' });
   const starters = h('div', { class: 'st-starters', id: 'st-spec-starters' });
-  const addStarter = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm', onclick: () => { addStarterRow(''); } }, h('span', { html: icon('plus', 14) }), 'Add a starter');
+  const addStarter = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost st-btn-sm', onclick: () => { addStarterRow(''); } }, h('span', { html: icon('plus', 14) }), 'Add a starter');
   const sources = h('div', { class: 'st-sources', id: 'st-spec-sources' });
   const strict = segmented('floor', 'Strictness', [['0.7', 'Standard', '70'], ['0.75', 'Stricter', '75'], ['0.8', 'Strictest', '80']]);
   const adv = h('details', { class: 'st-adv' }, h('summary', null, 'Advanced'), strict,
     h('p', { class: 'st-field-hint' }, 'Higher = refuses more, never guesses. It can only be raised.'));
   f.append(
     h('div', { class: 'st-field-row' },
-      h('div', { class: 'st-field st-avatar-field' }, h('span', { class: 'st-label', id: 'st-av-l' }, 'Avatar'),
+      h('div', { class: 'st-field st-avatar-field' }, h('span', { class: 'flabel st-label', id: 'st-av-l' }, 'Avatar'),
         h('div', { class: 'st-avatar-edit' }, h('span', { class: 'st-avatar st-avatar-xl', id: 'st-spec-avatar', 'aria-hidden': 'true' }), initials)),
       field('Name', name)),
     hues,
@@ -2595,16 +2598,16 @@ function buildSpecForm() {
     segmented('tone', 'Tone', [['friendly', 'Friendly'], ['neutral', 'Neutral'], ['formal', 'Formal']]),
     segmented('length', 'Answer length', [['short', 'Short'], ['normal', 'Normal']]),
     field('Greeting', greeting),
-    h('div', { class: 'st-field' }, h('span', { class: 'st-label' }, 'Starter questions'), starters,
+    h('div', { class: 'st-field' }, h('span', { class: 'flabel st-label' }, 'Starter questions'), starters,
       h('ul', { class: 'st-starters-auto', id: 'st-spec-auto', 'aria-label': 'Suggested by your bot (auto)' }), addStarter),
-    h('div', { class: 'st-field' }, h('span', { class: 'st-label' }, 'Sources'), sources),
-    h('fieldset', { class: 'st-field st-fieldset' }, h('legend', { class: 'st-label' }, 'Answers on'),
+    h('div', { class: 'st-field' }, h('span', { class: 'flabel st-label' }, 'Sources'), sources),
+    h('fieldset', { class: 'st-field st-fieldset' }, h('legend', { class: 'flabel st-label' }, 'Answers on'),
       h('div', { class: 'st-sources st-surfaces' }, SURFACES.map((x) => h('div', { class: 'st-src' },
         h('input', { type: 'checkbox', id: `st-surf-${x.id}`, class: 'st-check', name: 'surface', value: x.id }),
         h('label', { for: `st-surf-${x.id}` }, h('span', { class: 'st-src-name' }, x.label))))),
       h('p', { class: 'st-field-hint' }, 'Where it answers after launch. Every one answers from the same sources. Pick at least one.')),
     h('div', { class: 'st-field st-refusal' },
-      h('span', { class: 'st-label' }, h('span', { html: icon('lock', 13) }), ' Refusal ', h('span', { class: 'st-lock-note' }, 'fixed')),
+      h('span', { class: 'flabel st-label' }, h('span', { html: icon('lock', 13) }), ' Refusal ', h('span', { class: 'st-lock-note' }, 'fixed')),
       h('blockquote', { class: 'st-refusal-quote', title: "Fixed by design: this exact sentence proves your bot isn't guessing." }, NOT_IN_DATA),
       h('p', { class: 'st-field-hint' }, "Fixed by design: this exact sentence proves your bot isn't guessing.")),
     adv);
@@ -2616,7 +2619,7 @@ function buildSpecForm() {
 function addStarterRow(value) {
   const wrap = $('#st-spec-starters', specEl);
   if (!wrap || $$('.st-starter', wrap).length >= 6) return;
-  const inp = h('input', { class: 'st-text', maxlength: '140', value, 'aria-label': `Starter ${$$('.st-starter', wrap).length + 1}`, dataset: { starter: '1' } });
+  const inp = h('input', { class: 'input st-text', maxlength: '140', value, 'aria-label': `Starter ${$$('.st-starter', wrap).length + 1}`, dataset: { starter: '1' } });
   const row = h('div', { class: 'st-starter' }, inp, h('button', { type: 'button', class: 'st-iconbtn st-iconbtn-sm', 'aria-label': 'Remove starter', html: icon('x', 14),
     onclick: () => { row.remove(); queueSpec({ starters: readStarters() }); } }));
   wrap.append(row);
@@ -2639,7 +2642,7 @@ function paintAutoStarters(spec) {
     ul.innerHTML = '';
     for (const q of list) {
       ul.append(h('li', { class: 'st-starter-auto' }, h('span', { class: 'st-starter-q' }, q), h('span', { class: 'st-tag' }, 'auto'),
-        h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm', onclick: () => {
+        h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost st-btn-sm', onclick: () => {
           const cur = (getState().spec.starters || []).map((x) => (typeof x === 'string' ? x : x?.q)).filter(Boolean);
           if (cur.length >= 6) { toast({ kind: 'warn', text: 'Up to 6 starters. Remove one first.' }); return; }
           addStarterRow(q); queueSpec({ starters: readStarters() }, 0);
@@ -2890,7 +2893,7 @@ function versionTag(data) {
 store.registerCard('config-diff', (data, el) => {
   const rows = (data.rows || []).filter((r) => r && r.field && r.field !== 'instructions' && r.field !== 'version');
   const by = data.by || 'setup';
-  const card = h('div', { class: 'st-card st-diff' },
+  const card = h('div', { class: 'card st-card st-diff' },
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon(by === 'user' ? 'edit' : 'sliders', 14) }),
       h('span', null, by === 'user' ? 'You changed' : by === 'scope' ? 'Scope changed' : 'Bot settings'),
       versionTag(data)));
@@ -2953,8 +2956,8 @@ store.registerCard('replay-demo', (data, el) => {
   });
   const status = h('p', { class: 'st-rp-status', role: 'status' }, 'Reading 4 files…');
   const qa = h('div', { class: 'st-rp-qa' });
-  const replayBtn = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm', hidden: true, onclick: () => run() }, h('span', { html: icon('refresh', 14) }), h('span', null, 'Replay'));
-  const card = h('div', { class: 'st-card st-replay' },
+  const replayBtn = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost st-btn-sm', hidden: true, onclick: () => run() }, h('span', { html: icon('refresh', 14) }), h('span', null, 'Replay'));
+  const card = h('div', { class: 'card st-card st-replay' },
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('play', 14) }), h('span', null, 'Replay of a real build'), h('span', { class: 'st-rp-tag st-mono' }, 'Lumen Bikes · sample'), replayBtn),
     h('ol', { class: 'st-rp-rows', 'aria-label': 'Sample files' }, rows.map((r) => r.li)), status, qa);
   el.append(card);
@@ -3000,12 +3003,12 @@ store.registerCard('replay-demo', (data, el) => {
 store.registerCard('email-capture', (data, el) => {
   const t = getState().trial;
   const id = uid('em');
-  const input = h('input', { type: 'email', id, class: 'st-text', placeholder: 'you@company.com', autocomplete: 'email', required: true, value: t.email || '', 'aria-describedby': `${id}-msg` });
+  const input = h('input', { type: 'email', id, class: 'input st-text', placeholder: 'you@company.com', autocomplete: 'email', required: true, value: t.email || '', 'aria-describedby': `${id}-msg` });
   const msg = h('p', { id: `${id}-msg`, class: 'st-field-msg', role: 'status' });
-  const sendBtn = h('button', { type: 'submit', class: 'st-btn st-btn-primary' }, h('span', { html: icon('mail', 15) }), h('span', { class: 'st-btn-label' }, 'Send me the link'));
-  const no = h('button', { type: 'button', class: 'st-btn st-btn-ghost' }, 'No thanks');
+  const sendBtn = h('button', { type: 'submit', class: 'btn btn-primary st-btn st-btn-primary' }, h('span', { html: icon('mail', 15) }), h('span', { class: 'st-btn-label' }, 'Send me the link'));
+  const no = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost' }, 'No thanks');
   const form = h('form', { class: 'st-email-form', novalidate: true }, h('label', { for: id, class: 'st-sr' }, 'Email'), input, sendBtn);
-  const card = h('div', { class: 'st-card st-email' },
+  const card = h('div', { class: 'card st-card st-email' },
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Keep this bot'), h('span', { class: 'st-card-meta' }, 'Saved for 7 days')),
     form, h('div', { class: 'st-email-foot' }, msg, no));
   el.append(card);
@@ -3024,8 +3027,8 @@ store.registerCard('email-capture', (data, el) => {
       const link = r?.link || api.shareLink();
       if (r?.sent) done(h('p', { class: 'st-email-ok' }, h('span', { html: icon('checkCircle', 16) }), `Sent to ${v}.`));
       else {
-        const linkInput = h('input', { class: 'st-text st-mono', readonly: true, value: link, 'aria-label': 'Link to this bot' });
-        const copy = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, h('span', { html: icon('copy', 14) }), h('span', { class: 'st-btn-label' }, 'Copy'));
+        const linkInput = h('input', { class: 'input st-text st-mono', readonly: true, value: link, 'aria-label': 'Link to this bot' });
+        const copy = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost st-btn-sm' }, h('span', { html: icon('copy', 14) }), h('span', { class: 'st-btn-label' }, 'Copy'));
         copy.addEventListener('click', () => copyText(link, copy));
         done(h('div', { class: 'st-email-saved' }, h('p', { class: 'st-email-ok' }, h('span', { html: icon('checkCircle', 16) }), "Saved. Here's your link:"), h('div', { class: 'st-copyrow' }, linkInput, copy)));
       }
@@ -3172,11 +3175,11 @@ on('store:event', (e) => {
 
 store.registerCard('store-import', (data, el) => {
   const id = uid('si');
-  const input = h('input', { type: 'text', inputmode: 'url', id, class: 'st-text', placeholder: 'yourwebsite.com', autocomplete: 'url', spellcheck: 'false', autocapitalize: 'off',
+  const input = h('input', { type: 'text', inputmode: 'url', id, class: 'input st-text', placeholder: 'yourwebsite.com', autocomplete: 'url', spellcheck: 'false', autocapitalize: 'off',
     maxlength: '2048', value: data?.url || '', 'aria-describedby': `${id}-msg` });
   const own = h('input', { type: 'checkbox', id: `${id}-own`, class: 'st-si-own' });
   const msg = h('p', { id: `${id}-msg`, class: 'st-field-msg', role: 'status' });
-  const go = h('button', { type: 'submit', class: 'st-btn st-btn-primary' }, h('span', { html: icon('arrowRight', 15) }), h('span', { class: 'st-btn-label' }, 'Find sources'));
+  const go = h('button', { type: 'submit', class: 'btn btn-primary st-btn st-btn-primary' }, h('span', { html: icon('arrowRight', 15) }), h('span', { class: 'st-btn-label' }, 'Find sources'));
   const form = h('form', { class: 'st-si-form', novalidate: true },
     h('label', { for: id, class: 'st-si-label' }, "Your website's address"),
     h('div', { class: 'st-si-row' }, input, go),
@@ -3198,7 +3201,7 @@ store.registerCard('store-import', (data, el) => {
   const summary = h('div', { class: 'st-si-sum', hidden: true });
   const actions = h('div', { class: 'st-si-actions', hidden: true });
   const run = h('div', { class: 'st-si-run', hidden: true }, status, track, bar, found, capped, recent, summary, actions);
-  const card = h('div', { class: 'st-card st-si' },
+  const card = h('div', { class: 'card st-card st-si' },
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Enter your website'), h('span', { class: 'st-card-meta', title: 'Shopify, WooCommerce, Magento, BigCommerce, Squarespace, Wix or any public site' }, 'Any website or online store')),
     form, plan, run);
   el.append(card);
@@ -3228,7 +3231,7 @@ store.registerCard('store-import', (data, el) => {
     setAttr(bar, 'aria-valuenow', String(Math.round(p * 100)));
   };
   const showActions = (...btns) => { actions.replaceChildren(...btns); actions.hidden = !btns.length; };
-  const btn = (label, cls, fn) => { const b = h('button', { type: 'button', class: `st-btn ${cls} st-btn-sm` }, label); b.addEventListener('click', fn); return b; };
+  const btn = (label, cls, fn) => { const b = h('button', { type: 'button', class: `btn ${cls === 'st-btn-primary' ? 'btn-primary' : 'btn-ghost'} st-btn ${cls} st-btn-sm` }, label); b.addEventListener('click', fn); return b; };
   const resetRun = () => {
     st = fresh(); lastStep = '';
     found.hidden = true; capped.hidden = true; bar.hidden = true; recent.hidden = true; summary.hidden = true; summary.replaceChildren();
@@ -3399,7 +3402,7 @@ store.registerCard('store-import', (data, el) => {
     const head = planFoundLine(kinds);
     const where = st?.name || storeHost(lastUrl);
     const estEl = h('p', { class: 'st-si-est', id: `${id}-est` });
-    const importBtn = h('button', { type: 'button', class: 'st-btn st-btn-primary st-btn-sm', 'aria-describedby': `${id}-est` }, h('span', { html: icon('arrowRight', 14) }), h('span', { class: 'st-btn-label' }, 'Import'));
+    const importBtn = h('button', { type: 'button', class: 'btn btn-primary st-btn st-btn-primary st-btn-sm', 'aria-describedby': `${id}-est` }, h('span', { html: icon('arrowRight', 14) }), h('span', { class: 'st-btn-label' }, 'Import'));
     const paint = () => {
       setText(estEl, on.size ? estimateLine(planEstimate(p, kinds, on)) : 'Tick at least one kind of page to import.');
       importBtn.disabled = !on.size;
@@ -3657,14 +3660,15 @@ function storeGroupPanel(kind) {
   if (pn) return pn;
   const label = storeKindOf(kind).label;
   const sid = `st-sgq-${kind}`;
-  const q = h('input', { type: 'search', id: sid, class: 'st-text st-sgp-q', placeholder: 'Name or address', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': `${sid}-n` });
+  const q = h('input', { type: 'search', id: sid, class: 'input st-text st-sgp-q', placeholder: 'Name or address', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': `${sid}-n` });
   const count = h('p', { id: `${sid}-n`, class: 'st-sgp-n', role: 'status' });
   const ul = h('ul', { class: 'st-sgp-l', 'aria-label': `${label} files` });
-  const prev = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Previous');
-  const next = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm' }, 'Next');
+  const prev = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost st-btn-sm' }, 'Previous');
+  const next = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost st-btn-sm' }, 'Next');
   const pager = h('div', { class: 'st-sgp-pager' }, prev, next);
   const el = h('div', { class: 'st-sgp' }, h('label', { for: sid, class: 'st-sgp-ql' }, `Search ${label.toLowerCase()}`), q, count, ul, pager);
   let offset = 0, total = 0, seq = 0, timer = 0, known = '';
+  let gauges = [];   // one KnowDrive FileGauge per listed file (kdw.js), unmounted when the page of the list changes
   async function load({ fresh = false } = {}) {
     const my = ++seq;
     el.setAttribute('aria-busy', 'true');
@@ -3676,17 +3680,19 @@ function storeGroupPanel(kind) {
     total = r.total;
     if (offset && offset >= total) { offset = Math.max(0, Math.floor((total - 1) / STORE_PAGE) * STORE_PAGE); load(); return; }
     const sources = getState().spec?.sources || {};
+    for (const g of gauges) g.unmount();
+    gauges = [];
     ul.replaceChildren(...r.files.map((f) => {
       const url = storeSafeUrl(f.url);
       const name = String(f.name || f.path || 'file').replace(/\.md$/i, '');
       const use = h('input', { type: 'checkbox', class: 'st-sgp-use', checked: sources[f.id] !== false && f.enabled !== false });
       use.addEventListener('change', () => emit('spec:request', { patch: { sources: { ...(getState().spec?.sources || {}), [f.id]: use.checked } }, by: 'scope' }));
-      const rm = h('button', { type: 'button', class: 'st-btn st-btn-ghost st-btn-sm st-sgp-rm' }, 'Remove', h('span', { class: 'st-sr' }, ` ${name}`));
+      const rm = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost st-btn-sm st-sgp-rm' }, 'Remove', h('span', { class: 'st-sr' }, ` ${name}`));
       rm.addEventListener('click', () => removeStoreFile(f, name, rm));
       return h('li', { class: 'st-sgp-i', dataset: { id: f.id, stage: f.stage || '' } },
         url ? h('a', { class: 'st-sgp-a', href: url, target: '_blank', rel: 'noopener noreferrer', title: url }, name, h('span', { class: 'st-sr' }, ' (opens in a new tab)'))
           : h('span', { class: 'st-sgp-a' }, name),
-        h('span', { class: 'st-sgp-st' }, STORE_STAGE_TEXT[f.stage] || 'Learning'),
+        h('span', { class: 'st-sgp-st' }, (() => { const g = h('span', { class: 'st-sgp-gauge' }); gauges.push(mountWidget(g, 'FileGauge', gaugeProps({ ...f, name, phase: f.stage }))); return g; })(), STORE_STAGE_TEXT[f.stage] || 'Learning'),
         h('label', { class: 'st-sgp-ul' }, use, h('span', null, 'Use'), h('span', { class: 'st-sr' }, ` ${name}`)),
         rm);
     }));
@@ -3750,7 +3756,7 @@ function storeGroupPanel(kind) {
 }
 
 store.registerCard('expired', (data, el) => {
-  el.append(h('div', { class: 'st-card st-expired' },
+  el.append(h('div', { class: 'card st-card st-expired' },
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('clock', 14) }), h('span', null, 'Trial expired')),
     h('p', null, 'This trial expired and its files were deleted.')));
 });
@@ -3766,7 +3772,7 @@ store.registerCard('insights', (data, el) => {
   const gapEmpty = h('p', { class: 'st-field-hint' }, 'No gaps: every question so far was answered from your files.');
   const offNote = h('p', { class: 'st-field-hint st-ins-off', hidden: true });
   topCol.append(topList, topEmpty); gapCol.append(gapList, gapEmpty, offNote);
-  const card = h('div', { class: 'st-card st-insights' },
+  const card = h('div', { class: 'card st-card st-insights' },
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('trending', 14) }), h('span', null, 'What people ask'), metaEl),
     h('div', { class: 'st-ins-grid' }, topCol, gapCol),
     h('p', { class: 'st-card-foot' }, h('span', { html: icon('lock', 12) }), ' Every question is logged to your question insights. Logged questions are never used as sources.'));
@@ -4901,8 +4907,8 @@ function confirmStartOver() {
   const files = Object.values(getState().files || {}).filter((f) => f && !f.sample).length;
   const titleId = 'st-restart-title', descId = 'st-restart-desc';
   const err = h('p', { class: 'st-restart-err', role: 'alert', hidden: true });
-  const cancel = h('button', { type: 'button', class: 'st-btn st-btn-ghost', onclick: () => close() }, 'Cancel');
-  const go = h('button', { type: 'button', class: 'st-btn st-btn-danger', onclick: () => run() }, h('span', { html: icon('refresh', 15), 'aria-hidden': 'true' }), h('span', { class: 'st-btn-label' }, 'Delete and start over'));
+  const cancel = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost', onclick: () => close() }, 'Cancel');
+  const go = h('button', { type: 'button', class: 'btn btn-danger st-btn st-btn-danger', onclick: () => run() }, h('span', { html: icon('refresh', 15), 'aria-hidden': 'true' }), h('span', { class: 'st-btn-label' }, 'Delete and start over'));
   const panel = h('div', { class: 'st-confirm-panel' },
     h('h2', { id: titleId }, 'Start over from scratch?'),
     h('p', { id: descId }, `This permanently deletes ${botName()}, ${files ? `your ${files} uploaded file${files === 1 ? '' : 's'}, ` : ''}its settings, this conversation and the questions it has logged. Any link you saved to this bot will stop working. This can't be undone.`),

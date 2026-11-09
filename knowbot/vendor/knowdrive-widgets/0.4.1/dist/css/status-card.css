@@ -1,0 +1,28 @@
+/* ── Status card (§2.4 "Error / status card", §07 adapted — §2.6) — <StatusCard> ─ */
+.status-card {
+  box-sizing: border-box;
+  display: flex; flex-direction: column; gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-card);
+  text-align: left;
+}
+.status-card-head { display: flex; align-items: center; gap: var(--space-3); }
+.status-card-icon {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.125rem; height: 2.125rem;
+  border-radius: var(--radius-md);
+}
+.status-card-title { font-size: var(--text-md); font-weight: 700; line-height: var(--leading-snug); color: var(--text-heading); }
+.status-card-body { font-size: var(--text-sm); line-height: var(--leading-normal); color: var(--text-secondary); }
+.status-card-body strong { font-weight: 700; color: var(--text-heading); }
+.status-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.status-card-security .status-card-icon { background: var(--surface-secure); color: var(--secure); }
+.status-card-time .status-card-icon { background: var(--amber-light); color: var(--amber); }
+.status-card-info .status-card-icon { background: var(--surface-info); color: var(--accent-info); }
+.status-card-ok .status-card-icon { background: var(--surface-success); color: var(--accent-green); }
+.status-card-neutral .status-card-icon { background: var(--surface-hover); color: var(--text-muted); }
+

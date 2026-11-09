@@ -11,7 +11,7 @@
 // SampleBot composer to focus it for "Keep testing" (the same affordance B uses).
 
 const NBSP = ' ';
-import { SURFACES, normalizeSurfaces, planTotals } from './surfaces.js?v=6333a2c';
+import { SURFACES, normalizeSurfaces, planTotals } from './surfaces.js?v=71838ff';
 const DEFAULT_ANCHORS = { asOf: '2026-11', items: ['CustomGPT Premium $499/mo', 'Chatbase Business $500/mo (40 MB cap)', 'Botpress Team $939/mo', 'Intercom Fin $0.99 per resolution'] };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -288,7 +288,7 @@ export function mount(ctx) {
     // fixer r5 (D9, WCAG 2.5.3): the accessible name always STARTS with the visible label ("Copy", "Copied", "Press
     // Ctrl+C"); the extra context ("hosted link") follows it and tracks the label as it changes.
     const tail = aria ? (aria.toLowerCase().startsWith(label.toLowerCase()) ? aria.slice(label.length) : `, ${aria}`) : '';
-    const b = h('button', { type: 'button', class: `co-btn ${primary ? 'co-btn-primary' : 'co-btn-ghost'} co-copy${small ? ' is-small' : ''}` }, h('span', { class: 'co-copy-ico', 'aria-hidden': 'true', html: icon('copy', 14) }), lab);
+    const b = h('button', { type: 'button', class: `btn ${primary ? 'btn-primary' : 'btn-ghost'} co-btn ${primary ? 'co-btn-primary' : 'co-btn-ghost'} co-copy${small ? ' is-small' : ''}` }, h('span', { class: 'co-copy-ico', 'aria-hidden': 'true', html: icon('copy', 14) }), lab);
     const name = () => { if (tail) b.setAttribute('aria-label', `${lab.textContent}${tail}`); };
     name();
     b.addEventListener('click', async () => {
@@ -809,7 +809,7 @@ export function mount(ctx) {
     let fr = preStub ? preStub.getBoundingClientRect() : fromR && fromR.width ? { left: fromR.left, top: fromR.top, width: fromR.width, height: Math.min(56, fromR.height) } : null;
     const botPane = document.getElementById('st-bot');
     if (botPane && botPane.contains(document.activeElement)) focus = true;
-    const closeBtn = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small co-stage-x', 'aria-describedby': 'co-stage-x-hint' }, h('span', { 'aria-hidden': 'true', html: icon('x', 14) }), backLabel(), h('span', { class: 'co-sr', id: 'co-stage-x-hint', hidden: true }, 'Closes the receipt'));
+    const closeBtn = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small co-stage-x', 'aria-describedby': 'co-stage-x-hint' }, h('span', { 'aria-hidden': 'true', html: icon('x', 14) }), backLabel(), h('span', { class: 'co-sr', id: 'co-stage-x-hint', hidden: true }, 'Closes the receipt'));
     // fixer r7 (D9): the eyebrow is the panel's heading and its focus target on a user-initiated open
     const headEl = h('h2', { class: 'co-eyebrow co-stage-h', id: 'co-stage-h', tabindex: '-1' }, h('span', { html: icon('rocket', 13), 'aria-hidden': 'true' }), `${botName()} is ready to launch`);
     const head = h('div', { class: 'co-stage-head' }, headEl, closeBtn);
@@ -1197,7 +1197,7 @@ export function mount(ctx) {
     const pr = price();
     const t = getState().trial;
     const receipt = sheetReceipt();
-    const emailIn = h('input', { type: 'email', id: 'co-email', name: 'email', class: 'co-input', autocomplete: 'email', inputmode: 'email', spellcheck: 'false', required: true,
+    const emailIn = h('input', { type: 'email', id: 'co-email', name: 'email', class: 'input co-input', autocomplete: 'email', inputmode: 'email', spellcheck: 'false', required: true,
       'aria-describedby': 'co-email-hint', placeholder: 'you@company.com' });
     emailIn.value = t.email || '';
     const emailErr = h('p', { class: 'co-field-err', id: 'co-email-err', hidden: true });
@@ -1207,7 +1207,7 @@ export function mount(ctx) {
     const addFirst = samples ? h('p', { class: 'co-addfirst' }, h('span', { html: icon('upload', 13) }),
       h('span', null, `${botName()} only knows sample files. `, h('button', { type: 'button', class: 'co-link', onclick: () => { closeSheet('addfiles'); addOwnFiles(); } }, 'Add my files first'))) : null;
     const form = h('form', { class: 'co-form', novalidate: true },
-      h('label', { class: 'co-label', for: 'co-email' }, 'Email for your KnowDrive login'),
+      h('label', { class: 'flabel co-label', for: 'co-email' }, 'Email for your KnowDrive login'),
       emailIn,
       h('p', { class: 'co-hint', id: 'co-email-hint' }, 'We send your login and your bot link here. No other field.'),
       emailErr, addFirst, submit, errBox);
@@ -1350,7 +1350,7 @@ export function mount(ctx) {
         submit.disabled = false; submit.removeAttribute('aria-busy'); submit.classList.remove('is-busy');
         $('.co-cta-label', submit).textContent = PRICE_KINDS.submit(price());
         if (err && err.status === 400 && /email/i.test(err.message || '')) { emailErr.textContent = err.message; emailErr.hidden = false; emailIn.setAttribute('aria-invalid', 'true'); emailIn.focus(); return; }
-        const retry = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small' }, h('span', { html: icon('refresh', 14) }), 'Try again');
+        const retry = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small' }, h('span', { html: icon('refresh', 14) }), 'Try again');
         retry.addEventListener('click', () => go());
         const wait = err && err.status === 429 && err.retryAfter ? ` Try again in ${err.retryAfter}s.` : '';
         errBox.append(h('span', { class: 'co-err-ico', html: icon('warn', 15) }), h('span', null, `Couldn't open checkout. Your bot is safe.${wait}`), retry);
@@ -1459,9 +1459,9 @@ export function mount(ctx) {
     const skel = h('div', { class: 'co-act-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i', { class: 'is-short' }));
     // fixer r2 (D8): the pending state lives in this one card (replaced in place), with its own next actions; no
     // duplicate Builder turn repeating the same sentence.
-    const again = h('button', { type: 'button', class: 'co-btn co-btn-ghost is-small' }, h('span', { html: icon('refresh', 14) }), 'Check now');
+    const again = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small' }, h('span', { html: icon('refresh', 14) }), 'Check now');
     again.addEventListener('click', () => { if (pollWake) pollWake(); else pollConversion(); });
-    const keep = h('button', { type: 'button', class: 'co-btn co-btn-primary is-small' }, 'Keep testing');
+    const keep = h('button', { type: 'button', class: 'btn btn-primary co-btn co-btn-primary is-small' }, 'Keep testing');
     keep.addEventListener('click', () => focusBotComposer());
     const acts = h('div', { class: 'co-act-actions', hidden: true }, keep, again);
     const card = h('div', { class: 'co-act' },
@@ -1516,12 +1516,12 @@ export function mount(ctx) {
       data.ownFiles === 0 ? h('div', { class: 'co-success-empty', role: 'note' },
         h('span', { class: 'co-success-empty-ico', html: icon('upload', 16) }),
         h('div', null, h('b', null, 'Sample files were removed at launch'), h('small', null, `${botName()} keeps your settings, tests and tone. Add your docs and it starts answering from them.`)),
-        h('button', { type: 'button', class: 'co-btn co-btn-primary is-small', onclick: () => addOwnFiles() }, h('span', { html: icon('upload', 14) }), 'Add your files')) : null,
+        h('button', { type: 'button', class: 'btn btn-primary co-btn co-btn-primary is-small', onclick: () => addOwnFiles() }, h('span', { html: icon('upload', 14) }), 'Add your files')) : null,
       // fixer r7 (D8): one solid next step per Live card: "Add your files" when the samples were removed, else "Copy
       // embed". The dashboard is an outline link; channels and the API are the turn's chips (never repeated here).
       h('div', { class: 'co-codewrap' }, h('div', { class: 'co-code-head' }, h('span', null, 'Embed on your site'), copyButton(embed, 'Copy embed', { small: true, what: 'Embed code copied', primary: data.ownFiles !== 0 })), code),
       h('div', { class: 'co-success-actions' },
-        h('a', { class: 'co-btn co-btn-ghost', href: dash, target: '_blank', rel: 'noopener' }, 'Open KnowDrive dashboard', h('span', { html: icon('external', 14) }), h('span', { class: 'co-sr' }, ' (opens in a new tab)'))));
+        h('a', { class: 'btn btn-ghost co-btn co-btn-ghost', href: dash, target: '_blank', rel: 'noopener' }, 'Open KnowDrive dashboard', h('span', { html: icon('external', 14) }), h('span', { class: 'co-sr' }, ' (opens in a new tab)'))));
     el.append(card);
     const inst = { el, card, dot, embed, update() {}, destroy() { if (cardInst.success === inst) cardInst.success = null; } };
     cardInst.success = inst;
@@ -1676,7 +1676,7 @@ export function mount(ctx) {
       }
       return null;
     }
-    if (!goLiveMod) goLiveMod = import('./golive.js?v=6333a2c').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
+    if (!goLiveMod) goLiveMod = import('./golive.js?v=71838ff').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
     return goLiveMod;
   }
   async function openGoLive({ tab = 'channels', channel = null, invoker = null } = {}) {

@@ -1,0 +1,9 @@
+/* ── Empty state ─ */
+.empty-state {
+  padding: var(--space-5);
+  text-align: center;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+

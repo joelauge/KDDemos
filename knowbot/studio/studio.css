@@ -1,5 +1,66 @@
-@import url('../dashboard/dashboard.css');
-/* KnowBot Studio shell (owner B). Tokens live here only. Prefix: st-. SPEC 2.1. */
+/* KnowBot Studio shell (owner B). Tokens live here only. Prefix: st-. SPEC 2.1.
+   KnowDrive look (phase 1 of the design-system move): the palette, type, radii and elevation come from KnowDrive's
+   theme tokens (../vendor/kd-theme/tokens.css, loaded before this file together with the shared widgets.css). The
+   Studio keeps its own short variable names (--panel, --strong, --accent …) because ~2,000 rules read them, but each
+   one is now defined BY ROLE on a KnowDrive token (design contract 1.3: a role per occurrence, never a hex swap).
+   Dark mode is KnowDrive's html.dark, set together with data-theme="dark" (index.html pre-paint, app.js applyTheme).
+   The Studio no longer imports ../dashboard/dashboard.css: its palette would fight the tokens and its .btn rules
+   would fight the canonical button family. */
+
+/* ------------------------------------------------------------------ palette: Studio roles -> KnowDrive tokens */
+:root {
+  color-scheme: light;
+  --bg: var(--bg-page);                 /* page backdrop */
+  --panel: var(--bg-base);              /* base surface (panes, header, cards) */
+  --panel-2: var(--bg-surface);         /* raised / inset surface */
+  --raise: var(--surface-hover);        /* hover and pressed grounds, quiet chips */
+  --line: var(--border-base);           /* hairlines, card borders */
+  --line-2: var(--control-border);      /* control borders, dashed placeholders */
+  --text: var(--text-body);             /* body copy */
+  --strong: var(--text-heading);        /* headings, names, emphasis */
+  --muted: var(--text-muted);           /* secondary copy (AA) */
+  --dim: var(--text-muted);             /* tertiary copy: KnowDrive's --text-faint fails AA, so it stays muted */
+  --accent: var(--accent-purple);       /* brand fills, marks, focus */
+  --accent-2: var(--text-accent);       /* accent-coloured TEXT (links, selected labels) */
+  --accent-soft: var(--surface-accent); /* accent tint ground */
+  --btn: var(--accent-purple);          /* white-on-brand buttons (4.9:1) */
+  --btn-hover: var(--accent-strong);
+  /* status as TEXT must pass AA: the guide's green-dk / red; amber has no AA text value in the guide, so the
+     Studio keeps its own burnt amber for warning text */
+  --good: #0e7c5f;                      /* guide --green-dk (5.2:1); --accent-green is for marks only */
+  --good-soft: var(--surface-success);
+  --warn: #9a4508;
+  --warn-soft: var(--surface-warning);
+  --bad: var(--accent-red);
+  --bad-soft: var(--surface-danger-subtle);
+  --radius: var(--radius-lg);
+  --font: var(--font-sans);
+  --display: var(--font-sans);
+  --mono: var(--font-mono);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: var(--bg-base);
+  --panel: var(--bg-surface);
+  --panel-2: #16161f;                   /* between --bg-surface and --bg-elevated (read by no script) */
+  --raise: var(--bg-elevated);          /* KnowDrive's dark --surface-hover (#2a2a3c) puts --text-muted at 4.25:1 (contract 4.2); this keeps 5.1:1 */
+  --good: var(--accent-green);          /* 9.8:1 on the dark ground */
+  --warn: #fbbf24;
+  --bad: #f87171;                       /* --accent-red is 3.5:1 on dark: too faint for text */
+}
+
+/* ------------------------------------------------------------------ KnowDrive widget islands (kdw.js) */
+.kdw-slot { display: contents; }      /* a DOM node handed to a React widget (e.g. a Tabs panel) adds no box */
+
+/* ------------------------------------------------------------------ base (was dashboard.css) */
+*, *::before, *::after { box-sizing: border-box; }
+a { color: var(--accent-2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+}
 
 :root {
   /* motion */
@@ -13,13 +74,13 @@
   --stagger-card: 50ms; --stagger-atom: 12ms; --stagger-row: 60ms;
   /* studio surfaces */
   --st-header-h: 56px; --st-spine-h: 44px; --st-gutter: 16px;
-  --st-radius-sm: 8px; --st-radius-lg: 18px;
-  --st-shadow-1: 0 1px 2px rgb(15 23 42 / .06), 0 1px 1px rgb(15 23 42 / .04);
-  --st-shadow-2: 0 8px 24px -8px rgb(15 23 42 / .18);
-  --st-scrim: rgb(2 6 23 / .6);
-  --st-mark: rgba(99,102,241,.22);
+  --st-radius-sm: var(--radius-sm); --st-radius-lg: var(--radius-lg);
+  --st-shadow-1: var(--elev-card);
+  --st-shadow-2: var(--shadow-elev);
+  --st-scrim: var(--scrim);
+  --st-mark: rgba(108,92,231,.22);
   --st-floor: var(--warn);            /* the dashed floor line */
-  --st-refusal: #475569;              /* calm slate, never red */
+  --st-refusal: var(--text-muted);    /* calm grey, never red */
   --st-shield: var(--accent-2);
   /* 8-hue file palette (light); each ≥3:1 vs --panel */
   --f0:#4f46e5; --f1:#0e7490; --f2:#be185d; --f3:#9a4508; --f4:#047857; --f5:#7c3aed; --f6:#b45309; --f7:#1d4ed8;
@@ -27,18 +88,15 @@
   --st-tabs-h: 0px;
   --kb-inset: 0px;
   --st-hair: linear-gradient(90deg, transparent, var(--accent), transparent);
-  --st-panel-bot: #f4f6fb;
-  --st-dotgrid: rgb(15 23 42 / .045);
+  --st-panel-bot: var(--bg-surface);
+  --st-dotgrid: var(--grid-line);
   --st-chip-h: 34px;
-  --st-focus: 2px solid var(--accent);
+  --st-focus: 2px solid var(--accent-purple);
 }
 :root[data-theme="dark"] {
-  --st-shadow-1: 0 1px 2px rgb(0 0 0 / .4);
-  --st-shadow-2: 0 12px 32px -12px rgb(0 0 0 / .6);
-  --st-mark: rgba(129,140,248,.34);
-  --st-refusal: #94a3b8;
+  --st-mark: rgba(108,92,231,.34);
   --f0:#818cf8; --f1:#22d3ee; --f2:#f472b6; --f3:#fbbf24; --f4:#34d399; --f5:#c4b5fd; --f6:#fdba74; --f7:#93c5fd;
-  --st-panel-bot: #050b1a;
+  --st-panel-bot: var(--bg-base);
   --st-dotgrid: rgb(148 163 184 / .06);
 }
 @property --angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
@@ -441,23 +499,22 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 
 /* chips (2–4 per turn) */
 .st-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+/* look: KnowDrive .chipbtn (suggestions) and .btn.btn-primary (the one primary suggestion); layout and motion only here */
 .st-chip {
-  display: inline-flex; align-items: center; gap: 7px; min-height: var(--st-chip-h); padding: 6px 13px; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); font: 500 13.5px/1.25 var(--font); text-align: left;
-  box-shadow: var(--st-shadow-1); transition: transform var(--dur-1) var(--ease-out), border-color var(--dur-1), background-color var(--dur-1), box-shadow var(--dur-1), opacity var(--dur-2);
+  display: inline-flex; align-items: center; gap: 7px; min-height: var(--st-chip-h); padding: 6px 13px; cursor: pointer;
+  font-size: 13.5px; line-height: 1.25; text-align: left;
+  transition: transform var(--dur-1) var(--ease-out), border-color var(--dur-1), background-color var(--dur-1), box-shadow var(--dur-1), opacity var(--dur-2);
 }
-.st-chip:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 50%, var(--line-2)); box-shadow: var(--st-shadow-2); }
+.st-chip:hover { transform: translateY(-1px); }
+.st-chip.chipbtn:hover { border-color: var(--accent-purple); color: var(--text-heading); }
 .st-chip:active { transform: translateY(0) scale(.98); }
 .st-chip-ico { display: inline-flex; color: var(--accent-2); }
-.st-chip-primary { color: #fff; border-color: transparent; background: linear-gradient(180deg, color-mix(in srgb, var(--btn) 86%, #fff), var(--btn)); box-shadow: 0 1px 0 rgb(255 255 255 / .2) inset, 0 8px 18px -10px var(--btn); font-weight: 600; }
-.st-chip-primary .st-chip-ico { color: #fff; }
-.st-chip-primary:hover { background: var(--btn-hover); border-color: transparent; }
-.st-chip-probe { border-style: dashed; color: var(--st-refusal); }
+.st-chip-primary .st-chip-ico { color: inherit; }
+.st-chip-probe { border-style: dashed; }
 .st-chip-probe .st-chip-ico { color: var(--st-shield); }
 /* r7 (D7/D9): a used row keeps only the chosen chip, at full contrast with a check (it stays operable: re-opening a sheet
    is a fair second tap); the other options leave with the click (input-driven, no layout shift counted) */
 .st-chips.has-choice .st-chip:not(.is-chosen) { display: none; }
-.st-chips.has-choice .st-chip.is-chosen { border-color: var(--accent); }
 .st-chips.has-choice .st-chip.is-chosen::after {
   content: ''; flex: none; width: 13px; height: 13px; margin-left: 1px; background: currentColor;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / contain no-repeat;
@@ -490,8 +547,8 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-attach { width: 36px; height: 36px; }
 
 /* ------------------------------------------------------------------ cards (B-owned: config-diff, email-capture, expired, insights) */
-.st-card {
-  position: relative; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: var(--st-shadow-1); padding: 12px 14px; contain: layout paint;
+.st-card {   /* look: KnowDrive .card */
+  position: relative; padding: 12px 14px; contain: layout paint;
 }
 .st-card-head { display: flex; align-items: center; gap: 8px; font: 600 12.5px/1.2 var(--font); color: var(--strong); margin-bottom: 8px; }
 .st-card-ico { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: var(--accent-soft); color: var(--accent-2); }
@@ -552,18 +609,14 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-ins-n { font-size: 11.5px; color: var(--muted); text-align: right; }
 
 /* ------------------------------------------------------------------ buttons + form controls */
-.st-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 38px; padding: 0 14px; border-radius: 10px; font: 600 13.5px/1 var(--font); cursor: pointer; border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); transition: background-color var(--dur-1), transform var(--dur-1), border-color var(--dur-1); }
-.st-btn:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); }
+/* look: KnowDrive widgets.css (.btn family); this rule keeps only the Studio layout (size, spacing, motion) */
+.st-btn { height: 38px; padding: 0 14px; font-size: 13.5px; line-height: 1; white-space: nowrap; transition: background-color var(--dur-1), transform var(--dur-1), border-color var(--dur-1); }
 .st-btn:active { transform: translateY(1px); }
-.st-btn-primary { background: var(--btn); color: #fff; border-color: transparent; }
-.st-btn-primary:hover { background: var(--btn-hover); border-color: transparent; }
 .st-btn-primary[aria-busy="true"] { opacity: .8; }
-.st-btn-ghost { background: transparent; border-color: transparent; color: var(--muted); font-weight: 500; }
-.st-btn-ghost:hover { color: var(--strong); background: var(--raise); border-color: transparent; }
 .st-btn-sm { height: 32px; padding: 0 10px; font-size: 12.5px; }
-.st-text { width: 100%; min-height: 38px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--strong); font: 14px/1.4 var(--font); transition: border-color var(--dur-1), box-shadow var(--dur-1); }
-.st-text:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
-.st-text[aria-invalid="true"] { border-color: var(--bad); }
+/* look: KnowDrive .input; layout only here */
+.st-text { width: 100%; min-height: 38px; font-size: 14px; line-height: 1.4; transition: border-color var(--dur-1), box-shadow var(--dur-1); }
+.st-text[aria-invalid="true"] { border-color: var(--accent-red); }
 textarea.st-text { resize: vertical; }
 .st-text-initials { width: 56px; text-align: center; text-transform: uppercase; font-family: var(--display); font-weight: 700; }
 
@@ -610,7 +663,7 @@ textarea.st-text { resize: vertical; }
 .st-spec-form { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 14px var(--st-gutter) 28px; display: grid; gap: 16px; align-content: start; }
 .st-field { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .st-fieldset { min-inline-size: 0; }
-.st-label { font: 600 12px/1.3 var(--font); color: var(--muted); letter-spacing: .1px; display: inline-flex; align-items: center; gap: 4px; padding: 0; }
+.st-label { display: inline-flex; align-items: center; gap: 4px; padding: 0; line-height: 1.3; }   /* look: KnowDrive .flabel */
 .st-field-hint { margin: 0; font-size: 12px; color: var(--dim); }
 .st-field-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: end; }
 .st-avatar-edit { display: flex; align-items: center; gap: 8px; }
@@ -1231,8 +1284,6 @@ textarea.st-text { resize: vertical; }
 .st-confirm-panel h2 { margin: 0 0 8px; font: 700 18px/1.3 var(--font-display, var(--font)); }
 .st-confirm-panel p { margin: 0 0 14px; font: 400 14px/1.55 var(--font); color: var(--body, var(--strong)); }
 .st-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.st-btn-danger { background: #b42318; border-color: #b42318; color: #fff; }
-.st-btn-danger:hover { background: #912018; border-color: #912018; }
 .st-btn-danger:disabled, .st-confirm .st-btn:disabled { opacity: .7; cursor: progress; }
 .st-restart-err { margin: 0 0 12px !important; padding: 8px 10px; border-radius: 8px; background: rgba(180, 35, 24, .08); color: #b42318 !important; }
 :root[data-theme="dark"] .st-restart-err { color: #fda29b !important; background: rgba(253, 162, 155, .1); }
@@ -1310,7 +1361,7 @@ textarea.st-text { resize: vertical; }
 .st-sgp-a { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: inherit; }
 a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .st-sgp-a:focus-visible, .st-sgp-ul:focus-within { outline: var(--st-focus); outline-offset: 2px; border-radius: 4px; }
-.st-sgp-st { flex: none; font-size: 12px; color: var(--muted); }
+.st-sgp-st { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .st-sgp-i[data-stage="failed"] .st-sgp-st { color: var(--bad, var(--muted)); }
 .st-sgp-ul { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; min-height: 32px; cursor: pointer; }
 .st-sgp-rm { flex: none; }

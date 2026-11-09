@@ -1,0 +1,4 @@
+/* ── Inline form error (§2.4 "Inline form error", adapted — §2.6) ─ */
+.form-error { margin: 0; font-size: var(--text-xs); font-weight: 600; color: var(--accent-red); }
+
+

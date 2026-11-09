@@ -1,0 +1,16 @@
+/* ── Event timeline (GC10) — vertical rail + dots chronology ─ */
+.timeline { display: flex; flex-direction: column; gap: var(--space-2); }
+.timeline > .tl-item {
+  position: relative;
+  display: flex; flex-direction: column; gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-base);
+  font-size: var(--text-sm);
+}
+.timeline > .tl-item::before {
+  content: ""; position: absolute; left: -5px; top: var(--space-3);
+  width: 8px; height: 8px; border-radius: 999px; background: var(--accent-purple);
+}
+.tl-event { color: var(--text-heading); }
+.tl-actor { color: var(--text-secondary); font-size: var(--text-sm); }
+

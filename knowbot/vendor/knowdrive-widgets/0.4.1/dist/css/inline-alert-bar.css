@@ -1,0 +1,11 @@
+/* ── Inline alert bar (GC11) — subtle tinted surface + accent left-rule ─ */
+.alert {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+}
+.alert-danger  { background: var(--surface-danger-subtle); border-left-color: var(--accent-red);   color: var(--accent-red); }
+.alert-success { background: var(--surface-success);        border-left-color: var(--accent-green); color: var(--accent-green); }
+.alert-info    { background: var(--brand-bg);               border-left-color: var(--accent-purple); color: var(--accent-strong); }
+

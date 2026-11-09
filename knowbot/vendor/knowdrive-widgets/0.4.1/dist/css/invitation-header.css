@@ -1,0 +1,24 @@
+/* ── Invitation header (§2.4 "Invitation-accept header", E4 adapted — §2.6) ─ */
+.invite-header {
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-3);
+  text-align: center;
+}
+.invite-header-avatar {
+  display: flex; align-items: center; justify-content: center;
+  width: 2.75rem; height: 2.75rem;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--accent-purple);
+  color: #fff;
+  font-size: var(--text-lg); font-weight: 800; line-height: 1;
+  box-shadow: 0 0 0 2px var(--bg-base);
+}
+.invite-header-avatar > img { width: 100%; height: 100%; object-fit: cover; }
+.invite-header-text {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  font-size: var(--text-sm); line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+.invite-header-text > p { margin: 0; }
+.invite-header-text strong { font-weight: 700; color: var(--text-heading); }
+

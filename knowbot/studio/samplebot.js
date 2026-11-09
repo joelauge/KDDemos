@@ -1710,7 +1710,7 @@ export function mount(ctx) {
     const busy = readiness().busy.length;
     if (!busy || A.el.learn) return;
     const txt = h('span', { class: 'pf-learn-t' });
-    const btn = h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: () => startAsk(A.question, { by: 'chip', label: 'Asked again' }) }, ico('refresh', 13), 'Re-ask');
+    const btn = h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: () => startAsk(A.question, { by: 'chip', label: 'Asked again' }) }, ico('refresh', 13), 'Re-ask');
     const el = h('p', { class: 'pf-learn', role: 'note' }, h('span', { class: 'pf-spin', 'aria-hidden': 'true' }), txt, btn);
     A.el.learn = { el, txt };
     A.el.refusal.append(el);
@@ -2085,7 +2085,7 @@ export function mount(ctx) {
         : server ? 'Your bot hit an error answering this. Your question wasn’t lost.'
           : 'Couldn’t reach your bot. Your question wasn’t lost.';
       box.append(ico('warn', 15), h('span', null, A.errText),
-        h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: retry }, ico('refresh', 13), 'Retry'));
+        h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: retry }, ico('refresh', 13), 'Retry'));
       A.retry = retry;   // the 'online' event re-runs it when this is still the latest thing in the thread
     }
     A.el.status.innerHTML = '';
@@ -2149,7 +2149,7 @@ export function mount(ctx) {
     const q = last.question;
     reaskEl = h('div', { class: 'sb-reask' },
       h('span', { class: 'sb-reask-v sb-num' }, `v${version} saved`),
-      h('button', { type: 'button', class: 'sb-btn sb-btn-sm sb-btn-primary', onclick: () => { clearReask(); startAsk(q, { by: 'chip', label: 'Re-ask' }); } },
+      h('button', { type: 'button', class: 'btn btn-primary sb-btn sb-btn-sm sb-btn-primary', onclick: () => { clearReask(); startAsk(q, { by: 'chip', label: 'Re-ask' }); } },
         ico('refresh', 13), h('span', null, `Re-ask “${clip(q, 40)}” to compare`)));
     threadEl.append(reaskEl);
     if (!reduced()) anim(reaskEl, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out' });
@@ -2371,7 +2371,7 @@ export function mount(ctx) {
     const items = r?.items || [];
     let span = null;
     if (!items.length) {
-      if (err) body.append(h('div', { class: 'sb-err' }, ico('warn', 15), h('span', null, 'Couldn’t load this passage.'), h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: () => { body.innerHTML = ''; body.append(drawerSkeleton()); renderDrawerPassage(data, body, foot); } }, ico('refresh', 13), 'Retry')));
+      if (err) body.append(h('div', { class: 'sb-err' }, ico('warn', 15), h('span', null, 'Couldn’t load this passage.'), h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: () => { body.innerHTML = ''; body.append(drawerSkeleton()); renderDrawerPassage(data, body, foot); } }, ico('refresh', 13), 'Retry')));
       const fallback = q?.text || data.hit?.excerpt || '';
       if (fallback) body.append(h('div', { class: 'pf-atom is-main' }, h('span', { class: 'pf-atom-seq sb-num' }, data.seq != null ? `atom #${data.seq + 1}` : 'atom'), h('p', null, h('mark', { class: 'pf-mark is-on' }, fallback))));
     } else {
@@ -2415,8 +2415,8 @@ export function mount(ctx) {
       // character ranges and atom numbers are builder detail: behind a "Details" disclosure
       h('details', { class: 'pf-dspan sb-num' }, h('summary', null, q ? 'Quoted line · details' : 'Details'), h('span', null, span || (q ? 'quoted line' : data.seq != null ? `atom #${data.seq + 1}` : ''))),
       h('div', { class: 'pf-dacts' },
-        h('button', { type: 'button', class: 'sb-btn sb-btn-sm', onclick: (e) => expandSource(data, body, e.currentTarget) }, ico('file', 13), 'Expand source'),
-        h('button', { type: 'button', class: 'sb-btn sb-btn-sm sb-btn-primary', onclick: () => askAboutPassage(data) }, ico('chat', 13), 'Ask about this passage')));
+        h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: (e) => expandSource(data, body, e.currentTarget) }, ico('file', 13), 'Expand source'),
+        h('button', { type: 'button', class: 'btn btn-primary sb-btn sb-btn-sm sb-btn-primary', onclick: () => askAboutPassage(data) }, ico('chat', 13), 'Ask about this passage')));
   }
 
   async function expandSource(data, body, btn) {
@@ -2624,7 +2624,7 @@ export function mount(ctx) {
     stat('refused', 'Refused off-topic', '/0');
     stat('unsupported', 'Unsupported claims', '');
     stat('verified', 'Verified claims', '%');
-    const again = h('button', { type: 'button', class: 'sb-btn sb-btn-sm', hidden: true, onclick: () => runProof({ mini: run?.mini }) }, ico('refresh', 13), 'Run again');
+    const again = h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', hidden: true, onclick: () => runProof({ mini: run?.mini }) }, ico('refresh', 13), 'Run again');
     const card = h('div', { class: 'pf-sc', role: 'group', 'aria-label': 'Proof Run scorecard' }, title, bar, list, totals, h('div', { class: 'pf-sc-actions' }, again));
     el.append(card);
     const rowEls = new Map();
@@ -2726,7 +2726,7 @@ export function mount(ctx) {
       kind = 'reask';
       const q = lastPartialQ.question;
       content = [ico('checkCircle', 14), h('span', null, `All ${plural(r.ready.length, 'file')} ready.`),
-        h('button', { type: 'button', class: 'sb-btn sb-btn-sm sb-btn-primary', onclick: () => { partialOffered = true; lastPartialQ = null; renderBanner(); startAsk(q, { by: 'chip', label: 'Asked again' }); } }, ico('refresh', 13), h('span', null, `Ask again: “${clip(q, 36)}”`)),
+        h('button', { type: 'button', class: 'btn btn-primary sb-btn sb-btn-sm sb-btn-primary', onclick: () => { partialOffered = true; lastPartialQ = null; renderBanner(); startAsk(q, { by: 'chip', label: 'Asked again' }); } }, ico('refresh', 13), h('span', null, `Ask again: “${clip(q, 36)}”`)),
         h('button', { type: 'button', class: 'sb-banner-x', 'aria-label': 'Dismiss', onclick: () => { partialOffered = true; renderBanner(); } }, ico('close', 14))];
     } else if (!r.busy.length && r.failed.length && r.ready.length) {
       kind = 'warn';
@@ -2850,9 +2850,9 @@ export function mount(ctx) {
     const bar = h('div', { class: 'sb-sugg', role: 'toolbar', 'aria-label': 'Suggested questions', 'aria-orientation': 'horizontal' });
     const buttons = [];
     for (const q of starters) {
-      buttons.push(h('button', { type: 'button', class: 'sb-chip', onclick: (e) => { if (e.currentTarget.getAttribute('aria-disabled') === 'true') return; const bar0 = e.currentTarget.parentElement; const ptr = e.detail; const sl = ptr ? bar0.scrollLeft : 0; startAsk(q, { by: 'chip' }); if (ptr) homeRow(bar0, sl); } }, h('span', null, q)));
+      buttons.push(h('button', { type: 'button', class: 'chipbtn sb-chip', onclick: (e) => { if (e.currentTarget.getAttribute('aria-disabled') === 'true') return; const bar0 = e.currentTarget.parentElement; const ptr = e.detail; const sl = ptr ? bar0.scrollLeft : 0; startAsk(q, { by: 'chip' }); if (ptr) homeRow(bar0, sl); } }, h('span', null, q)));
     }
-    buttons.push(h('button', { type: 'button', class: 'sb-chip sb-chip-probe', title: 'Asks something your files don’t cover, to show the refusal',
+    buttons.push(h('button', { type: 'button', class: 'chipbtn sb-chip sb-chip-probe', title: 'Asks something your files don’t cover, to show the refusal',
       onclick: (e) => {
         const q = probes[probeIdx % probes.length];
         probeIdx++;

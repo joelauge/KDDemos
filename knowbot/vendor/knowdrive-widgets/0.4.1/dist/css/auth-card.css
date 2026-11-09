@@ -1,0 +1,49 @@
+/* ── Auth card (§2.4 "Auth card shell", adapted A4/D1/D3/E4 — §2.6; ledger §4.1) ─
+   Brand-neutral: the host supplies the logo in .auth-card-logo (currentColor = accent). */
+.auth-card {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 22rem;
+  margin: 0 auto;
+  display: flex; flex-direction: column;
+  padding: var(--space-5);
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-dropdown);
+}
+.auth-card-logo {
+  display: flex; justify-content: center;
+  margin-bottom: var(--space-4);
+  color: var(--accent-purple);
+}
+.auth-card-logo img,
+.auth-card-logo svg { height: 2rem; width: auto; max-width: 100%; }
+.auth-card-title {
+  margin: 0;
+  text-align: center;
+  font-size: var(--text-lg);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: var(--leading-tight);
+  color: var(--text-heading);
+}
+.auth-card-sub {
+  margin: var(--space-1) 0 0;
+  text-align: center;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+.auth-card-body {
+  display: flex; flex-direction: column; gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+.auth-card-body > .btn { box-sizing: border-box; width: 100%; }
+.auth-card-foot {
+  margin: var(--space-4) 0 0;
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
