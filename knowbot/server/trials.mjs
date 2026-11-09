@@ -2303,7 +2303,8 @@ export function createStudio(o = {}) {
       const summaryText = fin0.summary ? String(fin0.summary).trim() : null;
       const claims = claimLines.map((x) => {
         const l = x.body;
-        if (summaryText && l.trim() === summaryText) {
+        const bare = (t) => String(t).replace(/\s*\[\d{1,3}\]/g, '').replace(/\s+/g, ' ').trim();
+        if (summaryText && bare(l) === bare(summaryText)) {
           const sn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null;
           return { sentence: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: sn, quote: null, file: null, locator: null, summary: true,
             verified: true, check: 'every number, price, date and name in it is in the quoted lines' };

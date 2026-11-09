@@ -375,7 +375,9 @@ const LINK_SPAN = /https?:\/\/[^\s)\]>"”]+/g;
 const STOP_MASK = { '.': '', '!': '', '?': '' };
 const maskStops = (line) => String(line).replace(/[-]/g, '')
   .replace(QUOTED_SPAN, (q) => q.replace(/[.!?](?![.!?]*["”]$)/g, (c) => STOP_MASK[c]))
-  .replace(LINK_SPAN, (u) => u.replace(/[.!?](?![.!?]*$)/g, (c) => STOP_MASK[c]));
+  .replace(LINK_SPAN, (u) => u.replace(/[.!?](?![.!?]*$)/g, (c) => STOP_MASK[c]))
+  // a decimal point ("50.00 USD", "$139.99") never ends a sentence
+  .replace(/(\d)\.(?=\d)/g, (m, d) => `${d}${STOP_MASK['.']}`);
 const unmaskStops = (t) => t.replace(/[-]/g, (c) => '.!?'[c.charCodeAt(0) - 0xE000]);
 function proseSentences(line) {
   return (maskStops(line).match(/[^.!?]+(?:[.!?]+["”’)]*(?:\s*\[\d{1,3}\])*|$)\s*/g) || []).map((x) => unmaskStops(x).trim()).filter(Boolean);

@@ -157,3 +157,9 @@ test('verifySummary: a sentence without its own marker borrows the previous one,
   assert.equal(ok.text, 'The Toad Vault costs 50.00 USD to 300.00 USD [1]. It comes in Cherry or Bolivian Rosewood [1].');
   assert.equal(lib.verifySummary('It costs $50 [L2]. It also comes in Walnut.', { quotedLines: q, picks: [2, 3] }).ok, false, 'Walnut is not in the quotes');
 });
+
+test('a summary with decimal prices survives requireCitations whole (a decimal point never ends a sentence)', () => {
+  const fin = { text: 'The Toad Vault costs 50.00 USD to 300.00 USD [1]. It comes in Cherry [1].\n- “Toad Vault price: 50.00 USD to 300.00 USD” [1]', citations: [{ n: 1, file_id: 'f', filename: 'f', title: 'Toad Vault' }], refused: false };
+  const out = lib.requireCitations(fin);
+  assert.match(out.text, /^The Toad Vault costs 50\.00 USD to 300\.00 USD \[1\]\. It comes in Cherry \[1\]\./);
+});
