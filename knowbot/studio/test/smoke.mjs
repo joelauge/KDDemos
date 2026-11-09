@@ -319,12 +319,16 @@ async function journey(browser, dev, cell) {
   check('05-first-answer', 'first cited answer < 45 s from landing', elapsed < 45000, { detail: `${(elapsed / 1000).toFixed(1)} s` });
   await page.waitForTimeout(900);
   const threadText = await page.innerText('#sb-thread-slot').catch(() => '');
-  const matches = [...threadText.matchAll(/match\s*(\d{1,3})/gi)].map((m) => Number(m[1]));
-  check('05-first-answer', 'source chips show match 55–99', matches.some((n) => n >= 55 && n <= 99), { detail: matches.slice(0, 6).join(',') });
+  // the visitor's view is calm: no match scores, no chip row (they live in Proof view); the DOM still carries the
+  // source chips with their match, so the match range is checked from textContent
+  const srcText = await page.evaluate(() => [...document.querySelectorAll('#sb-thread-slot .sb-srcrow')].map((r) => r.textContent).join(' '));
+  const matches = [...srcText.matchAll(/match\s*(\d{1,3})/gi)].map((m) => Number(m[1]));
+  check('05-first-answer', 'source chips carry match 55–99 (Proof view)', matches.some((n) => n >= 55 && n <= 99), { detail: matches.slice(0, 6).join(',') });
+  check('05-first-answer', 'bot view shows no match scores', !/match\s*\d{1,3}/i.test(threadText), { detail: threadText.slice(0, 80) });
   // r7: chips are named "<visible text>: citation, atom n" (axe label-content-name-mismatch), so select by data-n
   const citeCount = await page.locator('#sb-thread-slot button.pf-cite[data-n="1"]').count();
   check('05-first-answer', 'answer has a [1] chip', citeCount > 0 || /\[1/.test(threadText), { detail: `${citeCount} citation buttons` });
-  check('05-first-answer', 'pill starts with "Grounded"', /Grounded/.test(threadText));
+  check('05-first-answer', 'pill says "From your files"', /From your files/.test(threadText));
   const geo5 = await page.evaluate(() => { const b = document.getElementById('st-bot').getBoundingClientRect(); const t = document.getElementById('sb-thread-slot').getBoundingClientRect(); return { pane: Math.round(b.height), thread: Math.round(t.height) }; });
   check('05-first-answer', 'thread gets ≥ 50% of the bot pane', geo5.thread >= geo5.pane * 0.5, { detail: `${geo5.thread}/${geo5.pane}` });
   const price5 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);

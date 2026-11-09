@@ -708,8 +708,11 @@ export function mount(ctx) {
       // the pill shows end-to-end time (what the visitor waited, Send -> last quote), labelled as such; the server's own
       // time is labelled "server" in the trace. r6: a bare "241 ms" read as an overstated speed claim.
       const e2e = A.e2eMs != null;
-      text = h('span', null, h('b', null, 'Grounded'), ` · ${plural(q, 'quote')} from ${plural(files, 'file')} · ${vp}% verified · `,
-        h('span', { class: 'sb-num' }, e2e ? `answered in ${fmtMs(waitMs(A))}` : `server ${fmtMs(waitMs(A))}`));
+      // the visitor's view says only where the answer came from; the counts, verification and timing are Proof view's
+      text = h('span', null,
+        h('span', { class: 'sb-pill-calm' }, h('b', null, 'From your files'), ` · ${plural(files, 'source')}`),
+        h('span', { class: 'sb-pill-full' }, h('b', null, 'Grounded'), ` · ${plural(q, 'quote')} from ${plural(files, 'file')} · ${vp}% verified · `,
+          h('span', { class: 'sb-num' }, e2e ? `answered in ${fmtMs(waitMs(A))}` : `server ${fmtMs(waitMs(A))}`)));
       cls += ' is-grounded';
     } else if (f.status === 'guard') {
       cls += ' is-refused'; ic = 'shield';
@@ -1459,6 +1462,73 @@ export function mount(ctx) {
     scrollToEnd(true);
   }
 
+  /**
+   * Bot view reads as prose, not a ledger: consecutive lines quoting the same passage (same citation label) form one
+   * quote block (data-run start / mid / end), only the run's last line keeps its citation (the others get is-repeat),
+   * and each quoted sentence's own curly quotes are wrapped in .sb-qm so the block's rule can stand in for them.
+   * Proof view ignores all of this and shows every chip and mark.
+   */
+  function calmLines(A) {
+    const lines = A.lineEls || [];
+    const ends = (t) => /[”"][.!?]?$/.test(t);
+    const keyOf = (L) => {
+      const t = L.sent.textContent.trim();
+      return L.chips.length === 1 && ends(t) && (/^[“"]/.test(t) || /^From\b[\s\S]*?:\s*[“"]/.test(t)) ? L.chips[0].dataset.n : null;
+    };
+    const keys = lines.map(keyOf);
+    lines.forEach((L, i) => {
+      const k = keys[i];
+      const prev = i > 0 && k != null && keys[i - 1] === k, next = i < lines.length - 1 && k != null && keys[i + 1] === k;
+      if (k == null) { delete L.p.dataset.run; L.chips.forEach((c) => c.classList.remove('is-repeat')); return; }
+      L.p.dataset.run = prev && next ? 'mid' : prev ? 'end' : next ? 'start' : 'solo';
+      // one citation per stretch of the same passage: hide this line's chip when the next line cites the same label
+      const nextLab = next ? lines[i + 1].chips[0]?.dataset.label : null;
+      L.chips.forEach((c) => c.classList.toggle('is-repeat', !!next && nextLab === c.dataset.label));
+      if (!L.sent.querySelector('.sb-from')) splitFrom(L.sent);
+      if (!L.sent.querySelector('.sb-qm')) wrapMarks(L.sent.querySelector('.sb-quote') || L.sent);
+    });
+  }
+  /** "From “Title”, under “Benefits”: “quote”" -> <span.sb-from>From … Benefits</span><span.sb-quote>“quote”</span> */
+  function splitFrom(sent) {
+    if (!/^\s*From\b/.test(sent.textContent)) return;
+    const tw = document.createTreeWalker(sent, NodeFilter.SHOW_TEXT);
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+      const m = /:\s*(?=[“"])/.exec(n.nodeValue || '');
+      if (!m) continue;
+      const r = document.createRange();
+      r.setStart(sent, 0); r.setEnd(n, m.index + m[0].length);
+      const head = r.extractContents();
+      const rest = document.createRange(); rest.selectNodeContents(sent);
+      const q = h('span', { class: 'sb-quote' }); q.append(rest.extractContents());
+      const from = h('span', { class: 'sb-from' }); from.append(head);
+      sent.append(from, q);
+      return;
+    }
+  }
+  /** Wrap the leading “ and the trailing ” (text nodes only, so links and emphasis survive). */
+  function wrapMarks(el) {
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = []; for (let n = tw.nextNode(); n; n = tw.nextNode()) if (n.nodeValue) nodes.push(n);
+    if (!nodes.length) return;
+    const first = nodes[0], last = nodes[nodes.length - 1];
+    const lead = /^(\s*)([“"])/.exec(first.nodeValue);
+    if (lead) {
+      const rest = first.splitText(lead[1].length);
+      const after = rest.splitText(1);
+      const sp = h('span', { class: 'sb-qm' }, rest.nodeValue);
+      rest.replaceWith(sp);
+      if (last === first) { return wrapTail(after); }
+    }
+    wrapTail(last);
+  }
+  function wrapTail(node) {
+    const m = /([”"])([.!?]?)(\s*)$/.exec(node.nodeValue || '');
+    if (!m) return;
+    const tail = node.splitText(m.index);
+    const markEnd = tail.splitText(1);
+    tail.replaceWith(h('span', { class: 'sb-qm' }, m[1]));
+    void markEnd;
+  }
   function renderGrounded(A) {
     const f = A.final;
     const body = A.el.body;
@@ -1509,6 +1579,7 @@ export function mount(ctx) {
       chip.setAttribute('aria-label', `${lab} ${title}: citation${loc ? `, ${loc}` : ''}`);
       if (!(A.fast || reduced())) anim(t, [{ opacity: 0, clipPath: 'inset(0 100% 0 0)' }, { opacity: 1, clipPath: 'inset(0 0 0 0)' }], aOpts(A, { duration: 220, easing: 'out' }));
     });
+    calmLines(A);
     // r7 (D6): the answer lands in three short tasks instead of one 60-70 ms frame under 4x throttle. Frame 1: the
     // text, its titled citation chips, the status pill and the footer (what the reader looks at). Frame 2: the source
     // row and the evidence strip (badges, quote marks, cited-first order). Frame 3: the proof sub-panels (ledger,
