@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer, internalSecret } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
-import { parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
+import { etaOf, parseIntent, validatePatch, defaultSpec, normHit, sniffOk, deriveStage, findOffset, hitAllowed, keepRelevantLines, LINE_MARGIN, topicCase, GENERIC_HEADING_RE,
   splitSentences, citeQuotedLines, quotedLineParts, storeIntentOf, sourceSegments, stripSourceLines, lastSourceUrl, answerCheck, cleanTopic, topicsOf, sectionLine, starterGrammarOk, genericNumbered, titleWords, insightKey, refusalReasonOf } from '../trials.mjs';
 import { requireCitations, isCourtesy } from '../../lib/knowbot.js';
 import { atomize, extractText, startFakeKnowDrive as startKD } from './fake-knowdrive.mjs';
@@ -2343,5 +2343,42 @@ describe('Studio answers with the research step (a fake agent in place of Claude
     if (summaryClaim) assert.equal(summaryClaim.verified, true);
     assert.ok(seen.length >= 1);
     assert.match(seen[0].system, /more than one passage/);
+  });
+});
+
+describe('time left: knowDrive store progress (#886) becomes the eta event', () => {
+  test('etaOf: ages the band from computed_at, nulls the point while estimating/stalled, null without progress', () => {
+    const t = 1_800_000_000_000, at = t / 1000 - 60;
+    assert.equal(etaOf(null, t), null);
+    assert.equal(etaOf({}, t), null);
+    const d = etaOf({ state: 'draining', eta_seconds: 300, eta_low_seconds: 200, eta_high_seconds: 500, atoms_estimated_remaining: 90, computed_at: at }, t);
+    assert.deepEqual({ ...d }, { state: 'draining', seconds: 240, low: 140, high: 440, atomsLeft: 90, at: at * 1000 });
+    assert.equal(etaOf({ state: 'draining', eta_seconds: 30, eta_low_seconds: 10, eta_high_seconds: 50, computed_at: at }, t).low, 0, 'never below zero');
+    assert.equal(etaOf({ state: 'stalled', eta_seconds: 100, computed_at: at }, t).seconds, null);
+    assert.equal(etaOf({ state: 'estimating', eta_seconds: null, computed_at: at }, t).seconds, null);
+  });
+
+  test('hello and eta events carry the store estimate while a file learns, rounded; null once nothing learns', async () => {
+    const S = await boot({ studio: { etaMaxAgeMs: 0 }, kdOpts: { progressOverride: { state: 'draining', eta_seconds: 400, eta_low_seconds: 290, eta_high_seconds: 610, atoms_estimated_remaining: 1200, computed_at: Math.floor(Date.now() / 1000) } } });
+    try {
+      const c = client(S);
+      const t = await c.trial();
+      const sse = await openSSE(`${S.base}/api/studio/trials/${t.trialId}/events`, c.h(t));
+      const hello = await sse.waitFor((e) => e.event === 'hello');
+      assert.equal(hello.data.eta, null, 'no files: no estimate');
+      const up = await c.upload(t, 'stuck.md', Buffer.from('# Stuck\n\nSTALL this file never finishes extracting.\n'));
+      assert.equal(up.status, 201);
+      const e1 = await sse.waitFor((e) => e.event === 'eta' && e.data && e.data.state === 'draining', 8000);
+      assert.equal(e1.data.learning, 1);
+      assert.ok(e1.data.low % 15 === 0 && e1.data.high % 15 === 0, 'rounded to 15 s');
+      assert.ok(e1.data.low <= e1.data.seconds && e1.data.seconds <= e1.data.high);
+      S.kd.setProgress({ state: 'stalled', eta_seconds: null, eta_low_seconds: null, eta_high_seconds: null, atoms_estimated_remaining: 1200, computed_at: Math.floor(Date.now() / 1000) });
+      const e2 = await sse.waitFor((e) => e.event === 'eta' && e.data && e.data.state === 'stalled', 8000);
+      assert.equal(e2.data.seconds, null);
+      const fid = (await up.json()).file.id;
+      assert.ok([200, 204].includes((await c.json(t, `/files/${fid}`, 'DELETE')).status));
+      await sse.waitFor((e) => e.event === 'eta' && e.data === null, 8000);
+      sse.close();
+    } finally { await S.close(); }
   });
 });

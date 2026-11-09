@@ -301,7 +301,7 @@ const FIXTURE_UGM = Object.freeze({
  * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number, chunker?: 'blocks'|'production' }} [o]
  * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, settle: () => Promise<void> }>}
  */
-export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all', chunker = 'blocks' } = {}) {
+export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all', chunker = 'blocks', progressOverride } = {}) {
   speed = Math.max(0.01, Number(speed) || 1);
   const files = new Map();
   const calls = [];
@@ -572,6 +572,19 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
           if (req.method === 'DELETE') { files.delete(f.id); return json(200, { id: f.id, deleted: true }); }
           if (req.method === 'GET') return json(200, row(f));
         }
+        // store record with production's #886 `progress` block (the store's drain ETA); `progressOverride` pins it in tests
+        if ((m = /^\/api\/v1\/vector_stores\/([^/]+)$/.exec(p)) && req.method === 'GET') {
+          const store = decodeURIComponent(m[1]);
+          if (progressOverride !== undefined) return json(200, { id: store, object: 'vector_store', progress: progressOverride });
+          const live = [...files.values()].filter((f) => f.store === store && f.phase !== 'completed' && f.status !== 'error' && f.raw == null);
+          const left = live.reduce((n, f) => n + Math.max(0, (f.atoms?.length || 0) - (f.atoms_vectorized || 0)), 0);
+          const eta = Math.ceil(live.length * 3.2 / speed);
+          const by = (ph) => live.filter((f) => f.phase === ph).length;
+          return json(200, { id: store, object: 'vector_store', progress: {
+            state: live.length ? 'draining' : 'drained', contents_remaining: { pending: by('pending'), text_extracted: by('text_extracted'), chunked: by('chunked') },
+            atoms_unvectorized: left, atoms_estimated_remaining: left, eta_seconds: eta, eta_low_seconds: Math.floor(eta * 0.7), eta_high_seconds: Math.ceil(eta * 1.5),
+            computed_at: Math.floor(Date.now() / 1000) } });
+        }
         return err(404, `fake knowDrive: no route ${req.method} ${p}`);
       } catch (e) {
         return err(500, `fake knowDrive error: ${e.message}`);
@@ -583,6 +596,8 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   const port = srv.address().port;
   return {
     url: `http://${host}:${port}`, port, calls, files, failNext,
+    /** Pins the store record's `progress` block (undefined = derive it from the files). */
+    setProgress(v) { progressOverride = v; },
     /** Adds a file directly (already processed unless pipeline:true). */
     add,
     /** Resolves once every file has reached a terminal phase (or STALL). */

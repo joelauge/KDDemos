@@ -232,6 +232,20 @@
 .in-collapse[aria-expanded="true"] > span { transform: rotate(180deg); }
 .in-collapse > span { display: inline-flex; transition: transform var(--dur-2) var(--ease-out); }
 
+/* learning tracker: batch progress + knowDrive's time-left estimate */
+.in-eta { flex: none; margin: 0 0 12px; padding: 10px 12px 11px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
+.in-eta[hidden], .in-panel[data-collapsed="yes"] > .in-eta { display: none; }
+.in-eta-row { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.in-eta-time { order: -1; display: inline-flex; align-items: center; gap: 6px; color: var(--strong); font: 600 13.5px/1.3 var(--display); }
+.in-eta-time::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: in-eta-pulse 1.6s ease-in-out infinite; }
+.in-eta-count { color: var(--muted); font-size: 12px; }
+.in-eta-bar { position: relative; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); overflow: hidden; }
+.in-eta-fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent))); transition: width 600ms var(--ease-out); overflow: hidden; }
+.in-eta-fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.4), transparent); transform: translateX(-100%); animation: in-eta-sheen 1.8s var(--ease-out) infinite; }
+@keyframes in-eta-sheen { to { transform: translateX(100%); } }
+@keyframes in-eta-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .in-eta-fill { transition: none; } .in-eta-fill::after, .in-eta-time::before { animation: none; } }
+
 /* capacity bar */
 .in-cap { padding: 0 0 10px; }
 .in-cap-bar { position: relative; height: 8px; border-radius: 999px; background: var(--raise); overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }

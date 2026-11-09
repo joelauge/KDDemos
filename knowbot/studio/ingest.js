@@ -413,8 +413,14 @@ export function mount(ctx) {
   const chipDescId = uid('in-chipd');
   const chipDesc = h('span', { class: 'in-sr', id: chipDescId });
   const chip = h('button', { type: 'button', class: 'in-chip', hidden: true, 'aria-expanded': 'false', 'aria-controls': panelId, 'aria-describedby': chipDescId, onclick: () => setCollapsed(false) });
+  // Progress tracker: while files learn, one bar for the whole batch and knowDrive's own estimate of the time left
+  const etaFill = h('span', { class: 'in-eta-fill' });
+  const etaBar = h('div', { class: 'in-eta-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', 'aria-label': 'Learning progress' }, etaFill);
+  const etaCount = h('span', { class: 'in-eta-count in-num' });
+  const etaTime = h('span', { class: 'in-eta-time', role: 'status' });
+  const tracker = h('div', { class: 'in-eta', hidden: true }, h('div', { class: 'in-eta-row' }, etaCount, etaTime), etaBar);
   const body = h('div', { class: 'in-body' }, cap, rowsEl);
-  panel.append(head, body, empty, chip, chipDesc);
+  panel.append(head, tracker, body, empty, chip, chipDesc);
   intakeSlot.innerHTML = '';
   intakeSlot.append(panel);
 
@@ -2617,6 +2623,31 @@ export function mount(ctx) {
     }
     for (const [key, el] of [...headBadgeEls]) if (!want.has(key)) { el.remove(); headBadgeEls.delete(key); }
   }
+  // ---- time left: the server relays knowDrive's drain estimate for the store ('eta' event / hello.eta)
+  let etaInfo = null;
+  function etaWords(e, files) {
+    if (files.some((f) => f.phase === 'queued' || f.phase === 'uploading')) return 'Uploading…';
+    if (!e || e.state === 'estimating') return 'Estimating time left…';
+    if (e.state === 'stalled') return 'Taking longer than usual…';
+    const lo = e.low ?? e.seconds, hi = e.high ?? e.seconds;
+    if (e.state === 'drained' || hi == null || hi <= 20) return 'Almost done';
+    if (hi < 60) return 'Under a minute left';
+    const hours = hi >= 5400, unit = hours ? 3600 : 60, u = hours ? 'h' : 'min';
+    const a = Math.max(1, Math.round(Math.max(lo ?? hi, 30) / unit)), b = Math.max(a, hours ? Math.round(hi / unit) : Math.ceil(hi / unit));
+    return a === b ? `About ${b} ${u} left` : `About ${a}–${b} ${u} left`;
+  }
+  function renderTracker(files) {
+    const c = fileCounts(files);
+    const on = c.learning > 0;
+    setHidden(tracker, !on);
+    if (!on) return;
+    const counted = files.filter((f) => f.phase !== 'failed');
+    const pct = Math.round(100 * counted.reduce((n, f) => n + fileProgress(f), 0) / Math.max(1, counted.length));
+    etaFill.style.width = `${pct}%`;
+    if (etaBar.getAttribute('aria-valuenow') !== String(pct)) etaBar.setAttribute('aria-valuenow', String(pct));
+    setText(etaCount, `${fmtInt(c.ready)} of ${plural(c.total - c.failed, 'file')} ready · ${pct}%`);
+    setText(etaTime, etaWords(etaInfo, files));
+  }
   function renderHead() {
     const files = liveFiles();
     const all = listFiles();
@@ -2624,6 +2655,7 @@ export function mount(ctx) {
     const c = fileCounts(files);
     const atoms = c.read;
     publishCounts(c);
+    renderTracker(files);
     // rebuilt from the files' real phases every time (also right after a reload restores them)
     const metaSig = `${c.total}|${c.read}|${c.learning}|${c.ready}|${c.failed}|${allReadyUntil > Date.now() ? 1 : 0}`;
     if (headMeta.dataset.sig !== metaSig) {
@@ -4053,6 +4085,7 @@ export function mount(ctx) {
     flushRows();
     switch (type) {
       case 'hello': {
+        if (data && 'eta' in data) etaInfo = data.eta || null;
         const rows = Array.isArray(data && data.files) ? data.files : null;
         if (rows) {
           const ids = new Set(rows.map((r) => r.id));
@@ -4083,6 +4116,7 @@ export function mount(ctx) {
       }
       case 'summary': applySummary(data); break;
       case 'usage': setUsage(data); break;
+      case 'eta': etaInfo = data || null; renderTracker(liveFiles()); break;
       default: break;
     }
   }

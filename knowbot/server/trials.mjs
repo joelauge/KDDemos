@@ -1049,6 +1049,23 @@ export function starterGrammarOk(q) {
 /**
  * @param {object} o  see spec 4.1; extra test hooks: now(), pingMs, pollMs, rotateMs, sweepMs, setupTimeoutMs, limits, adminToken
  */
+/**
+ * knowDrive's own drain estimate for a store (#886: VectorStoreObject.progress), made relative to `nowMs`.
+ * The estimate was computed at `computed_at`, so the time since then is taken off the band. Null when the store
+ * has no estimate. {state: 'estimating'|'draining'|'stalled'|'drained', seconds, low, high, atomsLeft, at}
+ */
+export function etaOf(p, nowMs = Date.now()) {
+  if (!p || typeof p !== 'object' || !p.state) return null;
+  const state = String(p.state);
+  const age = p.computed_at ? Math.max(0, Math.floor(nowMs / 1000) - Number(p.computed_at)) : 0;
+  const left = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Math.max(0, Number(v) - age));
+  const out = { state, seconds: left(p.eta_seconds), low: left(p.eta_low_seconds), high: left(p.eta_high_seconds),
+    atomsLeft: Number.isFinite(Number(p.atoms_estimated_remaining)) ? Number(p.atoms_estimated_remaining) : null, at: p.computed_at ? Number(p.computed_at) * 1000 : null };
+  if (state === 'estimating' || state === 'stalled') out.seconds = null;
+  if (out.low != null && out.high != null && out.low > out.high) [out.low, out.high] = [out.high, out.low];
+  return out;
+}
+
 export function createStudio(o = {}) {
   const env = o.env || {};
   const log = o.logger || (() => {});
@@ -1450,6 +1467,32 @@ export function createStudio(o = {}) {
     if (!TERMINAL.has(stage) && t - since >= allowance) file.stalledFor = t - since;
     return file;
   }
+  // The store-wide ETA (all trials share one store, and its queue drains in order, so the store's band is when this
+  // visitor's files are done at the latest). One cached read for every trial; a poll never waits on it.
+  const etaMaxAgeMs = Number(o.etaMaxAgeMs ?? 15000);
+  const etaCache = { at: 0, val: null, loading: null };
+  function etaNow() {
+    if (enabled && store && !etaCache.loading && now() - etaCache.at >= etaMaxAgeMs) {
+      etaCache.loading = kdJson(`/api/v1/vector_stores/${encodeURIComponent(store)}`, { timeout: 8000 }, 'reading progress')
+        .then((j) => { etaCache.val = j && 'progress' in j ? j.progress : null; }, (e) => log(`[studio] store progress: ${e.message}`))
+        .finally(() => { etaCache.at = now(); etaCache.loading = null; });
+    }
+    return etaOf(etaCache.val, now());
+  }
+  /** The 'eta' event body for a trial: null when nothing is learning. Rounded so a ticking clock doesn't re-send it. */
+  function etaFor(files) {
+    const learning = files.filter((f) => !TERMINAL.has(f.stage) && f.origin !== 'store').length;
+    if (!learning) return null;
+    const e = etaNow();
+    if (!e) return { state: 'estimating', learning };
+    const r = (v) => (v == null ? null : Math.round(v / 15) * 15);
+    return { state: e.state, seconds: r(e.seconds), low: r(e.low), high: r(e.high), learning };
+  }
+  function pushEta(T, files) {
+    const e = etaFor(files);
+    const s = JSON.stringify(e);
+    if ((T.etaEmitted ?? 'null') !== s) { T.etaEmitted = s; pushEvent(T, 'eta', e); }
+  }
   const isTrialFileRow = (r) => { const tags = r.tags || []; return !tags.includes('kind:trial-spec') && !tags.includes('questions') && !tags.includes('kind:config'); };
   async function refreshRows(T, { maxAgeMs = 1000 } = {}) {
     if (T.rows && now() - T.rowsAt < maxAgeMs) return T.rows;
@@ -1551,6 +1594,7 @@ export function createStudio(o = {}) {
     const usage = usageOf(T, files);
     const us = JSON.stringify(usage);
     if (T.usageEmitted !== us) { T.usageEmitted = us; pushEvent(T, 'usage', usage); }
+    pushEta(T, files);
     if (changed) T.lastChangeAt = now();
     const allTerminal = files.every((f) => TERMINAL.has(f.stage));
     // a Proof Run queued while files were learning: tell open Studios the full run can start now (once per queue)
@@ -1608,7 +1652,9 @@ export function createStudio(o = {}) {
       for (const f of shown) T.lastEmitted.set(f.id, sig(f));
       const usage = usageOf(T, files);
       T.usageEmitted = JSON.stringify(usage);
-      writeFrame(res, T.seq, 'hello', { files: shown, usage, reset: since != null, converted: !!T.converted, convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null,
+      const eta = etaFor(files);
+      T.etaEmitted = JSON.stringify(eta);
+      writeFrame(res, T.seq, 'hello', { files: shown, usage, eta, reset: since != null, converted: !!T.converted, convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null,
         ...(sv.group ? { groups: [sv.group] } : {}), ...(T.storeJob ? { storeJob: { id: T.storeJob.id, state: T.storeJob.state, seq: T.storeJob.seq } } : {}) });
     }
     T.clients.add(client);
