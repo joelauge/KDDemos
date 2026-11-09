@@ -23,7 +23,7 @@ export function ensureCss() {
     if (document.querySelector('link[data-gl-css]')) { resolve(); return; }
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = new URL('./golive.css?v=e5fd194', import.meta.url).href;
+    link.href = new URL('./golive.css?v=570c958', import.meta.url).href;
     link.dataset.glCss = '1';
     link.onload = () => resolve();
     link.onerror = () => resolve();
