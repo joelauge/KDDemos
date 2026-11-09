@@ -173,8 +173,8 @@ function renderHeader() {
     h('span', { class: 'st-botchip-name' }),
     h('span', { class: 'st-botchip-edit', 'aria-hidden': 'true', html: icon('edit', 13) }));
   const botchipDesc = h('span', { id: 'st-botchip-desc', class: 'st-sr' }, 'Opens the bot spec: name, tone and sources');
-  const net = h('span', { id: 'st-net', class: 'st-pill st-pill-net', role: 'status', hidden: true });
-  const trial = h('span', { id: 'st-trialpill', class: 'st-pill st-pill-trial', hidden: true });
+  const net = h('span', { id: 'st-net', class: 'chip amber is-label no-dot st-pill st-pill-net', role: 'status', hidden: true });
+  const trial = h('span', { id: 'st-trialpill', class: 'chip green is-label no-dot st-pill st-pill-trial', hidden: true });
   const kbd = h('button', { type: 'button', id: 'st-kbd', class: 'st-kbd', hidden: true, 'aria-describedby': 'st-kbd-desc', title: 'Command palette', onclick: () => openPalette() },
     isMac ? '⌘K' : 'Ctrl K');
   const kbdDesc = h('span', { id: 'st-kbd-desc', class: 'st-sr' }, 'Opens the command palette');
@@ -191,7 +191,7 @@ function renderHeader() {
   priceWrap.addEventListener('pointerleave', () => { if (document.activeElement !== price) priceWrap.classList.remove('is-tipoff'); });
   // Live (SPEC 1.4 B11): after conversion the header stops selling. A green Live pill and the dashboard link replace
   // the price and the trial pill.
-  const livePill = h('span', { id: 'st-livepill', class: 'st-pill st-pill-live', role: 'status', hidden: true }, h('i', { 'aria-hidden': 'true' }), 'Live');
+  const livePill = h('span', { id: 'st-livepill', class: 'chip green is-label no-dot st-pill st-pill-live', role: 'status', hidden: true }, h('i', { 'aria-hidden': 'true' }), 'Live');
   const dash = h('a', { id: 'st-dash', class: 'st-dash', href: 'https://knowdrive.ai/', target: '_blank', rel: 'noopener', hidden: true },
     h('span', null, 'Dashboard'), h('span', { class: 'st-dash-ico', 'aria-hidden': 'true', html: icon('external', 13) }), h('span', { class: 'st-sr' }, ' (opens in a new tab)'));
   const restart = h('button', { type: 'button', id: 'st-restart', class: 'st-restart st-hide-mobile', 'aria-haspopup': 'dialog', onclick: () => confirmStartOver() },
@@ -422,7 +422,7 @@ function paintTrialPill() {
   const days = Math.max(0, Math.ceil(ms / 86400000));
   setHidden(el, false);
   const soon = days <= 2;
-  if (el.classList.contains('is-warn') !== soon) el.classList.toggle('is-warn', soon);
+  if (el.classList.contains('is-warn') !== soon) { el.classList.toggle('is-warn', soon); el.classList.toggle('amber', soon); el.classList.toggle('green', !soon); }   // KnowDrive .chip tones
   setHTML(el, `${icon(soon ? 'clock' : 'checkCircle', 13)}<span>${soon ? `Expires in ${days} day${days === 1 ? '' : 's'}` : 'Saved · 7 days'}</span>`);
   // perf r4: the first toLocaleString() call loads locale data (~45 ms at 4x CPU, mid-ingest); the exact date is only
   // a hover hint, so it is formatted on first hover / focus instead

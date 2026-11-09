@@ -71,6 +71,13 @@
 /* .chip as a status pill: Studio labels are sentences ("Saved · 7 days"), so no per-word capitals */
 .chip.is-label { text-transform: none; }
 .chip.no-dot::before { content: none; }
+/* chip tones as TEXT through the AA roles (the package's green 3.1:1 and amber 2.9:1 on their tints fail), and the
+   violet chip, whose ground is the theme-invariant light --brand-bg, takes the dark accent ground in dark mode */
+.chip.green { color: var(--good); }
+.chip.amber { color: var(--warn); }
+:root[data-theme="dark"] .chip.red { color: var(--bad); }
+:root[data-theme="dark"] .chip.violet { background: var(--surface-accent); color: var(--text-accent); }
+:root[data-theme="dark"] .chip.gray { background: var(--raise); }
 
 /* ------------------------------------------------------------------ base (was dashboard.css) */
 *, *::before, *::after { box-sizing: border-box; }
@@ -192,13 +199,10 @@ button:disabled { cursor: default; }
 :root[data-theme="dark"] .st-avatar { color: #0b1020; }
 :root .st-botchip.is-placeholder .st-avatar { background: var(--raise); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-2); }
 
-.st-pill {
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; white-space: nowrap;
-  font: 500 12px/1 var(--font); color: var(--muted); background: var(--panel-2); border: 1px solid var(--line);
+.st-pill {   /* look: KnowDrive .chip (tone class set in app.js); header size only here */
+  height: 28px; padding: 0 10px; gap: 6px; white-space: nowrap;
 }
-.st-pill-trial { color: var(--good); border-color: color-mix(in srgb, var(--good) 25%, var(--line)); background: var(--good-soft); }
-.st-pill-trial.is-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, var(--line)); background: var(--warn-soft); }
-.st-pill-net[data-state="offline"] { color: var(--warn); background: var(--warn-soft); }
+
 .st-net-short { display: none; }
 .st-pill-debug { font-family: var(--mono); }
 .st-spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: st-rot 800ms linear infinite; }
@@ -254,7 +258,7 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 .st-price[data-level="activating"] { color: var(--muted); border: 1px solid var(--line-2); background: var(--panel-2); cursor: progress; gap: 8px; }
 .st-price[data-level="activating"] .st-price-label { display: inline-flex; align-items: center; gap: 8px; }
 /* Live (after conversion): a green pill and the dashboard link replace the price and the trial pill */
-.st-pill-live { color: var(--good); border-color: color-mix(in srgb, var(--good) 30%, var(--line)); background: var(--good-soft); font-weight: 600; }
+
 .st-pill-live i { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
 .st-pill-live i::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--good); opacity: 0; animation: st-ping 2.4s var(--ease-out) infinite; will-change: transform, opacity; }
 @keyframes st-ping { 0% { transform: scale(1); opacity: .55; } 70%, 100% { transform: scale(2.6); opacity: 0; } }

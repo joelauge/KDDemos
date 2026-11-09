@@ -492,8 +492,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     list.forEach((c, i) => {
       const card = h('button', { type: 'button', class: 'card gl-chcard', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: c.id }, style: { '--gl-hue': `var(--f${c.hue})`, '--i': i } },
         h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: GLYPH[c.id] }),
-        h('span', { class: 'gl-chcard-text' }, h('b', null, c.name, c.mine ? h('span', { class: 'gl-mine' }, 'Yours') : null), h('small', null, c.provider)),
-        h('span', { class: 'gl-chcard-status' }, c.status));
+        h('span', { class: 'gl-chcard-text' }, h('b', null, c.name, c.mine ? h('span', { class: 'chip violet is-label no-dot gl-mine' }, 'Yours') : null), h('small', null, c.provider)),
+        h('span', { class: 'chip gray is-label gl-chcard-status' }, c.status));
       card.addEventListener('click', () => selectChannel(c.id, { user: true }));
       chGrid.append(h('div', { role: 'listitem', class: 'gl-chitem' }, card));
     });
@@ -530,7 +530,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if (prov && prov.textContent !== c.provider) prov.textContent = c.provider; // the phone engine arrives with the dev key
       const was = el.textContent;
       el.textContent = st.label;
-      el.className = `gl-chcard-status is-${st.tone}`;
+      el.className = `chip ${st.tone === 'go' ? 'green' : st.tone === 'warn' ? 'amber' : 'gray'} is-label gl-chcard-status is-${st.tone}`;   // KnowDrive .chip
       // fixer r5 (D9, WCAG 2.5.3): no aria-label; the accessible name is the visible name, provider and status.
       b.removeAttribute('aria-label');
       if (animate && was !== st.label && !motion.reduced()) motion.animate(el, [{ opacity: 0, transform: 'scale(.92)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'spring' });

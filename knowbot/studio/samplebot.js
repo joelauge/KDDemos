@@ -588,7 +588,7 @@ export function mount(ctx) {
     const srcRow = h('div', { class: 'sb-srcrow', role: 'group', 'aria-label': 'Sources' });
     for (let i = 0; i < 3; i++) srcRow.append(h('span', { class: 'sb-src is-skel', 'aria-hidden': 'true' }, h('i')));
     const strip = h('div', { class: 'pf-strip', role: 'group', 'aria-label': 'Evidence' });
-    for (let i = 0; i < 3; i++) strip.append(h('div', { class: 'pf-card is-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')));
+    for (let i = 0; i < 3; i++) strip.append(h('div', { class: 'card pf-card is-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')));
     // EvidenceStrip frame: edge fades (mask) on the side with more to see, and scroll buttons for pointer users
     const stripPrev = h('button', { type: 'button', class: 'pf-strip-nav is-prev', 'aria-label': 'Earlier evidence', tabindex: '-1', hidden: true, onclick: () => scrollStrip(A, -1) }, ico('chevronRight', 14));
     const stripNext = h('button', { type: 'button', class: 'pf-strip-nav is-next', 'aria-label': 'More evidence', tabindex: '-1', hidden: true, onclick: () => scrollStrip(A, 1) }, ico('chevronRight', 14));
@@ -838,7 +838,7 @@ export function mount(ctx) {
     // The leading badge is the citation [n] (set on final), never the rank: a reader maps [n] in the answer to the
     // card with the same [n]. Rank is secondary, in small mono on the locator line. The raw atom id lives in the
     // drawer only (behind its copy button): on a card it is noise.
-    const card = h('button', { type: 'button', class: `pf-card${below ? ' is-below' : budget ? ' is-budget' : ''}`, style: { '--hue': hueVar(meta.hue) }, title: fname,
+    const card = h('button', { type: 'button', class: `card pf-card${below ? ' is-below' : budget ? ' is-budget' : ''}`, style: { '--hue': hueVar(meta.hue) }, title: fname,
       dataset: { atom: hit.atomId || '', file: hit.fileId || '', rank: String(hit.rank || ''), hf: hit.fileId || '', hn: fname || '' },
       onclick: (e) => openDrawer({ fileId: hit.fileId, atomId: hit.atomId, seq: hit.seq, answerId: A.id }, e.currentTarget),
       onmouseenter: (e) => emit('map:highlight', { fileId: hit.fileId, atomId: hit.atomId, seq: hit.seq, rect: e.currentTarget.getBoundingClientRect() }),
@@ -2067,7 +2067,7 @@ export function mount(ctx) {
       A.el.body.innerHTML = ''; A.el.body.append(A.el.caret);
       const t = buildTicker(A); A.el.status.innerHTML = ''; A.el.status.append(t); A.el.ticker = t;
       A.el.srcRow.innerHTML = ''; A.el.strip.innerHTML = '';
-      for (let i = 0; i < 3; i++) { A.el.srcRow.append(h('span', { class: 'sb-src is-skel', 'aria-hidden': 'true' }, h('i'))); A.el.strip.append(h('div', { class: 'pf-card is-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'))); }
+      for (let i = 0; i < 3; i++) { A.el.srcRow.append(h('span', { class: 'sb-src is-skel', 'aria-hidden': 'true' }, h('i'))); A.el.strip.append(h('div', { class: 'card pf-card is-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'))); }
       run(A);
     };
     if (expired) {

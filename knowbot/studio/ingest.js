@@ -2314,7 +2314,7 @@ export function mount(ctx) {
     });
     const ico = h('span', { class: 'in-ico', html: htmlKindIcon(f.kind, 18) });
     const name = h('span', { class: 'in-name', id: nameId, title: f.name }, h('span', { 'aria-hidden': 'true', class: 'in-name-v' }, mid(f.name, isMobile() ? 24 : 38)), h('span', { class: 'in-sr' }, f.name));
-    const tag = h('span', { class: 'in-tag', hidden: !f.sample }, 'Sample');
+    const tag = h('span', { class: 'chip violet is-label in-tag', hidden: !f.sample }, 'Sample');
     const size = h('span', { class: 'in-size in-num' }, fmtSize(f.bytes));
     // the file's real first line while it is being extracted, with a scan sweep (decorative: the status says it)
     const readT = h('span', { class: 'in-read-t' });
@@ -2512,7 +2512,7 @@ export function mount(ctx) {
     r.li.dataset.sum = key ? 'yes' : '';
     if (!key) return;
     const line = h('p', { class: 'in-sum-l', title: s.oneLine || '' }, s.oneLine || '');
-    const tops = h('div', { class: 'in-topics' }, (f.topics || []).slice(0, 3).map((t) => h('span', { class: 'in-topic' }, t)));
+    const tops = h('div', { class: 'in-topics' }, (f.topics || []).slice(0, 3).map((t) => h('span', { class: 'chip gray is-label no-dot in-topic' }, t)));
     r.summary.append(line, tops);
     if (!reduced() && r.lastPhase === 'ready') {
       anim(line, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'out', delay: 120 });
@@ -2566,12 +2566,12 @@ export function mount(ctx) {
   // icons (the words stay for screen readers), so "1 failed" can never be clipped to "1 fai".
   function badges(c, learnAlways = false) {
     const out = [
-      h('span', { class: 'in-bd' }, h('b', { class: 'in-num' }, fmtInt(c.total)), h('span', { class: 'in-bd-w' }, c.total === 1 ? ' file' : ' files')),
-      h('span', { class: 'in-bd' }, h('b', { class: 'in-num' }, fmtInt(c.read)), h('span', { class: 'in-bd-w' }, c.read === 1 ? ' atom' : ' atoms')),
+      h('span', { class: 'chip gray is-label no-dot in-bd' }, h('b', { class: 'in-num' }, fmtInt(c.total)), h('span', { class: 'in-bd-w' }, c.total === 1 ? ' file' : ' files')),
+      h('span', { class: 'chip gray is-label no-dot in-bd' }, h('b', { class: 'in-num' }, fmtInt(c.read)), h('span', { class: 'in-bd-w' }, c.read === 1 ? ' atom' : ' atoms')),
     ];
-    if (c.learning && (learnAlways || c.ready + c.failed)) out.push(h('span', { class: 'in-bd is-learn', title: `${c.learning} still learning` }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('refresh', { size: 11 }) }), h('b', { class: 'in-num' }, String(c.learning)), h('span', { class: 'in-bd-w' }, ' learning')));
-    if (c.failed) out.push(h('span', { class: 'in-bd is-warn', title: `${c.failed} failed` }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('warn', { size: 11 }) }), h('b', { class: 'in-num' }, String(c.failed)), h('span', { class: 'in-bd-w' }, ' failed')));
-    if (allReadyUntil > Date.now() && !c.learning) out.push(h('span', { class: 'in-bd is-done' }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('check', { size: 11 }) }), c.total === 1 ? 'Ready' : `All ${c.ready} ready`));
+    if (c.learning && (learnAlways || c.ready + c.failed)) out.push(h('span', { class: 'chip violet is-label no-dot in-bd is-learn', title: `${c.learning} still learning` }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('refresh', { size: 11 }) }), h('b', { class: 'in-num' }, String(c.learning)), h('span', { class: 'in-bd-w' }, ' learning')));
+    if (c.failed) out.push(h('span', { class: 'chip amber is-label no-dot in-bd is-warn', title: `${c.failed} failed` }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('warn', { size: 11 }) }), h('b', { class: 'in-num' }, String(c.failed)), h('span', { class: 'in-bd-w' }, ' failed')));
+    if (allReadyUntil > Date.now() && !c.learning) out.push(h('span', { class: 'chip green is-label no-dot in-bd is-done' }, h('span', { class: 'in-bd-i', 'aria-hidden': 'true', html: icon('check', { size: 11 }) }), c.total === 1 ? 'Ready' : `All ${c.ready} ready`));
     return out;
   }
   // When the last file lands: one "All N ready" badge (head + chip) that fades out after 4 s
@@ -4239,7 +4239,7 @@ export function mount(ctx) {
             h('div', { class: 'in-card-fb' },
               h('p', { class: 'in-card-fn' }, h('span', { class: 'in-card-name', title: f.name }, mid(f.name, 34)), gaugeFor(cur, f), h('span', { class: 'in-card-fa in-num' }, ` Ready · ${plural(Number(f.atoms) || 0, 'atom')}`)),
               f.oneLine ? h('p', { class: 'in-card-fl' }, f.oneLine) : null,
-              (f.topics || []).length ? h('div', { class: 'in-topics' }, f.topics.slice(0, 3).map((t) => h('span', { class: 'in-topic' }, t))) : null,
+              (f.topics || []).length ? h('div', { class: 'in-topics' }, f.topics.slice(0, 3).map((t) => h('span', { class: 'chip gray is-label no-dot in-topic' }, t))) : null,
               starters.length ? h('div', { class: 'in-card-ask' }, starters.map((q) => h('button', { type: 'button', class: 'btn btn-ghost in-btn in-btn-ghost in-ask', onclick: () => { emit('samplebot:ask', { question: q, by: 'chip' }); emit('tab:show', { tab: 'bot' }); } }, h('span', { html: icon('arrowRight', { size: 13 }) }), `Ask: “${q}”`))) : null));
         })));
       el.append(card);
