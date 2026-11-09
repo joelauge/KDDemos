@@ -2,9 +2,9 @@
 // Events come from untrusted clients: every value is normalised, and all text is
 // written with textContent / createTextNode (never innerHTML).
 
-import { simulator, simCanonical } from './sim.js?v=570c958';
-import { hostedApi } from '../lib/site-config.js?v=570c958';
-import { mountBots } from './bots.js?v=570c958';
+import { simulator, simCanonical } from './sim.js?v=13da54b';
+import { hostedApi } from '../lib/site-config.js?v=13da54b';
+import { mountBots } from './bots.js?v=13da54b';
 
 /* ------------------------------------------------------------------ utils */
 const $ = (s, r = document) => r.querySelector(s);
