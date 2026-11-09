@@ -37,7 +37,7 @@
 // CONTRACT-GAP (B, studio.css): once an answer exists the intake slot gets max 22% and the thread min 55%, so a
 //   user-expanded Sources panel shows ~1 row. D marks that state with #in-intake-slot[data-open="user"].
 
-import { mountWidget, mountRowMenu, gaugeProps } from './kdw.js?v=2a19db0';
+import { mountWidget, mountRowMenu, gaugeProps } from './kdw.js?v=aa5db61';
 
 const RANK = { rejected: -2, failed: -1, queued: 0, uploading: 1, uploaded: 2, extracted: 3, chunked: 4, atomized: 5, vectorizing: 6, ready: 7 };
 const TERMINAL = new Set(['ready', 'failed', 'rejected']);
@@ -3257,7 +3257,15 @@ export function mount(ctx) {
   async function doAction(lid, a) {
     const f = getState().files[lid];
     if (!f) return;
-    if (a === 'remove') return removeFile(lid);
+    if (a === 'remove') {
+      // a file the visitor uploaded is confirmed first (samples and rejected rows, which never reached the bot, are not)
+      if (f.id && !f.sample && f.phase !== 'rejected' && store.listenerCount('confirm:ask')) {
+        const ok = await new Promise((done) => emit('confirm:ask', { title: `Remove ${f.name}?`,
+          body: 'Your bot will stop answering from it. You can upload it again any time.', confirm: 'Remove file', done }));
+        if (!ok || !getState().files[lid]) return;
+      }
+      return removeFile(lid);
+    }
     if (a === 'files') { setCollapsed(false); const first = rowsEl.querySelector('.in-row:not([data-phase="rejected"])'); if (first) first.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }); return; }
     if (a === 'retrynow') return retryUpload(lid);
     if (a === 'reconnect') return reconnectNow();

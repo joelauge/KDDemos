@@ -23,13 +23,13 @@
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
 
-import * as store from './store.js?v=2a19db0';
-import * as api from './api.js?v=2a19db0';
-import * as motion from './motion.js?v=2a19db0';
-import * as icons from './icons.js?v=2a19db0';
-import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=2a19db0';
-import { mountShapes } from './shapes.js?v=2a19db0';
-import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=2a19db0';
+import * as store from './store.js?v=aa5db61';
+import * as api from './api.js?v=aa5db61';
+import * as motion from './motion.js?v=aa5db61';
+import * as icons from './icons.js?v=aa5db61';
+import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=aa5db61';
+import { mountShapes } from './shapes.js?v=aa5db61';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=aa5db61';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -4966,6 +4966,30 @@ function confirmStartOver() {
     toast({ kind: 'info', text: 'Started over. Everything from the old bot was deleted.' });
   }
 }
+
+/**
+ * A confirmation in the Start over style (KnowDrive .confirm-dialog, focus on Cancel, Escape cancels). Other modules ask
+ * through the store: emit('confirm:ask', {title, body, confirm, done(ok)}). Resolves true only on the confirm button.
+ */
+let confirmEl = null;
+function confirmAction({ title, body, confirm = 'Confirm', danger = true } = {}) {
+  return new Promise((resolve) => {
+    if (confirmEl || startOverEl) { resolve(false); return; }
+    ensureOverlay();
+    const titleId = 'st-confirm-title', descId = 'st-confirm-desc';
+    let ok = false;
+    const cancel = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost', onclick: () => close() }, 'Cancel');
+    const go = h('button', { type: 'button', class: `btn ${danger ? 'btn-danger st-btn-danger' : 'btn-primary'} st-btn`, onclick: () => { ok = true; close(); } }, confirm);
+    const panel = h('div', { class: 'st-confirm-panel' }, h('h2', { id: titleId }, title), h('p', { id: descId }, body), h('div', { class: 'actions st-confirm-actions' }, cancel, go));
+    confirmEl = h('div', { class: 'confirm-dialog st-confirm', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': titleId, 'aria-describedby': descId },
+      h('span', { class: 'st-confirm-away', 'aria-hidden': 'true', onclick: () => close() }), panel);
+    slots.overlay.append(confirmEl);
+    motion.animate(panel, [{ transform: 'translateY(8px) scale(.98)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: motion.DUR[2], easing: 'out' });
+    const rec = openDialog(confirmEl, { onClose: () => { confirmEl && confirmEl.remove(); confirmEl = null; resolve(ok); }, initialFocus: () => cancel });
+    function close() { closeDialog(rec); }
+  });
+}
+on('confirm:ask', (d) => { if (d && typeof d.done === 'function') confirmAction(d).then(d.done); });
 
 async function startNewBot() {
   try { sessionStorage.removeItem(logKey()); } catch { /* ignore */ }
