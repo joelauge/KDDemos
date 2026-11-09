@@ -149,3 +149,11 @@ describe('research mode', () => {
     assert.equal(lib.verifySummary('It is $24.99.', { quotedLines: q, picks: [4, 5] }).ok, false, 'uncited');
   });
 });
+
+test('verifySummary: a sentence without its own marker borrows the previous one, and is still checked', () => {
+  const q = ['Toad Vault price: 50.00 USD to 300.00 USD', 'Style (Cherry w/ Engraving, Bolivian Rosewood w/ Marquetry)'];
+  const ok = lib.verifySummary('The Toad Vault costs 50.00 USD to 300.00 USD [L2]. It comes in Cherry or Bolivian Rosewood.', { quotedLines: q, picks: [2, 3], citeOf: () => 1 });
+  assert.equal(ok.ok, true, ok.reason);
+  assert.equal(ok.text, 'The Toad Vault costs 50.00 USD to 300.00 USD [1]. It comes in Cherry or Bolivian Rosewood [1].');
+  assert.equal(lib.verifySummary('It costs $50 [L2]. It also comes in Walnut.', { quotedLines: q, picks: [2, 3] }).ok, false, 'Walnut is not in the quotes');
+});

@@ -1332,8 +1332,22 @@ const normNum = (t) => String(t).replace(/[,\s]/g, '').replace(/\.0+$/, '');
  * points at a quoted line. Returns { ok, text (markers as [n]), reason }.
  */
 export function verifySummary(summary, { quotedLines = [], picks = [], citeOf = () => 1, question = '', titles = [] } = {}) {
-  const s = cleanLine(String(summary || '')).slice(0, 600);
+  let s = cleanLine(String(summary || '')).slice(0, 600);
   if (!s) return { ok: false, reason: 'empty' };
+  // a sentence without its own marker takes the marker of the sentence before it (or the first one in the summary);
+  // its facts are still checked against the quotes below
+  {
+    const parts = s.split(/(?<=[.!?])\s+(?=\S)/).filter((x) => x.trim());
+    const first = /\[L?\d{1,3}\]/i.exec(s)?.[0];
+    if (first) {
+      let lastMark = first;
+      s = parts.map((x) => {
+        const m = x.match(/\[L?\d{1,3}\]/gi);
+        if (m) { lastMark = m[m.length - 1]; return x; }
+        return x.replace(/([.!?]?)\s*$/, (all, p) => ` ${lastMark}${p}`).replace(/\s+(\[L?\d{1,3}\])([.!?])$/i, ' $1$2');
+      }).join(' ');
+    }
+  }
   const pool = quotedLines.join('\n');
   const low = pool.toLowerCase();
   const nums = new Set((pool.match(/\d[\d,]*(?:\.\d+)?/g) || []).map(normNum));
@@ -1353,12 +1367,13 @@ export function verifySummary(summary, { quotedLines = [], picks = [], citeOf = 
   const tlow = titles.join(' ').toLowerCase();
   for (const sent of body.split(/(?<=[.!?])\s+/)) {
     const words = sent.match(/[A-Za-z][A-Za-z'’&-]*/g) || [];
-    words.forEach((w, i) => {
-      if (i === 0 || !/^[A-Z]/.test(w) || w.length < 3) return;
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i];
+      if (!/^[A-Z]/.test(w) || w.length < 3) continue;
       const lw = w.toLowerCase().replace(/[’']s$/, '');
-      if (FACT_STOP.has(lw) || qlow.includes(lw) || low.includes(lw) || tlow.includes(lw)) return;
-      throw Object.assign(new Error('name'), { word: w });
-    });
+      if (FACT_STOP.has(lw) || qlow.includes(lw) || low.includes(lw) || tlow.includes(lw)) continue;
+      return { ok: false, reason: `name ${w} not in the quotes` };
+    }
   }
   const text = s.replace(/\[L?(\d{1,3})\]/gi, (_, n) => `[${citeOf(+n)}]`).replace(/(\[\d{1,3}\])(?:\s*\1)+/g, '$1');
   return { ok: true, text };
@@ -1459,10 +1474,7 @@ export async function researchAnswer({ question, sources = [], search, agent, pe
   }
   let summary = null, summaryNote = null;
   if (final.summary) {
-    let v;
-    try {
-      v = verifySummary(final.summary, { quotedLines: chosen.map((l) => l.text), picks, citeOf: (n) => cite(byN.get(n).source, byN.get(n)), question, titles: chosen.map((l) => String(pool[l.source]?.title || '')) });
-    } catch (e) { v = { ok: false, reason: `name ${e.word || ''} not in the quotes` }; }
+    const v = verifySummary(final.summary, { quotedLines: chosen.map((l) => l.text), picks, citeOf: (n) => cite(byN.get(n).source, byN.get(n)), question, titles: chosen.map((l) => String(pool[l.source]?.title || '')) });
     if (v.ok) summary = v.text; else summaryNote = v.reason;
   }
   const text = summary ? `${summary}\n${quoteText}` : quoteText;
