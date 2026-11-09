@@ -146,7 +146,10 @@ describe('research mode', () => {
     assert.equal(ok.text, 'The Dragon Dice Set is $24.99 [1].');
     assert.equal(lib.verifySummary('It ships in 3 business days [L5].', { quotedLines: q, picks: [4, 5] }).ok, false);
     assert.equal(lib.verifySummary('It is $24.99 [L9].', { quotedLines: q, picks: [4, 5] }).ok, false, 'marker outside the quotes');
-    assert.equal(lib.verifySummary('It is $24.99.', { quotedLines: q, picks: [4, 5] }).ok, false, 'uncited');
+    const unmarked = lib.verifySummary('The Dragon Dice Set is $24.99.', { quotedLines: q, picks: [4, 5], citeOf: () => 1 });
+    assert.equal(unmarked.ok, true, 'no marker at all: cited to the first quote');
+    assert.equal(unmarked.text, 'The Dragon Dice Set is $24.99 [1].');
+    assert.equal(lib.verifySummary('The Dragon Dice Set is $19.99.', { quotedLines: q, picks: [4, 5] }).ok, false, 'its facts are still checked');
   });
 });
 

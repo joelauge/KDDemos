@@ -1340,7 +1340,8 @@ export function verifySummary(summary, { quotedLines = [], picks = [], citeOf = 
   // its facts are still checked against the quotes below
   {
     const parts = s.split(/(?<=[.!?])\s+(?=\S)/).filter((x) => x.trim());
-    const first = /\[L?\d{1,3}\]/i.exec(s)?.[0];
+    // no marker at all: the summary points at the first quoted line (its facts are still checked against every quote)
+    const first = /\[L?\d{1,3}\]/i.exec(s)?.[0] || (picks.length ? `[L${picks[0]}]` : null);
     if (first) {
       let lastMark = first;
       s = parts.map((x) => {
