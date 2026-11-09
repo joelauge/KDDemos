@@ -28,7 +28,7 @@ export class KnowBotContainer extends Container {
       ...pick(env, ['GEMINI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
         // plain vars (wrangler.jsonc "vars" or --var), optional
         // (no SHOP_DOMAIN: product links come from each bot's own Shopify store import, never one server-wide store)
-        'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS']),
+        'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PROOF_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS']),
     };
   }
 

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>KnowBot</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f6f7fb; --ink: #0f172a; --mute: #5b6476; --acc: #4f46e5; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0b1020; --ink: #e7eaf3; --mute: #a3abc2; --acc: #a5b4fc; } }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink); font: 16px/1.6 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    main { max-width: 420px; padding: 24px 16px; text-align: center; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { margin: 0 0 16px; color: var(--mute); }
+    a { color: var(--acc); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="t">Page not found</h1>
+    <p id="d">That page doesn't exist.</p>
+    <a href="/studio/">Go to KnowBot Studio</a>
+  </main>
+  <script type="module">
+    // Short proof links (/p/<id>) live on this site so a texted answer never shows the API's address; the proof
+    // itself is served by the KnowBot API, so forward there.
+    import { hostedApi } from '/lib/site-config.js';
+    const m = /^\/p\/([A-Za-z0-9_-]{4,64})\/?$/.exec(location.pathname);
+    const api = hostedApi();
+    if (m && api) {
+      document.getElementById('t').textContent = 'Opening the proof…';
+      document.getElementById('d').textContent = 'One moment.';
+      location.replace(`${api}/api/p/${m[1]}${location.hash}`);
+    }
+  </script>
+</body>
+</html>

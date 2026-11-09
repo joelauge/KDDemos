@@ -650,7 +650,10 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
    * KNOWBOT_PROOF_PREFIX overrides either way. Every proofUrl this module hands out is built here. */
   const PROOF_PREFIX = env.KNOWBOT_PROOF_PREFIX != null ? String(env.KNOWBOT_PROOF_PREFIX).replace(/\/+$/, '')
     : /^(1|true|yes)$/i.test(String(env.KNOWBOT_TRUST_PROXY || '')) ? '/api' : '';
-  const proofUrlFor = (req, id) => (id ? `${publicBase(req, env)}${PROOF_PREFIX}/p/${id}` : null);
+  /** KNOWBOT_PROOF_URL puts proof links on the public site instead of the API host (https://knowbot.knowdrive.ai/p/<id>;
+   * the site's 404.html forwards /p/<id> to this server's proof page), so a texted link never shows the API's address. */
+  const PROOF_URL = String(env.KNOWBOT_PROOF_URL || '').replace(/\/+$/, '');
+  const proofUrlFor = (req, id) => (id ? (PROOF_URL ? `${PROOF_URL}/p/${id}` : `${publicBase(req, env)}${PROOF_PREFIX}/p/${id}`) : null);
   function send(res, status, body, headers = {}) {
     if (res.headersSent) { try { res.end(); } catch {} return; }
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });

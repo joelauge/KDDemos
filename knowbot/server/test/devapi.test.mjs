@@ -497,3 +497,19 @@ describe('developer API: local mode (no knowDrive)', () => {
     assert.equal(ins.top[0].q, Q);
   });
 });
+
+describe('KNOWBOT_PROOF_URL: proof links on the public site, never the API host', () => {
+  test('a texted proof link uses the site origin and still resolves on the API', async () => {
+    const S = await boot({ env: { KNOWBOT_PROOF_URL: 'https://knowbot.example.com/' } });
+    try {
+      const bot = await setupBot(S);
+      const K = await newKey(S, bot);
+      const sms = await (await S.api(`/v1/bots/${bot}/preview`, { method: 'POST', headers: { authorization: `Bearer ${K.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'sms', question: Q }) })).json();
+      const m = /Proof: (https:\/\/knowbot\.example\.com\/p\/([A-Za-z0-9_-]+))/.exec(sms.text);
+      assert.ok(m, `site-origin proof link: ${sms.text}`);
+      assert.doesNotMatch(sms.text, /127\.0\.0\.1/);
+      const page = await S.api(`/api/p/${m[2]}`);
+      assert.equal(page.status, 200, 'the forwarded /api/p/<id> serves the proof');
+    } finally { await S.close(); }
+  });
+});
