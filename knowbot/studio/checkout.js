@@ -1117,7 +1117,7 @@ export function mount(ctx) {
         chips: showText ? [
           // Launch + Keep testing are on the summary card itself; the chips offer the next questions instead.
           { id: 'what-get', label: 'What do I get?', send: 'What do I get?' },
-          { id: 'co-channels', label: 'Channels & API', local: true, run: () => openGoLive({ tab: 'channels' }) },
+          { id: 'co-channels', label: 'Test it before going live', local: true, run: () => openGoLive({ tab: 'channels' }) },
         ] : null });
       mark('launchShown');
       preloadGoLive();

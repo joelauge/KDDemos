@@ -38,6 +38,7 @@ import { shopDomainFor } from './channels/shop.mjs';
 import { handleWhatsApp } from './channels/whatsapp.mjs';
 import { handleEmail } from './channels/email.mjs';
 import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
+import { createResearchAgent } from './research.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
 export const KEY_RE = /^kb_(live|trial)_[A-Za-z0-9_.-]{20,600}$/;
@@ -132,6 +133,8 @@ export function createDevApi(o = {}) {
   /** Milliseconds between streamed chat.completion.chunk deltas (capped so a whole answer streams in under ~1 s); 0 disables. */
   const streamPaceMs = Math.max(0, Number(o.streamPaceMs ?? env.KNOWBOT_STREAM_PACE_MS ?? 12) || 0);
   const llmModel = o.llmModel || env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
+  // every bot's answers (chat, API, widget, phone, SMS, WhatsApp, email): the research step when the server has a key
+  const researchAgent = o.researchAgent !== undefined ? o.researchAgent : createResearchAgent(env, { log });
   const CANON = o.canonical || { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
   const sealSecret = String(o.secret || registry?.secret || env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || 'knowbot-local-dev');
   const trialSecret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || randomBytes(32).toString('hex');
@@ -458,7 +461,8 @@ export function createDevApi(o = {}) {
         floor: { min: floor, top: round4(top) }, ms: Math.round(tRet - t0) });
       // voice: every bot answers as a kind librarian (lib guideText): where it found it, the exact words, one opener/closer
       const r = await lib.answerFromSources({ question: q, results, complete: safeComplete, search: retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
-        history: Array.isArray(history) ? history : [], mode, settings, voice: target.inst?.voice ?? true });
+        history: Array.isArray(history) ? history : [], mode, settings, voice: target.inst?.voice ?? true,
+        ...(mode === 'select' && researchAgent ? { research: researchAgent, onResearch: (e) => { if (e.type === 'error') log(`[api] research failed: ${e.message}`); } } : {}) });
       fin = r.fin;
     } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
 

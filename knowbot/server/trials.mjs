@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { promises as fsp, readdirSync, statSync } from 'node:fs';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as kbLib from '../lib/knowbot.js';
+import { createResearchAgent } from './research.mjs';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
 import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS } from './storeimport.mjs';
@@ -1114,6 +1115,9 @@ export function createStudio(o = {}) {
   // Product facts come from studio/kb (knowDrive-backed when a store is configured, else the bundled local copy).
   // The key: the dashboard's sealed registry entry, else the ANTHROPIC_API_KEY Worker secret (GitHub secret).
   const anthropicKey = () => (studioProvider === 'anthropic' ? (providerKey() || env.ANTHROPIC_API_KEY || null) : null);
+  // Research step for the trial bots' answers (lib researchAnswer): Claude reads whole passages, may search again, picks
+  // line spans to quote and may add a verified summary. Without a key it is null and answers use the select path.
+  const researchAgent = o.researchAgent !== undefined ? o.researchAgent : createResearchAgent(env, { key: () => providerKey() || env.ANTHROPIC_API_KEY || null, log });
   const localKb = createLocalKb({ pricing: { checkoutUrl: checkoutBase } });
   let remoteKb = null;
   try { remoteKb = enabled && store && o.builderKb !== false ? createBuilderKb({ kdJson, store, log, now }) : null; } catch (e) { log(`[studio] builder kb: ${e.message}`); }
@@ -2205,26 +2209,50 @@ export function createStudio(o = {}) {
       // 5. select
       const titleOf = (h) => (h.crumb ? h.crumb.split(' > ')[0] : '') || titleFromName(fileName(h.fileId));
       // librarian voice: every source carries where it lives (page, section, link) so the answer can point there
-      const { sources, srcHit } = await answerSources(T, kept, { titleOf, fileName });
-      const lines = kbLib.candidateLines(sources);
+      let { sources, srcHit } = await answerSources(T, kept, { titleOf, fileName });
+      // each source remembers its hit (non-enumerable): research can add sources from new searches
+      const tagHits = (src, hits) => src.forEach((x, i) => Object.defineProperty(x, '_hit', { value: hits[i], enumerable: false, configurable: true }));
+      tagHits(sources, srcHit);
+      let lines = kbLib.candidateLines(sources);
       const lineView = (l) => {
         const h = srcHit[l.source];
         const derived = isDerivedLine(l.text) && !h.text.includes(l.text.replace(/…$/, ''));
         return { L: l.n, fileId: h.fileId, atomId: h.atomId, text: clip(l.text, 320), offset: derived ? null : findOffset(h.text, l.text), derived };
       };
-      emit('lines', { count: lines.length, items: lines.slice(0, 12).map(lineView) });
       emit('status', { step: 'select', t: ms() });
       const tSel0 = ms();
       let raw = '', model = 'keyword-fallback';
-      try {
+      // research first (when the server has the agent): reads whole passages, may search the files again
+      let rfin = null;
+      if (researchAgent) {
+        const searchMore = async (q) => {
+          const r2 = await retrieve(T, q, { files, signal: ac.signal });
+          const hits = [...r2.vector.filter((h) => (h.similarity ?? 0) >= floor * 0.85).slice(0, 8), ...r2.hybridOnly.filter((x) => x.hybridRank <= 3)];
+          await resolveAtoms(T, hits);
+          const got = await answerSources(T, hits, { titleOf, fileName });
+          tagHits(got.sources, got.srcHit);
+          return got.sources;
+        };
+        rfin = await kbLib.researchAnswer({ question, sources, search: searchMore, agent: researchAgent, persona, voice: true, k: 8, signal: ac.signal,
+          onEvent: (e) => { if (e.type === 'search') emit('research', { query: e.query, t: ms() }); else if (e.type === 'error') log(`[studio] research failed: ${e.message}`); } }).catch((e) => { log(`[studio] research failed: ${e?.message}`); return null; });
+        if (ac.signal.aborted) { clearInterval(ping); return; }
+        if (rfin) {
+          sources = rfin.sources; srcHit = sources.map((x) => x._hit); lines = rfin.allLines;
+          model = researchAgent.model || 'research';
+        }
+      }
+      emit('lines', { count: lines.length, items: lines.slice(0, 12).map(lineView) });
+      if (!rfin) try {
         const out = await withTimeout(selectComplete(kbLib.buildSelectMessages(question, lines, persona), { ...kbLib.SELECT_SETTINGS }), 20000);
         raw = String(out.raw ?? ''); model = out.model || model;
       } catch (e) { raw = ''; model = 'keyword-fallback'; log(`[studio] select failed (${e.message}); keyword fallback`); }
       if (ac.signal.aborted) { clearInterval(ping); return; }
-      let fin0 = kbLib.finalizeSelection(raw, lines, sources, { question, voice: true });
-      if (fin0.fallback) model = 'keyword-fallback';
-      // keep only lines that answer the question themselves (within LINE_MARGIN of the best selected line)
-      if (!fin0.refused && (fin0.selected || []).length > 1) {
+      let fin0;
+      if (rfin) { const { lines: _l, allLines: _a, sources: _s, ...rest } = rfin; fin0 = rest; }
+      else { fin0 = kbLib.finalizeSelection(raw, lines, sources, { question, voice: true }); if (fin0.fallback) model = 'keyword-fallback'; }
+      // keep only lines that answer the question themselves (within LINE_MARGIN of the best selected line); research
+      // picks spans on purpose (a name line and its price line), so they are kept as chosen
+      if (!rfin && !fin0.refused && (fin0.selected || []).length > 1) {
         const keep = keepRelevantLines(question, fin0.selected, (L) => lines[L - 1]?.text || '', (L) => srcHit[lines[L - 1]?.source]?.similarity ?? floor, LINE_MARGIN,
           { isIntro: (L) => { const h = srcHit[lines[L - 1]?.source]; return !!h && Number(h.seq) <= 2 && !!h.crumb && !h.crumb.includes(' > '); } });
         if (keep.length && keep.length < fin0.selected.length) {
@@ -2232,7 +2260,7 @@ export function createStudio(o = {}) {
           fin0 = { ...kbLib.finalizeSelection(keep.map((L) => `L${L}`).join(', '), lines, sources, { question, voice: true }), fallback: fb };
         }
       }
-      emit('selected', { lines: fin0.selected ?? [], ms: ms() - tSel0, model });
+      emit('selected', { lines: fin0.selected ?? [], ms: ms() - tSel0, model, ...(fin0.research ? { research: fin0.research } : {}), ...(fin0.summary ? { summary: true } : {}) });
       const tSel = ms() - tSel0;
       // 6. quote
       emit('status', { step: 'quote', t: ms() });
@@ -2272,8 +2300,14 @@ export function createStudio(o = {}) {
           quotes: qs.map((q) => ({ L: q.L, text: q.text, offset: q.offset, derived: q.derived })) };
       });
       const usedQ = new Set();
+      const summaryText = fin0.summary ? String(fin0.summary).trim() : null;
       const claims = claimLines.map((x) => {
         const l = x.body;
+        if (summaryText && l.trim() === summaryText) {
+          const sn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null;
+          return { sentence: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: sn, quote: null, file: null, locator: null, summary: true,
+            verified: true, check: 'every number, price, date and name in it is in the quoted lines' };
+        }
         const nn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null;
         const flat = l.replace(/“/g, '‘').replace(/”/g, '’');
         const has = (q) => { const t = voiceQuote(q.text); return !!t && (flat.includes(t.slice(0, 60)) || l.includes(q.text.replace(/…$/, '').slice(0, 40))); };

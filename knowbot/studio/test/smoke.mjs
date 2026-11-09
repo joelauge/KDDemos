@@ -681,7 +681,7 @@ async function journey(browser, dev, cell) {
   const liveChips = await p2.waitForFunction(() => { const rows = [...document.querySelectorAll('#st-log .st-chips:not([hidden]):not(.is-stale)')]; const t = rows.length ? rows[rows.length - 1].innerText : '';
     // r8: post-launch chips follow fixer r7 D8 (the SuccessCard holds Copy embed / Add your files; the chips are the
     // channel + API next actions); a text-only Live line still offers "Copy embed code"
-    return /Set up channels|Channels & API|Copy embed code/.test(t) && !/Use sample files|canonical bot|avoid making things up|^\s*Call it /im.test(t) ? t : null; }, null, { timeout: 12000 }).then((h) => h.jsonValue()).catch(() => null);
+    return /Set up channels|Test it before going live|Copy embed code/.test(t) && !/Use sample files|canonical bot|avoid making things up|^\s*Call it /im.test(t) ? t : null; }, null, { timeout: 12000 }).then((h) => h.jsonValue()).catch(() => null);
   check('17-live', 'Builder offers the live next actions (no setup chips)', !!liveChips, { detail: String(liveChips || '').replace(/\s+/g, ' ') });
   check('17-live', 'ghost answer hidden', await p2.evaluate(() => { const g = document.querySelector('.sb-ghost'); return !g || g.offsetParent === null; }));
   await p2.waitForTimeout(cell.motion === 'reduce' ? 200 : 1400);   // let the SuccessCard finish assembling before the shot

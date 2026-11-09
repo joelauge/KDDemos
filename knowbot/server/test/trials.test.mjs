@@ -2309,3 +2309,39 @@ describe('fake knowDrive enforces the production facts', () => {
     assert.ok(!hits.some((h) => h.file_id === dup.id), 'the duplicate is not searchable');
   });
 });
+
+describe('Studio answers with the research step (a fake agent in place of Claude)', () => {
+  let S, c;
+  const seen = [];
+  /** Quotes the bundle's name line and its price line, and adds a summary built from them. */
+  const agent = async (params) => {
+    seen.push(params);
+    const all = JSON.stringify(params.messages);
+    const name = Number(/L(\d+) Ultimate Bundle \(Brown\)/.exec(all)?.[1] || 0);
+    if (!name) return { content: [{ type: 'tool_use', id: 'a1', name: 'answer', input: { found: false, quotes: [] } }] };
+    return { content: [{ type: 'tool_use', id: 'a1', name: 'answer', input: { found: true, quotes: [{ from: name, to: name + 1 }], summary: `The Ultimate Bundle (Brown) is $319.99, down from $361.90 [L${name + 1}].` } }] };
+  };
+  agent.model = 'fake-research';
+  before(async () => { S = await boot({ studio: { researchAgent: agent } }); c = client(S); });
+  after(async () => { await S.close(); });
+
+  test('a price on the line under the product name is quoted as one span, with a verified summary and its proof', async () => {
+    const t = await c.trial();
+    const page = '# Ultimate Bundles\n\nComplete Game Master Screen bundles with everything you need for epic campaigns.\n\nUltimate Bundle (Brown) - Complete Game Master Screen Kit for D&D, Pathfinder & TTRPGs\n\n$319.99 $361.90\n\nSave $41.91\n';
+    assert.equal((await c.upload(t, 'ultimate-bundles.md', Buffer.from(page))).status, 201);
+    await c.waitReady(t, 1);
+    const ev = await c.stream(t, '/ask', { question: "What's the price of the ultimate bundle?" });
+    const fin = ev.find((e) => e.event === 'final').data;
+    assert.equal(fin.refused, false, JSON.stringify(fin.why));
+    assert.match(fin.text, /The Ultimate Bundle \(Brown\) is \$319\.99, down from \$361\.90 \[1\]/);
+    assert.match(fin.text, /\$319\.99 \$361\.90/);
+    const sel = ev.find((e) => e.event === 'selected').data;
+    assert.equal(sel.model, 'fake-research');
+    assert.equal(sel.summary, true);
+    assert.equal(sel.lines.length, 2);
+    const summaryClaim = fin.proof?.claims?.find((x) => x.summary) || fin.claims?.find?.((x) => x.summary);
+    if (summaryClaim) assert.equal(summaryClaim.verified, true);
+    assert.ok(seen.length >= 1);
+    assert.match(seen[0].system, /more than one passage/);
+  });
+});

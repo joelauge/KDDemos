@@ -14,6 +14,7 @@ import { createStudio } from './trials.mjs';
 import { createDevApi, isDevApiPath, EXPOSE_HEADERS as DEV_EXPOSE_HEADERS } from './devapi.mjs';
 import { phoneSessions } from './channels/voice-live.mjs';
 import { activeWebVoiceSessions } from './channels/webvoice.mjs';
+import { createResearchAgent } from './research.mjs';
 
 /**
  * The header the Cloudflare Worker sends on internal calls to this server (GET /api/internal/busy): an HMAC of a fixed
@@ -64,6 +65,7 @@ export function createKnowBotServer(opts = {}) {
   const libPath = path.resolve(opts.libPath || env.KNOWBOT_LIB || path.join(root, 'lib', 'knowbot.js'));
   const llmBase = String(env.LLM_BASE_URL || 'http://127.0.0.1:8080/v1').replace(/\/+$/, '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
+  const researchAgent = opts.researchAgent !== undefined ? opts.researchAgent : createResearchAgent(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
   // Models a bot can answer with. Today one local model; KNOWBOT_MODELS (JSON [{id,label,baseUrl?,apiKeyEnv?}]) adds more.
   const models = (() => {
     const base = [{ id: llmModel, label: env.LLM_MODEL_LABEL || 'Qwen2.5 1.5B Instruct (Q4_K_M, llama.cpp)', default: true }];
@@ -107,11 +109,11 @@ export function createKnowBotServer(opts = {}) {
 
   // ------------------------------------------------------------ KnowBot Studio (/api/studio/*, server/trials.mjs)
   const kdConfig = kd; // { baseUrl, apiKey, store }: the same knowDrive config as the registry (null in local mode)
-  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith,
+  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent,
     rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, ...(opts.studio || {}) });
 
   // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
-  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, readRaw, readJson, clientIp, requireAdmin,
+  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, readRaw, readJson, clientIp, requireAdmin,
     logger: log, dataDir, llmModel, canonical: CANONICAL, ...(opts.devapi || {}) });
 
   // ------------------------------------------------------------ events / SSE
@@ -274,8 +276,10 @@ export function createKnowBotServer(opts = {}) {
       const complete = provider === 'local'
         ? (m, c) => llmComplete(m, c?.settings || settings, inst.model || llmModel)
         : (m, c) => completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
+      const answerMode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
       const r = await lib.answerFromSources({ question, results, complete, search: (x) => retriever.search(x, k), persona, minScore, k,
-        history: Array.isArray(history) ? history : [], mode: inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select', settings,
+        history: Array.isArray(history) ? history : [], mode: answerMode, settings,
+        ...(answerMode === 'select' && researchAgent ? { research: researchAgent } : {}),
         // Owner rule: every live bot answers as a kind librarian (opener, "In “Title”, page N, it says: “…” [1].", closer).
         // An instance may opt out with voice:false; anything else (unset included) gets the guide voice.
         voice: inst.voice ?? true });

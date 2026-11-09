@@ -1864,12 +1864,15 @@ export function mount(ctx) {
           const m = fmtMatch(hit || cit, floorOfA(A));
           return h('tr', null,
             h('td', null, c.n ? npill(A.citeLabel ? A.citeLabel(c.n, ql?.atomId || cit?.atomId) : c.n, 'pf-tn') : null, ' ', c.sentence),
-            h('td', { class: 'pf-tq' }, c.quote ? h('q', null, c.quote) : h('span', { class: 'pf-dim' }, '—')),
+            h('td', { class: 'pf-tq' }, c.quote ? h('q', null, c.quote) : c.summary ? h('span', { class: 'pf-dim' }, 'Summary of the quotes below') : h('span', { class: 'pf-dim' }, '—')),
             h('td', { class: 'sb-num pf-tf' }, [c.file, hit?.locator || c.locator].filter(Boolean).join(' · ')),
             h('td', { class: 'sb-num' }, m == null ? 'keyword' : m),
-            h('td', null, c.verified ? h('span', { class: 'pf-badge' }, ico('check', 11), 'Verbatim') : h('span', { class: 'pf-badge is-warn' }, 'Unverified')));
+            h('td', null, c.summary && c.verified ? h('span', { class: 'pf-badge', title: c.check || 'Every number, price, date and name in it is in the quoted lines' }, ico('check', 11), 'Checked')
+              : c.verified ? h('span', { class: 'pf-badge' }, ico('check', 11), 'Verbatim') : h('span', { class: 'pf-badge is-warn' }, 'Unverified')));
         })))),
-      h('p', { class: 'pf-foot-note' }, 'In select mode every sentence is copied from your files; the model only chooses which lines.'));
+      h('p', { class: 'pf-foot-note' }, claims.some((c) => c.summary)
+        ? 'The first sentence sums up the quotes: every number, price, date and name in it was checked against the quoted lines. Every other sentence is copied from your files.'
+        : 'In select mode every sentence is copied from your files; the model only chooses which lines.'));
     };
     btn.addEventListener('click', () => { fill(); disclose(btn, panel); });
     const box = h('div', { class: 'pf-only pf-ledger' }, btn, panel);

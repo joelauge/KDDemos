@@ -778,7 +778,7 @@ function priceIntent(text, label) {
   if (isLive()) {
     localSay(`${botName()} is already live: your plan is active, so there's nothing more to pay here. Manage billing in your KnowDrive dashboard.`, { reply: true, chips: [
       { id: 'live_copy', label: 'Copy embed code', kind: 'primary', local: true, run: () => { copyText(embedSnippet()); toast({ kind: 'info', text: 'Embed code copied' }); } },
-      { id: 'channels', label: 'Channels & API', local: true, run: () => openGoLive('channels') },
+      { id: 'channels', label: 'Test it before going live', local: true, run: () => openGoLive('channels') },
     ] });
     return;
   }
@@ -1618,7 +1618,7 @@ function closeSetup() {
   if (slots.bot && slots.bot.dataset.pane) { delete slots.bot.dataset.pane; updateView(); }
 }
 on('file:ready', () => updateView());
-function channelsChip() { return { id: 'channels', label: 'Channels & API', local: true, run: () => openGoLive('channels') }; }
+function channelsChip() { return { id: 'channels', label: 'Test it before going live', local: true, run: () => openGoLive('channels') }; }
 function withChannelsChip(chips) {
   const list = (chips || []).filter(Boolean);
   if (list.some((c) => c.id === 'channels' || /channels/i.test(c.label || ''))) return list;
@@ -2817,7 +2817,7 @@ function paletteCommands() {
     { id: 'view', label: getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Toggle Proof view', ico: 'shieldCheck', run: () => setView(getState().ui.view === 'proof' ? 'bot' : 'proof', 'toggle') },
     { id: 'spec', label: 'Open bot spec', ico: 'edit', run: () => openSpec() },
     { id: 'launch', label: launchChipLabel(), ico: 'rocket', run: () => launchOpen('palette') },
-    { id: 'channels', label: 'Channels & API (SMS, phone, WhatsApp, email, voice)', ico: 'phone', run: () => openGoLive('channels') },
+    { id: 'channels', label: 'Test it before going live (SMS, phone, WhatsApp, email, voice)', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
     ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
@@ -4871,7 +4871,7 @@ function liveChips(addFirst = false) {
   return [
     { id: 'live_copy', label: 'Copy embed code', kind: addFirst ? 'default' : 'primary', local: true, run: () => { copyText(embedSnippet()); toast({ kind: 'info', text: 'Embed code copied' }); } },
     { id: 'live_add', label: 'Add your files', kind: addFirst ? 'primary' : 'default', local: true, run: () => { if (isMobile()) setTab('bot'); emit('intake:open', {}); if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); } },
-    { id: 'channels', label: 'Channels & API', local: true, run: () => openGoLive('channels') },
+    { id: 'channels', label: 'Test it before going live', local: true, run: () => openGoLive('channels') },
   ];
 }
 
