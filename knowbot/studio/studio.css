@@ -450,9 +450,10 @@ html:root[data-co-cta="receipt"] #st-pricewrap, html:root[data-co-cta="sheet"] #
 }
 :root[data-theme="dark"] .st-glyph { color: #0b1020; background: linear-gradient(135deg, #a5b4fc, var(--accent-2)); }
 .st-glyph-lg { width: 34px; height: 34px; border-radius: 10px; }
-/* KnowDrive mark: white mark on KD ink, no accent gradient */
-.st-glyph-kd { color: #fff; background: #0b1020; box-shadow: 0 4px 10px -5px rgba(11,16,32,.55); }
-:root[data-theme="dark"] .st-glyph-kd { color: #fff; background: #1c2333; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+/* KnowDrive mark: the real logo file, white on a black tile */
+.st-glyph-kd { background: #000; box-shadow: 0 4px 10px -5px rgba(0,0,0,.55); }
+:root[data-theme="dark"] .st-glyph-kd { background: #000; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+.st-kd-logo { display: block; width: 62%; height: auto; }
 .st-hint { margin: 10px var(--st-gutter) 0; padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 13px; flex: none; }
 .st-hint-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .st-link-btn { color: var(--accent-2); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 4px 2px; }
