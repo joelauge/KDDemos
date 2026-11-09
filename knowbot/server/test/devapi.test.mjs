@@ -110,6 +110,27 @@ describe('developer API (knowDrive mode)', () => {
     assert.equal((await S.api('/api/instances/nope/keys', { headers: S.admin })).status, 404);
   });
 
+  test('POST /v1/bots/:id/preview: the reply exactly as SMS, WhatsApp or email would send it', async () => {
+    const post = (body) => S.api(`/v1/bots/${bot}/preview`, { method: 'POST', headers: auth(), body: JSON.stringify(body) });
+    const sms = await (await post({ channel: 'sms', question: Q })).json();
+    assert.equal(sms.channel, 'sms');
+    assert.equal(sms.refused, false);
+    assert.ok(sms.text.length <= 320, `SMS fits: ${sms.text.length}`);
+    assert.match(sms.text, /30 days/);
+    assert.match(sms.text, /\[1\]/);
+    assert.match(sms.text, /Proof: http/);
+    const wa = await (await post({ channel: 'whatsapp', question: Q })).json();
+    assert.match(wa.text, /\*Sources\*/);
+    const em = await (await post({ channel: 'email', question: Q })).json();
+    assert.match(em.subject, /^Re: /);
+    assert.match(em.text, /Sources/);
+    assert.match(em.html, /<sup/);
+    const off = await (await post({ channel: 'sms', question: 'What is the capital of Australia?' })).json();
+    assert.equal(off.refused, true);
+    assert.equal((await post({ channel: 'fax', question: Q })).status, 400);
+    assert.equal((await S.api(`/v1/bots/${bot}/preview`, { method: 'POST', body: JSON.stringify({ channel: 'sms', question: Q }) })).status, 401);
+  });
+
   test('POST /v1/bots/:id/chat answers with citations, real similarities (never RRF) and a proof link', async () => {
     const r = await S.api(`/v1/bots/${bot}/chat`, { method: 'POST', headers: auth(), body: JSON.stringify({ question: Q }) });
     assert.equal(r.status, 200);

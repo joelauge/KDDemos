@@ -28,7 +28,8 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sealKey, openKey } from './providers.mjs';
 import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
-import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle } from './channels/util.mjs';
+import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle, formatSms, formatWhatsApp, formatEmail } from './channels/util.mjs';
+import { SMS_MAX } from './channels/sms.mjs';
 import { handleSms } from './channels/sms.mjs';
 import { handleVoice, phoneEngine } from './channels/voice.mjs';
 import { handleMediaStream } from './channels/voice-live.mjs';
@@ -710,6 +711,31 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
   const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title}${c.page ? `, page ${c.page}` : ''}${c.section ? `, “${c.section}”` : ''} — ` : ''}${c.file}${c.url ? ` <${c.url}>` : ''}`).join('\n')}`.trim());
 
   // ---------------------------------------------------------------- /v1/bots/:id/chat
+  /**
+   * POST /v1/bots/:id/preview {channel: sms|whatsapp|email, question} → the reply exactly as that channel would send it
+   * (the same answer pipeline and the same formatter as the real webhook), logged to insights under that channel.
+   * The Studio's bot pane uses it to show the bot in the shape the visitor will launch.
+   */
+  async function botPreview(req, res, botId) {
+    const who = await authKey(req, botId);
+    rateLimit(res, who);
+    const body = await bodyJson(req);
+    const channel = String(body.channel || '');
+    if (!['sms', 'whatsapp', 'email'].includes(channel)) throw new ApiError(400, 'invalid_request_error', 'channel must be sms, whatsapp or email');
+    const question = String(body.question || '').replace(/\s+/g, ' ').trim().slice(0, MAX_Q);
+    if (!question) throw new ApiError(400, 'invalid_request_error', 'question is required');
+    const target = await resolveTarget(botId, who);
+    const a = await answer(target, question, { channel, callerKey: who.keyId });
+    a.proofId = a.refused ? null : saveProof(a, channel);
+    const proofUrl = a.refused ? null : proofUrlFor(req, a.proofId);
+    const r = { ...a, question };
+    const out = { channel, question, refused: !!a.refused, proofUrl, citations: publicAnswer(a, req).citations || [] };
+    if (channel === 'sms') out.text = formatSms(r, proofUrl, SMS_MAX);
+    else if (channel === 'whatsapp') out.text = formatWhatsApp(r, proofUrl);
+    else { const e = formatEmail(r, { proofUrl, botName: target.name || 'KnowBot', question }); out.text = e.text; out.html = e.html; out.subject = `Re: ${question.slice(0, 120)}`; out.from = target.name || 'KnowBot'; }
+    return send(res, 200, out);
+  }
+
   async function botChat(req, res, botId) {
     const who = await authKey(req, botId);
     rateLimit(res, who);
@@ -1146,10 +1172,10 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
       return send(res, 200, { id: who.bot, object: 'model', created: 0, owned_by: 'knowbot' });
     }
     if (p === '/v1/chat/completions') { if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only'); return completions(req, res); }
-    if ((mt = /^\/v1\/bots\/([^/]+)\/(chat|voice)$/.exec(p))) {
+    if ((mt = /^\/v1\/bots\/([^/]+)\/(chat|voice|preview)$/.exec(p))) {
       if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only');
       const botId = decodeURIComponent(mt[1]);
-      return mt[2] === 'chat' ? botChat(req, res, botId) : botVoice(req, res, botId);
+      return mt[2] === 'chat' ? botChat(req, res, botId) : mt[2] === 'preview' ? botPreview(req, res, botId) : botVoice(req, res, botId);
     }
     if ((mt = /^\/v1\/channels\/([^/]+)\/?$/.exec(p))) {
       if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');

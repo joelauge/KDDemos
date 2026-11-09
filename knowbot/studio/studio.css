@@ -1379,3 +1379,10 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 .st-bot[data-pane="setup"] > #in-map-slot, .st-bot[data-pane="setup"] > #in-intake-slot, .st-bot[data-pane="setup"] > #sb-thread-slot,
 .st-bot[data-pane="setup"] > #sb-suggest-slot, .st-bot[data-pane="setup"] > #sb-composer-slot { display: none !important; }
 .st-seg-btn.st-seg-setup[aria-pressed="true"] { color: var(--accent); }
+
+/* "See it as" (shapes.js): another shape than web chat replaces the chat (thread, suggestions, composer) and the map */
+.st-bot > #sb-shape-bar { flex: none; min-width: 0; }
+.st-bot > #sb-shape-frame { flex: 1 1 auto; min-height: 0; }
+.st-bot[data-shape] > #in-map-slot, .st-bot[data-shape] > #in-intake-slot, .st-bot[data-shape] > #sb-thread-slot,
+.st-bot[data-shape] > #sb-suggest-slot, .st-bot[data-shape] > #sb-composer-slot { display: none !important; }
+.st-bot[data-pane="setup"] > #sb-shape-bar, .st-bot[data-pane="setup"] > #sb-shape-frame { display: none !important; }

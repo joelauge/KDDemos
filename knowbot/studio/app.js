@@ -23,12 +23,13 @@
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
 
-import * as store from './store.js?v=71838ff';
-import * as api from './api.js?v=71838ff';
-import * as motion from './motion.js?v=71838ff';
-import * as icons from './icons.js?v=71838ff';
-import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=71838ff';
-import { mountWidget, gaugeProps } from './kdw.js?v=71838ff';
+import * as store from './store.js?v=4a6819a';
+import * as api from './api.js?v=4a6819a';
+import * as motion from './motion.js?v=4a6819a';
+import * as icons from './icons.js?v=4a6819a';
+import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=4a6819a';
+import { mountShapes } from './shapes.js?v=4a6819a';
+import { mountWidget, gaugeProps } from './kdw.js?v=4a6819a';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -1603,6 +1604,7 @@ function anyFileReady() { const s = getState(); return (s.fileOrder || []).some(
 function openSetup({ tab = 'channels', channel = null } = {}) {
   const el = setupSlot();
   if (!el || !slots.bot) return;
+  if (shapes && shapes.shape !== 'webchat') shapes.set('webchat');
   if (isMobile()) setTab('bot', { slide: true });
   dset(slots.bot, 'pane', 'setup');
   el.hidden = false;
@@ -1621,6 +1623,29 @@ function closeSetup() {
   if (slots.bot && slots.bot.dataset.pane) { delete slots.bot.dataset.pane; updateView(); }
 }
 on('file:ready', () => updateView());
+// ---- "See it as" (shapes.js): the bot pane shows the bot in the shape it will have once launched. Web chat is the
+// Studio's own thread; SMS, WhatsApp and email show the channel's real reply (POST /v1/bots/:id/preview); phone and web
+// voice are the live simulators. The first shape is the visitor's first chosen surface.
+let shapes = null;
+function initShapes() {
+  const bar = document.getElementById('sb-shape-bar'), frame = document.getElementById('sb-shape-frame');
+  if (!bar || !frame || shapes) return;
+  shapes = mountShapes(bar, frame, {
+    getState, base: api.BASE,
+    starters: () => {
+      const s = getState();
+      const pinned = (s.spec.starters || []).map((q) => (typeof q === 'string' ? q : q?.q));
+      const asked = [...(s.thread || [])].reverse().filter((a) => a && a.status === 'grounded' && a.by !== 'proof').map((a) => a.question);
+      return [...new Set([...pinned, ...asked].filter(Boolean))].slice(0, 3);
+    },
+    onChange: (shape) => {
+      if (!slots.bot) return;
+      if (shape === 'webchat') delete slots.bot.dataset.shape; else slots.bot.dataset.shape = shape;
+      if (shape !== 'webchat' && setupOpen()) closeSetup();
+    },
+  });
+}
+on('spec:changed', (d) => { if (d?.patch && 'surfaces' in d.patch) shapes?.refresh(); });
 function channelsChip() { return { id: 'channels', label: 'Test it before going live', local: true, run: () => openGoLive('channels') }; }
 function withChannelsChip(chips) {
   const list = (chips || []).filter(Boolean);
@@ -5499,7 +5524,7 @@ async function boot() {
   if (hadTrial && !params.get('t')) resumeActivating();
   setState({ config: DEFAULT_CONFIG }, 'config:default');
   // 3. render the shell immediately (config fills in when it arrives; first paint never waits on the network)
-  renderHeader(); renderSpine(); renderSetupPane(); renderBotHeader(); renderTabs(); ensureOverlay(); wireApplyOnInput();
+  renderHeader(); renderSpine(); renderSetupPane(); renderBotHeader(); renderTabs(); ensureOverlay(); wireApplyOnInput(); initShapes();
   // The thread slot scrolls (B's layout), so it must be reachable by keyboard; C may refine the label/role.
   // r6 (D9/D10): the thread is a skip-link / J target (tabindex -1), not a Tab stop of its own: it was a 375x14 focus
   // target on phones and one more stop between the composer and the first [n]
