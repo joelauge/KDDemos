@@ -1,0 +1,43 @@
+# Points a Twilio phone number at the live KnowBot API: incoming calls → /api/v1/channels/<bot>/voice (Gemini Live over
+# Media Streams), texts → /api/v1/channels/<bot>/sms. Run it by hand (Actions → Point Twilio number at KnowBot → Run).
+# Uses the TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN secrets on the github-pages environment; no key ever leaves GitHub.
+name: Point Twilio number at KnowBot
+on:
+  workflow_dispatch:
+    inputs:
+      number: { description: 'Twilio number, E.164 (e.g. +12892120968)', required: true, default: '+12892120968' }
+      bot: { description: 'KnowBot bot id the number answers for (e.g. ugm)', required: true, default: 'ugm' }
+      sms: { description: 'Also point incoming texts at the bot', type: boolean, default: true }
+jobs:
+  point:
+    runs-on: ubuntu-latest
+    environment: github-pages
+    steps:
+      - name: Update the number's webhooks
+        env:
+          SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          NUMBER: ${{ inputs.number }}
+          BOT: ${{ inputs.bot }}
+          SMS: ${{ inputs.sms }}
+          API: https://knowbot-api.joelauge.workers.dev/api
+        run: |
+          set -euo pipefail
+          [ -n "$SID" ] && [ -n "$TOKEN" ] || { echo "::error::TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN are not set"; exit 1; }
+          [[ "$NUMBER" =~ ^\+[1-9][0-9]{6,14}$ ]] || { echo "::error::number must be E.164, like +12892120968"; exit 1; }
+          [[ "$BOT" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || { echo "::error::bot id may only hold letters, digits, - and _"; exit 1; }
+          T="https://api.twilio.com/2010-04-01/Accounts/$SID"
+          PN=$(curl -sS --fail -u "$SID:$TOKEN" -G "$T/IncomingPhoneNumbers.json" --data-urlencode "PhoneNumber=$NUMBER" \
+            | python3 -c 'import json,sys; n=json.load(sys.stdin)["incoming_phone_numbers"]; print(n[0]["sid"] if n else "")')
+          [ -n "$PN" ] || { echo "::error::$NUMBER is not a number on this Twilio account"; exit 1; }
+          VOICE="$API/v1/channels/$BOT/voice"
+          ARGS=(--data-urlencode "VoiceUrl=$VOICE" --data-urlencode "VoiceMethod=POST")
+          if [ "$SMS" = "true" ]; then ARGS+=(--data-urlencode "SmsUrl=$API/v1/channels/$BOT/sms" --data-urlencode "SmsMethod=POST"); fi
+          curl -sS --fail -u "$SID:$TOKEN" -X POST "$T/IncomingPhoneNumbers/$PN.json" "${ARGS[@]}" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("number:", d["phone_number"]); print("voice:", d["voice_url"], d["voice_method"]); print("sms:", d["sms_url"], d["sms_method"])'
+          # the live API's view of the bot's channels (configured or not, and the webhook it expects)
+          curl -sS "$API/v1/channels/$BOT" | python3 -c 'import json,sys
+          try: d=json.load(sys.stdin)
+          except Exception: sys.exit()
+          ch=d.get("channels") or {}
+          for k in ("voice","sms"): print(k, json.dumps({x: ch.get(k,{}).get(x) for x in ("configured","webhook","engine")}))' || true
