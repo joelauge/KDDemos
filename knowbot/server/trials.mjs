@@ -4340,7 +4340,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const configured = !(status === 503 && /not_configured|not configured/i.test(text));
     return {
       channel: ch, provider, configured, signed, question, ms: Math.round(performance.now() - t0),
-      request: { method: 'POST', path: path0, contentType: headers['content-type'], signature: headers['x-twilio-signature'] ? 'X-Twilio-Signature' : headers['x-hub-signature-256'] ? 'X-Hub-Signature-256' : headers.authorization ? 'Basic auth (EMAIL_WEBHOOK_SECRET)' : null, body: shown },
+      request: { method: 'POST', path: path0, contentType: headers['content-type'], signature: headers['x-twilio-signature'] ? 'Number signature' : headers['x-hub-signature-256'] ? 'X-Hub-Signature-256' : headers.authorization ? 'Basic auth (EMAIL_WEBHOOK_SECRET)' : null, body: shown },
       response: { status, contentType: ctype.split(';')[0], body: clip(text, 8000), json },
     };
   }

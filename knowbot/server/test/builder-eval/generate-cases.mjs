@@ -311,8 +311,8 @@ for (const [msg, st, query, quote, must] of launchQs) {
 // ================================================================== 12. channels
 const channels = [
   ['can it work on WhatsApp?', 'WhatsApp channel', ['WhatsApp Business Cloud API'], '/whatsapp/i'],
-  ['does it do SMS?', 'SMS channel Twilio', ['Twilio Messaging'], '/twilio/i'],
-  ['can customers call it on the phone?', 'telephone channel', ['Twilio Voice'], '/twilio|phone|call/i'],
+  ['does it do SMS?', 'SMS channel KnowBot number', ['The SMS channel works with a KnowBot number'], '/KnowBot number/i'],
+  ['can customers call it on the phone?', 'telephone channel', ['works with a KnowBot number and works for any KnowBot'], '/phone|call/i'],
   ['is there a voice version?', 'voice chatbot browser', ['talk to the bot in their browser'], '/voice|talk/i'],
   ['can it answer emails?', 'email channel', ['inbound-parse webhook'], '/sendgrid|postmark|mailgun|email/i'],
   ['can I put it on my website?', 'website chat widget embed', ['one line of embed code'], '/embed|widget/i'],
@@ -334,7 +334,7 @@ add('channels', 'show me the developer docs', 'own-ready', { tools: ['open_devel
 
 // questions whose wording looks like a rename ("call it", "name it") but ask about a channel: never a patch
 const renameLike = [
-  ['can my customers call it from their phone?', 'telephone channel', 'Twilio Voice', '/twilio|phone|call/i'],
+  ['can my customers call it from their phone?', 'telephone channel', 'works with a KnowBot number and works for any KnowBot', '/phone|call/i'],
   ['could I call it from my own app?', 'connect to my own app API', 'developer API', '/api/i'],
   ['can people text it on WhatsApp?', 'WhatsApp channel', 'WhatsApp Business Cloud API', '/whatsapp/i'],
   ['can visitors talk to it out loud?', 'voice chatbot browser', 'talk to the bot in their browser', '/voice|talk/i'],

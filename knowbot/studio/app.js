@@ -808,9 +808,9 @@ function priceIntent(text, label) {
 }
 
 const CHANNEL_HINTS = [
-  { id: 'whatsapp', re: /\bwhats ?app\b/i, name: 'WhatsApp', need: 'WhatsApp needs a WhatsApp Business number (Meta Cloud API or Twilio); your webhook is ready to paste.' },
-  { id: 'sms', re: /\b(sms|text messag\w*|texts?)\b/i, name: 'SMS', need: 'SMS needs a Twilio number; point its messaging webhook at the URL I prefilled and replies come back with [1] citations.' },
-  { id: 'phone', re: /\b(telephone|phone( calls?| line| number)?|calls?|call in)\b/i, name: 'Telephone', need: 'Phone calls need a Twilio number; callers ask out loud and it answers by voice, naming the source. Try the call simulator now.' },
+  { id: 'whatsapp', re: /\bwhats ?app\b/i, name: 'WhatsApp', need: 'WhatsApp needs a WhatsApp Business number (through Meta); your webhook is ready to paste.' },
+  { id: 'sms', re: /\b(sms|text messag\w*|texts?)\b/i, name: 'SMS', need: 'SMS needs a KnowBot number; point its messaging webhook at the URL I prefilled and replies come back with [1] citations.' },
+  { id: 'phone', re: /\b(telephone|phone( calls?| line| number)?|calls?|call in)\b/i, name: 'Telephone', need: 'Phone calls need a KnowBot number; callers ask out loud and it answers by voice, naming the source. Try the call simulator now.' },
   { id: 'email', re: /\b(e-?mails?|inbox|support@)\b/i, name: 'Email', need: 'Email needs an inbound-parse webhook (SendGrid, Postmark or Mailgun); replies carry footnoted citations and a source list.' },
   { id: 'voice', re: /\bvoice ?(bot|chat\w*|assistant|agent|channel)?\b|\bspeak|\btalk to\b/i, name: 'Voice chatbot', need: 'The voice chatbot runs in the browser, no account needed. Press Try it and talk to your bot.' },
   { id: 'text', re: /\b(widget|embed\w*|website|my site|chat ?bubble|full-?page)\b/i, name: 'Text chatbot', need: 'The chat widget is one line of embed code; you can try it right here before you launch.' },

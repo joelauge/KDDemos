@@ -5658,7 +5658,7 @@
     ],
     "cites": true,
     "replyMust": [
-     "/twilio/i"
+     "/KnowBot number/i"
     ],
     "mustNotTools": [
      "update_bot",
@@ -5677,11 +5677,11 @@
      {
       "name": "kb_search",
       "input": {
-       "query": "SMS channel Twilio"
+       "query": "SMS channel KnowBot number"
       }
      }
     ],
-    "reply": "{{quote:Twilio Messaging}}"
+    "reply": "{{quote:The SMS channel works with a KnowBot number}}"
    }
   },
   {
@@ -5697,7 +5697,7 @@
     ],
     "cites": true,
     "replyMust": [
-     "/twilio|phone|call/i"
+     "/phone|call/i"
     ],
     "mustNotTools": [
      "update_bot",
@@ -5720,7 +5720,7 @@
       }
      }
     ],
-    "reply": "{{quote:Twilio Voice}}"
+    "reply": "{{quote:works with a KnowBot number and works for any KnowBot}}"
    }
   },
   {
@@ -6218,7 +6218,7 @@
     ],
     "cites": true,
     "replyMust": [
-     "/twilio|phone|call/i"
+     "/phone|call/i"
     ],
     "mustNotTools": [
      "update_bot"
@@ -6243,7 +6243,7 @@
       }
      }
     ],
-    "reply": "{{quote:Twilio Voice}}"
+    "reply": "{{quote:works with a KnowBot number and works for any KnowBot}}"
    }
   },
   {

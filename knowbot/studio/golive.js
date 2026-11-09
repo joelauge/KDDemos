@@ -403,31 +403,27 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const ch = (name) => `${apiRoot}/v1/channels/${id}/${name}`;
     const embed = `<script type="module" src="${siteBase}lib/embed.js" data-instance="${id}" data-api="${apiBase}"></script>`;
     return mineFirst(phoneByEngine([
-      { id: 'sms', name: 'SMS', blurb: 'Customers text a number, your bot texts back with [1] citations and a proof link.', provider: 'Twilio Messaging', hue: 1, url: ch('sms'), status: 'Needs a Twilio number', tryLabel: 'Preview an SMS reply',
-        needs: ['A Twilio account and an SMS-capable phone number', 'Your Twilio auth token (to verify X-Twilio-Signature)'],
-        steps: ['In Twilio, open Phone Numbers → Active numbers → your number.', 'Under Messaging, set “A message comes in” to Webhook, HTTP POST, and paste the URL below.', 'Add TWILIO_AUTH_TOKEN to your KnowBot environment so every request is signature-checked.'],
+      // Owner rule: customer-facing copy never names the phone vendor; it is "your KnowBot number" / "your phone number provider".
+      { id: 'sms', name: 'SMS', blurb: 'Customers text a number, your bot texts back with [1] citations and a proof link.', provider: 'KnowBot Messaging', hue: 1, url: ch('sms'), status: 'Needs a KnowBot number', tryLabel: 'Preview an SMS reply',
+        needs: ['A KnowBot number that can send and receive texts (or a number from your own phone provider)'],
+        steps: ['In your phone number settings, open your number’s messaging setup.', 'Set incoming messages to Webhook, HTTP POST, and paste the URL below.', 'Every request is signature-checked, so only your number can reach your bot.'],
         configs: [
-          { label: 'Twilio Console', lang: 'text', code: `Phone Numbers → Active numbers → (your number) → Messaging\n  A message comes in:  Webhook\n  URL:                 ${ch('sms')}\n  HTTP:                POST` },
-          { label: 'Twilio CLI', lang: 'sh', code: `twilio phone-numbers:update +15551234567 \\\n  --sms-url="${ch('sms')}"` },
-          { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token   # verifies X-Twilio-Signature' },
+          { label: 'Number settings', lang: 'text', code: `Your number → Messaging\n  A message comes in:  Webhook\n  URL:                 ${ch('sms')}\n  HTTP:                POST` },
         ] },
-      { id: 'phone', name: 'Telephone', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Your Twilio number · live voice', hue: 3, url: ch('voice'), status: 'Needs a Twilio number', tryLabel: 'Call simulator',
-        needs: ['A Twilio account and a voice-capable phone number (KnowBot runs the voice for you)'],
-        steps: ['In Twilio, open your number and set “A call comes in” to Webhook, HTTP POST, with the URL below.',
+      { id: 'phone', name: 'Telephone', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Your KnowBot number · live voice', hue: 3, url: ch('voice'), status: 'Needs a KnowBot number', tryLabel: 'Call simulator',
+        needs: ['A KnowBot number that can take calls (KnowBot runs the voice for you)'],
+        steps: ['In your phone number settings, set incoming calls to Webhook, HTTP POST, with the URL below.',
           'KnowBot picks up and talks with the caller in real time, looking up every answer in your files and naming the source.',
           'Every question asked on a call is logged to your question insights.'],
         configs: [
-          { label: 'Twilio Console', lang: 'text', code: `Phone Numbers → Active numbers → (your number) → Voice\n  A call comes in:  Webhook\n  URL:              ${ch('voice')}\n  HTTP:             POST` },
-          { label: 'Twilio CLI', lang: 'sh', code: `twilio phone-numbers:update +15551234567 \\\n  --voice-url="${ch('voice')}"` },
-          { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token   # verifies X-Twilio-Signature' },
+          { label: 'Number settings', lang: 'text', code: `Your number → Voice\n  A call comes in:  Webhook\n  URL:              ${ch('voice')}\n  HTTP:             POST` },
         ] },
-      { id: 'whatsapp', name: 'WhatsApp', blurb: 'Answers in WhatsApp with numbered footnotes. Meta Cloud API or Twilio.', provider: 'Meta Cloud API · Twilio', hue: 4, url: ch('whatsapp'), status: 'Needs WhatsApp Business', tryLabel: 'Preview a WhatsApp reply',
-        needs: ['A Meta app with WhatsApp Business (or a Twilio WhatsApp sender)', 'The app secret (verifies X-Hub-Signature-256) and an access token to reply'],
-        steps: ['In Meta for Developers → your app → WhatsApp → Configuration, paste the callback URL below.', 'Use the verify token below for the handshake and subscribe to the messages field.', 'Add the four values to your KnowBot environment. Using Twilio instead? Set the same URL as your sender\'s incoming webhook.'],
+      { id: 'whatsapp', name: 'WhatsApp', blurb: 'Answers in WhatsApp with numbered footnotes.', provider: 'WhatsApp Business', hue: 4, url: ch('whatsapp'), status: 'Needs WhatsApp Business', tryLabel: 'Preview a WhatsApp reply',
+        needs: ['A Meta app with WhatsApp Business', 'The app secret (verifies X-Hub-Signature-256) and an access token to reply'],
+        steps: ['In Meta for Developers → your app → WhatsApp → Configuration, paste the callback URL below.', 'Use the verify token below for the handshake and subscribe to the messages field.', 'Add the four values to your KnowBot environment.'],
         configs: [
           { label: 'Meta webhook', lang: 'text', code: `WhatsApp → Configuration → Webhook\n  Callback URL:    ${ch('whatsapp')}\n  Verify token:    ${verifyToken}\n  Webhook fields:  messages ✓` },
           { label: 'Environment', lang: 'sh', code: `WHATSAPP_VERIFY_TOKEN=${verifyToken}\nWHATSAPP_APP_SECRET=your_meta_app_secret        # verifies X-Hub-Signature-256\nWHATSAPP_ACCESS_TOKEN=your_meta_access_token     # sends the reply\nWHATSAPP_PHONE_NUMBER_ID=your_phone_number_id` },
-          { label: 'Twilio WhatsApp', lang: 'text', code: `Messaging → Senders → WhatsApp senders → (your sender)\n  Webhook URL for incoming messages:  ${ch('whatsapp')}\n  Method:                             POST` },
         ] },
       // The inbound webhook is authenticated (server/channels/email.mjs): SendGrid/Postmark carry EMAIL_WEBHOOK_SECRET as
       // ?key=… on the URL; Mailgun is verified with its signing key instead. Without either the server answers 403.
@@ -461,7 +457,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     ]));
   };
   /** Phone calls are Gemini Live voice-to-voice only (GET …/devkey → channels.voice). Texted checkout links are described
-   *  only when voice.texts is true (a Shopify store for this bot, Twilio texting configured). */
+   *  only when voice.texts is true (a Shopify store for this bot, texting configured). */
   const mine = new Set((Array.isArray(surfaces) ? surfaces : []).map((x) => SURFACE_CH[x]).filter(Boolean));
   /** The bot's chosen answer surfaces first (in the order the cards were defined), each marked as theirs. */
   function mineFirst(list) {
@@ -669,7 +665,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const label = h('span', null, 'Send test webhook');
     const btn = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small gl-tw-btn' }, h('span', { class: 'gl-tw-ico', html: icon('play', 13) }), label);
     const q = () => (exampleExchange()?.question || starterQs()[0] || validatedQ || '');
-    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming Twilio call (the reply connects it to live voice)' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS (Twilio shape)', ch === 'voice' ? '.' : ', asking your first starter question.');
+    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming call (the reply connects it to live voice)' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS', ch === 'voice' ? '.' : ', asking your first starter question.');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       btn.disabled = true; btn.classList.add('is-busy'); label.textContent = 'Sending…';
@@ -827,7 +823,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     if (loadingEx) screen.append(loadingEx);
     const af = askForm({ placeholder: kind === 'email' ? 'Customer email, e.g. “Hi, how long is the warranty?”' : kind === 'sms' ? 'Text your bot…' : 'Message…', button: 'Send', label: `${kind === 'email' ? 'Email' : 'Message'} to your bot`, onAsk });
     el.append(h('div', { class: `gl-device gl-device-${kind}` }, screen), af.form, af.row, meta,
-      h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), kind === 'email' ? 'Preview: answered by your trial bot, formatted as the email reply. Live once your inbound webhook points here.' : `Preview: answered by your trial bot, formatted exactly as the ${kind === 'sms' ? 'SMS' : 'WhatsApp'} reply. Live once ${kind === 'sms' ? 'Twilio' : 'WhatsApp'} points at the webhook.`));
+      h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), kind === 'email' ? 'Preview: answered by your trial bot, formatted as the email reply. Live once your inbound webhook points here.' : `Preview: answered by your trial bot, formatted exactly as the ${kind === 'sms' ? 'SMS' : 'WhatsApp'} reply. Live once ${kind === 'sms' ? 'your number' : 'WhatsApp'} points at the webhook.`));
     const stamp = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     function putQuestion(q, now) {
       if (kind === 'email') {
@@ -1037,8 +1033,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     // fixer r4 (D11): the published endpoint this demo actually called, under the captions (Stripe-style request line)
     const reqLine = h('p', { class: 'gl-reqline', 'aria-live': 'off' });
     // fixer r7 (D11): the phone simulator shows the TwiML the voice webhook returned for the last turn
-    const twimlBox = phone ? h('details', { class: 'gl-json gl-twiml', hidden: true }, h('summary', null, 'TwiML returned by the voice webhook'),
-      h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'TwiML response' }, h('code'))) : null;
+    const twimlBox = phone ? h('details', { class: 'gl-json gl-twiml', hidden: true }, h('summary', null, 'Call instructions returned by the voice webhook'),
+      h('pre', { class: 'gl-pre', tabindex: '0', 'aria-label': 'Call instructions response' }, h('code'))) : null;
     const callBar = phone ? h('div', { class: 'gl-callbar' }, h('span', { class: 'gl-call-dot', 'aria-hidden': 'true' }), h('span', { class: 'gl-call-label' }, `${botName()} · KnowBot line`), h('span', { class: 'gl-call-t gl-mono' }, '00:00')) : null;
     const speakToggle = h('input', { type: 'checkbox', checked: true, id: `gl-speak-${rid()}` });
     const engineNote = h('span', { class: 'gl-engine' });
@@ -1051,7 +1047,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(stage, status, degraded, caps, typed.form,
       h('div', { class: 'gl-vopts' }, h('label', { class: 'gl-switch', for: speakToggle.id }, speakToggle, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), 'Speak answers'), engineNote),
       h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), phone
-        ? 'Each turn is answered by your bot from its files, with its source. A real call is answered in live voice through your voice webhook; the TwiML that webhook returns is shown below.'
+        ? 'Each turn is answered by your bot from its files, with its source. A real call is answered in live voice through your voice webhook; the call instructions that webhook returns are shown below.'
         : 'Runs in your browser: speech recognition → your bot → spoken answer with its source. Nothing is recorded or stored.'));
 
     const paintEngine = () => {
@@ -1394,7 +1390,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           if (spoken) {
             const src = /^According to ([^,]{2,80}),/.exec(spoken);
             const refused = /can't seem to find an answer/i.test(spoken);
-            paintReq({ method: 'POST', path: pub((j.request && j.request.path) || `/v1/channels/${botId()}/voice`), status: rs.status, ms: j.ms ?? Math.round(performance.now() - t0), note: `${j.signed ? 'signed ' : ''}call → TwiML` });
+            paintReq({ method: 'POST', path: pub((j.request && j.request.path) || `/v1/channels/${botId()}/voice`), status: rs.status, ms: j.ms ?? Math.round(performance.now() - t0), note: `${j.signed ? 'signed ' : ''}call → call instructions` });
             paintTwiml(body);
             return { r: { text: spoken, refused, citations: [], srcNote: refused ? null : src ? `Named on the call: ${src[1]}` : null }, audio: null };
           }
@@ -1814,7 +1810,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       ['401', 'invalid_api_key', 'The key is malformed, unknown or revoked', 'Bearer kb_trial_wrong'],
       ['401', 'expired_api_key', 'A trial key outlived its trial', 'a kb_trial_ key after 7 days'],
       ['403', 'wrong_bot', 'The key belongs to another bot', `/v1/bots/other-bot/chat`],
-      ['403', 'bad_signature', 'Channel webhooks: X-Twilio-Signature / X-Hub-Signature-256 did not verify', 'a forged SMS webhook'],
+      ['403', 'bad_signature', 'Channel webhooks: the request signature did not verify', 'a forged SMS webhook'],
       ['404', 'bot_not_found · model_not_found', 'No such bot, or model ≠ your bot id', '"model": "gpt-4o"'],
       ['429', 'rate_limit_exceeded', 'Too many requests for this key. Wait retry-after seconds', 'retry-after: 12'],
       ['503', 'channel_not_configured', 'A channel webhook whose provider secret is not set', 'SMS without TWILIO_AUTH_TOKEN'],
