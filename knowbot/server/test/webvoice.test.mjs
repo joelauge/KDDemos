@@ -289,6 +289,59 @@ describe('webvoice: Gemini Live engine', () => {
   });
 });
 
+describe('webvoice: phone mode (the Studio phone simulator)', () => {
+  let S, G;
+  const seen = {};
+  before(async () => {
+    _resetQuestions();
+    G = await startFakeGemini(async ({ send, next }) => {
+      seen.hello = (await next('text')).realtimeInput.text;
+      send({ serverContent: { outputTranscription: { text: "Hi, you've reached Front Desk." }, modelTurn: { parts: [{ inlineData: { data: pcm(2400, 24000).toString('base64') } }] } } });
+      send({ serverContent: { turnComplete: true } });
+      seen.bye = (await next('text')).realtimeInput.text;
+      send({ toolCall: { functionCalls: [{ id: 'h1', name: 'end_call', args: {} }] } });
+      seen.hang = (await next('toolResponse')).toolResponse.functionResponses[0];
+    });
+    S = await boot({ GEMINI_API_KEY: 'gkey', GEMINI_LIVE_URL: G.url });
+  });
+  after(async () => { _resetQuestions(); await S.close(); await G.close(); });
+
+  test('runs the real phone prompt and greeting, and the bot can hang up', async () => {
+    const b = browser(`${S.wsBase}/api/v1/bots/front-desk/voice/live`);
+    await b.opened;
+    b.send({ type: 'start', mode: 'phone' });
+    const ready = await b.wait('ready');
+    assert.equal(ready.engine, 'gemini');
+    assert.equal(ready.mode, 'phone');
+    assert.match(ready.greeting, /you've reached/i);
+    await until(() => seen.hello, 5000, 'call connected prompt');
+    assert.match(seen.hello, /^\[call connected\]/);
+    const setup = G.sessions[0].setup;
+    assert.match(setup.systemInstruction.parts[0].text, /phone assistant/);
+    assert.doesNotMatch(setup.systemInstruction.parts[0].text, /send_product_link/);
+    assert.deepEqual(setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'end_call']);
+    b.send({ type: 'text', text: "That's all, thanks. Bye!" });
+    await b.wait('hangup', 5000);
+    await until(() => seen.hang, 5000, 'end_call response');
+    assert.equal(seen.hang.response.status, 'ok');
+    b.send({ type: 'stop' });
+    await b.closed;
+  });
+
+  test('a web session (no mode) keeps the website prompt and has no end_call', async () => {
+    const n = G.sessions.length;
+    const b = browser(`${S.wsBase}/api/v1/bots/front-desk/voice/live`);
+    await b.opened;
+    b.send({ type: 'start' });
+    const ready = await b.wait('ready');
+    assert.equal(ready.mode, 'web');
+    await until(() => G.sessions.length > n, 5000, 'session');
+    assert.deepEqual(G.sessions[n].setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base']);
+    b.send({ type: 'stop' });
+    await b.closed;
+  });
+});
+
 describe('webvoice: Gemini unreachable', () => {
   let S;
   before(async () => { S = await boot({ GEMINI_API_KEY: 'gkey', GEMINI_LIVE_URL: 'ws://127.0.0.1:9/live' }); });

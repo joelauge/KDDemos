@@ -11,6 +11,11 @@
 // Developers: endpoint, trial key, live-tested snippets (curl, JS fetch, JS OpenAI SDK, Python requests, Python OpenAI SDK).
 //
 // Nothing here calls Twilio, Meta, Google or OpenAI directly. Only the KnowBot server is called.
+//
+// Two ways in: openGoLive(ctx, {...}) opens it as a sheet (launch, palette); openGoLive(ctx, {inline: el, surfaces})
+// renders the same Set up view inside the bot pane (no scrim, no focus trap), with the bot's chosen answer surfaces
+// listed first. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
+// engine and phone prompt as a real call.
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -217,8 +222,10 @@ const devCache = { info: null, at: 0, promise: null };
  * openGoLive(ctx, {tab:'channels'|'developers', channel?, invoker?, helpers}) -> close()
  * helpers come from checkout.js: {h, copyButton, copyText, lastQA, botName, hueVar, price}.
  */
-export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = null, helpers = {} } = {}) {
-  if (current) { current.select(tab, channel); return current.close; }
+// answer surface id (studio/surfaces.js) → channel card id
+const SURFACE_CH = { webchat: 'text', sms: 'sms', whatsapp: 'whatsapp', email: 'email', phone: 'phone', webvoice: 'voice' };
+export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = null, helpers = {}, inline = null, surfaces = null } = {}) {
+  if (current && !inline) { current.select(tab, channel); return current.close; }
   const { store, api, motion, icons, slots, announce } = ctx;
   const { getState, setState, emit } = store;
   const icon = (n, s = 16) => icons.icon(n, s);
@@ -255,7 +262,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   // ------------------------------------------------------------ frame
   const titleId = `gl-title-${rid()}`;
   const close = () => doClose();
-  const xBtn = h('button', { type: 'button', class: 'gl-x', 'aria-label': 'Close channels and API', html: icon('x', 18), onclick: close });
+  const xBtn = inline ? (helpers.onBack ? h('button', { type: 'button', class: 'gl-back', onclick: () => helpers.onBack() }, h('span', { html: icon('chat', 15) }), 'Back to chat') : null)
+    : h('button', { type: 'button', class: 'gl-x', 'aria-label': 'Close channels and API', html: icon('x', 18), onclick: close });
   const idPill = h('span', { class: 'gl-idpill' }, h('span', { class: 'gl-idpill-k' }, 'bot id'), h('code', { class: 'gl-mono' }, botId()));
   const tabsEl = h('div', { class: 'gl-tabs', role: 'tablist', 'aria-label': 'Go live' });
   const ink = h('span', { class: 'gl-tabs-ink', 'aria-hidden': 'true' });
@@ -283,33 +291,40 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
 
   const head = h('header', { class: 'gl-head' },
     h('div', { class: 'gl-head-main' },
-      h('p', { class: 'gl-eyebrow' }, h('span', { html: icon('rocket', 13) }), 'Go live'),
-      h('h2', { class: 'gl-title', id: titleId }, `Put ${botName()} everywhere`),
-      h('p', { class: 'gl-sub' }, 'Same files, same citations, same canonical refusal on every channel. ', idPill)),
+      h('p', { class: 'gl-eyebrow' }, h('span', { html: icon('rocket', 13) }), inline ? 'Set up' : 'Go live'),
+      h('h2', { class: 'gl-title', id: titleId }, inline ? `Set up ${botName()}` : `Put ${botName()} everywhere`),
+      h('p', { class: 'gl-sub' }, inline ? 'Pick a place for your bot to answer. Each one has its setup steps and a way to try it right here. ' : 'Same files, same citations, same canonical refusal on every channel. ', idPill)),
     xBtn);
   const body = h('div', { class: 'gl-body' }, panels.channels, panels.developers);
-  const dialog = h('div', { class: 'gl-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, head, tabsEl, body);
+  const dialog = inline
+    ? h('section', { class: 'gl-sheet gl-inline', 'aria-labelledby': titleId }, head, tabsEl, body)
+    : h('div', { class: 'gl-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, head, tabsEl, body);
   const scrim = h('div', { class: 'gl-scrim', 'aria-hidden': 'true', onclick: close });
   const layer = h('div', { class: 'gl-layer' }, scrim, dialog);
   const prevInert = slots.app ? slots.app.inert : false;
   const inv = invoker === false ? null : invoker || document.activeElement;
-  modal.append(layer);
-  if (slots.app) slots.app.inert = true;
   const prevSheet = getState().ui.sheet;
-  setState({ ui: { ...getState().ui, sheet: 'golive' } }, 'sheet:golive');
-  motion.animate(scrim, [{ opacity: 0 }, { opacity: 1 }], { duration: motion.DUR[3], easing: 'out' });
-  motion.animate(dialog, isMobile()
-    ? [{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }]
-    : [{ opacity: 0, transform: 'translateX(28px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3] + 40, easing: 'spring' });
+  if (inline) {
+    inline.append(dialog);
+    motion.animate(dialog, [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'out' });
+  } else {
+    modal.append(layer);
+    if (slots.app) slots.app.inert = true;
+    setState({ ui: { ...getState().ui, sheet: 'golive' } }, 'sheet:golive');
+    motion.animate(scrim, [{ opacity: 0 }, { opacity: 1 }], { duration: motion.DUR[3], easing: 'out' });
+    motion.animate(dialog, isMobile()
+      ? [{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }]
+      : [{ opacity: 0, transform: 'translateX(28px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3] + 40, easing: 'spring' });
 
-  // Captured at the document so Esc/Tab work even when focus fell to <body>.
-  const onKey = (e) => {
-    if (closing) return;
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
-    else if (e.key === 'Tab') trap(e, dialog);
-  };
-  document.addEventListener('keydown', onKey, true);
-  cleanups.push(() => document.removeEventListener('keydown', onKey, true));
+    // Captured at the document so Esc/Tab work even when focus fell to <body>.
+    const onKey = (e) => {
+      if (closing) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      else if (e.key === 'Tab') trap(e, dialog);
+    };
+    document.addEventListener('keydown', onKey, true);
+    cleanups.push(() => document.removeEventListener('keydown', onKey, true));
+  }
 
   const cur = { tab: null, channel: channel || 'sms' };
   const built = { channels: false, developers: false };
@@ -354,6 +369,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function doClose() {
     if (closing) return; closing = true;
     for (const fn of cleanups.splice(0)) { try { fn(); } catch { /* ignore */ } }
+    if (inline) { dialog.remove(); return; }
     if (slots.app) slots.app.inert = !!prevInert;
     setState({ ui: { ...getState().ui, sheet: prevSheet === 'golive' ? null : prevSheet || null } }, 'sheet:close');
     const a = motion.animate(scrim, [{ opacity: 1 }, { opacity: 0 }], { duration: motion.DUR[2], fill: 'forwards' });
@@ -407,7 +423,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const id = botId();
     const ch = (name) => `${apiRoot}/v1/channels/${id}/${name}`;
     const embed = `<script type="module" src="${siteBase}lib/embed.js" data-instance="${id}" data-api="${apiBase}"></script>`;
-    return phoneByEngine([
+    return mineFirst(phoneByEngine([
       { id: 'sms', name: 'SMS', blurb: 'Customers text a number, your bot texts back with [1] citations and a proof link.', provider: 'Twilio Messaging', hue: 1, url: ch('sms'), status: 'Needs a Twilio number', tryLabel: 'Preview an SMS reply',
         needs: ['A Twilio account and an SMS-capable phone number', 'Your Twilio auth token (to verify X-Twilio-Signature)'],
         steps: ['In Twilio, open Phone Numbers → Active numbers → your number.', 'Under Messaging, set “A message comes in” to Webhook, HTTP POST, and paste the URL below.', 'Add TWILIO_AUTH_TOKEN to your KnowBot environment so every request is signature-checked.'],
@@ -417,15 +433,14 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token   # verifies X-Twilio-Signature' },
         ] },
       { id: 'phone', name: 'Telephone', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Twilio Media Streams · Gemini Live voice-to-voice', hue: 3, url: ch('voice'), status: 'Needs a Twilio number', tryLabel: 'Call simulator',
-        needs: ['A Twilio account and a voice-capable phone number', 'A Gemini API key (calls are voice-to-voice with Gemini Live)'],
+        needs: ['A Twilio account and a voice-capable phone number (KnowBot runs the voice for you)'],
         steps: ['In Twilio, open your number and set “A call comes in” to Webhook, HTTP POST, with the URL below.',
           'KnowBot answers with <Connect><Stream>: the call is streamed to Gemini Live, which listens and speaks in real time and looks up every answer in your files.',
-          'Without a Gemini API key the line answers that it isn\'t set up yet and hangs up.',
           'Every question asked on a call is logged to your question insights.'],
         configs: [
           { label: 'Twilio Console', lang: 'text', code: `Phone Numbers → Active numbers → (your number) → Voice\n  A call comes in:  Webhook\n  URL:              ${ch('voice')}\n  HTTP:             POST` },
           { label: 'Twilio CLI', lang: 'sh', code: `twilio phone-numbers:update +15551234567 \\\n  --voice-url="${ch('voice')}"` },
-          { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token\nGEMINI_API_KEY=your_gemini_api_key        # voice to voice on calls' },
+          { label: 'Environment', lang: 'sh', code: 'TWILIO_AUTH_TOKEN=your_twilio_auth_token   # verifies X-Twilio-Signature' },
         ] },
       { id: 'whatsapp', name: 'WhatsApp', blurb: 'Answers in WhatsApp with numbered footnotes. Meta Cloud API or Twilio.', provider: 'Meta Cloud API · Twilio', hue: 4, url: ch('whatsapp'), status: 'Needs WhatsApp Business', tryLabel: 'Preview a WhatsApp reply',
         needs: ['A Meta app with WhatsApp Business (or a Twilio WhatsApp sender)', 'The app secret (verifies X-Hub-Signature-256) and an access token to reply'],
@@ -457,7 +472,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       // Web voice assistant (lib/voice-widget.js over GET /v1/bots/:id/voice/live, server/channels/webvoice.mjs): Gemini Live
       // voice to voice when GEMINI_API_KEY is set on the server, else browser speech; sources as chips while it speaks.
       { id: 'voice', name: 'Web voice assistant', blurb: 'Visitors talk to your bot from a mic button on your site and hear the answer, with its sources on screen as it speaks.', provider: liveVoice() ? 'Gemini Live voice to voice' : googleVoice() ? 'Google Cloud speech' : 'Browser speech · live voice when configured', hue: 5, url: `${apiRoot}/v1/bots/${id}/voice`, status: 'Try it now', tryLabel: 'Talk to your bot',
-        needs: ['Nothing to try it: your browser\'s speech engine works today', 'For live voice to voice: a Gemini API key (GEMINI_API_KEY) on your KnowBot server', 'Optional, for the clip endpoint: Google Cloud Speech-to-Text and Text-to-Speech keys'],
+        needs: ['Nothing: paste one line on your site (KnowBot runs the voice for you)'],
         steps: ['Paste the embed below on your site: a mic button that opens the voice assistant (tap to talk, or hold to talk).', 'It streams the visitor\'s voice over a WebSocket and speaks the answer from your sources, naming each one; the sources show as links while it speaks.', 'Without a Gemini key it still works: the browser recognizes speech and reads the cited answer aloud. Or record a clip and POST it to the voice endpoint below.'],
         configs: [
           // a trial bot needs its trial key in the embed (masked on screen, real on Copy); a launched bot's voice socket is public
@@ -468,10 +483,16 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Browser (fetch)', lang: 'js', secret: true, code: (mode) => `// clip: a Blob from MediaRecorder (audio/webm)\nconst res = await fetch("${apiRoot}/v1/bots/${id}/voice", {\n  method: "POST",\n  headers: { Authorization: "Bearer ${keyFor(mode)}", "Content-Type": clip.type },\n  body: clip,\n});\nconst { transcript, answer, citations, audio, mime } = await res.json();\nnew Audio(\`data:\${mime};base64,\${audio}\`).play();` },
           { label: 'Environment', lang: 'sh', code: 'GEMINI_API_KEY=your_gemini_api_key        # live voice to voice (web voice assistant + phone)\nGOOGLE_STT_API_KEY=your_google_api_key   # optional: the clip endpoint\nGOOGLE_TTS_API_KEY=your_google_api_key\nGOOGLE_TTS_VOICE=en-US-Neural2-F' },
         ] },
-    ]);
+    ]));
   };
   /** Phone calls are Gemini Live voice-to-voice only (GET …/devkey → channels.voice). Texted checkout links are described
    *  only when voice.texts is true (a Shopify store for this bot, Twilio texting configured). */
+  const mine = new Set((Array.isArray(surfaces) ? surfaces : []).map((x) => SURFACE_CH[x]).filter(Boolean));
+  /** The bot's chosen answer surfaces first (in the order the cards were defined), each marked as theirs. */
+  function mineFirst(list) {
+    if (!mine.size) return list;
+    return [...list.filter((c) => mine.has(c.id)).map((c) => ({ ...c, mine: true })), ...list.filter((c) => !mine.has(c.id))];
+  }
   function phoneByEngine(list) {
     const v = (dev().channels && dev().channels.voice) || {};
     if (!v.texts) return list;
@@ -487,14 +508,16 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function buildChannels(panel) {
     panel.innerHTML = '';
     const intro = h('div', { class: 'gl-intro' },
-      h('p', null, h('b', null, '6 channel templates.'), ' Webhook URLs are prefilled with your bot id. Connect the accounts when you\'re ready; every channel logs to your question insights.'));
+      inline
+        ? h('p', null, h('b', null, 'Your bot can answer in 6 places.'), ' Pick one to see how to set it up, and try it right here. Every place uses the same files and shows its sources.')
+        : h('p', null, h('b', null, '6 channel templates.'), ' Webhook URLs are prefilled with your bot id. Connect the accounts when you\'re ready; every channel logs to your question insights.'));
     chGrid = h('div', { class: 'gl-chgrid', role: 'list', 'aria-label': 'Channels' });
     chDetail = h('section', { class: 'gl-chdetail', id: 'gl-chdetail', 'aria-live': 'polite' });
     const list = CH();
     list.forEach((c, i) => {
       const card = h('button', { type: 'button', class: 'gl-chcard', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: c.id }, style: { '--gl-hue': `var(--f${c.hue})`, '--i': i } },
         h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: GLYPH[c.id] }),
-        h('span', { class: 'gl-chcard-text' }, h('b', null, c.name), h('small', null, c.provider)),
+        h('span', { class: 'gl-chcard-text' }, h('b', null, c.name, c.mine ? h('span', { class: 'gl-mine' }, 'Yours') : null), h('small', null, c.provider)),
         h('span', { class: 'gl-chcard-status' }, c.status));
       card.addEventListener('click', () => selectChannel(c.id, { user: true }));
       chGrid.append(h('div', { role: 'listitem', class: 'gl-chitem' }, card));
@@ -734,7 +757,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function buildTry(c, el) {
     el.append(h('div', { class: 'gl-try-head' }, h('span', { class: 'gl-try-k' }, 'Try it'), h('b', null, c.tryLabel)));
     if (c.id === 'voice') { webVoiceTry(el); return; }
-    if (c.id === 'phone') { voices.push(voiceTry(el, { mode: 'phone' })); return; }
+    if (c.id === 'phone') { phoneTry(el); return; }
     if (c.id === 'text') { widgetTry(el); return; }
     previewTry(el, c.id);
   }
@@ -987,6 +1010,23 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   // ------------------------------------------------------------ Web voice assistant preview (the real embeddable widget)
   // Mounts lib/voice-widget.js inline with this trial's key, exactly what the embed snippet does on a site. The older
   // clip-based voice bot (POST /v1/bots/:id/voice) stays one click away for servers with Google speech.
+  // The phone you can call in the browser: real phone prompt and greeting, Gemini Live voice to voice (or browser
+  // speech when the server has no live voice), and the bot may hang up. Without a trial key: the older simulator.
+  function phoneTry(el) {
+    const host = h('div', { class: 'gl-phonesim' });
+    const note = h('p', { class: 'gl-tw-hint', role: 'status' }, 'Getting the line ready…');
+    el.append(note, host);
+    let sim = null, stopped = false;
+    voices.push({ stop() { stopped = true; try { sim && sim.stop(); } catch { /* ignore */ } sim = null; } });
+    loadDev().then(() => import('./phonesim.js?v=570c958')).then(({ mountPhone }) => {
+      if (stopped || closing) return;
+      const d = dev();
+      if (d.status !== 'ok' || !d.key) { note.remove(); voices.push(voiceTry(el, { mode: 'phone' })); return; }
+      note.textContent = liveVoice() ? 'Live voice, the same as a real call. Allow the microphone when asked.' : 'Your browser listens and speaks on this test line. Real calls use live voice.';
+      sim = mountPhone(host, { endpoint: webVoiceUrl(), key: d.key, botName: botName(), starters: starterQs() });
+    }).catch(() => { if (!stopped) { note.remove(); voices.push(voiceTry(el, { mode: 'phone' })); } });
+  }
+
   function webVoiceTry(el) {
     const host = h('div', { class: 'gl-webvoice' });
     const note = h('p', { class: 'gl-tw-hint', role: 'status' }, 'Loading the voice assistant…');
@@ -1835,8 +1875,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
 
   // ------------------------------------------------------------ go
-  select(tab === 'developers' ? 'developers' : 'channels', channel);
-  requestAnimationFrame(() => { moveInk(); tabBtns[cur.tab]?.focus(); });
+  select(tab === 'developers' ? 'developers' : 'channels', channel || (mine.size ? CH()[0].id : null));
+  requestAnimationFrame(() => { moveInk(); if (!inline) tabBtns[cur.tab]?.focus(); });
+  if (inline) return { close: doClose, select };
   current = { close: doClose, select };
   return doClose;
 }

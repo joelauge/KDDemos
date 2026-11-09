@@ -1693,6 +1693,17 @@ export function mount(ctx) {
   }
   // Any module (or B's palette) can open it: emit('golive:open', {tab:'channels'|'developers', channel?}).
   sub('golive:open', (d) => openGoLive(d || {}));
+  // The bot pane's Set up view: the same channels, rendered inline (app.js owns the pane and its toggle).
+  // emit('setup:mount', {el, surfaces, channel?, onBack, onReady(handle)}); handle.close() unmounts (and ends any call).
+  async function mountSetup({ el, surfaces = null, channel = null, onBack = null, onReady = null } = {}) {
+    if (!el) return;
+    const m = await preloadGoLive({ now: true });
+    if (!m) { emit('toast', { kind: 'warn', text: 'Setup is loading. Try again in a moment.' }); onReady?.(null); return; }
+    await m.ensureCss?.();
+    const handle = m.openGoLive(ctx, { inline: el, surfaces, channel, invoker: false, helpers: { h, copyButton, copyText, lastQA, botName, hueVar, price, onBack } });
+    onReady?.(handle);
+  }
+  sub('setup:mount', (d) => mountSetup(d || {}));
   sub('trial:ready', () => watchPane());
   setTimeout(watchPane, 0);
 

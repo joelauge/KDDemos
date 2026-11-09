@@ -1585,11 +1585,39 @@ function nameOfferChips(offer, rest = []) {
   ];
 }
 function openGoLive(tab = 'channels', channel = null) {
+  if (anyFileReady() && store.listenerCount('setup:mount')) { openSetup({ tab, channel }); return; }
   whenReady(() => {
     if (store.listenerCount('golive:open')) emit('golive:open', channel ? { tab, channel } : { tab });
     else launchOpen('setup');
   });
 }
+// ---- Set up view (#sb-setup-slot in the bot pane): every answer surface with its setup steps and a way to try it
+// (the phone is a phone you can call in the browser). golive.js renders it inline via checkout.js ('setup:mount').
+let setupHandle = null, setupMounting = false;
+const setupSlot = () => document.getElementById('sb-setup-slot');
+const setupOpen = () => !!slots.bot && slots.bot.dataset.pane === 'setup';
+function anyFileReady() { const s = getState(); return (s.fileOrder || []).some((id) => s.files[id]?.phase === 'ready'); }
+function openSetup({ tab = 'channels', channel = null } = {}) {
+  const el = setupSlot();
+  if (!el || !slots.bot) return;
+  if (isMobile()) setTab('bot', { slide: true });
+  dset(slots.bot, 'pane', 'setup');
+  el.hidden = false;
+  updateView();
+  if (setupHandle) { setupHandle.select(tab, channel); return; }
+  if (setupMounting) return;
+  setupMounting = true;
+  emit('setup:mount', { el, surfaces: getState().spec.surfaces || null, channel, onBack: () => closeSetup(),
+    onReady: (hd) => { setupMounting = false; setupHandle = hd; if (!hd) { closeSetup(); return; } if (tab !== 'channels') hd.select(tab, channel); if (!setupOpen()) closeSetup(); } });
+}
+function closeSetup() {
+  try { setupHandle?.close(); } catch { /* ignore */ }
+  setupHandle = null;
+  const el = setupSlot();
+  if (el) { el.hidden = true; el.textContent = ''; }
+  if (slots.bot && slots.bot.dataset.pane) { delete slots.bot.dataset.pane; updateView(); }
+}
+on('file:ready', () => updateView());
 function channelsChip() { return { id: 'channels', label: 'Channels & API', local: true, run: () => openGoLive('channels') }; }
 function withChannelsChip(chips) {
   const list = (chips || []).filter(Boolean);
@@ -1795,6 +1823,7 @@ function dispatchAction(a, { fromClick = false } = {}) {
     }
     case 'run_proof': whenReady(() => emit('proof:run', { mini: !!a.mini })); break;
     case 'show_launch': launchOpen('setup', { force: !!a.force }); break;
+    case 'open_setup': openSetup({ channel: a.channel || null }); break;
     case 'set_scope':
       if (a.fileId) updateSpec({ sources: { ...getState().spec.sources, [a.fileId]: a.enabled !== false } }, { by: 'setup' });
       break;
@@ -2091,8 +2120,10 @@ function renderBotHeader() {
   const el = slots.botHeader;
   el.innerHTML = '';
   const seg = h('div', { class: 'st-seg', role: 'group', 'aria-label': 'Answer view' },
-    h('button', { type: 'button', class: 'st-seg-btn', dataset: { view: 'bot' }, onclick: () => setView('bot', 'toggle') }, 'Bot'),
-    h('button', { type: 'button', class: 'st-seg-btn', dataset: { view: 'proof' }, onclick: () => setView('proof', 'toggle') }, h('span', { html: icon('shieldCheck', 13) }), 'Proof'));
+    h('button', { type: 'button', class: 'st-seg-btn', dataset: { view: 'bot' }, onclick: () => { closeSetup(); setView('bot', 'toggle'); } }, 'Bot'),
+    h('button', { type: 'button', class: 'st-seg-btn', dataset: { view: 'proof' }, onclick: () => { closeSetup(); setView('proof', 'toggle'); } }, h('span', { html: icon('shieldCheck', 13) }), 'Proof'),
+    h('button', { type: 'button', class: 'st-seg-btn st-seg-setup', dataset: { pane: 'setup' }, hidden: true, title: 'Set up where your bot answers, and try each one',
+      onclick: () => (setupOpen() ? closeSetup() : openSetup()) }, h('span', { html: icon('sliders', 13) }), 'Set up'));
   const ver = h('button', { type: 'button', id: 'st-version', class: 'st-version', hidden: true, 'aria-haspopup': 'menu', 'aria-expanded': 'false',
     onclick: (e) => openVersionMenu(e.currentTarget) }, h('span', { class: 'st-version-n st-mono' }, 'v1'), h('span', { class: 'st-sr' }, ', bot versions'), h('span', { 'aria-hidden': 'true', html: icon('chevronDown', 12) }));
   const status = h('span', { class: 'st-status', id: 'st-botstatus', dataset: { state: 'draft' } }, h('i', { 'aria-hidden': 'true' }), h('span', null, 'Draft'));
@@ -2198,9 +2229,13 @@ function updateView() {
   const v = getState().ui.view;
   dset(slots.bot, 'view', v);
   dset(document.documentElement, 'view', v);
-  for (const b of $$('.st-seg-btn', slots.botHeader)) setAttr(b, 'aria-pressed', String(b.dataset.view === v));
+  const inSetup = setupOpen();
+  for (const b of $$('.st-seg-btn', slots.botHeader)) setAttr(b, 'aria-pressed', String(b.dataset.pane === 'setup' ? inSetup : !inSetup && b.dataset.view === v));
   const seg = $('.st-seg', slots.botHeader);
-  if (seg) setHidden(seg, !(getState().thread.length > 0 || getState().milestones.firstCited));
+  const ready = anyFileReady();
+  if (seg) setHidden(seg, !(getState().thread.length > 0 || getState().milestones.firstCited || ready));
+  const sb = $('.st-seg-setup', slots.botHeader);
+  if (sb) setHidden(sb, !ready);
 }
 
 // ------------------------------------------------------------------ mobile tabs, badges, peek bar

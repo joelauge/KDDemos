@@ -3079,7 +3079,7 @@ export function createStudio(o = {}) {
     return list.slice(0, 4);
   }
   const EMIT_TYPES = new Set(['golive:open']); // fixer r7: client store events a chip may emit (studio/app.js onChip)
-  const ACTION_TYPES = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples', 'import_store']);
+  const ACTION_TYPES = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples', 'import_store', 'open_setup']);
   const botName = (T) => T.spec.name || 'Your bot';
   /** Enabled files still learning (not Ready, not Failed): a Proof Run waits for them. */
   const learningOf = (files) => files.filter((f) => f.enabled && !TERMINAL.has(f.stage));
@@ -3596,7 +3596,8 @@ export function createStudio(o = {}) {
         if (ready.length === total && total && !T.flags.allReadySaid) {
           T.flags.allReadySaid = true;
           const atoms = ready.reduce((s, f) => s + f.atoms, 0);
-          return { reply: total === 1 ? `Your file is ready: ${atomsN(atoms)} your bot can quote.` : `All ${plural(total, 'file')} ready: ${atomsN(atoms)} your bot can quote.`, chips: stepChips(T, files) };
+          return { reply: `${total === 1 ? `Your file is ready: ${atomsN(atoms)} your bot can quote.` : `All ${plural(total, 'file')} ready: ${atomsN(atoms)} your bot can quote.`} When you like, set up where it answers: each place has its own steps, and you can try every one, even a phone call, right here.`,
+            chips: [...stepChips(T, files), C('open-setup', 'Set up your bot', { action: { type: 'open_setup' } })].slice(0, 4) };
         }
         const names = (Array.isArray(d.files) ? d.files : [d]).map((x) => files.find((f) => f.id === (x.fileId || x.id || x.localId) || f.name === x.name)).filter(Boolean);
         const nm = names.length ? names.map((f) => `${f.name} (${atomsN(f.atoms)})`).join(', ') : null;

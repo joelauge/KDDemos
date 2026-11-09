@@ -1321,3 +1321,10 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
   .st-sgp-a { flex-basis: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .st-sgp[aria-busy="true"] .st-sgp-l { transition: none; } }
+
+/* Set up view: the bot pane shows every answer surface (golive.js inline) instead of the chat */
+.st-bot > #sb-setup-slot { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.st-bot > #sb-setup-slot[hidden] { display: none; }
+.st-bot[data-pane="setup"] > #in-map-slot, .st-bot[data-pane="setup"] > #in-intake-slot, .st-bot[data-pane="setup"] > #sb-thread-slot,
+.st-bot[data-pane="setup"] > #sb-suggest-slot, .st-bot[data-pane="setup"] > #sb-composer-slot { display: none !important; }
+.st-seg-btn.st-seg-setup[aria-pressed="true"] { color: var(--accent); }

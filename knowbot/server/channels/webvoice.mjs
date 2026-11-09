@@ -15,7 +15,11 @@
 //           read aloud with speechSynthesis.
 //
 // Protocol (JSON text frames unless noted)
-//   client → {type:'start', key?, engine?:'auto'|'text'}   first message, within 10 s
+//   client → {type:'start', key?, engine?:'auto'|'text', mode?:'web'|'phone'}   first message, within 10 s
+//            mode 'phone' (the Studio's in-browser phone simulator): the bot runs with the REAL phone prompt and
+//            greeting (voice-live.mjs systemInstruction/greetingFor, no texted links), and may hang up: when it calls
+//            end_call the server sends {type:'hangup'} and closes the session shortly after (the client ends the call
+//            once the goodbye has played).
 //            binary PCM16 LE 16 kHz mono (gemini engine)   {type:'text', text}   {type:'stop'}
 //   status: GET /v1/channels/:botId → channels.webVoice {engine, live, socket (wss URL), widget, embed}
 //   server → {type:'ready', engine, bot:{id,name}, greeting, input:{rate:16000}, output:{rate:24000}, maxSeconds, note?}
@@ -32,7 +36,7 @@
 // KNOWBOT_WEBVOICE_MAX_PER_BOT (default 10), KNOWBOT_WEBVOICE_MAX_PER_IP (default 2), KNOWBOT_WEBVOICE_ENGINE=text.
 // Over any cap the start is refused with {type:'error', code:'busy'} and close code 1013.
 import { NOT_IN_DATA, formatSpoken, humanTitle } from './util.mjs';
-import { connectGemini, createToolRunner } from './voice-live.mjs';
+import { connectGemini, createToolRunner, systemInstruction as phoneSystemInstruction, toolDeclarations as phoneToolDeclarations, greetingFor as phoneGreeting } from './voice-live.mjs';
 
 export const MAX_QUESTIONS_PER_SESSION = 40;
 let active = 0;
@@ -107,7 +111,7 @@ export function handleWebVoice(ws, cx) {
   const botKey = String(cx.botId || '');
   const ipKey = cx.ip ? String(cx.ip) : null;
   const sid = `wv_${Math.random().toString(36).slice(2, 10)}`;
-  let started = false, closed = false, engine = null, session = null, sessionReady = false, questions = 0, counted = false;
+  let started = false, closed = false, engine = null, session = null, sessionReady = false, questions = 0, counted = false, phone = false, hangupTimer = null;
   let callerKey = cx.callerKey || null;
   const pendingAudio = [];
   const transcript = [];
@@ -117,7 +121,7 @@ export function handleWebVoice(ws, cx) {
   const closeAll = (reason = 'closed', code = 1000) => {
     if (closed) return;
     closed = true;
-    clearTimeout(startTimer); clearTimeout(lifeTimer);
+    clearTimeout(startTimer); clearTimeout(lifeTimer); clearTimeout(hangupTimer);
     try { session?.close(); } catch {}
     if (counted) { active -= 1; bump(activeByBot, botKey, -1); if (ipKey) bump(activeByIp, ipKey, -1); counted = false; }
     sendJson({ type: 'end', reason });
@@ -153,6 +157,12 @@ export function handleWebVoice(ws, cx) {
   // ---------------------------------------------------------------- gemini engine
   let runShared = null;
   async function runTool(call) {
+    if (phone && call?.name === 'end_call') {
+      // the simulated caller hears the goodbye, then the call ends (the browser hangs up once playback drains)
+      sendJson({ type: 'hangup' });
+      if (!hangupTimer) { hangupTimer = setTimeout(() => closeAll('hangup'), Number(cx.hangupFallbackMs || 15000)); hangupTimer.unref?.(); }
+      return { status: 'ok', note: 'The call will end after your goodbye finishes playing.' };
+    }
     if (call?.name !== 'search_knowledge_base') return { status: 'error', reason: `Unknown tool ${call?.name}` };
     if (!call.args?.query && userText.trim()) call.args = { ...call.args, query: userText.trim() };
     const query = String(call.args?.query || '').trim();
@@ -187,8 +197,8 @@ export function handleWebVoice(ws, cx) {
   }
   async function openGemini() {
     const s = await connectGemini(env, {
-      systemInstruction: webSystemInstruction({ botName: cx.botName, org: cx.org }),
-      tools: webToolDeclarations({ org: cx.org || cx.botName }),
+      systemInstruction: phone ? phoneSystemInstruction({ botName: cx.botName, org: cx.org, productLinks: false }) : webSystemInstruction({ botName: cx.botName, org: cx.org }),
+      tools: phone ? phoneToolDeclarations({ org: cx.org || cx.botName, productLinks: false }) : webToolDeclarations({ org: cx.org || cx.botName }),
       onMessage: onGeminiMessage,
       onClose: () => { sessionReady = false; closeAll('model_closed'); },
       timeoutMs: Number(cx.geminiTimeoutMs || 10000),
@@ -211,6 +221,7 @@ export function handleWebVoice(ws, cx) {
     active += 1; bump(activeByBot, botKey, 1); if (ipKey) bump(activeByIp, ipKey, 1); counted = true;
     lifeTimer = setTimeout(() => closeAll('time_limit'), maxSeconds * 1000);
     lifeTimer.unref?.();
+    phone = msg.mode === 'phone';
     engine = msg.engine === 'text' ? 'text' : webVoiceEngine(env);
     let note;
     if (engine === 'gemini') {
@@ -224,13 +235,13 @@ export function handleWebVoice(ws, cx) {
       }
       if (closed) return;
     }
-    sendJson({ type: 'ready', engine, bot: { id: cx.botId, name: cx.botName || 'KnowBot' }, greeting: webGreeting(cx.botName), input: { rate: 16000, encoding: 'pcm16le' }, output: { rate: 24000, encoding: 'pcm16le' }, maxSeconds, ...(note ? { note } : {}) });
+    sendJson({ type: 'ready', engine, bot: { id: cx.botId, name: cx.botName || 'KnowBot' }, mode: phone ? 'phone' : 'web', greeting: phone ? phoneGreeting(cx.botName) : webGreeting(cx.botName), input: { rate: 16000, encoding: 'pcm16le' }, output: { rate: 24000, encoding: 'pcm16le' }, maxSeconds, ...(note ? { note } : {}) });
     if (engine === 'gemini' && session) {
       sessionReady = true;
-      session.sendText('[visitor connected]');
+      session.sendText(phone ? '[call connected] A test call placed from the browser.' : '[visitor connected]');
       for (const d of pendingAudio.splice(0)) session.sendAudio(d);
     }
-    log(`[webvoice] ${sid} started (bot ${cx.botId}, ${engine})`);
+    log(`[webvoice] ${sid} started (bot ${cx.botId}, ${engine}${phone ? ', phone simulator' : ''})`);
   }
 
   ws.on('message', (raw, isBinary) => {
