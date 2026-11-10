@@ -3,7 +3,7 @@
 // search shows (until the visitor closes it, or on every visit). Every change saves at once (POST /site) and calls
 // onSaved(view) so the caller can refresh its preview.
 
-import * as api from './api.js?v=d18ee6b';
+import * as api from './api.js?v=ab7c464';
 
 export const LOGO_BOX = { w: 600, h: 200 };          // the suggested size; uploads are fitted inside it
 const LOGO_MAX = 150 * 1024;                          // matches server/site.mjs LOGO_MAX_BYTES

@@ -17,9 +17,9 @@
 // listed first. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
 // engine and phone prompt as a real call.
 
-import { mountWidget } from './kdw.js?v=d18ee6b';
-import { mountNumbers, numberCache } from './numbers.js?v=d18ee6b';
-import { siteSettings } from './sitebrand.js?v=d18ee6b';
+import { mountWidget } from './kdw.js?v=ab7c464';
+import { mountNumbers, numberCache } from './numbers.js?v=ab7c464';
+import { siteSettings } from './sitebrand.js?v=ab7c464';
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -32,7 +32,7 @@ export function ensureCss() {
     if (document.querySelector('link[data-gl-css]')) { resolve(); return; }
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = new URL('./golive.css?v=d18ee6b', import.meta.url).href;
+    link.href = new URL('./golive.css?v=ab7c464', import.meta.url).href;
     link.dataset.glCss = '1';
     link.onload = () => resolve();
     link.onerror = () => resolve();
@@ -1130,7 +1130,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(note, host);
     let sim = null, stopped = false;
     voices.push({ stop() { stopped = true; try { sim && sim.stop(); } catch { /* ignore */ } sim = null; } });
-    loadDev().then(() => import('./phonesim.js?v=d18ee6b')).then(({ mountPhone }) => {
+    loadDev().then(() => import('./phonesim.js?v=ab7c464')).then(({ mountPhone }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.remove(); voices.push(voiceTry(el, { mode: 'phone' })); return; }
