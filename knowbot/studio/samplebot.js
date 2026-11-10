@@ -77,7 +77,7 @@
 //   Its check "06-popover · Proof view is now on" after a hover also needs to move after the 07 Enter (r6 critic:
 //   hover must show only the popover; the view turns on at the first click / Enter).
 
-import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=3ab6348';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=75e6880';
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const STEP_ORDER = ['embed', 'search', 'rank', 'select', 'quote'];

@@ -16,15 +16,15 @@
   // theme before first paint: ?theme=dark|light, else the visitor's system setting (KnowDrive dark = html.dark)
   (function () { try { var t = new URLSearchParams(location.search).get('theme'); var d = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; if (d) document.documentElement.classList.add('dark'); } catch (e) {} })();
 </script>
-<link rel="stylesheet" href="../vendor/kd-theme/tokens.css?v=02f5eba">
-<link rel="stylesheet" href="../vendor/knowdrive-widgets/0.4.1/widgets.css?v=02f5eba">
-<link rel="stylesheet" href="./site.css?v=02f5eba">
+<link rel="stylesheet" href="../vendor/kd-theme/tokens.css?v=75e6880">
+<link rel="stylesheet" href="../vendor/knowdrive-widgets/0.4.1/widgets.css?v=75e6880">
+<link rel="stylesheet" href="./site.css?v=75e6880">
 </head>
 <body>
 <div id="ks-root" class="ks-root">
   <main class="ks-main"><p class="ks-loading" role="status">Loading…</p></main>
 </div>
 <noscript><p class="ks-noscript">This page needs JavaScript to search.</p></noscript>
-<script type="module" src="./site.js?v=02f5eba"></script>
+<script type="module" src="./site.js?v=75e6880"></script>
 </body>
 </html>
