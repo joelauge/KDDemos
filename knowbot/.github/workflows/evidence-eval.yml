@@ -1,0 +1,110 @@
+# Manually runs the evidence eval (scripts/evidence-eval.mjs) with the REAL research step (claude-haiku-5-5) answering,
+# against prod KnowDrive, READ-ONLY (it only searches and reads; nothing is deployed, written or deleted).
+# Arms: A today's search; B/C attend (server hybrid / client fusion); D/E resolve (server hybrid / client fusion).
+# Secrets (on the github-pages environment, as the deploy uses them, or as repository secrets): ANTHROPIC_API_KEY
+# (the research agent), KNOWDRIVE_API_KEY (the store the bots answer from), GITLAB_TOKEN (read_api + read_repository on
+# the engine project: the engine source is fetched to build attendd, never committed or uploaded).
+# Output: the results tables in the job log and the step summary, and evidence-eval-results.md (+ .json) as an artifact.
+name: Evidence eval (Haiku)
+on:
+  workflow_dispatch:
+    inputs:
+      bots:
+        description: Bots to ask (comma-separated; ugm, wyrmwood)
+        type: string
+        default: ugm,wyrmwood
+      arms:
+        description: Arms (comma-separated; A, B, C, B20, D, E)
+        type: string
+        default: A,D,E
+      runs:
+        description: Runs per question for B, C, D, E (2 fills the determinism columns)
+        type: string
+        default: '1'
+permissions: { contents: read }
+concurrency: { group: evidence-eval, cancel-in-progress: false }
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    environment: github-pages # holds the secrets the deploy uses; restricted to main
+    timeout-minutes: 60
+    env:
+      KNOWDRIVE_BASE_URL: https://knowdrive.ai
+      OUT: ${{ github.workspace }}/eval-out
+    steps:
+      - name: Check secrets and inputs
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          KNOWDRIVE_API_KEY: ${{ secrets.KNOWDRIVE_API_KEY }}
+          BOTS: ${{ inputs.bots }}
+          ARMS: ${{ inputs.arms }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          missing=""
+          for n in GITLAB_TOKEN ANTHROPIC_API_KEY KNOWDRIVE_API_KEY; do [ -n "${!n}" ] || missing="$missing $n"; done
+          if [ -n "$missing" ]; then echo "::error::missing secrets:$missing (set them on the github-pages environment or the repository)"; exit 1; fi
+          [[ "$BOTS" =~ ^[a-z]+(,[a-z]+)*$ ]] || { echo "::error::bots: comma-separated names (ugm,wyrmwood)"; exit 1; }
+          [[ "$ARMS" =~ ^[A-Za-z0-9]+(,[A-Za-z0-9]+)*$ ]] || { echo "::error::arms: comma-separated (A,B,C,B20,D,E)"; exit 1; }
+          [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs: 1 to 5"; exit 1; }
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.26', cache-dependency-path: attendd/go.sum }
+      - name: Fetch the evidence engine source (never committed, never uploaded)
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: scripts/fetch-engine.sh
+      - name: Build attendd
+        working-directory: attendd
+        env: { GOTOOLCHAIN: auto, CGO_ENABLED: '0' } # go.mod pins go 1.26.3: auto fetches it if setup-go's is older
+        run: go build -trimpath -o "$RUNNER_TEMP/attendd" . && go version
+      - name: Start attendd (server hybrid on 7181, client fusion on 7182; loopback only)
+        env:
+          KNOWDRIVE_API_KEY: ${{ secrets.KNOWDRIVE_API_KEY }}
+        run: |
+          mkdir -p "$OUT"
+          ATTENDD_ADDR=127.0.0.1:7181 nohup "$RUNNER_TEMP/attendd" > "$OUT/attendd-hybrid.log" 2>&1 &
+          ATTENDD_ADDR=127.0.0.1:7182 ATTENDD_FUSION=on nohup "$RUNNER_TEMP/attendd" > "$OUT/attendd-fusion.log" 2>&1 &
+          for port in 7181 7182; do
+            for i in $(seq 1 30); do curl -fsS "http://127.0.0.1:$port/healthz" && echo && break; sleep 1; done
+            curl -fsS "http://127.0.0.1:$port/healthz" > /dev/null || { echo "::error::attendd on $port did not start"; cat "$OUT"/attendd-*.log; exit 1; }
+          done
+      - name: Run the eval (research agent claude-haiku-5-5)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          KNOWDRIVE_API_KEY: ${{ secrets.KNOWDRIVE_API_KEY }}
+          KNOWBOT_RESEARCH_MODEL: claude-haiku-5-5
+          BOTS: ${{ inputs.bots }}
+          ARMS: ${{ inputs.arms }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          node scripts/evidence-eval.mjs --answer haiku --bots "$BOTS" --arms "$ARMS" --runs "$RUNS" \
+            --hybrid http://127.0.0.1:7181 --fusion http://127.0.0.1:7182 \
+            --md "$OUT/evidence-eval-results.md" --json "$OUT/evidence-eval-results.json"
+      - name: Results
+        if: always()
+        run: |
+          f="$OUT/evidence-eval-results.md"
+          if [ -f "$f" ]; then
+            # the summary tables and the cost line first, then every question
+            awk '/^### /{exit} {print}' "$f"
+            echo "------------------------------------------------------------------ per question"
+            cat "$f"
+            awk '/^### /{exit} {print}' "$f" >> "$GITHUB_STEP_SUMMARY"
+          else echo "no results file"; fi
+          echo "------------------------------------------------------------------ attendd logs (no question text is logged)"
+          tail -n 50 "$OUT"/attendd-*.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-eval-results
+          path: |
+            eval-out/evidence-eval-results.md
+            eval-out/evidence-eval-results.json
+            eval-out/attendd-*.log
+          if-no-files-found: warn
+          retention-days: 30

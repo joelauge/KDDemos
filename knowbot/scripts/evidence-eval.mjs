@@ -17,17 +17,29 @@
 //
 // The answer key (expected fact as regexes + expected source files) was written by reading the bots' files before
 // any arm was run. Retrieval metrics: rank of the first passage holding the expected fact, expected file in the top
-// 3/5 passages; for B/C also the same with H-section's passages removed (= section off). Answer step: the real
-// research agent (claude-haiku-5-5) when an Anthropic key works here, else KnowBot's deterministic keyword selector
-// (lib answerFromSources, mode select); the report says which. Weak matches are answered both ways
-// (KNOWBOT_EVIDENCE_WEAK=refuse, the default, and =answer).
+// 3/5 passages; for B/C also the same with H-section's passages removed (= section off). Weak matches are answered
+// both ways (KNOWBOT_EVIDENCE_WEAK=refuse, the default, and =answer).
+//
+// Answer step (--answer):
+//   keyword  (default) KnowBot's deterministic keyword selector (lib answerFromSources, mode select; no model)
+//   haiku    the REAL research step, as production runs it for each arm (server/trials.mjs ask path): lib researchAnswer
+//            with the research agent (server/research.mjs, claude-haiku-5-5 unless KNOWBOT_RESEARCH_MODEL says otherwise,
+//            effort low), voice on, k 8, over the kept passages; for A, D and E with its search_files tool backed by that
+//            arm's own retrieve (today's searches for A, /resolve for D and E; hits at 0.85 x floor, at most 8, plus
+//            the top-3 keyword hits), for B and C with no search tool (the selector chose the passages). Then
+//            citeQuotedLines, as production does. A failed research call falls back to the keyword selector (counted).
+//            Needs ANTHROPIC_API_KEY (KNOWBOT_ANTHROPIC_BASE_URL points it at a fake for tests). The report adds the
+//            agent's token use per arm.
+// Each answer is judged against the answer key: correct (the quoted text holds every expected fact), partial (some),
+// wrong answer (none), wrong refusal; off-topic: refused or answered; plus whether a cited file is an expected one.
 //
 // Usage (two attendd instances on the loopback, one with ATTENDD_FUSION=on):
 //   KNOWDRIVE_API_KEY=… node scripts/evidence-eval.mjs [--arms A,D,E] [--hybrid http://127.0.0.1:7181] [--fusion http://127.0.0.1:7182]
-//     [--bots ugm,wyrmwood] [--only u1,w3] [--json out.json] [--md out.md]
+//     [--bots ugm,wyrmwood] [--only u1,w3] [--runs 2] [--answer keyword|haiku] [--json out.json] [--md out.md]
+//   --runs: runs per question for B, C, D, E (default 2; the determinism columns need 2)
 import { writeFileSync } from 'node:fs';
 import * as lib from '../lib/knowbot.js';
-import { normHit, questionClauses, resolvedRetrieval } from '../server/trials.mjs';
+import { normHit, questionClauses, resolvedRetrieval, citeQuotedLines } from '../server/trials.mjs';
 import { mergeBundles, spanToDoc, combineDigests } from '../server/evidence.mjs';
 
 const args = process.argv.slice(2);
@@ -40,8 +52,12 @@ const EXCLUDE = ['kind:trial-spec', 'kind:config', 'questions'];
 const URLS = { B: opt('hybrid', 'http://127.0.0.1:7181'), C: opt('fusion', 'http://127.0.0.1:7182') };
 // resolve arms: attendd's /resolve on the same two instances (server hybrid / client fusion)
 URLS.D = URLS.B; URLS.E = URLS.C;
-const ARMS = (opt('arms') || 'A,D,E').split(',').map((x) => x.trim()).filter(Boolean);
+const ARMS = (opt('arms') || 'A,D,E').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+const ANSWER = String(opt('answer', 'keyword')).toLowerCase();
+const RUNS = Math.max(1, Number(opt('runs', 2)) || 2);
 if (!key) { console.error('KNOWDRIVE_API_KEY is not set'); process.exit(2); }
+if (!['keyword', 'haiku'].includes(ANSWER)) { console.error(`--answer ${ANSWER}: keyword or haiku`); process.exit(2); }
+if (ARMS.some((a) => !['A', 'B', 'C', 'B20', 'D', 'E'].includes(a))) { console.error(`--arms ${ARMS}: A, B, C, B20, D, E`); process.exit(2); }
 
 // ------------------------------------------------------------------------------------------------ the answer key
 // type: policy | price | service | staff | paraphrase | multi | offtopic. keys: every one must be quoted for a correct
@@ -117,8 +133,8 @@ async function rawSearch(query, mode, k, scopeTag) {
   return (await res.json()).data || [];
 }
 
-/** server/trials.mjs retrieve() + the ask path's keep step, for one trial with no disabled files or shared samples. */
-async function searchPath(question, scopeTag) {
+/** server/trials.mjs retrieve(), for one trial with no disabled files or shared samples. */
+async function retrieveA(question, scopeTag) {
   const ok = (h) => h.text && h.tags?.includes(scopeTag) && !EXCLUDE.some((t) => h.tags.includes(t));
   const vRaw = await rawSearch(question, 'vector', 12, scopeTag);
   const hRaw = await rawSearch(question, 'hybrid', 8, scopeTag);
@@ -155,8 +171,25 @@ async function searchPath(question, scopeTag) {
     hybridOnly = hybridOnly.filter((h) => !inV.has(h));
   }
   const top = merged.length ? Math.max(...merged.map((h) => h.similarity ?? 0)) : 0;
-  return { ...keepStep({ vector: merged, hybridOnly, top }), calls: 2 + (clauses.length > 1 ? clauses.length : 0), vector: merged };
+  return { vector: merged, hybridOnly, top, calls: 2 + (clauses.length > 1 ? clauses.length : 0) };
 }
+
+/** retrieve() + the ask path's keep step. */
+async function searchPath(question, scopeTag) {
+  const r = await retrieveA(question, scopeTag);
+  return { ...keepStep(r), calls: r.calls, vector: r.vector };
+}
+
+const toSource = (h) => ({ file_id: h.fileId, filename: h.filename, path: h.filename, title: h.filename.split('/').pop(), text: h.text, score: h.similarity, seq: h.seq });
+
+/**
+ * The research agent's search_files tool in the ask path (server/trials.mjs searchMore): the arm's own retrieve() for
+ * the new query, hits at 0.85 x floor (at most 8) plus the top-3 keyword hits, as sources.
+ */
+const searchMoreOf = (retrieveFn) => async (q) => {
+  const r2 = await retrieveFn(q);
+  return [...r2.vector.filter((h) => (h.similarity ?? 0) >= FLOOR * 0.85).slice(0, 8), ...r2.hybridOnly.filter((x) => x.hybridRank <= 3)].map(toSource);
+};
 
 /** The ask path's keep step (server/trials.mjs, steps 3-4) over retrieve()'s result: floor, at most 6 kept + top-3 keyword hits. */
 function keepStep({ vector, hybridOnly, top }) {
@@ -165,7 +198,6 @@ function keepStep({ vector, hybridOnly, top }) {
     if (top >= floor) for (const h of hybridOnly.filter((x) => x.hybridRank <= 3)) if (kept.length < 6) kept.push(h);
     return kept;
   };
-  const toSource = (h) => ({ file_id: h.fileId, filename: h.filename, path: h.filename, title: h.filename.split('/').pop(), text: h.text, score: h.similarity, seq: h.seq });
   const kept = keep(FLOOR);
   // retrieval metrics read the kept window as if the floor were 0, so a floor refusal still shows what search found
   return { status: top >= FLOOR && kept.length ? 'ok' : 'refused_floor', top, sources: kept.map(toSource), candidates: keep(-Infinity).map(toSource) };
@@ -182,12 +214,18 @@ async function resolveCall(url, question, scopeTag, limit) {
   return j;
 }
 
-/** server/trials.mjs resolvedRetrieve(): the question's window (20) + one per clause (6), run together, then the keep step. */
-async function resolvePath(url, question, scopeTag) {
+/** server/trials.mjs resolvedRetrieve(): the question's window (20) + one per clause (6), run together. */
+async function retrieveR(url, question, scopeTag) {
   const ok = (h) => h.text && h.tags?.includes(scopeTag) && !EXCLUDE.some((t) => h.tags.includes(t));
   const clauses = questionClauses(question);
   const [main, ...per] = await Promise.all([resolveCall(url, question, scopeTag, 20), ...(clauses.length > 1 ? clauses.map((c) => resolveCall(url, c, scopeTag, 6)) : [])]);
-  const r = resolvedRetrieval([main.spans.map(spanToDoc), ...per.map((x) => x.spans.map(spanToDoc))], ok);
+  return { ...resolvedRetrieval([main.spans.map(spanToDoc), ...per.map((x) => x.spans.map(spanToDoc))], ok), main, per };
+}
+
+/** retrieveR() then the keep step. */
+async function resolvePath(url, question, scopeTag) {
+  const r = await retrieveR(url, question, scopeTag);
+  const { main, per } = r;
   return { ...keepStep(r), vector: r.vector, digest: combineDigests([main.receipt?.digest, ...per.map((x) => x.receipt?.digest)]),
     order: main.spans.map((x) => `${x.file_id}#${x.atom_index}`).join(','), calls: 1 + per.length, rankMode: main.rank_mode, simMs: main.similarity?.ms ?? null };
 }
@@ -203,19 +241,55 @@ async function attend(url, question, scopeTag, extra = {}) {
 
 // --------------------------------------------------------------------------------------------------- answering
 let agent = null, answerMode = 'keyword selector (lib answerFromSources, mode select; no model)';
+// the research agent's token use and outcomes, per arm
+const usage = {};
+const tallyOf = (arm) => (usage[arm] ||= { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, answers: 0, fallbacks: 0, searches: 0 });
 async function probeModel() {
+  if (ANSWER !== 'haiku') return;
   // only through an explicit key: no key is requested, read from elsewhere, or printed
-  if (!process.env.ANTHROPIC_API_KEY) return;
+  if (!process.env.ANTHROPIC_API_KEY) { console.error('--answer haiku needs ANTHROPIC_API_KEY'); process.exit(2); }
   const { createResearchAgent } = await import('../server/research.mjs');
-  agent = createResearchAgent(process.env);
-  if (agent) answerMode = `research agent ${agent.model}`;
+  agent = createResearchAgent({ ...process.env, KNOWBOT_RESEARCH: 'on' }, { log: (m) => console.error(m), timeoutMs: 60000 });
+  if (!agent) { console.error('no research agent'); process.exit(2); }
+  answerMode = `research agent ${agent.model} (lib researchAnswer, effort ${process.env.KNOWBOT_RESEARCH_EFFORT || 'low'}, as the ask path runs it)`;
 }
 
-async function answer(question, sources, evidenceOnly) {
+/** The agent, counting its calls and token use toward one arm. */
+function counted(arm) {
+  const t = tallyOf(arm);
+  return async (params, o) => {
+    const r = await agent(params, o);
+    const u = r?.usage || {};
+    t.calls++;
+    t.input += u.input_tokens || 0; t.output += u.output_tokens || 0;
+    t.cacheRead += u.cache_read_input_tokens || 0; t.cacheWrite += u.cache_creation_input_tokens || 0;
+    return r;
+  };
+}
+
+/**
+ * One answer from the kept sources. keyword: lib answerFromSources (mode select). haiku: the ask path's research step
+ * (lib researchAnswer, then citeQuotedLines); search is the arm's search_files backing (none when evidenceOnly).
+ */
+async function answer(question, sources, evidenceOnly, { arm = '?', search = null, persona = {} } = {}) {
   if (!sources?.length) return { refused: true, text: '', files: [] };
-  const r = await lib.answerFromSources({ question, results: sources, complete: async () => '', mode: 'select', voice: false, evidenceOnly, k: evidenceOnly ? sources.length : 6, ...(agent ? { research: agent } : {}) });
-  const fin = r.fin;
-  return { refused: !!fin.refused, text: fin.refused ? '' : String(fin.text || ''), files: [...new Set((fin.citations || []).map((c) => String(c.filename || '')))] };
+  const view = (fin) => ({ refused: !!fin.refused, text: fin.refused ? '' : String(fin.text || ''), files: [...new Set((fin.citations || []).map((c) => String(c.filename || '')))] });
+  const keyword = async () => (await lib.answerFromSources({ question, results: sources, complete: async () => '', mode: 'select', voice: false, evidenceOnly, k: evidenceOnly ? sources.length : 6 })).fin;
+  if (!agent) return view(await keyword());
+  const t = tallyOf(arm);
+  t.answers++;
+  const rfin = await lib.researchAnswer({ question, sources, search: evidenceOnly ? undefined : search || undefined, searchTool: !evidenceOnly, agent: counted(arm), persona, voice: true, k: 8 })
+    .catch((e) => { console.error(`[research] ${arm}: ${e?.message || e}`); return null; });
+  if (!rfin) { t.fallbacks++; return { ...view(await keyword()), research: 'fallback' }; }
+  const { lines: _l, allLines: _a, sources: _s, ...fin0 } = rfin;
+  t.searches += rfin.research?.searches || 0;
+  return { ...view(citeQuotedLines(fin0, lib.requireCitations)), research: rfin.research ? `${rfin.research.searches} search${rfin.research.searches === 1 ? '' : 'es'}` : null };
+}
+
+/** The bot's persona for the research step (production: the trial spec's name/org; here the bot's name). */
+function personaOf(Q) {
+  const bot = Object.values(BOTS).find((b) => b.questions.includes(Q));
+  return { name: bot?.name, org: bot?.name };
 }
 
 function judge(Q, a) {
@@ -262,7 +336,8 @@ async function runAttendArm(name, url, Q, scopeTag, runs, extra = {}) {
   const noSection = ev.filter((e) => !(e.via || []).every((v) => v === 'H-section'));
   const merged = mergeBundles([b]);
   const mergedWeak = mergeBundles([b], { weakAnswers: true });
-  const a = await answer(Q.q, merged.sources, true);
+  const persona = personaOf(Q);
+  const a = await answer(Q.q, merged.sources, true, { arm: name, persona });
   const res = {
     name, status: b.status, passages: ev.length, ms: out.runs.map((x) => x.ms),
     heads: b.summary?.heads_contributing || {}, headsRun: b.summary?.heads_run || [], headsFailed: b.summary?.heads_failed || [],
@@ -271,10 +346,10 @@ async function runAttendArm(name, url, Q, scopeTag, runs, extra = {}) {
     ret: retrieval(Q, ev.map((e) => ({ path: e.path, text: e.text }))),
     retNoSection: retrieval(Q, noSection.map((e) => ({ path: e.path, text: e.text }))),
     deterministic: ok.length >= 2 ? { digest: ok[0].digest === ok[1].digest, order: ok[0].order === ok[1].order } : null,
-    answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()) },
+    answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()), research: a.research ?? null },
   };
   if (b.status === 'weak_match') {
-    const aw = await answer(Q.q, mergedWeak.sources, true);
+    const aw = await answer(Q.q, mergedWeak.sources, true, { arm: name, persona });
     res.weakAnswer = { ...judge(Q, aw), quote: quote(aw.text, Q.keys) };
   }
   return res;
@@ -289,10 +364,10 @@ async function runResolveArm(name, url, Q, scopeTag, runs) {
   const ok = out.filter((x) => !x.error);
   if (!ok.length) return { name, error: out[0]?.error, ms: out.map((x) => x.ms) };
   const p = ok[0];
-  const a = await answer(Q.q, p.status === 'ok' ? p.sources : [], false);
+  const a = await answer(Q.q, p.status === 'ok' ? p.sources : [], false, { arm: name, persona: personaOf(Q), search: searchMoreOf((q) => retrieveR(url, q, scopeTag)) });
   return { name, status: p.status, top: Number(p.top.toFixed(3)), passages: p.sources.length, ms: out.map((x) => x.ms), rankMode: p.rankMode, digest: p.digest, vector: p.vector,
     ret: retrieval(Q, p.candidates), deterministic: ok.length >= 2 ? { digest: ok[0].digest === ok[1].digest, order: ok[0].order === ok[1].order } : null,
-    answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()) } };
+    answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()), research: a.research ?? null } };
 }
 
 /** Similarity agreement: |resolve's cosine - search's 1 - distance/2| over the passages both arms returned. */
@@ -316,6 +391,7 @@ async function main() {
   const results = [];
   for (const botId of bots) {
     const bot = BOTS[botId];
+    if (!bot) { console.error(`--bots: no bot ${botId} (${Object.keys(BOTS).join(', ')})`); process.exit(2); }
     const scopeTag = `trial:${bot.trial}`;
     for (const Q of bot.questions) {
       if (only && !only.has(Q.id)) continue;
@@ -326,16 +402,16 @@ async function main() {
         try {
           const p = await searchPath(Q.q, scopeTag);
           const ms = Math.round(performance.now() - t0);
-          const a = await answer(Q.q, p.status === 'ok' ? p.sources : [], false);
+          const a = await answer(Q.q, p.status === 'ok' ? p.sources : [], false, { arm: 'A', persona: personaOf(Q), search: searchMoreOf((q) => retrieveA(q, scopeTag)) });
           row.arms.A = { name: 'A', status: p.status, top: Number(p.top.toFixed(3)), passages: p.sources.length, ms: [ms], ret: retrieval(Q, p.candidates), vector: p.vector,
-            answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()) } };
+            answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()), research: a.research ?? null } };
         } catch (e) { row.arms.A = { name: 'A', error: String(e.message || e), ms: [Math.round(performance.now() - t0)] }; }
       }
-      if (ARMS.includes('B')) row.arms.B = await runAttendArm('B', URLS.B, Q, scopeTag, 2);
-      if (ARMS.includes('C')) row.arms.C = await runAttendArm('C', URLS.C, Q, scopeTag, 2);
+      if (ARMS.includes('B')) row.arms.B = await runAttendArm('B', URLS.B, Q, scopeTag, RUNS);
+      if (ARMS.includes('C')) row.arms.C = await runAttendArm('C', URLS.C, Q, scopeTag, RUNS);
       if (ARMS.includes('B20')) row.arms.B20 = await runAttendArm('B20', URLS.B, Q, scopeTag, 1, { query_limit: 20 });
-      if (ARMS.includes('D')) row.arms.D = await runResolveArm('D', URLS.D, Q, scopeTag, 2);
-      if (ARMS.includes('E')) row.arms.E = await runResolveArm('E', URLS.E, Q, scopeTag, 2);
+      if (ARMS.includes('D')) row.arms.D = await runResolveArm('D', URLS.D, Q, scopeTag, RUNS);
+      if (ARMS.includes('E')) row.arms.E = await runResolveArm('E', URLS.E, Q, scopeTag, RUNS);
       // single-clause questions only: arm A raises a passage's similarity to its best clause's on a multi-part one
       if (row.arms.A?.vector && row.arms.D?.vector && questionClauses(Q.q).length <= 1) row.simDiffs = simAgreement(row.arms.A.vector, row.arms.D.vector);
       for (const x of Object.values(row.arms)) delete x.vector;
@@ -345,11 +421,12 @@ async function main() {
     }
   }
   const diffs = results.flatMap((r) => r.simDiffs || []);
-  const meta = { at: new Date().toISOString(), store: STORE, answerMode, health, kdSearchCallsArmA: calls, floor: FLOOR, arms: ARMS,
+  const meta = { at: new Date().toISOString(), store: STORE, answerMode, answer: ANSWER, runs: RUNS, usage: agent ? usage : null, health, kdSearchCallsArmA: calls, floor: FLOOR, arms: ARMS,
     simAgreement: diffs.length ? { n: diffs.length, max: Number(Math.max(...diffs).toFixed(5)), mean: Number((diffs.reduce((a, b) => a + b, 0) / diffs.length).toFixed(5)) } : null };
   if (opt('json')) writeFileSync(opt('json'), JSON.stringify({ meta, results }, null, 2));
   const md = report(meta, results);
-  if (opt('md')) writeFileSync(opt('md'), md); else console.log(md);
+  if (opt('md')) writeFileSync(opt('md'), md);
+  if (!opt('md') || args.includes('--print')) console.log(md);
 }
 
 // ---------------------------------------------------------------------------------------------------- report
@@ -364,6 +441,7 @@ function summarize(rows, arm) {
     n: inScope.length, hit1: at(1), hit3: at(3), hit5: at(5), file3: inScope.filter((x) => x.ret?.file3).length, file5: inScope.filter((x) => x.ret?.file5).length,
     correct: inScope.filter((x) => x.answer?.verdict === 'correct').length, partial: inScope.filter((x) => x.answer?.verdict === 'partial').length,
     srcOk: inScope.filter((x) => x.answer?.source).length, wrongRefusal: inScope.filter((x) => x.answer?.verdict === 'wrong_refusal').length,
+    wrong: inScope.filter((x) => x.answer?.verdict === 'wrong').length,
     offRefused: off.filter((x) => x.answer?.verdict === 'refused_ok').length, offN: off.length,
     med: median(ms), p90: p90(ms), errors: xs.filter((x) => x.error).length,
     det: det.length ? `${det.filter((x) => x.deterministic.digest).length}/${det.length} digest, ${det.filter((x) => x.deterministic.order).length}/${det.length} order` : 'n/a',
@@ -376,17 +454,22 @@ function report(meta, results) {
   L.push('# Evidence selection eval: per-question results', '');
   L.push(`Run ${meta.at} against prod KnowDrive (read-only), store \`${meta.store}\`. Answer step: ${meta.answerMode}. Floor (arm A): ${meta.floor}.`);
   L.push(`attendd: ${Object.entries(meta.health).map(([k, v]) => `${k === 'B' ? 'hybrid' : 'fusion'} ${JSON.stringify(v)}`).join('; ')}.`, '');
-  L.push(`Arms run: ${meta.arms.join(', ')}. **A** today's trial search + keep; **B** attend, server hybrid; **C** attend, client-side fusion; **B20** B with query_limit 20; **D** resolve (no attend), server hybrid, then today's keep + answer steps; **E** D with client-side fusion. B, C, D, E ran each question twice.`, '');
+  L.push(`Arms run: ${meta.arms.join(', ')}. **A** today's trial search + keep; **B** attend, server hybrid; **C** attend, client-side fusion; **B20** B with query_limit 20; **D** resolve (no attend), server hybrid, then today's keep + answer steps; **E** D with client-side fusion. B, C, D, E ran each question ${meta.runs === 1 ? 'once' : `${meta.runs} times`}.`, '');
+  if (meta.usage) {
+    const u = Object.entries(meta.usage);
+    const tot = u.reduce((a, [, t]) => ({ calls: a.calls + t.calls, input: a.input + t.input, output: a.output + t.output, cacheRead: a.cacheRead + t.cacheRead, cacheWrite: a.cacheWrite + t.cacheWrite }), { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    L.push(`Cost (research agent tokens): ${tot.calls} calls, ${tot.input} input + ${tot.output} output tokens${tot.cacheRead || tot.cacheWrite ? ` (cache read ${tot.cacheRead}, cache write ${tot.cacheWrite})` : ''}. Per arm: ${u.map(([arm, t]) => `${arm} ${t.answers} answers, ${t.calls} calls, ${t.searches} searches, ${t.input}/${t.output} in/out${t.fallbacks ? `, ${t.fallbacks} research failures → keyword selector` : ''}`).join('; ')}.`, '');
+  }
   if (meta.simAgreement) L.push(`Similarity check (resolve's cosine vs search's 1 - distance/2, same passage, A vs D): n=${meta.simAgreement.n}, max |Δ| ${meta.simAgreement.max}, mean |Δ| ${meta.simAgreement.mean}.`, '');
   L.push('Columns: status; rank = position of the first passage holding the expected fact (— = none); f3/f5 = expected file in top 3/5; heads = passages per head; det = run 1 vs 2 (digest/order); answer verdict, cited file, and the first sentence quoted.', '');
   for (const botId of [...new Set(results.map((r) => r.bot))]) {
     const rows = results.filter((r) => r.bot === botId);
     L.push(`## ${BOTS[botId].name} (\`trial:${BOTS[botId].trial}\`)`, '');
-    L.push('| arm | in-scope n | hit@1 | hit@3 | hit@5 | file@3 | file@5 | correct | partial | source ok | wrong refusals | off-topic refused | median ms | p90 ms | determinism | hit@5 w/o H-section |');
-    L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    L.push('| arm | in-scope n | hit@1 | hit@3 | hit@5 | file@3 | file@5 | correct | partial | wrong answer | source ok | wrong refusals | off-topic refused | median ms | p90 ms | determinism | hit@5 w/o H-section |');
+    L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const arm of meta.arms) {
       const s = summarize(rows, arm);
-      L.push(`| ${arm} | ${s.n} | ${s.hit1} | ${s.hit3} | ${s.hit5} | ${s.file3} | ${s.file5} | ${s.correct} | ${s.partial} | ${s.srcOk} | ${s.wrongRefusal} | ${s.offRefused}/${s.offN} | ${s.med} | ${s.p90} | ${s.det} | ${['B', 'C', 'B20'].includes(arm) ? s.hit5NoSection : '—'} |`);
+      L.push(`| ${arm} | ${s.n} | ${s.hit1} | ${s.hit3} | ${s.hit5} | ${s.file3} | ${s.file5} | ${s.correct} | ${s.partial} | ${s.wrong} | ${s.srcOk} | ${s.wrongRefusal} | ${s.offRefused}/${s.offN} | ${s.med} | ${s.p90} | ${s.det} | ${['B', 'C', 'B20'].includes(arm) ? s.hit5NoSection : '—'} |`);
     }
     L.push('');
     for (const r of rows) {
@@ -399,7 +482,7 @@ function report(meta, results) {
         const heads = x.heads ? Object.entries(x.heads).map(([h, n]) => `${h.replace('H-', '')}:${n}`).join(' ') : '—';
         const det = x.deterministic ? `${x.deterministic.digest ? '=' : '≠'}/${x.deterministic.order ? '=' : '≠'}` : '—';
         const st = x.status + (x.top != null ? ` (top ${x.top})` : '') + (x.match?.weak ? ` unmatched: ${x.match.unmatched.join(' ')}` : '');
-        const ans = x.answer?.verdict + (x.weakAnswer ? `; weak→answer: ${x.weakAnswer.verdict}` : '');
+        const ans = x.answer?.verdict + (x.answer?.research ? ` (${x.answer.research})` : '') + (x.weakAnswer ? `; weak→answer: ${x.weakAnswer.verdict}` : '');
         L.push(`| ${arm} | ${st} | ${x.passages} | ${x.ret?.rank ?? '—'} | ${x.ret?.file3 ? 'y' : 'n'}/${x.ret?.file5 ? 'y' : 'n'} | ${heads} | ${det} | ${x.ms.join('/')} | ${ans} | ${(x.answer?.files || []).join(', ') || '—'} | ${(x.answer?.quote || '').replace(/\|/g, '/')} |`);
       }
       L.push('');

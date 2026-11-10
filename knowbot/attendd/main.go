@@ -149,9 +149,12 @@ func (f fileTags) FileTags(ctx context.Context, vs string, paths []string) (map[
 type server struct {
 	full, plain *attend.Engine
 	// ranked is the engine's ranked resolver (server hybrid, or client RRF under ATTENDD_FUSION), used alone by
-	// /resolve; kc reads the question's embedding and the passages' stored vectors for /resolve's similarity
-	ranked    *resolve.Engine
-	kc        *knowdb.Client
+	// /resolve; kc reads the question's embedding and the passages' stored vectors when /resolve's distance search
+	// misses a span
+	ranked *resolve.Engine
+	kc     *knowdb.Client
+	// dist is /resolve's one POST search for the spans' vector distances (see distance.go)
+	dist      *distanceSearcher
 	timeout   time.Duration
 	fusion    bool
 	noSection atomic.Bool
@@ -171,7 +174,7 @@ func newServer(base, key string, timeout time.Duration, fusion bool) *server {
 	plain := &attend.Engine{Ranked: busyResolver{ranked}, Complete: busyResolver{&complete}, Tags: ranked, Exclude: isControl, FileTags: fileTags{ranked}}
 	full := *plain
 	full.Embed, full.Neighbours = embedder{kc}, ranked
-	return &server{full: &full, plain: plain, ranked: ranked, kc: kc, timeout: timeout, fusion: fusion}
+	return &server{full: &full, plain: plain, ranked: ranked, kc: kc, dist: newDistanceSearcher(base, key), timeout: timeout, fusion: fusion}
 }
 
 // rankMode names the ranked search in use, for /healthz and the per-call summary.
