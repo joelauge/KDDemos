@@ -29,6 +29,7 @@ import * as motion from './motion.js?v=d18ee6b';
 import * as icons from './icons.js?v=d18ee6b';
 import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=d18ee6b';
 import { mountShapes } from './shapes.js?v=d18ee6b';
+import { mountBuilderPane } from './builderpane.js?v=d18ee6b';
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=d18ee6b';
 
 const V = '1';
@@ -634,6 +635,7 @@ function renderSetupPane() {
   el.append(head, hintEl, logEl, h('div', { class: 'st-composer-wrap' }, formEl));
   if (typed) { composerEl.value = typed; autoGrow(); }
   wireLogScroll();
+  mountBuilderPane(el, el.closest('.st-main'));   // desktop: resize edge, hide button, rail
   requestAnimationFrame(fitPlaceholder);
 }
 /** r4 (D1): the composer teaches by example where it has room (desktop), and stays short on phones. */
