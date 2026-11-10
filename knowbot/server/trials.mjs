@@ -28,7 +28,7 @@ import { promises as fsp, readdirSync, statSync } from 'node:fs';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as kbLib from '../lib/knowbot.js';
 import { createResearchAgent } from './research.mjs';
-import { createEvidenceSelector, isRefusal, isAnswerable } from './evidence.mjs';
+import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAnswerable } from './evidence.mjs';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
 import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS } from './storeimport.mjs';
@@ -262,6 +262,41 @@ export function normHit(d, mode) {
     tags: Array.isArray(d.tags) ? d.tags.map((t) => String(t).toLowerCase()) : null,
     page, slide, sheet, row, ts, crumb: crumb ? String(crumb) : null, kind: at.node_kind ?? md.node_kind ?? null, url,
   };
+}
+
+/**
+ * Pure: retrieve()'s result from resolve windows (KNOWBOT_EVIDENCE=resolve) instead of its vector + hybrid searches.
+ * lists[0] is the question's window, lists[1..] its clauses' (a multi-part question), each a list of KnowDB-shaped
+ * hits in resolve's rank order (evidence.mjs spanToDoc). Every hit carries a similarity (the question/passage cosine,
+ * read like a vector hit's 1 - distance/2) and its RRF score as rrf. The order is resolve's ranking, NOT re-sorted by
+ * similarity: the similarity only feeds KnowBot's own floor (and its refusal) downstream. Clauses are interleaved
+ * like today's: each clause's two best first, then the rest in rank order. ok fences each hit as today.
+ * @returns {{ vector: object[], hybridOnly: object[], top: number }}
+ */
+export function resolvedRetrieval(lists = [], ok = () => true) {
+  const keyOf = (h) => `${h.fileId}#${h.seq}`;
+  const byKey = new Map();
+  const hitsOf = (docs) => (docs || []).map((d, i) => {
+    const h = { ...normHit(d, 'hybrid'), hybridRank: i + 1, resolved: true, contentHash: d.content_hash || null };
+    return h.similarity == null ? h : { ...h, mode: 'vector' };
+  }).filter((h) => h.text && ok(h)).map((h) => {
+    const cur = byKey.get(keyOf(h));
+    if (cur) return cur;
+    byKey.set(keyOf(h), h);
+    return h;
+  });
+  const [main = [], ...clauses] = lists.map(hitsOf);
+  let ranked = main.filter((h) => h.similarity != null);
+  if (clauses.length > 1) {
+    const first = [];
+    for (let r = 0; r < 2; r++) for (const l of clauses) { const h = l.filter((x) => x.similarity != null)[r]; if (h && !first.includes(h)) first.push(h); }
+    const rest = [...ranked, ...clauses.flat()].filter((h, i, a) => h.similarity != null && !first.includes(h) && a.indexOf(h) === i);
+    ranked = [...first, ...rest];
+  }
+  const inRanked = new Set(ranked);
+  const hybridOnly = [...main, ...clauses.flat()].filter((h, i, a) => h.similarity == null && !inRanked.has(h) && a.indexOf(h) === i);
+  const top = ranked.length ? Math.max(...ranked.map((h) => h.similarity)) : 0;
+  return { vector: ranked, hybridOnly, top };
 }
 
 // ------------------------------------------------------------------------------------------- "Source: <url>" lines
@@ -1140,6 +1175,9 @@ export function createStudio(o = {}) {
   // Evidence selector (server/evidence.mjs; KNOWBOT_EVIDENCE=attend): when it answers, it picks the passages an answer
   // may quote instead of retrieve() + the research agent's search tool; null (off, down, failed) keeps today's path
   const evidence = o.evidence !== undefined ? o.evidence : createEvidenceSelector(env, { log });
+  // Resolve mode (KNOWBOT_EVIDENCE=resolve): the sidecar's ranked search replaces retrieve()'s searches only; the floor,
+  // refusal, research/select, citations and proof below run unchanged on its passages. null keeps today's searches.
+  const resolver = o.resolver !== undefined ? o.resolver : createResolver(env, { log });
   const localKb = createLocalKb({ pricing: { checkoutUrl: checkoutBase } });
   let remoteKb = null;
   try { remoteKb = enabled && store && o.builderKb !== false ? createBuilderKb({ kdJson, store, log, now }) : null; } catch (e) { log(`[studio] builder kb: ${e.message}`); }
@@ -1757,12 +1795,18 @@ export function createStudio(o = {}) {
     const disabledIds = new Set(files.filter((f) => !f.enabled).map((f) => f.id));
     const sharedSet = !T.converted && T.flags.sharedSet && T.flags.sharedAt ? T.flags.sharedSet : null;
     const sharedFilter = sharedSet ? { all_of: [`sample-set:${sharedSet}`, 'kind:trial-sample'], none_of: ALWAYS_EXCLUDE } : null;
-    const [vRaw, hRaw, svRaw, shRaw] = await Promise.all([rawSearch(query, 'vector', vectorK, filter, signal), hybrid ? rawSearch(query, 'hybrid', hybridK, filter, signal) : [],
-      sharedSet ? rawSearch(query, 'vector', vectorK, sharedFilter, signal) : [], sharedSet && hybrid ? rawSearch(query, 'hybrid', hybridK, sharedFilter, signal) : []]);
     // shared sample copies count only once the trial's replay has reached them (the replay never runs ahead of the data)
     const searchable = new Set(files.filter((f) => f.replay && ['vectorizing', 'ready'].includes(f.stage)).map((f) => f.id));
     const sharedOk = (h) => !!h.tags && h.tags.includes(`sample-set:${sharedSet}`) && h.tags.includes('kind:trial-sample') && !ALWAYS_EXCLUDE.some((t) => h.tags.includes(t)) && searchable.has(h.fileId);
     const ok = (h) => (hitAllowed(h, T.id, disabledTags) || convertedHitOk(T, h, disabledTags) || (sharedSet && sharedOk(h))) && !disabledIds.has(h.fileId);
+    // resolve mode: the sidecar's ranked windows replace the searches below (an answer's search, not a starter's
+    // vector-only check); the same fences apply. null (off, down, an error): today's searches.
+    if (resolver && store && hybrid) {
+      const rr = await resolvedRetrieve(T, query, { files, filter, sharedFilter, ok, signal });
+      if (rr) return rr;
+    }
+    const [vRaw, hRaw, svRaw, shRaw] = await Promise.all([rawSearch(query, 'vector', vectorK, filter, signal), hybrid ? rawSearch(query, 'hybrid', hybridK, filter, signal) : [],
+      sharedSet ? rawSearch(query, 'vector', vectorK, sharedFilter, signal) : [], sharedSet && hybrid ? rawSearch(query, 'hybrid', hybridK, sharedFilter, signal) : []]);
     vRaw.push(...svRaw);
     hRaw.push(...shRaw);
     let vector = vRaw.map((d) => normHit(d, 'vector')).filter(ok).filter((h) => h.text);
@@ -1819,6 +1863,41 @@ export function createStudio(o = {}) {
   }
 
   /**
+   * retrieve() in resolve mode: one /resolve call for the question over the trial's scope and, when it uses them, the
+   * shared samples (ORed, one call when the tags fit a tag query), plus one per clause of a multi-part question, as
+   * today. The hits then carry the atom's id, breadcrumb and location from the file's atoms (cached), as search hits
+   * do. null: the question's own call failed (today's searches run instead).
+   */
+  async function resolvedRetrieve(T, query, { files, filter, sharedFilter, ok, signal }) {
+    const scopes = [{ tags_all: filter.all_of, tags_none: filter.none_of }, ...(sharedFilter ? [{ tags_all: sharedFilter.all_of, tags_none: sharedFilter.none_of }] : [])];
+    const clauses = questionClauses(query);
+    const [main, ...per] = await Promise.all([resolver.resolve({ store, question: query, scopes, limit: 20, signal }),
+      ...(clauses.length > 1 ? clauses.map((c) => resolver.resolve({ store, question: c, scopes, limit: 6, signal })) : [])]);
+    if (!main) return null;
+    const got = per.filter(Boolean);
+    const r = resolvedRetrieval([main.docs, ...got.map((x) => x.docs)], ok);
+    await fillFromAtoms(T, [...r.vector, ...r.hybridOnly]);
+    return { ...r, files, receipt: combineDigests([main.digest, ...got.map((x) => x.digest)]), rankMode: main.rankMode };
+  }
+
+  /** A hit's atom id, breadcrumb and location, from its file's atoms (cached), matched by sequence and text. */
+  async function fillFromAtoms(T, hits) {
+    await Promise.all([...new Set(hits.map((h) => h.fileId))].map(async (fid) => {
+      let atoms = [];
+      try { atoms = await allAtoms(T, fid); } catch { return; }
+      for (const h of hits.filter((x) => x.fileId === fid)) {
+        const a = atoms.find((y) => y.seq === h.seq && normText(y.text) === normText(h.text)) || atoms.find((y) => y.seq === h.seq) || atoms.find((y) => normText(y.text) === normText(h.text));
+        if (a) {
+          const m = a.meta || {};
+          Object.assign(h, { atomId: a.id, seq: a.seq, offset: a.offset == null ? null : Number(a.offset), crumb: m.breadcrumb ? String(m.breadcrumb) : h.crumb ?? null, kind: a.kind,
+            page: m.page_number ?? m.page ?? null, slide: m.slide ?? m.slide_number ?? null, sheet: m.sheet ?? null, row: m.row ?? null });
+        }
+        h.atomsTotal = atoms.length || null;
+      }
+    }));
+  }
+
+  /**
    * The evidence selector's passages for one question, as retrieve() hits (null: use retrieve()). The trial's own files
    * (scope tag, none of the excluded or disabled tfile: tags) and, when the trial uses the shared samples, the sample set
    * are two calls, merged in that order; then the same fences as retrieve(): disabled files by id, shared samples only
@@ -1842,19 +1921,7 @@ export function createStudio(o = {}) {
     // every passage dropped by the fences: nothing in this bot's files answers it
     if (!hits.length) return { ...sel, status: 'none_in_window', sources: [], hits: [] };
     // the atom's id, breadcrumb and location, from the file's atoms (cached), so the answer and its proof read as today
-    await Promise.all([...new Set(hits.map((h) => h.fileId))].map(async (fid) => {
-      let atoms = [];
-      try { atoms = await allAtoms(T, fid); } catch { return; }
-      for (const h of hits.filter((x) => x.fileId === fid)) {
-        const a = atoms.find((y) => y.seq === h.seq && normText(y.text) === normText(h.text)) || atoms.find((y) => normText(y.text) === normText(h.text));
-        if (a) {
-          const m = a.meta || {};
-          Object.assign(h, { atomId: a.id, seq: a.seq, offset: a.offset == null ? null : Number(a.offset), crumb: m.breadcrumb ? String(m.breadcrumb) : null, kind: a.kind,
-            page: m.page_number ?? m.page ?? null, slide: m.slide ?? m.slide_number ?? null, sheet: m.sheet ?? null, row: m.row ?? null });
-        }
-        h.atomsTotal = atoms.length || null;
-      }
-    }));
+    await fillFromAtoms(T, hits);
     return { ...sel, hits };
   }
 
@@ -2301,7 +2368,7 @@ export function createStudio(o = {}) {
       // the evidence selector, when on and answering, replaces the search (and the research agent's search tool)
       const sel = await evidenceSelect(T, question, files, ac.signal);
       if (ac.signal.aborted) { clearInterval(ping); return; }
-      const receipt = sel?.receipt?.digest ? { digest: sel.receipt.digest } : null;
+      let receipt = sel?.receipt?.digest ? { digest: sel.receipt.digest } : null;
       if (sel && isRefusal(sel)) {
         const tRet0 = ms();
         const ready0 = files.filter((f) => f.enabled && f.stage === 'ready');
@@ -2311,6 +2378,8 @@ export function createStudio(o = {}) {
           closeMiss: null, guard: null, latencyMs: { retrieve: tRet0, select: 0, quote: 0, total: ms() } });
       }
       const r = sel ? { vector: sel.hits, hybridOnly: [], top: floor, files } : await retrieve(T, question, { files, signal: ac.signal });
+      // resolve mode: the receipt of the ranked windows the answer was drawn from (proof page), as with the selector's
+      if (!receipt && r.receipt) receipt = { digest: r.receipt };
       const tRet = ms();
       // 3. normalize, join, keep
       const top = r.top;
@@ -2332,7 +2401,7 @@ export function createStudio(o = {}) {
       // 4. floor refusal
       if (top < floor || !kept.length) {
         const cands = r.vector.slice(0, 5).map((h) => ({ file: fileName(h.fileId), similarity: round4(h.similarity ?? 0), match: pct(h.similarity), excerpt: clip(oneLine(h.text), 200) }));
-        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: 0 },
+        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: 0, ...(receipt ? { receipt } : {}) },
           why: { best: round4(top), floor, candidates: cands }, closeMiss: closeMissOf(top, floor, question), guard: null, latencyMs: { retrieve: tRet, select: 0, quote: 0, total: ms() } });
       }
       // 5. select

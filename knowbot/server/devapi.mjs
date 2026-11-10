@@ -40,7 +40,7 @@ import { handleWhatsApp } from './channels/whatsapp.mjs';
 import { handleEmail } from './channels/email.mjs';
 import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
 import { createResearchAgent } from './research.mjs';
-import { createEvidenceSelector, selectForRetriever, isRefusal, isAnswerable, hashFor } from './evidence.mjs';
+import { createEvidenceSelector, createResolver, selectForRetriever, isRefusal, isAnswerable, hashFor } from './evidence.mjs';
 import { createSendInfo } from './sendinfo.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
@@ -140,6 +140,9 @@ export function createDevApi(o = {}) {
   const researchAgent = o.researchAgent !== undefined ? o.researchAgent : createResearchAgent(env, { log });
   // the evidence selector (server/evidence.mjs; KNOWBOT_EVIDENCE=attend): when it answers, its passages replace the search
   const evidence = o.evidence !== undefined ? o.evidence : createEvidenceSelector(env, { log });
+  // resolve mode (KNOWBOT_EVIDENCE=resolve): the sidecar's ranked window replaces trialSearch's searches (a live bot's
+  // retriever does the same itself); everything after the search is unchanged
+  const resolver = o.resolver !== undefined ? o.resolver : createResolver(env, { log });
   const CANON = o.canonical || { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
   const sealSecret = String(o.secret || registry?.secret || env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || 'knowbot-local-dev');
   const trialSecret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || randomBytes(32).toString('hex');
@@ -368,10 +371,13 @@ export function createDevApi(o = {}) {
       const j = await res.json();
       return Array.isArray(j.data) ? j.data : [];
     };
+    // resolve mode: one ranked window over the trial's scope and its shared samples (ORed), resolve's order kept; each
+    // passage's similarity (its cosine with the question) is the floor's measure, as a vector hit's is. null: search.
+    const rw = resolver ? await resolver.resolve({ store, question, scopes: filters.map((f) => ({ tags_all: f.all_of, tags_none: f.none_of })), limit: 20 }) : null;
     // production: a pure vector search under a narrow tag filter (one trial) can come back empty while hybrid, same
     // filter, finds the atoms and still reports each hit's vector `distance`; keep only those (simOf scores by distance,
     // never by the RRF score)
-    const pages = await Promise.all(filters.map(async (filter) => {
+    const pages = rw ? [rw.docs] : await Promise.all(filters.map(async (filter) => {
       const v = await page(filter, 'vector');
       if (v.length) return v;
       return (await page(filter, 'hybrid')).filter((d) => d && d.distance != null && Number.isFinite(Number(d.distance)));
@@ -389,9 +395,11 @@ export function createDevApi(o = {}) {
       if (seen.has(k)) continue;
       seen.add(k);
       const filename = String(d.filename || '').split('/').pop();
-      hits.push({ file_id: d.file_id, filename, title: docTitle(d.attributes?.breadcrumb ? String(d.attributes.breadcrumb).split(' > ')[0] : '', filename), url: null, score: round4(simOf(d)), similarity: round4(simOf(d)), text });
+      hits.push({ file_id: d.file_id, filename, title: docTitle(d.attributes?.breadcrumb ? String(d.attributes.breadcrumb).split(' > ')[0] : '', filename), url: null, score: round4(simOf(d)), similarity: round4(simOf(d)), text,
+        ...(rw && d.content_hash ? { content_hash: d.content_hash } : {}) });
     }
-    hits.sort((a, b) => b.similarity - a.similarity);
+    if (rw) Object.defineProperty(hits, 'receipt', { value: rw.digest, enumerable: false });
+    else hits.sort((a, b) => b.similarity - a.similarity);
     return hits;
   }
 
@@ -463,7 +471,7 @@ export function createDevApi(o = {}) {
       return { file: r.filename, similarity: round4(sim ?? null), ...(sim == null ? { label: r.evidence ? 'selected passage' : 'keyword match' } : {}), excerpt: String(r.text || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
     };
     const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(q, persona, { profile }) : null;
-    let fin = guard, tRet = performance.now(), top = null, candidates = [], sel = null;
+    let fin = guard, tRet = performance.now(), top = null, candidates = [], sel = null, resolvedReceipt = null;
     if (!guard) {
       // the evidence selector, when on and answering, replaces the search below (and the research agent's search tool)
       sel = target.kind === 'trial' ? await trialEvidence(target, q) : await selectForRetriever(evidence, retriever, q);
@@ -472,13 +480,16 @@ export function createDevApi(o = {}) {
         candidates = results.slice(0, 5);
       } else if (target.kind === 'trial') {
         const hits = await trialSearch(target, q);
-        top = hits.length ? hits[0].similarity : 0;
+        // (resolve mode keeps resolve's order, so the best similarity is not always first)
+        top = hits.length ? Math.max(...hits.map((h) => h.similarity)) : 0;
+        resolvedReceipt = hits.receipt || null;
         candidates = hits.slice(0, 5);
         results = hits.filter((h) => h.similarity >= floor).slice(0, 6);
         for (const h of hits) { sims.set(h.filename, Math.max(sims.get(h.filename) ?? 0, h.similarity)); sims.set(chunkKey(h.filename, h.text), h.similarity); }
       } else {
         const [ret, s] = await Promise.all([retriever.search(q, 6), liveSimilarities(retriever, q)]);
         sims = s;
+        resolvedReceipt = ret.receipt || null;
         // never cite a stored question or a config file, whatever the retriever returned
         results = (ret.results || []).filter((r) => r && r.text && !isQuestionFile(r.filename));
         top = ret.floor?.top ?? (sims.size ? Math.max(...sims.values()) : null);
@@ -515,7 +526,7 @@ export function createDevApi(o = {}) {
       const t = stripMarks(l).replace(/^\s*[-*•]\s+/, '').replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g, '$1');
       return n && !isCourtesy(t) ? [{ n, text: t }] : [];
     }).filter((x) => x.n && x.text)
-      .map((x) => { const c = (fin.citations || []).find((y) => y.n === x.n); const h = sel && c?.file_id ? hashFor(results, c.file_id, x.text) : null;
+      .map((x) => { const c = (fin.citations || []).find((y) => y.n === x.n); const h = (sel || resolvedReceipt) && c?.file_id ? hashFor(results, c.file_id, x.text) : null;
         return { ...x, file: c?.filename || null, ...(c?.file_id ? { fileId: c.file_id } : {}), ...(h ? { contentHash: h } : {}) }; });
     // One footnote, one verbatim span: excerpt is the FIRST line quoted under [n] exactly as written (never two lines
     // stitched together); every line quoted under [n] is listed, each verbatim, in spans (and in proof.quoted).
@@ -538,7 +549,7 @@ export function createDevApi(o = {}) {
       : { prompt: meter.calls ? meter.prompt : Math.ceil((q.length + histChars + ctxChars) / 4) + 8, completion: Math.max(meter.completion, approxTokens(text)), estimated: true, modelCalls: meter.calls };
     const out = {
       id: `ans_${rid(16)}`, bot: target.id, botName: target.name, question: q, answer: text, refused, grounded: !refused && citations.length > 0, citations,
-      proof: { hits, quoted, floor: { min: floor, top: round4(top) }, ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : {}) }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
+      proof: { hits, quoted, floor: { min: floor, top: round4(top) }, ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : resolvedReceipt ? { receipt: { digest: resolvedReceipt } } : {}) }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
     };
     logAnswer(target, out, channel, callerKey);
     return out;

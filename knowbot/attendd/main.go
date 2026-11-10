@@ -148,9 +148,13 @@ func (f fileTags) FileTags(ctx context.Context, vs string, paths []string) (map[
 // cannot embed or ATTENDD_SECTION=off.
 type server struct {
 	full, plain *attend.Engine
-	timeout     time.Duration
-	fusion      bool
-	noSection   atomic.Bool
+	// ranked is the engine's ranked resolver (server hybrid, or client RRF under ATTENDD_FUSION), used alone by
+	// /resolve; kc reads the question's embedding and the passages' stored vectors for /resolve's similarity
+	ranked    *resolve.Engine
+	kc        *knowdb.Client
+	timeout   time.Duration
+	fusion    bool
+	noSection atomic.Bool
 }
 
 // newServer builds the engines. fusion swaps the ranked search for the engine's client-side RRF (resolve.NewRESTSearcher
@@ -167,7 +171,7 @@ func newServer(base, key string, timeout time.Duration, fusion bool) *server {
 	plain := &attend.Engine{Ranked: busyResolver{ranked}, Complete: busyResolver{&complete}, Tags: ranked, Exclude: isControl, FileTags: fileTags{ranked}}
 	full := *plain
 	full.Embed, full.Neighbours = embedder{kc}, ranked
-	return &server{full: &full, plain: plain, timeout: timeout, fusion: fusion}
+	return &server{full: &full, plain: plain, ranked: ranked, kc: kc, timeout: timeout, fusion: fusion}
 }
 
 // rankMode names the ranked search in use, for /healthz and the per-call summary.
@@ -269,6 +273,7 @@ func (s *server) routes() http.Handler {
 		log.Printf("attendd: attend store=%s status=%s evidence=%d heads=%v in %s", in.Store, b.Status, len(b.Evidence), sm.HeadsContributing, time.Since(t0).Round(time.Millisecond))
 		writeJSON(w, 200, attendOut{Bundle: b, Summary: sm})
 	})
+	mux.HandleFunc("POST /resolve", s.handleResolve)
 	mux.HandleFunc("POST /check", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
 			Evidence []attend.ClientItem `json:"evidence"`

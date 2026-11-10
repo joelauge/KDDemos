@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
-import { createEvidenceSelector, mergeBundles, scopesFromRetriever, hashFor } from '../evidence.mjs';
+import { createEvidenceSelector, createResolver, spanToDoc, combineDigests, mergeBundles, scopesFromRetriever, hashFor } from '../evidence.mjs';
+import { normHit, resolvedRetrieval } from '../trials.mjs';
 import * as lib from '../../lib/knowbot.js';
 
 delete process.env.KNOWDRIVE_API_KEY;
@@ -35,7 +36,22 @@ function parseSSE(text) {
  */
 async function startFakeAttendd(kdFiles) {
   const calls = [];
-  const state = { status: 'ok', match: /.^/, respond: null, down: false };
+  // resolve: POST /resolve (KNOWBOT_EVIDENCE=resolve): every atom of the files carrying every tags_all tag of some
+  // scope, in file order, each with similarity sim(text) (default 0.8); fail: an HTTP 500; noSim: spans without one
+  const resolveCalls = [];
+  const state = { status: 'ok', match: /.^/, respond: null, down: false, sim: () => 0.8, fail: false, noSim: false };
+  const resolveOf = (body) => {
+    const scopes = body.scopes || [body.scope || {}];
+    const all = [];
+    for (const f of kdFiles.values()) {
+      if (!scopes.some((sc) => (sc.tags_all || []).every((t) => f.tags.includes(t)))) continue;
+      for (const a of f.atoms || []) all.push({ f, a, sim: state.sim(a.text) });
+    }
+    // ranked like a search would rank them (best first), then cut to the window
+    const spans = all.sort((x, y) => y.sim - x.sim).slice(0, body.limit || 20).map(({ f, a, sim }, i) => ({ file_id: f.id, path: f.filename, atom_index: a.seq, text: a.text,
+      content_hash: `blake3:${f.id}`, score: 0.033 - i * 0.001, rank: i, tags: f.tags, ...(state.noSim ? {} : { similarity: sim }) }));
+    return { spans, score_kind: 'rrf', rank_mode: 'server_hybrid', calls: 1, receipt: { digest: `blake3:resolve-${resolveCalls.length}` } };
+  };
   const bundleOf = (body) => {
     const all = body.scope?.tags_all || [];
     const ev = [];
@@ -53,13 +69,20 @@ async function startFakeAttendd(kdFiles) {
       if (state.down) { res.writeHead(503); res.end('{"error":"down"}'); return; }
       if (req.url === '/healthz') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}'); return; }
       const body = JSON.parse(b || '{}');
+      if (req.url === '/resolve') {
+        resolveCalls.push(body);
+        if (state.fail) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":"boom"}'); return; }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(resolveOf(body)));
+        return;
+      }
       calls.push(body);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(state.respond ? state.respond(body, bundleOf) : bundleOf(body)));
     });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { url: `http://127.0.0.1:${server.address().port}`, calls, state, close: () => new Promise((r) => server.close(() => r())) };
+  return { url: `http://127.0.0.1:${server.address().port}`, calls, resolveCalls, state, close: () => new Promise((r) => server.close(() => r())) };
 }
 
 /** A research agent that quotes every line matching `want` it is shown (none: found=false). Records each request. */
@@ -384,5 +407,181 @@ describe('evidence selector on the developer API and live bots', () => {
     assert.equal(off.refused, true);
     assert.equal(off.answer, lib.NOT_IN_DATA);
     assert.equal(S.llm.calls.length, llm0);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ resolve mode
+describe('resolve mode (KNOWBOT_EVIDENCE=resolve): pure parts', () => {
+  test('off unless KNOWBOT_EVIDENCE=resolve; attend and resolve are never both on', () => {
+    assert.equal(createResolver({}), null);
+    assert.equal(createResolver({ KNOWBOT_EVIDENCE: 'attend' }), null);
+    assert.ok(createResolver({ KNOWBOT_EVIDENCE: 'resolve' }));
+    assert.equal(createEvidenceSelector({ KNOWBOT_EVIDENCE: 'resolve' }), null);
+  });
+
+  test('a span reads as a search hit: similarity = the span\'s (as 1 - distance/2), rrf = its score', () => {
+    const d = spanToDoc({ file_id: 'f1', path: 'knowbot/trials/t1/returns.md', atom_index: 3, text: 'Return within 30 days.', score: 0.0328, rank: 0, similarity: 0.7925, tags: ['trial:t1'], content_hash: 'blake3:x' });
+    const h = normHit(d, 'hybrid');
+    assert.ok(Math.abs(h.similarity - 0.7925) < 1e-9);
+    assert.equal(h.rrf, 0.0328);
+    assert.equal(h.seq, 3);
+    assert.equal(h.fileId, 'f1');
+    assert.deepEqual(h.tags, ['trial:t1']);
+    assert.equal(normHit(spanToDoc({ file_id: 'f', path: 'p', text: 't', score: 0.01 }), 'hybrid').similarity, null);
+  });
+
+  test('resolvedRetrieval keeps resolve\'s order, fences hits, interleaves clauses, and reports the best similarity', () => {
+    const doc = (f, i, sim, tags = ['trial:t1']) => spanToDoc({ file_id: f, path: `x/${f}.md`, atom_index: i, text: `${f}${i} text`, score: 0.03, similarity: sim, tags });
+    const main = [doc('a', 0, 0.71), doc('b', 1, 0.85), doc('c', 2, 0.9, ['trial:other']), doc('a', 4, 0.6)];
+    const ok = (h) => h.tags.includes('trial:t1');
+    const r = resolvedRetrieval([main], ok);
+    assert.deepEqual(r.vector.map((h) => `${h.fileId}${h.seq}`), ['a0', 'b1', 'a4'], 'rank order, not re-sorted; the out-of-scope hit fenced');
+    assert.equal(r.top, 0.85);
+    assert.deepEqual(r.hybridOnly, []);
+    assert.ok(r.vector.every((h) => h.hybridRank && h.rrf === 0.03 && h.mode === 'vector' && h.contentHash === null));
+    // what today's keep step keeps at a 0.7 floor
+    assert.deepEqual(r.vector.filter((h) => h.similarity >= 0.7).map((h) => `${h.fileId}${h.seq}`), ['a0', 'b1']);
+    // two clauses: each clause's two best first, then the rest in rank order, each passage once
+    const r2 = resolvedRetrieval([main, [doc('d', 0, 0.8), doc('a', 0, 0.71)], [doc('e', 0, 0.75)]], ok);
+    assert.deepEqual(r2.vector.map((h) => `${h.fileId}${h.seq}`), ['d0', 'e0', 'a0', 'b1', 'a4']);
+    assert.equal(combineDigests(['blake3:a']), 'blake3:a');
+    assert.match(combineDigests(['blake3:a', 'blake3:b']), /^sha256:[0-9a-f]{64}$/);
+    assert.equal(combineDigests([]), null);
+  });
+
+  test('createResolver: an HTTP error, a span without a similarity, or a dead sidecar returns null (search instead)', async () => {
+    const mk = (body, status = 200) => async (u) => (String(u).endsWith('/healthz') ? new Response('{"ok":true}') : new Response(JSON.stringify(body), { status }));
+    const span = { file_id: 'f', path: 'p.md', atom_index: 0, text: 't', score: 0.03, rank: 0, tags: [] };
+    let sent = null;
+    const good = createResolver({ KNOWBOT_EVIDENCE: 'resolve' }, { fetch: async (u, init) => { if (init?.body) sent = JSON.parse(init.body); return mk({ spans: [{ ...span, similarity: 0.8 }], receipt: { digest: 'blake3:z' }, rank_mode: 'server_hybrid' })(u); } });
+    const r = await good.resolve({ store: 'vs', question: 'q', scopes: [{ tags_all: ['trial:t1'] }, { tags_all: ['sample-set:s'] }] });
+    assert.equal(r.digest, 'blake3:z');
+    assert.equal(r.docs.length, 1);
+    assert.equal(sent.scopes.length, 2, 'both scopes in one request');
+    assert.equal(await createResolver({ KNOWBOT_EVIDENCE: 'resolve' }, { fetch: mk({ error: 'x' }, 502) }).resolve({ store: 'vs', question: 'q' }), null);
+    assert.equal(await createResolver({ KNOWBOT_EVIDENCE: 'resolve' }, { fetch: mk({ spans: [span] }) }).resolve({ store: 'vs', question: 'q' }), null);
+    assert.equal(await createResolver({ KNOWBOT_EVIDENCE: 'resolve' }, { fetch: async () => { throw new Error('ECONNREFUSED'); } }).resolve({ store: 'vs', question: 'q' }), null);
+  });
+});
+
+describe('resolve mode in the Studio answer path', () => {
+  let S, c, t;
+  before(async () => {
+    S = await boot({ env: { KNOWBOT_EVIDENCE: 'resolve' }, agent: null });
+    c = client(S);
+    t = await c.trial();
+    assert.equal((await c.upload(t, 'returns.md', RETURNS)).status, 201);
+    assert.equal((await c.upload(t, 'shipping.md', SHIPPING)).status, 201);
+    await c.waitReady(t, 2);
+  });
+  after(async () => { await S.close(); });
+  const searches = () => S.kd.calls.filter((x) => x.url.endsWith('/search')).length;
+
+  test('resolve replaces the search; KnowBot\'s floor, answer, citations and proof run as today, with the receipt', async () => {
+    S.att.state.sim = (text) => (/30 days/.test(text) ? 0.82 : 0.55);
+    const s0 = searches(), r0 = S.att.resolveCalls.length;
+    const { ev, final } = await c.ask(t, 'How long do I have to return an item?');
+    assert.equal(final.status, 'grounded', JSON.stringify(final.why));
+    assert.match(final.text, /30 days/);
+    assert.equal(searches(), s0, 'no knowDrive search ran');
+    assert.equal(S.att.calls.length, 0, 'no attend call');
+    assert.ok(S.att.resolveCalls.length > r0);
+    const call = S.att.resolveCalls.at(-1);
+    assert.deepEqual(call.scope.tags_all, [`trial:${t.trialId}`]);
+    for (const tag of ['kind:trial-spec', 'kind:config', 'questions']) assert.ok(call.scope.tags_none.includes(tag), tag);
+    assert.match(final.proof.receipt.digest, /^blake3:resolve-/);
+    const ret = ev.find((e) => e.event === 'retrieval').data;
+    assert.equal(ret.floor.top, 0.82);
+    // the floor is KnowBot's own: only passages at or above it are kept; the others are shown, not kept
+    assert.ok(ret.hits.filter((h) => h.kept).every((h) => h.similarity >= ret.floor.min));
+    assert.ok(ret.hits.some((h) => !h.kept && h.similarity === 0.55));
+    assert.ok(ret.hits.every((h) => h.label === 'match'), 'labelled like search hits, not selected passages');
+  });
+
+  test('below the floor: the same floor refusal as today (best, floor, candidates), with the receipt', async () => {
+    S.att.state.sim = () => 0.52;
+    const { final } = await c.ask(t, 'Do you sell boats?');
+    assert.equal(final.status, 'refused');
+    assert.equal(final.text, lib.NOT_IN_DATA);
+    assert.equal(final.why.best, 0.52);
+    assert.equal(final.why.floor, 0.7);
+    assert.ok(final.why.candidates.length > 0 && final.why.candidates.every((x) => x.similarity === 0.52));
+    assert.ok('closeMiss' in final);
+    assert.match(final.proof.receipt.digest, /^blake3:resolve-/);
+  });
+
+  test('resolve fails or carries no similarity: today\'s search answers, without a receipt', async () => {
+    for (const mode of ['fail', 'noSim']) {
+      S.att.state.sim = () => 0.82;
+      S.att.state[mode] = true;
+      try {
+        const t2 = await c.trial();
+        await c.upload(t2, 'returns.md', `${RETURNS}\n${mode} copy.\n`);
+        await c.waitReady(t2, 1);
+        const s0 = searches();
+        const { final } = await c.ask(t2, 'How long do I have to return an item?');
+        assert.equal(final.status, 'grounded', `${mode}: ${JSON.stringify(final.why)}`);
+        assert.ok(searches() > s0, `${mode}: knowDrive search ran`);
+        assert.equal(final.proof.receipt, undefined);
+      } finally { S.att.state[mode] = false; }
+    }
+  });
+});
+
+describe('resolve mode: shared samples, developer API and live bots', () => {
+  test('shared samples: one call with both scopes; every citation is this trial\'s', async () => {
+    const S = await boot({ env: { KNOWBOT_EVIDENCE: 'resolve', KNOWBOT_STUDIO_SAMPLE_MODE: 'shared' }, agent: null, studio: { replayTargetMs: 1500 } });
+    try {
+      const c = client(S);
+      const t = await c.trial();
+      assert.ok([200, 201].includes((await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' })).status));
+      assert.equal((await c.upload(t, 'returns.md', RETURNS)).status, 201);
+      const files = await c.waitReady(t, 5);
+      await sleep(300);
+      S.att.state.sim = (text) => (/30 days/i.test(text) ? 0.8 : 0.5);
+      const { final } = await c.ask(t, 'How long do I have to return an item?');
+      const call = S.att.resolveCalls.findLast((x) => Array.isArray(x.scopes));
+      assert.ok(call, 'one call carries both scopes');
+      assert.deepEqual(call.scopes[0].tags_all, [`trial:${t.trialId}`]);
+      assert.ok(call.scopes[1].tags_all.includes('sample-set:lumen-bikes') && call.scopes[1].tags_all.includes('kind:trial-sample'));
+      assert.equal(final.status, 'grounded', JSON.stringify(final.why));
+      const ids = new Set(files.map((f) => f.id));
+      assert.ok(final.citations.every((x) => ids.has(x.fileId)));
+    } finally { await S.close(); }
+  });
+
+  test('/api/canonical and /v1/bots/:id/chat: the retriever reads the resolve window; floor and receipt as with search', async () => {
+    const S = await boot({ env: { KNOWBOT_EVIDENCE: 'resolve' }, agent: quotingAgent(/30 days/), fixtures: [{ store: 'vs_fake', path: 'knowbot/ugm/returns.md', text: RETURNS, tags: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] }] });
+    try {
+      S.att.state.sim = (text) => (/30 days/.test(text) ? 0.86 : 0.5);
+      const s0 = S.kd.calls.filter((x) => x.url.endsWith('/search')).length;
+      const a = await (await S.api('/api/canonical', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: 'How long do I have to return an item?' }) })).json();
+      assert.equal(a.refused, false, a.text);
+      assert.match(a.text, /30 days of delivery/);
+      assert.match(a.receipt.digest, /^blake3:resolve-/);
+      assert.equal(S.kd.calls.filter((x) => x.url.endsWith('/search')).length, s0, 'no knowDrive search ran');
+      assert.equal(S.att.resolveCalls.at(-1).scope.tags_all[0], 'knowbot:ugm');
+      // below the built-in floor: refused by the retriever's own floor, as with search
+      S.att.state.sim = () => 0.6;
+      const off = await (await S.api('/api/canonical', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: 'Do you sell boats?' }) })).json();
+      assert.equal(off.refused, true);
+
+      await S.kb.registry.ready;
+      const admin = { authorization: 'Bearer dev-admin', 'content-type': 'application/json' };
+      assert.equal((await S.api('/api/buckets', { method: 'POST', headers: admin, body: JSON.stringify({ name: 'Acme' }) })).status, 201);
+      assert.equal((await S.api('/api/buckets/acme/files', { method: 'POST', headers: { authorization: 'Bearer dev-admin', 'content-type': 'text/markdown', 'x-filename': 'policy.md' }, body: `${RETURNS}\nAcme only.\n` })).status, 201);
+      assert.equal((await S.api('/api/instances', { method: 'POST', headers: admin, body: JSON.stringify({ name: 'Front Desk', buckets: ['acme'] }) })).status, 201);
+      await S.kd.settle();
+      const key = (await (await S.api('/api/instances/front-desk/keys', { method: 'POST', headers: admin, body: JSON.stringify({ name: 't' }) })).json()).key;
+      S.att.state.sim = (text) => (/30 days/.test(text) ? 0.86 : 0.5);
+      const j = await (await S.api('/v1/bots/front-desk/chat', { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: 'How long do I have to return an item?' }) })).json();
+      assert.equal(j.refused, false, j.answer);
+      assert.ok(S.att.resolveCalls.at(-1).scope.tags_all.some((x) => x.startsWith('bucket:')), 'scoped to the bot\'s bucket');
+      assert.match(j.proof.receipt.digest, /^blake3:resolve-/);
+      assert.equal(j.proof.floor.top, 0.86);
+      const html = await (await fetch(j.proofUrl.replace(/^https?:\/\/[^/]+/, S.base))).text();
+      assert.match(html, /Receipt <span class="file">blake3:resolve-/);
+      assert.doesNotMatch(html, /attend|resolve\.engine|gitlab/i, 'the page never names the engine');
+    } finally { await S.close(); }
   });
 });

@@ -396,3 +396,389 @@ Expected: refuse (near "Working for Wyrmwood")
 | wyrmwood | w14 | C | offtopic | refused_ok | refused_ok |
 | wyrmwood | w15 | B | offtopic | refused_ok | refused_ok |
 | wyrmwood | w15 | C | offtopic | refused_ok | refused_ok |
+
+---
+
+# Run 2: resolve mode (kd-mcp's engine `resolve`, attend off)
+
+Owner's ask: "leave kd-mcp, but turn the attend function off". `KNOWBOT_EVIDENCE=resolve` (default off): attendd's new
+`POST /resolve` runs the engine's ranked search alone (`resolve.Engine.Resolve`, the call kd-mcp's `resolve` tool makes
+in ranked mode; no attend heads, no weak_match), and its spans replace ONLY the retrieval call. KnowBot's own floor,
+refusal rule, research/select step, citations and proof run unchanged on them. Same store, same 30 questions and answer
+key as run 1; arm A re-run the same day as the baseline; B is copied from run 1 above.
+
+**Arms.** **A** today's trial search (vector 12 + hybrid 8, clause decomposition, floor 0.7, ≤6 kept + top-3 keyword
+hits). **D** resolve, server hybrid (limit 20 for the question, 6 per clause), then A's keep and answer steps.
+**E** D with the engine's client-side fusion (`ATTENDD_FUSION=on`). D and E ran each question twice. (Run 1's "D",
+attend with query_limit 20, is now called B20 in the script.)
+
+**Score / floor mapping.** A resolve span's score is RRF (`score_kind: rrf`, server hybrid and client fusion alike),
+not comparable to the floor. attendd therefore attaches a `similarity` to every span: the cosine between the question's
+embedding (`POST /search/embed`) and the passage's stored text vector (`/files/{id}/atoms?fields=…text_vector`, one
+read per cluster of nearby atoms per file). KnowDB's vector `distance` is the squared L2 distance of unit vectors
+(2 − 2·cos), so KnowBot's `1 − distance/2` IS that cosine: checked on all 218 passages that A and D both returned for
+single-clause questions, max |Δ| 0.00005 (rounding). The Node side turns each span into a KnowDB-shaped hit with
+`distance = 2·(1 − similarity)` and `score = rrf`, so `normHit`/`simOf`/`mapResult` read it exactly like today's hits.
+Order is resolve's ranking (not re-sorted by similarity); the similarity only feeds the floor. A span without a
+similarity (embed or vector read refused) fails the call and today's search runs.
+
+## Headline (keyword selector; no Anthropic key here)
+
+| bot | arm | hit@1 | hit@3 | hit@5 | correct | partial | wrong refusals | off-topic refused | median ms | p90 ms | determinism (digest, order) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| UGM | A (today, re-run) | 8 | 10 | 12 | 3 | 2 | 3 | 2/2 | 238 | 502 | n/a |
+| UGM | B (attend, run 1) | 10 | 11 | 13 | 5 | 1 | 5 | 2/2 | 350 | 422 | 15/15, 15/15 |
+| UGM | D (resolve) | 10 | 11 | 13 | 4 | 2 | 2 | 2/2 | 396 | 479 | 15/15, 15/15 |
+| UGM | E (resolve + fusion) | 10 | 11 | 13 | 4 | 2 | 2 | 2/2 | 478 | 584 | 15/15, 15/15 |
+| Wyrmwood | A (today, re-run) | 10 | 10 | 11 | 5 | 0 | 5 | 2/2 | 296 | 579 | n/a |
+| Wyrmwood | B (attend, run 1) | 9 | 9 | 9 | 4 | 0 | 5 | 2/2 | 372 | 427 | 15/15, 15/15 |
+| Wyrmwood | D (resolve) | 9 | 9 | 9 | 5 | 0 | 4 | 2/2 | 493 | 588 | 15/15, 15/15 |
+| Wyrmwood | E (resolve + fusion) | 9 | 9 | 9 | 5 | 0 | 3 | 2/2 | 590 | 631 | 15/15, 15/15 |
+
+n = 13 in-scope questions per bot. Today's A matched run 1's A on every metric (latency within noise).
+
+## Findings (hand-written after the run)
+
+- **UGM: resolve keeps attend's retrieval gain without its refusals.** D/E rank like B (hit@1 10 vs A's 8; u7's answer
+  and u12's box contents move up) and, because KnowBot's own floor decides instead of weak_match, wrong refusals fall
+  from A's 3 (B's 5) to 2. u7 (Jason Azevedo) becomes correct; u9 moves from a wrong refusal to a wrong answer (the
+  keyword selector quotes the "wrong item" line).
+- **Wyrmwood: the hybrid window still misses the paraphrase/service answers** (w3 Affirm, w7 reply time, w8 custom
+  orders, w10 split payments: none in the top 6 for D/E; A's vector-first search had w10 at 1 and w7 at 5). Net:
+  hit@5 9 vs A's 11, correct equal (5), wrong refusals 4 (D) / 3 (E) vs 5, but those became wrong answers (w8 under D
+  and E, w3 under E) with the keyword selector.
+- **Fusion (E) vs server hybrid (D):** identical retrieval metrics and answers on UGM; on Wyrmwood one more answered
+  question (w3), which is wrong. E costs ~80-100 ms more median. No reason to prefer it.
+- **Off-topic:** all 4 refused in every arm (w14 by the floor under D, top 0.68; under A and E by the answer step).
+- **Determinism:** D and E 15/15 digest and 15/15 order per bot (two runs each).
+- **Latency:** D median +160-200 ms over A. Most of it is the similarity read (one embed + 8-19 vector reads: 190-410
+  ms of a 400-650 ms /resolve call, measured directly on Wyrmwood questions); the ranked search itself is ~150-250 ms.
+  If the engine's search carried KnowDB's per-hit `distance` (the POST search route already returns it on hybrid hits;
+  the engine's GET route / `knowdb.IdentifiedAtom` drop it), the reads would go away.
+
+## Generated tables (run 2, `scripts/evidence-eval.mjs --arms A,D,E`)
+
+Run 2026-11-10T04:07:54.003Z against prod KnowDrive (read-only), store `vs_97c857474b1f4e8892b134c283cf9849`. Answer step: keyword selector (lib answerFromSources, mode select; no model). Floor (arm A): 0.7.
+attendd: hybrid {"fusion":false,"ok":true,"rank_mode":"server_hybrid","section":true}; fusion {"fusion":true,"ok":true,"rank_mode":"client_rrf","section":true}.
+
+Arms run: A, D, E. **A** today's trial search + keep; **B** attend, server hybrid; **C** attend, client-side fusion; **B20** B with query_limit 20; **D** resolve (no attend), server hybrid, then today's keep + answer steps; **E** D with client-side fusion. B, C, D, E ran each question twice.
+
+Similarity check (resolve's cosine vs search's 1 - distance/2, same passage, A vs D): n=218, max |Δ| 0.00005, mean |Δ| 0.00002.
+
+Columns: status; rank = position of the first passage holding the expected fact (— = none); f3/f5 = expected file in top 3/5; heads = passages per head; det = run 1 vs 2 (digest/order); answer verdict, cited file, and the first sentence quoted.
+
+## The Ultimate Game Master (`trial:tr_6ajxk3z2gxkzrbwi`)
+
+| arm | in-scope n | hit@1 | hit@3 | hit@5 | file@3 | file@5 | correct | partial | source ok | wrong refusals | off-topic refused | median ms | p90 ms | determinism | hit@5 w/o H-section |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | 13 | 8 | 10 | 12 | 10 | 12 | 3 | 2 | 9 | 3 | 2/2 | 238 | 502 | n/a | — |
+| D | 13 | 10 | 11 | 13 | 11 | 13 | 4 | 2 | 9 | 2 | 2/2 | 396 | 479 | 15/15 digest, 15/15 order | — |
+| E | 13 | 10 | 11 | 13 | 11 | 13 | 4 | 2 | 9 | 2 | 2/2 | 478 | 584 | 15/15 digest, 15/15 order | — |
+
+### u1 (policy): What is your return policy?
+
+Expected: 30 days after receiving the item (FAQ: 30-night risk-free return) — `refund-policy.md`, `avada-faqs.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.793) | 6 | 1 | y/y | — | — | 370 | wrong | refund-policy.md |  |
+| D | ok (top 0.792) | 6 | 1 | y/y | — | =/= | 338/350 | wrong | refund-policy.md |  |
+| E | ok (top 0.792) | 6 | 1 | y/y | — | =/= | 422/560 | wrong | refund-policy.md |  |
+
+### u2 (price): How much is the Tales of the Valiant Rules Pack?
+
+Expected: $30.00 USD — `tales-of-the-valiant-rules-pack.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.883) | 6 | 1 | y/y | — | — | 238 | correct | tales-of-the-valiant-rules-pack.md | Tales of the Valiant Rules Pack price: 30.00 USD. |
+| D | ok (top 0.883) | 6 | 1 | y/y | — | =/= | 315/312 | correct | tales-of-the-valiant-rules-pack.md | Tales of the Valiant Rules Pack price: 30.00 USD. |
+| E | ok (top 0.883) | 6 | 1 | y/y | — | =/= | 403/450 | correct | tales-of-the-valiant-rules-pack.md | Tales of the Valiant Rules Pack price: 30.00 USD. |
+
+### u3 (policy): How quickly do you ship orders?
+
+Expected: within 2 business days (FAQ: in-stock within 24 hours) — `shipping-policy.md`, `avada-faqs.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.72) | 3 | 1 | y/y | — | — | 227 | wrong | shipping-policy.md | This may include extra shipping charges if an order is required to be split up (only outside of the United States.). |
+| D | ok (top 0.721) | 2 | 1 | y/y | — | =/= | 398/466 | wrong | shipping-policy.md | This may include extra shipping charges if an order is required to be split up (only outside of the United States.). |
+| E | ok (top 0.721) | 2 | 1 | y/y | — | =/= | 546/546 | wrong | shipping-policy.md | This may include extra shipping charges if an order is required to be split up (only outside of the United States.). |
+
+### u4 (policy): Do you ship outside the United States?
+
+Expected: yes, weight-based shipping anywhere else, calculated at checkout — `shipping-policy.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.715) | 3 | 1 | y/y | — | — | 226 | wrong | shipping-policy.md | This may include extra shipping charges if an order is required to be split up (only outside of the United States.). |
+| D | ok (top 0.715) | 2 | 1 | y/y | — | =/= | 426/445 | wrong | shipping-policy.md | This may include extra shipping charges if an order is required to be split up (only outside of the United States.). |
+| E | ok (top 0.715) | 2 | 1 | y/y | — | =/= | 552/524 | wrong | shipping-policy.md | This may include extra shipping charges if an order is required to be split up (only outside of the United States.). |
+
+### u5 (policy): Can I return a gift card?
+
+Expected: no: no returns on sale items or gift cards — `refund-policy.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.761) | 6 | 4 | n/y | — | — | 226 | wrong | the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md | The Ultimate Game Master Gift Card is the perfect treasure. |
+| D | ok (top 0.761) | 6 | 5 | n/y | — | =/= | 358/375 | wrong | the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md | The Ultimate Game Master Gift Card is the perfect treasure. |
+| E | ok (top 0.761) | 6 | 5 | n/y | — | =/= | 464/425 | wrong | the-ultimate-game-master-gift-card-let-them-have-the-adventure-they-want.md | The Ultimate Game Master Gift Card is the perfect treasure. |
+
+### u6 (multi): What does the Magnetic Dice Tray cost and how big is it?
+
+Expected: $29.99; 9.84 x 7.28 inches — `ugms-magnetic-dice-tray.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.859) | 6 | 1 | y/y | — | — | 502 | partial | ugms-magnetic-dice-tray.md | Magnetic Dice Tray price: 29.99 USD. |
+| D | ok (top 0.854) | 6 | 1 | y/y | — | =/= | 396/457 | partial | ugms-magnetic-dice-tray.md | Magnetic Dice Tray price: 29.99 USD. |
+| E | ok (top 0.854) | 6 | 1 | y/y | — | =/= | 543/594 | partial | ugms-magnetic-dice-tray.md | Magnetic Dice Tray price: 29.99 USD. |
+
+### u7 (staff): Who teaches the Dungeon Masterclass course?
+
+Expected: Jason Azevedo of RealmSmith — `game-master-foundations-online-course.md`, `dungeon-masterclass.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.847) | 6 | 2 | y/y | — | — | 226 | wrong | game-master-foundations-online-course.md | Dungeon Masterclass: The Art of Game Mastering type: Online Course. |
+| D | ok (top 0.847) | 6 | 1 | y/y | — | =/= | 260/251 | correct | dungeon-masterclass.md | From finding your voice as a GM to running dramatic live sessions, Jason Azevedo of RealmSmith teaches you to run a table your players never want to leave. |
+| E | ok (top 0.847) | 6 | 1 | y/y | — | =/= | 405/407 | correct | dungeon-masterclass.md | From finding your voice as a GM to running dramatic live sessions, Jason Azevedo of RealmSmith teaches you to run a table your players never want to leave. |
+
+### u8 (paraphrase): Where do I mail stuff to if I'm sending it back?
+
+Expected: 13665 E 42 Terr S, Ste F, Independence, Missouri 64055 — `refund-policy.md`, `contact-information.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.776) | 6 | 2 | y/y | — | — | 263 | wrong_refusal | — |  |
+| D | ok (top 0.767) | 6 | 1 | y/y | — | =/= | 445/448 | wrong_refusal | — |  |
+| E | ok (top 0.776) | 6 | 1 | y/y | — | =/= | 553/535 | wrong_refusal | — |  |
+
+### u9 (paraphrase): I ordered the wrong thing. Can I just swap it for a different one?
+
+Expected: return it, then make a separate purchase for the new item — `refund-policy.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.763) | 6 | — | n/n | — | — | 274 | wrong_refusal | — |  |
+| D | ok (top 0.749) | 6 | 5 | n/y | — | =/= | 434/424 | wrong | refund-policy.md | Please inspect your order upon reception and contact us immediately if the item is defective, damaged or if you receive the wrong item, so that we can evaluate |
+| E | ok (top 0.763) | 6 | 5 | n/y | — | =/= | 512/592 | wrong | refund-policy.md | Please inspect your order upon reception and contact us immediately if the item is defective, damaged or if you receive the wrong item, so that we can evaluate |
+
+### u10 (multi): What discount do shops get for stocking your products, and what's the minimum order?
+
+Expected: tiers 25/40/50% off, minimums $500/$1,000/$1,500 — `wholesale.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.791) | 6 | 1 | y/y | — | — | 512 | partial | wholesale.md | $500 minimum order. |
+| D | ok (top 0.791) | 6 | 1 | y/y | — | =/= | 533/552 | partial | wholesale.md | $500 minimum order. |
+| E | ok (top 0.791) | 6 | 1 | y/y | — | =/= | 584/607 | partial | wholesale.md | $500 minimum order. |
+
+### u11 (price): How much is a seat in the Wednesday Everlasting Rime campaign?
+
+Expected: $50.00 USD — `the-everlasting-rime-wednesday.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.856) | 6 | 1 | y/y | — | — | 236 | correct | the-everlasting-rime-wednesday.md | The Everlasting Rime (Wednesday) price: 50.00 USD. |
+| D | ok (top 0.856) | 6 | 1 | y/y | — | =/= | 317/363 | correct | the-everlasting-rime-wednesday.md | The Everlasting Rime (Wednesday) price: 50.00 USD. |
+| E | ok (top 0.856) | 6 | 1 | y/y | — | =/= | 376/418 | correct | the-everlasting-rime-wednesday.md | The Everlasting Rime (Wednesday) price: 50.00 USD. |
+
+### u12 (service): What comes in the box with the screen?
+
+Expected: 4-panel screen, 12 blank magnetic charts, 4 rivet magnets, magnetic clasp — `avada-faqs.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.8) | 6 | 5 | n/y | — | — | 229 | correct | avada-faqs.md | The 4-panel magnetic screen, 12 blank magnetic charts, 4 rivet magnets, and the magnetic clasp that doubles as a dice tower. |
+| D | ok (top 0.8) | 6 | 3 | y/y | — | =/= | 342/347 | correct | ultimate-game-master-screen-brown-portrait.md | Your core screen includes the 4-panel magnetic screen, 12 blank magnetic charts, 4 rivet magnets, and the magnetic clasp / dice tower. |
+| E | ok (top 0.8) | 6 | 3 | y/y | — | =/= | 490/406 | correct | ultimate-game-master-screen-brown-portrait.md | Your core screen includes the 4-panel magnetic screen, 12 blank magnetic charts, 4 rivet magnets, and the magnetic clasp / dice tower. |
+
+### u13 (policy): How long does a refund take to reach my card?
+
+Expected: refunded to the original payment method within 10 business days — `refund-policy.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.763) | 2 | 1 | y/y | — | — | 286 | wrong_refusal | — |  |
+| D | ok (top 0.763) | 1 | 1 | y/y | — | =/= | 426/479 | wrong_refusal | — |  |
+| E | ok (top 0.763) | 1 | 1 | y/y | — | =/= | 478/461 | wrong_refusal | — |  |
+
+### u14 (offtopic): What is the capital of Australia?
+
+Expected: refuse
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | refused_floor (top 0.641) | 0 | — | n/n | — | — | 220 | refused_ok | — |  |
+| D | refused_floor (top 0.64) | 0 | — | n/n | — | =/= | 368/364 | refused_ok | — |  |
+| E | refused_floor (top 0.64) | 0 | — | n/n | — | =/= | 397/502 | refused_ok | — |  |
+
+### u15 (offtopic): Can you recommend a good pizza place in Independence, Missouri?
+
+Expected: refuse (shares words with the return address)
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.708) | 2 | — | n/n | — | — | 242 | refused_ok | — |  |
+| D | ok (top 0.708) | 1 | — | n/n | — | =/= | 406/585 | refused_ok | — |  |
+| E | ok (top 0.708) | 1 | — | n/n | — | =/= | 464/466 | refused_ok | — |  |
+
+## Wyrmwood Help (`trial:tr_fpfsjztz7h7insy6`)
+
+| arm | in-scope n | hit@1 | hit@3 | hit@5 | file@3 | file@5 | correct | partial | source ok | wrong refusals | off-topic refused | median ms | p90 ms | determinism | hit@5 w/o H-section |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | 13 | 10 | 10 | 11 | 10 | 11 | 5 | 0 | 8 | 5 | 2/2 | 296 | 579 | n/a | — |
+| D | 13 | 9 | 9 | 9 | 9 | 9 | 5 | 0 | 8 | 4 | 2/2 | 493 | 588 | 15/15 digest, 15/15 order | — |
+| E | 13 | 9 | 9 | 9 | 9 | 9 | 5 | 0 | 8 | 3 | 2/2 | 590 | 631 | 15/15 digest, 15/15 order | — |
+
+### w1 (policy): Do you offer a military discount?
+
+Expected: no standing discount programs (military, seniors, …); only temporary promotions — `26115689444763-discounts.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.781) | 6 | 1 | y/y | — | — | 278 | correct | 26115689444763-discounts.md | We will continue to explore these options and may open up such programs in the future, but at present, our discounts are limited to temporary promotions. |
+| D | ok (top 0.781) | 6 | 1 | y/y | — | =/= | 546/503 | correct | 26115689444763-discounts.md | We will continue to explore these options and may open up such programs in the future, but at present, our discounts are limited to temporary promotions. |
+| E | ok (top 0.781) | 6 | 1 | y/y | — | =/= | 614/650 | correct | 26115689444763-discounts.md | We will continue to explore these options and may open up such programs in the future, but at present, our discounts are limited to temporary promotions. |
+
+### w2 (policy): Do your gift certificates expire?
+
+Expected: never expire — `26148615958939-gift-certificates.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.743) | 3 | 1 | y/y | — | — | 266 | correct | 26148615958939-gift-certificates.md | WyrmwoodGaming.com gift certificates never expire. |
+| D | ok (top 0.743) | 3 | 1 | y/y | — | =/= | 472/429 | correct | 26148615958939-gift-certificates.md | WyrmwoodGaming.com gift certificates never expire. |
+| E | ok (top 0.743) | 3 | 1 | y/y | — | =/= | 592/609 | correct | 26148615958939-gift-certificates.md | WyrmwoodGaming.com gift certificates never expire. |
+
+### w3 (paraphrase): Can I spread the cost of a table over a few months?
+
+Expected: payment plans through Affirm at checkout — `payment-plans-by-affirm.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.801) | 6 | — | n/n | — | — | 384 | wrong_refusal | — |  |
+| D | ok (top 0.801) | 6 | — | n/n | — | =/= | 576/528 | wrong_refusal | — |  |
+| E | ok (top 0.801) | 6 | — | n/n | — | =/= | 578/631 | wrong | 25827107190171-wood-movement-in-toppers.md | If you find that the above steps resolve your issue, you can help prevent it from recurring in the future by utilizing a humidifier during the drier months to k |
+
+### w4 (policy): Will I have to pay customs or VAT if I order from Germany?
+
+Expected: yes, calculated and collected at checkout — `international-fees-customs-duties-and-vat.md`, `shipping-locations-carriers.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.786) | 6 | 1 | y/y | — | — | 296 | wrong_refusal | — |  |
+| D | ok (top 0.786) | 6 | 1 | y/y | — | =/= | 448/570 | wrong_refusal | — |  |
+| E | ok (top 0.786) | 6 | 1 | y/y | — | =/= | 569/562 | wrong_refusal | — |  |
+
+### w5 (service): Do you ship furniture to Australia?
+
+Expected: furniture ships to the US and Canada only — `shipping-locations-carriers.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.746) | 6 | 1 | y/y | — | — | 315 | correct | 26145583367579-shipping-locations-carriers.md | We ship tabletop accessories and small items worldwide, while we ship furniture to the United States and Canada. |
+| D | ok (top 0.746) | 6 | 1 | y/y | — | =/= | 418/437 | correct | 26145583367579-shipping-locations-carriers.md | We ship tabletop accessories and small items worldwide, while we ship furniture to the United States and Canada. |
+| E | ok (top 0.746) | 6 | 1 | y/y | — | =/= | 590/561 | correct | 26145583367579-shipping-locations-carriers.md | We ship tabletop accessories and small items worldwide, while we ship furniture to the United States and Canada. |
+
+### w6 (policy): How long until my order ships?
+
+Expected: in-stock orders generally ship within 2-5 days — `order-status-and-expected-ship-dates.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.772) | 6 | 1 | y/y | — | — | 306 | correct | 31849298953115-order-status-and-expected-ship-dates.md | Orders containing only in-stock items generally ship within 2-5 days, but this can vary due to peak times, or in the case of promotional items, during the holid |
+| D | ok (top 0.771) | 6 | 1 | y/y | — | =/= | 507/493 | correct | 31849298953115-order-status-and-expected-ship-dates.md, hex-table-for-six-quick-ship.md | Orders containing only in-stock items generally ship within 2-5 days, but this can vary due to peak times, or in the case of promotional items, during the holid |
+| E | ok (top 0.771) | 6 | 1 | y/y | — | =/= | 620/579 | correct | 31849298953115-order-status-and-expected-ship-dates.md, hex-table-for-six-quick-ship.md | Orders containing only in-stock items generally ship within 2-5 days, but this can vary due to peak times, or in the case of promotional items, during the holid |
+
+### w7 (service): How long does support take to reply?
+
+Expected: 48 business hours — `26174791100827-contact-us.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.736) | 6 | 5 | n/y | — | — | 276 | wrong_refusal | — |  |
+| D | ok (top 0.73) | 6 | — | n/n | — | =/= | 478/482 | wrong_refusal | — |  |
+| E | ok (top 0.736) | 6 | — | n/n | — | =/= | 599/586 | wrong_refusal | — |  |
+
+### w8 (service): Can you build me a custom table?
+
+Expected: not currently; the Signature Series is coming — `do-you-accept-custom-orders.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.826) | 6 | — | n/n | — | — | 304 | wrong_refusal | — |  |
+| D | ok (top 0.824) | 6 | — | n/n | — | =/= | 487/553 | wrong | modular-table.md | Build Your Modular Gaming Table. |
+| E | ok (top 0.826) | 6 | — | n/n | — | =/= | 601/573 | wrong | home.md | Build & Price Your Table. |
+
+### w9 (staff): Who founded Wyrmwood?
+
+Expected: Douglas Costello and Ed Maranville, then Ian Costello — `about-us.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.766) | 6 | 1 | y/y | — | — | 289 | wrong | about-us.md | First launched on Etsy in 2012, early prototypes were tested with friends and family at weekly game nights. |
+| D | ok (top 0.766) | 6 | 1 | y/y | — | =/= | 457/433 | wrong | about-us.md | First launched on Etsy in 2012, early prototypes were tested with friends and family at weekly game nights. |
+| E | ok (top 0.766) | 6 | 1 | y/y | — | =/= | 506/544 | wrong | about-us.md | First launched on Etsy in 2012, early prototypes were tested with friends and family at weekly game nights. |
+
+### w10 (paraphrase): I want to put half on my Visa and half on my Amex. Is that possible?
+
+Expected: not directly; buy gift certificates with one card first — `split-my-purchase-between-multiple-payment-methods.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.785) | 6 | 1 | y/y | — | — | 288 | wrong_refusal | — |  |
+| D | ok (top 0.735) | 6 | — | n/n | — | =/= | 495/493 | wrong_refusal | — |  |
+| E | ok (top 0.785) | 6 | — | n/n | — | =/= | 624/611 | wrong_refusal | — |  |
+
+### w11 (multi): How many sleeved cards fit in the deck box, and will the tarot box hold a full tarot deck?
+
+Expected: 100 sleeved cards; yes, a standard 78-card tarot deck — `deck-box-capacity.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.854) | 6 | 1 | y/y | — | — | 652 | wrong | 27135104095771-deck-box-capacity.md | The Tarot Deck Box includes a removable divider to separate the manual and deck compartments. |
+| D | ok (top 0.854) | 6 | 1 | y/y | — | =/= | 679/626 | wrong | 27135104095771-deck-box-capacity.md | The Tarot Deck Box includes a removable divider to separate the manual and deck compartments. |
+| E | ok (top 0.854) | 6 | 1 | y/y | — | =/= | 603/617 | wrong | 27135104095771-deck-box-capacity.md | The Tarot Deck Box includes a removable divider to separate the manual and deck compartments. |
+
+### w12 (multi): Which meeple color has the skull pattern, and how many meeples come in a color set?
+
+Expected: black; 8 per color set — `colorblind-friendly-meeples.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.88) | 6 | 1 | y/y | — | — | 579 | correct | 27048964803739-colorblind-friendly-meeples.md | Black Meeple: a skull motif. |
+| D | ok (top 0.88) | 6 | 1 | y/y | — | =/= | 637/588 | correct | 27048964803739-colorblind-friendly-meeples.md | Black Meeple: a skull motif. |
+| E | ok (top 0.88) | 6 | 1 | y/y | — | =/= | 693/751 | correct | 27048964803739-colorblind-friendly-meeples.md | Black Meeple: a skull motif. |
+
+### w13 (policy): Can I pick up my order in person?
+
+Expected: no in-person pickup at either location — `shipping-locations-carriers.md`
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.752) | 6 | 1 | y/y | — | — | 278 | wrong | 26145583367579-shipping-locations-carriers.md | Thank you for your understanding. |
+| D | ok (top 0.752) | 6 | 1 | y/y | — | =/= | 517/450 | wrong | 26145583367579-shipping-locations-carriers.md | Thank you for your understanding. |
+| E | ok (top 0.752) | 6 | 1 | y/y | — | =/= | 575/531 | wrong | 26145583367579-shipping-locations-carriers.md | Thank you for your understanding. |
+
+### w14 (offtopic): What's the best way to train for a marathon?
+
+Expected: refuse
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | ok (top 0.703) | 4 | — | n/n | — | — | 357 | refused_ok | — |  |
+| D | refused_floor (top 0.68) | 0 | — | n/n | — | =/= | 538/478 | refused_ok | — |  |
+| E | ok (top 0.703) | 1 | — | n/n | — | =/= | 557/567 | refused_ok | — |  |
+
+### w15 (offtopic): Can you write me a cover letter for a job at IKEA?
+
+Expected: refuse (near "Working for Wyrmwood")
+
+| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | refused_floor (top 0.692) | 0 | — | n/n | — | — | 278 | refused_ok | — |  |
+| D | refused_floor (top 0.692) | 0 | — | n/n | — | =/= | 498/480 | refused_ok | — |  |
+| E | refused_floor (top 0.692) | 0 | — | n/n | — | =/= | 591/547 | refused_ok | — |  |

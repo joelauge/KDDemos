@@ -8,6 +8,7 @@
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { KnowDriveRetriever } from './retrievers.mjs';
+import { combineDigests } from './evidence.mjs';
 import { PROVIDERS, sealKey, openKey, listModels } from './providers.mjs';
 
 export const REGISTRY_PATH = 'knowbot/_config/instances.json';
@@ -186,6 +187,8 @@ class LinkedRetriever {
       source: all.some(({ r }) => r.source === 'knowdrive') ? 'knowdrive' : all[0].r.source,
       results: results.slice(0, k),
       floor: { top: tops.length ? Math.max(...tops) : null, buckets: all.map(({ bucket, r }) => ({ bucket, top: r.floor?.top ?? null, count: r.results.length })) },
+      // resolve mode: one receipt over every bucket's window
+      ...(all.some(({ r }) => r.receipt) ? { receipt: combineDigests(all.map(({ r }) => r.receipt)) } : {}),
     };
   }
 }
@@ -515,7 +518,7 @@ export class InstanceRegistry {
     if (!this.retrievers.has(key)) {
       this.retrievers.set(key, new KnowDriveRetriever({
         baseUrl: this.kd.baseUrl, apiKey: this.kd.apiKey, store: this.kd.store, tag: b.tag, prefix: b.root, dirFilter: false, prefixFilter: false,
-        local: null, minSimilarity, exclude: ['kind:config', 'questions'], cards: false, logger: this.log,
+        local: null, minSimilarity, exclude: ['kind:config', 'questions'], cards: false, logger: this.log, resolver: this.kd.resolver || null,
       }));
     }
     return this.retrievers.get(key).withMask(mask || {});

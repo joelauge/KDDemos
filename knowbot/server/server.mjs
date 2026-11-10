@@ -17,7 +17,7 @@ import { logSendEvent } from './questions.mjs';
 import { phoneSessions } from './channels/voice-live.mjs';
 import { activeWebVoiceSessions } from './channels/webvoice.mjs';
 import { createResearchAgent } from './research.mjs';
-import { createEvidenceSelector, selectForRetriever, isRefusal } from './evidence.mjs';
+import { createEvidenceSelector, createResolver, selectForRetriever, isRefusal } from './evidence.mjs';
 
 /**
  * The header the Cloudflare Worker sends on internal calls to this server (GET /api/internal/busy): an HMAC of a fixed
@@ -71,6 +71,9 @@ export function createKnowBotServer(opts = {}) {
   const researchAgent = opts.researchAgent !== undefined ? opts.researchAgent : createResearchAgent(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
   // Evidence selector (server/evidence.mjs): off unless KNOWBOT_EVIDENCE=attend; shared by every answer path
   const evidence = opts.evidence !== undefined ? opts.evidence : createEvidenceSelector(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
+  // Resolve mode (KNOWBOT_EVIDENCE=resolve): the sidecar's ranked search replaces only the retrieval call of every
+  // answer path (knowDrive retrievers, trial search); the floor, refusal and answer steps are unchanged
+  const resolver = opts.resolver !== undefined ? opts.resolver : createResolver(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
   // Models a bot can answer with. Today one local model; KNOWBOT_MODELS (JSON [{id,label,baseUrl?,apiKeyEnv?}]) adds more.
   const models = (() => {
     const base = [{ id: llmModel, label: env.LLM_MODEL_LABEL || 'Qwen2.5 1.5B Instruct (Q4_K_M, llama.cpp)', default: true }];
@@ -92,7 +95,7 @@ export function createKnowBotServer(opts = {}) {
   const log = (...a) => { if (!quiet) console.log(...a); };
 
   // Stored questions (SPEC 11.1) are never searchable, so never citable.
-  const { mode, retriever, local } = createRetriever({ corpusDir, env: { ...env, KNOWDRIVE_EXCLUDE_TAGS: [env.KNOWDRIVE_EXCLUDE_TAGS, 'questions'].filter(Boolean).join(',') }, logger: log, watch: opts.watch ?? true });
+  const { mode, retriever, local } = createRetriever({ corpusDir, env: { ...env, KNOWDRIVE_EXCLUDE_TAGS: [env.KNOWDRIVE_EXCLUDE_TAGS, 'questions'].filter(Boolean).join(',') }, logger: log, watch: opts.watch ?? true, resolver });
   const store = mode === 'knowdrive' ? (env.KNOWDRIVE_STORE || DEFAULT_STORE) : 'local:corpus';
 
   // ------------------------------------------------------------ chat instances (one knowDrive folder each)
@@ -100,6 +103,7 @@ export function createKnowBotServer(opts = {}) {
   const kd = mode === 'knowdrive' ? {
     baseUrl: String(env.KNOWDRIVE_BASE_URL || 'https://knowdrive.ai').replace(/\/+$/, ''), store,
     apiKey: kdKeyFile ? () => { try { return readFileSync(kdKeyFile, 'utf8').trim(); } catch { return ''; } } : env.KNOWDRIVE_API_KEY,
+    resolver,
   } : null;
   const builtinOrg = env.KNOWBOT_ORG || DEFAULT_PERSONA.org;
   const registry = opts.registry || new InstanceRegistry({
@@ -123,13 +127,13 @@ export function createKnowBotServer(opts = {}) {
     Promise.resolve(studio?.numbers?.meterFor?.({ kind: 'trial', id: e.botId, flags: T?.flags, T })).then((m) => m && m.phoneNumber === e.fromNumber && m.charge('text', Math.max(1, Math.ceil((e.length || 160) / 153)), 'send_info'))
       .catch((err) => log(`[sendinfo] credit not recorded: ${err.message}`));
   } });
-  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent, evidence,
+  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent, evidence, resolver,
     rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, sendInfo,
     // a Studio answer's public proof link (/p/<id>) for what it sends, made by the developer API (created below)
     proofLink: (req, trialId, a) => devapi.proofLink(req, trialId, a), ...(opts.studio || {}) });
 
   // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
-  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, evidence, readRaw, readJson, clientIp, requireAdmin,
+  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, evidence, resolver, readRaw, readJson, clientIp, requireAdmin,
     logger: log, dataDir, llmModel, canonical: CANONICAL, sendInfo, ...(opts.devapi || {}) });
 
   // ------------------------------------------------------------ events / SSE
@@ -308,7 +312,7 @@ export function createKnowBotServer(opts = {}) {
     const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
     const answer = {
       ...fin,
-      ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : {}),
+      ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : ret.receipt ? { receipt: { digest: ret.receipt } } : {}),
       latencyMs, engine, surface,
       sessionId: sessionId ?? null,
       turnId: turnId ?? `canonical.${randomUUID().slice(0, 8)}`,

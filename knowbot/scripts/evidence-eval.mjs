@@ -7,8 +7,13 @@
 //      fallback, clause decomposition for multi-part questions, similarity floor, at most 6 kept + top-3 keyword hits)
 //   B  the evidence selector (attendd) with KnowDB's server-side hybrid search      (ATTENDD_FUSION off)
 //   C  the evidence selector (attendd) with the engine's client-side fused ranking  (ATTENDD_FUSION=on)
-//   D  B with query_limit 20 (one run), to see what the smaller window costs
-// B and C run each question twice and compare the bundle digest and the passage order (determinism).
+//   B20 B with query_limit 20 (one run), to see what the smaller window costs
+//   D  resolve mode (KNOWBOT_EVIDENCE=resolve): attendd's POST /resolve, the engine's ranked search WITHOUT attend
+//      (server-side hybrid), in place of the trial search only; then today's keep step (similarity floor, at most 6
+//      kept + top-3 keyword hits) and answer step, exactly as arm A (server/trials.mjs resolvedRetrieval)
+//   E  D with the engine's client-side fused ranking (ATTENDD_FUSION=on)
+// B, C, D and E run each question twice and compare the digest and the passage order (determinism).
+// --arms picks the arms (default A,D,E; B, C and B20 are the attend arms of the first run).
 //
 // The answer key (expected fact as regexes + expected source files) was written by reading the bots' files before
 // any arm was run. Retrieval metrics: rank of the first passage holding the expected fact, expected file in the top
@@ -18,12 +23,12 @@
 // (KNOWBOT_EVIDENCE_WEAK=refuse, the default, and =answer).
 //
 // Usage (two attendd instances on the loopback, one with ATTENDD_FUSION=on):
-//   KNOWDRIVE_API_KEY=… node scripts/evidence-eval.mjs [--hybrid http://127.0.0.1:7181] [--fusion http://127.0.0.1:7182]
+//   KNOWDRIVE_API_KEY=… node scripts/evidence-eval.mjs [--arms A,D,E] [--hybrid http://127.0.0.1:7181] [--fusion http://127.0.0.1:7182]
 //     [--bots ugm,wyrmwood] [--only u1,w3] [--json out.json] [--md out.md]
 import { writeFileSync } from 'node:fs';
 import * as lib from '../lib/knowbot.js';
-import { normHit, questionClauses } from '../server/trials.mjs';
-import { mergeBundles, REFUSAL_STATUSES } from '../server/evidence.mjs';
+import { normHit, questionClauses, resolvedRetrieval } from '../server/trials.mjs';
+import { mergeBundles, spanToDoc, combineDigests } from '../server/evidence.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, d = null) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : d; };
@@ -33,6 +38,9 @@ const STORE = 'vs_97c857474b1f4e8892b134c283cf9849';
 const FLOOR = 0.7;
 const EXCLUDE = ['kind:trial-spec', 'kind:config', 'questions'];
 const URLS = { B: opt('hybrid', 'http://127.0.0.1:7181'), C: opt('fusion', 'http://127.0.0.1:7182') };
+// resolve arms: attendd's /resolve on the same two instances (server hybrid / client fusion)
+URLS.D = URLS.B; URLS.E = URLS.C;
+const ARMS = (opt('arms') || 'A,D,E').split(',').map((x) => x.trim()).filter(Boolean);
 if (!key) { console.error('KNOWDRIVE_API_KEY is not set'); process.exit(2); }
 
 // ------------------------------------------------------------------------------------------------ the answer key
@@ -147,15 +155,41 @@ async function searchPath(question, scopeTag) {
     hybridOnly = hybridOnly.filter((h) => !inV.has(h));
   }
   const top = merged.length ? Math.max(...merged.map((h) => h.similarity ?? 0)) : 0;
+  return { ...keepStep({ vector: merged, hybridOnly, top }), calls: 2 + (clauses.length > 1 ? clauses.length : 0), vector: merged };
+}
+
+/** The ask path's keep step (server/trials.mjs, steps 3-4) over retrieve()'s result: floor, at most 6 kept + top-3 keyword hits. */
+function keepStep({ vector, hybridOnly, top }) {
   const keep = (floor) => {
-    const kept = merged.filter((h) => (h.similarity ?? 0) >= floor).slice(0, 6);
+    const kept = vector.filter((h) => (h.similarity ?? 0) >= floor).slice(0, 6);
     if (top >= floor) for (const h of hybridOnly.filter((x) => x.hybridRank <= 3)) if (kept.length < 6) kept.push(h);
     return kept;
   };
   const toSource = (h) => ({ file_id: h.fileId, filename: h.filename, path: h.filename, title: h.filename.split('/').pop(), text: h.text, score: h.similarity, seq: h.seq });
   const kept = keep(FLOOR);
   // retrieval metrics read the kept window as if the floor were 0, so a floor refusal still shows what search found
-  return { status: top >= FLOOR && kept.length ? 'ok' : 'refused_floor', top, sources: kept.map(toSource), candidates: keep(-Infinity).map(toSource), calls: 2 + (clauses.length > 1 ? clauses.length : 0) };
+  return { status: top >= FLOOR && kept.length ? 'ok' : 'refused_floor', top, sources: kept.map(toSource), candidates: keep(-Infinity).map(toSource) };
+}
+
+// ------------------------------------------------------------------------------- arms D, E: resolve (no attend)
+async function resolveCall(url, question, scopeTag, limit) {
+  const res = await fetch(`${url}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(60000),
+    body: JSON.stringify({ store: STORE, question, scope: { tags_all: [scopeTag], tags_none: EXCLUDE }, limit }) });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`resolve HTTP ${res.status} ${text.slice(0, 200)}`);
+  const j = JSON.parse(text);
+  if (j.spans.some((x) => typeof x.similarity !== 'number')) throw new Error('a span has no similarity');
+  return j;
+}
+
+/** server/trials.mjs resolvedRetrieve(): the question's window (20) + one per clause (6), run together, then the keep step. */
+async function resolvePath(url, question, scopeTag) {
+  const ok = (h) => h.text && h.tags?.includes(scopeTag) && !EXCLUDE.some((t) => h.tags.includes(t));
+  const clauses = questionClauses(question);
+  const [main, ...per] = await Promise.all([resolveCall(url, question, scopeTag, 20), ...(clauses.length > 1 ? clauses.map((c) => resolveCall(url, c, scopeTag, 6)) : [])]);
+  const r = resolvedRetrieval([main.spans.map(spanToDoc), ...per.map((x) => x.spans.map(spanToDoc))], ok);
+  return { ...keepStep(r), vector: r.vector, digest: combineDigests([main.receipt?.digest, ...per.map((x) => x.receipt?.digest)]),
+    order: main.spans.map((x) => `${x.file_id}#${x.atom_index}`).join(','), calls: 1 + per.length, rankMode: main.rank_mode, simMs: main.similarity?.ms ?? null };
 }
 
 // ------------------------------------------------------------------------------------------ arms B, C, D: attendd
@@ -246,13 +280,37 @@ async function runAttendArm(name, url, Q, scopeTag, runs, extra = {}) {
   return res;
 }
 
+async function runResolveArm(name, url, Q, scopeTag, runs) {
+  const out = [];
+  for (let r = 0; r < runs; r++) {
+    const t0 = performance.now();
+    try { out.push({ ...(await resolvePath(url, Q.q, scopeTag)), ms: Math.round(performance.now() - t0) }); } catch (e) { out.push({ error: String(e.message || e), ms: Math.round(performance.now() - t0) }); }
+  }
+  const ok = out.filter((x) => !x.error);
+  if (!ok.length) return { name, error: out[0]?.error, ms: out.map((x) => x.ms) };
+  const p = ok[0];
+  const a = await answer(Q.q, p.status === 'ok' ? p.sources : [], false);
+  return { name, status: p.status, top: Number(p.top.toFixed(3)), passages: p.sources.length, ms: out.map((x) => x.ms), rankMode: p.rankMode, digest: p.digest, vector: p.vector,
+    ret: retrieval(Q, p.candidates), deterministic: ok.length >= 2 ? { digest: ok[0].digest === ok[1].digest, order: ok[0].order === ok[1].order } : null,
+    answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()) } };
+}
+
+/** Similarity agreement: |resolve's cosine - search's 1 - distance/2| over the passages both arms returned. */
+function simAgreement(aVec = [], dVec = []) {
+  const key = (h) => `${h.fileId}|${norm(h.text).trim().slice(0, 200)}`;
+  const a = new Map(aVec.filter((h) => h.similarity != null).map((h) => [key(h), h.similarity]));
+  return dVec.filter((h) => a.has(key(h))).map((h) => Math.abs(h.similarity - a.get(key(h))));
+}
+
 async function main() {
   await probeModel();
   const health = {};
-  for (const [arm, url] of Object.entries(URLS)) {
+  const need = new Set(ARMS.flatMap((a) => (['B', 'B20', 'D'].includes(a) ? ['B'] : ['C', 'E'].includes(a) ? ['C'] : [])));
+  for (const arm of need) {
+    const url = URLS[arm];
     try { health[arm] = await (await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(3000) })).json(); } catch (e) { console.error(`attendd ${arm} at ${url}: ${e.message}`); process.exit(2); }
   }
-  if (health.B.rank_mode !== 'server_hybrid' || health.C.rank_mode !== 'client_rrf') { console.error(`attendd modes: B=${health.B.rank_mode} C=${health.C.rank_mode}; want server_hybrid and client_rrf`); process.exit(2); }
+  if ((need.has('B') && health.B.rank_mode !== 'server_hybrid') || (need.has('C') && health.C.rank_mode !== 'client_rrf')) { console.error(`attendd modes: ${JSON.stringify(health)}; want server_hybrid (--hybrid) and client_rrf (--fusion)`); process.exit(2); }
   const only = opt('only') ? new Set(opt('only').split(',')) : null;
   const bots = (opt('bots') || 'ugm,wyrmwood').split(',');
   const results = [];
@@ -263,23 +321,32 @@ async function main() {
       if (only && !only.has(Q.id)) continue;
       const row = { bot: botId, id: Q.id, type: Q.type, q: Q.q, note: Q.note, files: Q.files, arms: {} };
       // A
-      const t0 = performance.now();
-      try {
-        const p = await searchPath(Q.q, scopeTag);
-        const ms = Math.round(performance.now() - t0);
-        const a = await answer(Q.q, p.status === 'ok' ? p.sources : [], false);
-        row.arms.A = { name: 'A', status: p.status, top: Number(p.top.toFixed(3)), passages: p.sources.length, ms: [ms], ret: retrieval(Q, p.candidates),
-          answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()) } };
-      } catch (e) { row.arms.A = { name: 'A', error: String(e.message || e), ms: [Math.round(performance.now() - t0)] }; }
-      row.arms.B = await runAttendArm('B', URLS.B, Q, scopeTag, 2);
-      row.arms.C = await runAttendArm('C', URLS.C, Q, scopeTag, 2);
-      row.arms.D = await runAttendArm('D', URLS.B, Q, scopeTag, 1, { query_limit: 20 });
+      if (ARMS.includes('A')) {
+        const t0 = performance.now();
+        try {
+          const p = await searchPath(Q.q, scopeTag);
+          const ms = Math.round(performance.now() - t0);
+          const a = await answer(Q.q, p.status === 'ok' ? p.sources : [], false);
+          row.arms.A = { name: 'A', status: p.status, top: Number(p.top.toFixed(3)), passages: p.sources.length, ms: [ms], ret: retrieval(Q, p.candidates), vector: p.vector,
+            answer: { ...judge(Q, a), quote: quote(a.text, Q.keys), files: a.files.map((f) => f.split('/').pop()) } };
+        } catch (e) { row.arms.A = { name: 'A', error: String(e.message || e), ms: [Math.round(performance.now() - t0)] }; }
+      }
+      if (ARMS.includes('B')) row.arms.B = await runAttendArm('B', URLS.B, Q, scopeTag, 2);
+      if (ARMS.includes('C')) row.arms.C = await runAttendArm('C', URLS.C, Q, scopeTag, 2);
+      if (ARMS.includes('B20')) row.arms.B20 = await runAttendArm('B20', URLS.B, Q, scopeTag, 1, { query_limit: 20 });
+      if (ARMS.includes('D')) row.arms.D = await runResolveArm('D', URLS.D, Q, scopeTag, 2);
+      if (ARMS.includes('E')) row.arms.E = await runResolveArm('E', URLS.E, Q, scopeTag, 2);
+      // single-clause questions only: arm A raises a passage's similarity to its best clause's on a multi-part one
+      if (row.arms.A?.vector && row.arms.D?.vector && questionClauses(Q.q).length <= 1) row.simDiffs = simAgreement(row.arms.A.vector, row.arms.D.vector);
+      for (const x of Object.values(row.arms)) delete x.vector;
       results.push(row);
       const s = (x) => x.error ? 'ERR' : `${x.status}${x.ret?.rank ? '@' + x.ret.rank : ''}/${x.answer?.verdict}`;
-      console.error(`${Q.id.padEnd(4)} A ${s(row.arms.A)} | B ${s(row.arms.B)} | C ${s(row.arms.C)} | D ${s(row.arms.D)}`);
+      console.error(`${Q.id.padEnd(4)} ${Object.entries(row.arms).map(([k, x]) => `${k} ${s(x)}`).join(' | ')}`);
     }
   }
-  const meta = { at: new Date().toISOString(), store: STORE, answerMode, health, kdSearchCallsArmA: calls, floor: FLOOR };
+  const diffs = results.flatMap((r) => r.simDiffs || []);
+  const meta = { at: new Date().toISOString(), store: STORE, answerMode, health, kdSearchCallsArmA: calls, floor: FLOOR, arms: ARMS,
+    simAgreement: diffs.length ? { n: diffs.length, max: Number(Math.max(...diffs).toFixed(5)), mean: Number((diffs.reduce((a, b) => a + b, 0) / diffs.length).toFixed(5)) } : null };
   if (opt('json')) writeFileSync(opt('json'), JSON.stringify({ meta, results }, null, 2));
   const md = report(meta, results);
   if (opt('md')) writeFileSync(opt('md'), md); else console.log(md);
@@ -308,23 +375,24 @@ function report(meta, results) {
   const L = [];
   L.push('# Evidence selection eval: per-question results', '');
   L.push(`Run ${meta.at} against prod KnowDrive (read-only), store \`${meta.store}\`. Answer step: ${meta.answerMode}. Floor (arm A): ${meta.floor}.`);
-  L.push(`attendd: B ${JSON.stringify(meta.health.B)}; C ${JSON.stringify(meta.health.C)}.`, '');
-  L.push('Arms: **A** today\'s trial search + keep; **B** attend, server hybrid; **C** attend, client-side fusion; **D** B with query_limit 20 (one run). B and C ran each question twice.', '');
+  L.push(`attendd: ${Object.entries(meta.health).map(([k, v]) => `${k === 'B' ? 'hybrid' : 'fusion'} ${JSON.stringify(v)}`).join('; ')}.`, '');
+  L.push(`Arms run: ${meta.arms.join(', ')}. **A** today's trial search + keep; **B** attend, server hybrid; **C** attend, client-side fusion; **B20** B with query_limit 20; **D** resolve (no attend), server hybrid, then today's keep + answer steps; **E** D with client-side fusion. B, C, D, E ran each question twice.`, '');
+  if (meta.simAgreement) L.push(`Similarity check (resolve's cosine vs search's 1 - distance/2, same passage, A vs D): n=${meta.simAgreement.n}, max |Δ| ${meta.simAgreement.max}, mean |Δ| ${meta.simAgreement.mean}.`, '');
   L.push('Columns: status; rank = position of the first passage holding the expected fact (— = none); f3/f5 = expected file in top 3/5; heads = passages per head; det = run 1 vs 2 (digest/order); answer verdict, cited file, and the first sentence quoted.', '');
   for (const botId of [...new Set(results.map((r) => r.bot))]) {
     const rows = results.filter((r) => r.bot === botId);
     L.push(`## ${BOTS[botId].name} (\`trial:${BOTS[botId].trial}\`)`, '');
     L.push('| arm | in-scope n | hit@1 | hit@3 | hit@5 | file@3 | file@5 | correct | partial | source ok | wrong refusals | off-topic refused | median ms | p90 ms | determinism | hit@5 w/o H-section |');
     L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
-    for (const arm of ['A', 'B', 'C', 'D']) {
+    for (const arm of meta.arms) {
       const s = summarize(rows, arm);
-      L.push(`| ${arm} | ${s.n} | ${s.hit1} | ${s.hit3} | ${s.hit5} | ${s.file3} | ${s.file5} | ${s.correct} | ${s.partial} | ${s.srcOk} | ${s.wrongRefusal} | ${s.offRefused}/${s.offN} | ${s.med} | ${s.p90} | ${s.det} | ${arm === 'A' ? '—' : s.hit5NoSection} |`);
+      L.push(`| ${arm} | ${s.n} | ${s.hit1} | ${s.hit3} | ${s.hit5} | ${s.file3} | ${s.file5} | ${s.correct} | ${s.partial} | ${s.srcOk} | ${s.wrongRefusal} | ${s.offRefused}/${s.offN} | ${s.med} | ${s.p90} | ${s.det} | ${['B', 'C', 'B20'].includes(arm) ? s.hit5NoSection : '—'} |`);
     }
     L.push('');
     for (const r of rows) {
       L.push(`### ${r.id} (${r.type}): ${r.q}`, '', `Expected: ${r.note}${r.files.length ? ` — ${r.files.map((f) => `\`${f.split('/').pop()}\``).join(', ')}` : ''}`, '');
       L.push('| arm | status | passages | rank | f3/f5 | heads | det | ms | answer | cited | quote |', '|---|---|---|---|---|---|---|---|---|---|---|');
-      for (const arm of ['A', 'B', 'C', 'D']) {
+      for (const arm of meta.arms) {
         const x = r.arms[arm];
         if (!x) continue;
         if (x.error) { L.push(`| ${arm} | error: ${String(x.error).replace(/\|/g, '/').slice(0, 80)} | | | | | | ${x.ms?.join('/')} | | | |`); continue; }
@@ -337,7 +405,8 @@ function report(meta, results) {
       L.push('');
     }
   }
-  // weak-match outcome
+  // weak-match outcome (attend arms only)
+  if (!meta.arms.some((a) => a === 'B' || a === 'C')) return L.join('\n');
   const weak = results.flatMap((r) => ['B', 'C'].map((arm) => ({ r, x: r.arms[arm], arm }))).filter(({ x }) => x?.status === 'weak_match');
   L.push('## Weak matches: KNOWBOT_EVIDENCE_WEAK=refuse vs answer', '');
   if (!weak.length) L.push('No weak_match bundles in this run.');

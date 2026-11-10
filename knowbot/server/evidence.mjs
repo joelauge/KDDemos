@@ -2,7 +2,10 @@
 // receipt, instead of the server's own search. Off unless KNOWBOT_EVIDENCE=attend. Every failure (sidecar absent, down,
 // slow, an error) returns null and the caller keeps its search path, so turning it on can never break an answer.
 //
-// Settings (names only): KNOWBOT_EVIDENCE=attend, ATTENDD_URL (default http://127.0.0.1:7071),
+// KNOWBOT_EVIDENCE=resolve is the other mode: the sidecar's ranked search alone (no attend heads) replaces only the
+// retrieval call, and KnowBot's own floor, refusal and answer steps run on it (createResolver, at the end of this file).
+//
+// Settings (names only): KNOWBOT_EVIDENCE=attend|resolve, ATTENDD_URL (default http://127.0.0.1:7071),
 // ATTENDD_TIMEOUT_MS (default 20000), KNOWBOT_EVIDENCE_WEAK=answer (a weak match goes to the answer step, which may
 // still find nothing, instead of the fixed refusal; default: refuse).
 import { createHash } from 'node:crypto';
@@ -21,7 +24,7 @@ const DOWN_TTL_MS = 30000;
  * @returns {null | { url: string, healthy: () => Promise<boolean>, select: (q: object) => Promise<null | object> }}
  */
 export function createEvidenceSelector(env = {}, o = {}) {
-  if (String(env.KNOWBOT_EVIDENCE || '').trim().toLowerCase() !== 'attend') return null;
+  if (evidenceMode(env) !== 'attend') return null;
   const url = String(env.ATTENDD_URL || 'http://127.0.0.1:7071').replace(/\/+$/, '');
   const log = typeof o.log === 'function' ? o.log : () => {};
   const doFetch = o.fetch || fetch;
@@ -195,4 +198,100 @@ export function hashFor(sources = [], fileId, quote) {
   const mine = sources.filter((s) => s.file_id === fileId && s.content_hash);
   const hit = (q && mine.find((s) => fold(s.text).includes(q))) || (mine.length === 1 ? mine[0] : null);
   return hit ? hit.content_hash : null;
+}
+
+// ------------------------------------------------------------------------------------------------ resolve mode
+// KNOWBOT_EVIDENCE=resolve: the same sidecar's POST /resolve (the engine's ranked search alone, no attend heads)
+// replaces the RETRIEVAL call only. Its spans come back as KnowDB search hits (the shape today's search returns), and
+// KnowBot's own pipeline runs on them unchanged: its relevance floor, refusal rule, research/select step, citations
+// and proof. Each span carries a similarity, the cosine of the question and the passage, which is exactly KnowBot's
+// 1 - distance/2 (KnowDB's vector distance is 2 - 2·cos), so the floor reads the same number it reads today; the
+// order is resolve's ranking. Every failure returns null and the caller keeps today's search.
+
+/** The evidence mode KNOWBOT_EVIDENCE names: 'attend', 'resolve', or null (today's search). */
+export function evidenceMode(env = {}) {
+  const m = String(env.KNOWBOT_EVIDENCE || '').trim().toLowerCase();
+  return m === 'attend' || m === 'resolve' ? m : null;
+}
+
+/** Pure: one /resolve span as a KnowDB search hit (normHit / mapResult / simOf read it like a hybrid hit with a distance). */
+export function spanToDoc(sp) {
+  const sim = typeof sp.similarity === 'number' && Number.isFinite(sp.similarity) ? sp.similarity : null;
+  const path = String(sp.path || '');
+  return {
+    file_id: sp.file_id, filename: path, uri: path, text: String(sp.text || ''), sequence_index: Number.isFinite(Number(sp.atom_index)) ? Number(sp.atom_index) : null,
+    score: typeof sp.score === 'number' ? sp.score : null, ...(sim != null ? { distance: 2 * (1 - sim) } : {}),
+    tags: Array.isArray(sp.tags) ? sp.tags.map(String) : null, content_hash: sp.content_hash || null, resolved: true, rank: Number(sp.rank) || 0,
+    metadata: {}, attributes: {},
+  };
+}
+
+/** Pure: one digest over several /resolve receipts (a question and its clauses), as mergeBundles combines bundles. */
+export function combineDigests(digests = []) {
+  const ds = digests.filter(Boolean);
+  if (ds.length <= 1) return ds[0] || null;
+  return `sha256:${createHash('sha256').update(ds.join('\n')).digest('hex')}`;
+}
+
+/**
+ * Off unless KNOWBOT_EVIDENCE=resolve. Settings as the selector's: ATTENDD_URL, ATTENDD_TIMEOUT_MS.
+ * @param {object} env
+ * @param {{ log?: (s: string) => void, fetch?: typeof fetch, now?: () => number, timeoutMs?: number }} [o]
+ * @returns {null | { url: string, healthy: () => Promise<boolean>, resolve: (q: object) => Promise<null | { docs: object[], digest: string|null, rankMode: string|null, scoreKind: string|null, calls: number, ms: number }> }}
+ */
+export function createResolver(env = {}, o = {}) {
+  if (evidenceMode(env) !== 'resolve') return null;
+  const url = String(env.ATTENDD_URL || 'http://127.0.0.1:7071').replace(/\/+$/, '');
+  const log = typeof o.log === 'function' ? o.log : () => {};
+  const doFetch = o.fetch || fetch;
+  const now = o.now || Date.now;
+  const timeoutMs = Number(o.timeoutMs ?? env.ATTENDD_TIMEOUT_MS ?? 20000);
+  let health = { at: -Infinity, ok: false, loading: null };
+  let downUntil = 0, lastLog = -Infinity;
+  const warn = (msg) => { if (now() - lastLog >= 60000) { lastLog = now(); log(`[evidence] ${msg}; using search instead`); } };
+
+  async function healthy() {
+    if (now() < downUntil) return false;
+    if (now() - health.at < HEALTH_TTL_MS) return health.ok;
+    if (!health.loading) {
+      health.loading = (async () => {
+        let ok = false;
+        try { const r = await doFetch(`${url}/healthz`, { signal: AbortSignal.timeout(2000) }); ok = r.ok; } catch { ok = false; }
+        health = { at: now(), ok, loading: null };
+        if (!ok) warn(`resolver at ${url} is not answering`);
+        return ok;
+      })();
+    }
+    return health.loading;
+  }
+
+  /**
+   * One ranked window for a question over one or more scopes (ORed; one call when they fold into a tag query).
+   * null: use today's search (sidecar off, down, slow, an error, or a span without a similarity).
+   */
+  async function resolve({ store, question, scope, scopes, limit = 20, signal } = {}) {
+    const list = (Array.isArray(scopes) && scopes.length ? scopes : [scope || {}])
+      .map((s) => ({ tags_all: s.tags_all || [], tags_any: s.tags_any || [], tags_none: s.tags_none || [] }));
+    if (!store || !question || !(await healthy())) return null;
+    const t0 = now();
+    try {
+      const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+      const res = await doFetch(`${url}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: sig,
+        body: JSON.stringify({ store, question, ...(list.length === 1 ? { scope: list[0] } : { scopes: list }), limit }) });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0, 160)}`);
+      const j = JSON.parse(text);
+      if (!j || !Array.isArray(j.spans)) throw new Error('malformed response');
+      // the floor needs every passage's similarity: without one this is not today's pipeline, so today's search runs
+      if (j.spans.some((s) => typeof s.similarity !== 'number')) throw new Error('a span has no similarity');
+      return { docs: j.spans.map(spanToDoc), digest: j.receipt?.digest || null, rankMode: j.rank_mode || null, scoreKind: j.score_kind || null, calls: Number(j.calls) || 1, ms: now() - t0 };
+    } catch (e) {
+      if (signal?.aborted) return null;
+      downUntil = now() + DOWN_TTL_MS;
+      warn(`resolver failed (${e?.name === 'TimeoutError' ? 'timed out' : e?.message || e})`);
+      return null;
+    }
+  }
+
+  return { url, healthy, resolve };
 }

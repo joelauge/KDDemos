@@ -328,7 +328,7 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true, resolver = null }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0; this.rescueMargin = Number(rescueMargin) || 0; this.cards = cards !== false;
@@ -339,6 +339,10 @@ export class KnowDriveRetriever {
     // a same-named file outside the folder can't take a result slot.
     // Tag-scoped buckets (dirFilter/prefixFilter off) are defined by tags alone; the prefix then only shortens names.
     this.dirFilter = dirFilter !== false; this.prefixFilter = prefixFilter !== false;
+    // resolve mode (server/evidence.mjs createResolver, KNOWBOT_EVIDENCE=resolve): query() reads the sidecar's ranked
+    // window instead of knowDrive's search; null (or any failure): knowDrive's search, as before
+    this.resolver = resolver || null;
+    this.resolved = new Map(); // in-flight / recent windows: key -> { at, p }
     this.allOf = [...(this.tag ? [this.tag] : []), ...(this.dirFilter ? this.prefix.split('/').filter(Boolean).map((d) => `dir:${d}`) : []),
       ...(Array.isArray(include) ? include : []).filter(Boolean)];
   }
@@ -353,7 +357,35 @@ export class KnowDriveRetriever {
     return r;
   }
 
+  /**
+   * Resolve mode: the ranked window for a question under this retriever's tags (plus extraAllOf), shared by the
+   * hybrid, vector and card queries of one search (they ask the same question). null: not in resolve mode, or it failed.
+   * @returns {Promise<null | { docs: object[], digest: string|null }>}
+   */
+  resolveWindow(query, extraAllOf = []) {
+    if (!this.resolver) return Promise.resolve(null);
+    const scope = { tags_all: [...this.allOf, ...extraAllOf], tags_none: [...this.exclude] };
+    const key = JSON.stringify([query, scope]);
+    const now = Date.now();
+    for (const [k, v] of this.resolved) if (now - v.at > 10000) this.resolved.delete(k);
+    let hit = this.resolved.get(key);
+    if (!hit) {
+      hit = { at: now, p: this.resolver.resolve({ store: this.store, question: query, scope, limit: 20 }).catch(() => null) };
+      this.resolved.set(key, hit);
+    }
+    return hit.p;
+  }
+
   async query(query, k, mode, extraAllOf = []) {
+    if (this.resolver && (mode === 'hybrid' || mode === 'vector')) {
+      const w = await this.resolveWindow(query, extraAllOf);
+      if (w) {
+        // hybrid: resolve's ranked order; vector: the same passages nearest first, scored by similarity as a vector
+        // search scores them (score = 1 - distance/2, the passage's cosine with the question)
+        if (mode === 'hybrid') return w.docs.slice(0, k);
+        return w.docs.filter((d) => d.distance != null).map((d) => ({ ...d, score: 1 - d.distance / 2 })).sort((a, b) => b.score - a.score).slice(0, k);
+      }
+    }
     const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
@@ -387,7 +419,10 @@ export class KnowDriveRetriever {
       // defense in depth: when a prefix is configured, only hits under it (tag window is the primary guard)
       const results = hybrid.map((d) => this.mapResult(d)).filter((r) => r && r.text);
       results.sort((a, b) => b.score - a.score);
-      if (!floor) return { source: 'knowdrive', results };
+      // resolve mode: the receipt of the window these results came from (proof page)
+      const receipt = this.resolver ? (await this.resolveWindow(query))?.digest || null : null;
+      const withReceipt = (r) => (receipt ? { ...r, receipt } : r);
+      if (!floor) return withReceipt({ source: 'knowdrive', results });
       const near = vector.map((d) => this.mapResult(d)).filter((r) => r && r.text);
       // Similarities on this embedding sit in a narrow band (~0.70–0.88), so an answer card close to the floor
       // still counts: a card that clears floor + canonicalMargin (default −0.01) keeps the question in scope.
@@ -400,9 +435,9 @@ export class KnowDriveRetriever {
         const rescued = this.rescueCards(query, [...cardHits.map((d) => this.mapResult(d)), ...near]);
         if (rescued.length) cards.push(...rescued);
       }
-      if (top < this.minSimilarity && !cards.length) return { source: 'knowdrive', results: [], floor: { top, min: this.minSimilarity } };
+      if (top < this.minSimilarity && !cards.length) return withReceipt({ source: 'knowdrive', results: [], floor: { top, min: this.minSimilarity } });
       const merged = [...cards, ...results.filter((r) => !cards.some((c) => c.filename === r.filename))].slice(0, k);
-      return { source: 'knowdrive', results: merged, floor: { top, min: this.minSimilarity, canonical: cards.map((c) => c.filename) } };
+      return withReceipt({ source: 'knowdrive', results: merged, floor: { top, min: this.minSimilarity, canonical: cards.map((c) => c.filename) } });
     } catch (e) {
       this.log(`[retriever] knowDrive search failed (${e.name === 'TimeoutError' ? 'timeout' : e.message})${this.local ? '; falling back to local' : ''}`);
       // A folder-scoped instance has no local mirror: no results beats answering from outside its folder.
@@ -455,7 +490,7 @@ export class KnowDriveRetriever {
     // Where the hit sits: its page (only when knowDrive reports one, e.g. PDFs; never guessed) and its section heading.
     const page = hitPage(attrs), section = hitSection(attrs, title);
     return { file_id: d.file_id || d.id || `kd:${filename}`, filename, title, url, score: Number(d.score) || 0, text,
-      ...(page ? { page } : {}), ...(section ? { section } : {}) };
+      ...(page ? { page } : {}), ...(section ? { section } : {}), ...(d.resolved && d.content_hash ? { content_hash: d.content_hash } : {}) };
   }
 }
 
@@ -469,7 +504,7 @@ export const DEFAULT_PREFIX = 'knowbot/ugm/';
 export const DEFAULT_MIN_SIMILARITY = 0.745;
 
 /** Build the retriever for the given env. */
-export function createRetriever({ corpusDir, env = process.env, logger, watch = true } = {}) {
+export function createRetriever({ corpusDir, env = process.env, logger, watch = true, resolver = null } = {}) {
   const local = new LocalRetriever({ corpusDir, logger, watch });
   if (env.KNOWDRIVE_API_KEY || env.KNOWDRIVE_API_KEY_FILE) {
     // A key file is re-read on every search, so a rotated or short-lived credential needs no restart.
@@ -480,6 +515,7 @@ export function createRetriever({ corpusDir, env = process.env, logger, watch = 
       store: env.KNOWDRIVE_STORE || DEFAULT_STORE, tag: env.KNOWDRIVE_TAG ?? DEFAULT_TAG, prefix: env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX, local, logger,
       minSimilarity: Number(env.KNOWDRIVE_MIN_SIMILARITY ?? DEFAULT_MIN_SIMILARITY),
       exclude: env.KNOWDRIVE_EXCLUDE_TAGS || '', // e.g. kind:canonical to A/B the answer cards
+      resolver,
     });
     return { mode: 'knowdrive', retriever: kd, local };
   }
