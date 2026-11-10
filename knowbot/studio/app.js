@@ -30,6 +30,7 @@ import * as icons from './icons.js?v=d18ee6b';
 import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=d18ee6b';
 import { mountShapes } from './shapes.js?v=d18ee6b';
 import { mountBuilderPane } from './builderpane.js?v=d18ee6b';
+import { siteSettings } from './sitebrand.js?v=d18ee6b';
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=d18ee6b';
 
 const V = '1';
@@ -2570,6 +2571,21 @@ function openSpec(focusField) {
   motion.animate(scrim, [{ opacity: 0 }, { opacity: 1 }], { duration: motion.DUR[3] });
   specOpenRec = openDialog(specEl, { onClose: () => teardownSpec(), initialFocus: () => $(focusField ? `[name="${focusField}"]` : '[name="name"]', specEl) });
   syncSpecForm();
+  syncSpecSite();
+}
+
+/** Shows the Homepage search block in the spec drawer while that surface is on; loads it the first time. */
+function syncSpecSite() {
+  const box = specEl && $('#st-spec-site', specEl);
+  if (!box) return;
+  const on = $$('input[name="surface"]', specEl).some((c) => c.value === 'site' && c.checked);
+  box.hidden = !on;
+  const body = $('.st-spec-site-body', box);
+  if (!on || box.dataset.loaded === '1') return;
+  box.dataset.loaded = '1';
+  body.replaceChildren(h('p', { class: 'st-field-hint' }, 'Loading…'));
+  api.getSite().then((view) => { if (body.isConnected) body.replaceChildren(siteSettings({ view, compact: true })); })
+    .catch(() => { box.dataset.loaded = ''; body.replaceChildren(h('p', { class: 'st-field-hint' }, "Couldn't load the Homepage search settings. Close and open the bot spec to try again.")); });
 }
 
 function closeSpec() { if (specOpenRec) closeDialog(specOpenRec); }
@@ -2635,6 +2651,9 @@ function buildSpecForm() {
         h('input', { type: 'checkbox', id: `st-surf-${x.id}`, class: 'st-check', name: 'surface', value: x.id }),
         h('label', { for: `st-surf-${x.id}` }, h('span', { class: 'st-src-name' }, x.label))))),
       h('p', { class: 'st-field-hint' }, 'Where it answers after launch. Every one answers from the same sources. Pick at least one.')),
+    // the Homepage search's name, logo and timing (sitebrand.js; the same block as Channels → Homepage search)
+    h('div', { class: 'st-field st-spec-site', id: 'st-spec-site', hidden: true },
+      h('span', { class: 'flabel st-label' }, 'Homepage search'), h('div', { class: 'st-spec-site-body' })),
     h('div', { class: 'st-field st-refusal' },
       h('span', { class: 'flabel st-label' }, h('span', { html: icon('lock', 13) }), ' Refusal ', h('span', { class: 'st-lock-note' }, 'fixed')),
       h('blockquote', { class: 'st-refusal-quote', title: "Fixed by design: this exact sentence proves your bot isn't guessing." }, NOT_IN_DATA),
@@ -2743,6 +2762,7 @@ function onSpecInput(e) {
       const on = $$('input[name="surface"]', specEl).filter((c) => c.checked).map((c) => c.value);
       if (!on.length) { t.checked = true; toast({ kind: 'warn', text: 'Your bot needs at least one place to answer.' }); break; }
       queueSpec({ surfaces: normalizeSurfaces(on) }, 0);
+      syncSpecSite();
       break;
     }
     default: break;

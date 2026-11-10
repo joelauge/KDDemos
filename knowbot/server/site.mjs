@@ -15,6 +15,7 @@
 // /api/site/:id once the site is published. Its start screen is only the name, one search box and one quiet line: topic
 // chips show only when the owner turns them on (showChips); popular questions and key facts stay in the spec, unused.
 
+import { createHash } from 'node:crypto';
 export const SITE_CHIPS_MAX = 8;
 export const SITE_QUESTIONS_MAX = 5;
 export const SITE_FACTS_MAX = 4;
@@ -176,18 +177,49 @@ export function buildSite({ spec = {}, files = [], questions = {}, atomsByFile =
 }
 
 // ------------------------------------------------------------------------------------------------ owner edits
-export const SHOW_ON = Object.freeze(['first-visit', 'every-visit']);
+export const SHOW_ON = Object.freeze(['until-dismissed', 'every-visit']);
+/** 'first-visit' was the earlier name of 'until-dismissed' (saved edits and old clients still send it). */
+export const showOnOf = (v) => (v === 'every-visit' ? 'every-visit' : 'until-dismissed');
+export const LOGO_MAX_BYTES = 150 * 1024;
+const LOGO_TYPES = { 'image/png': (b) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
+  'image/jpeg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/webp': (b) => b.length > 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP' };
 /**
- * Owner edits from POST /site: { name?, tagline?, chips?, showOn?, showChips?, published? } → validated, or throws
- * { status:400, field }. showOn: 'first-visit' (default: once a visitor closes it, it stays closed for their visit) or
- * 'every-visit' (it opens on every page view). showChips: topic buttons under the search box (default off).
+ * The owner's logo for the Homepage search: a data URL (PNG, JPEG or WebP; the Studio resizes it to fit 600x200 first),
+ * at most LOGO_MAX_BYTES. Kept as base64 in the spec; served as bytes at GET /api/site/:id/logo?v=<v>.
+ */
+function parseLogo(value, bad) {
+  if (typeof value !== 'string') bad('logo', 'must be an image data URL');
+  const m = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(value.trim());
+  if (!m) bad('logo', 'must be a PNG, JPEG or WebP image');
+  const bytes = Buffer.from(m[2], 'base64');
+  if (!bytes.length || bytes.length > LOGO_MAX_BYTES) bad('logo', `must be ${Math.round(LOGO_MAX_BYTES / 1024)} KB or smaller`);
+  if (!LOGO_TYPES[m[1]](bytes)) bad('logo', 'is not a readable image');
+  return { type: m[1], data: bytes.toString('base64'), v: createHash('sha256').update(bytes).digest('hex').slice(0, 12) };
+}
+/** The stored logo as bytes, or null. */
+export function siteLogo(edits = {}) {
+  const l = edits?.logo;
+  if (!l || typeof l.data !== 'string' || !LOGO_TYPES[l.type]) return null;
+  return { type: l.type, v: l.v, bytes: Buffer.from(l.data, 'base64') };
+}
+/** Owner edits without the logo's bytes (what the Studio is sent back). */
+export function editsView(edits = {}) {
+  const { logo, ...rest } = edits || {};
+  return logo ? { ...rest, logo: { type: logo.type, v: logo.v } } : rest;
+}
+/**
+ * Owner edits from POST /site: { name?, tagline?, logo?, chips?, showOn?, showChips?, published? } → validated, or
+ * throws { status:400, field }. showOn: 'until-dismissed' (default: it opens on each visit until the visitor closes it
+ * with ×; after that only the small "Ask" button shows, in that browser) or 'every-visit' (it opens on every visit).
+ * logo: an image data URL, or null to remove it (the business name shows instead). showChips: topic buttons under the search box (default off).
  */
 export function validateSiteEdit(body, current = {}) {
   const bad = (field, message) => { const e = new Error(`${field}: ${message}`); e.status = 400; e.code = 'bad_request'; e.field = field; throw e; };
   if (!body || typeof body !== 'object' || Array.isArray(body)) bad('body', 'must be a JSON object');
   const next = { ...current };
   for (const k of Object.keys(body)) {
-    if (!['name', 'tagline', 'chips', 'showOn', 'showChips', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
+    if (!['name', 'tagline', 'logo', 'chips', 'showOn', 'showChips', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
   }
   if (body.name !== undefined) {
     if (body.name === null || body.name === '') delete next.name;
@@ -213,7 +245,11 @@ export function validateSiteEdit(body, current = {}) {
   }
   if (body.showOn !== undefined) {
     if (body.showOn === null) delete next.showOn;
-    else { if (!SHOW_ON.includes(body.showOn)) bad('showOn', `must be ${SHOW_ON.join(' or ')}`); next.showOn = body.showOn; }
+    else { if (![...SHOW_ON, 'first-visit'].includes(body.showOn)) bad('showOn', `must be ${SHOW_ON.join(' or ')}`); next.showOn = showOnOf(body.showOn); }
+  }
+  if (body.logo !== undefined) {
+    if (body.logo === null || body.logo === '') delete next.logo;
+    else next.logo = parseLogo(body.logo, bad);
   }
   if (body.showChips !== undefined) {
     if (typeof body.showChips !== 'boolean') bad('showChips', 'must be true or false');
@@ -233,7 +269,8 @@ export function publicSite(gen, edits = {}, { botId, trial = true, expiresAt = n
     bot: botId, name: edits.name || g.name || 'Our help centre', tagline: edits.tagline ?? g.tagline ?? '',
     chips: Array.isArray(edits.chips) ? edits.chips : g.chips || [], questions: g.questions || [], facts: g.facts || [],
     links: g.links || { byId: {}, byName: {} }, brand: g.brand || brandColors(null), homeUrl: g.homeUrl || null, homeFrame: g.homeFrame || null, initials: g.initials || 'KB',
-    showOn: SHOW_ON.includes(edits.showOn) ? edits.showOn : 'first-visit', showChips: edits.showChips === true,
+    logo: edits.logo?.v && botId ? { path: `/api/site/${encodeURIComponent(botId)}/logo?v=${edits.logo.v}` } : null,
+    showOn: showOnOf(edits.showOn), showChips: edits.showChips === true,
     published: !!edits.published, trial: !!trial, noindex: !!trial, expiresAt, generatedAt: g.generatedAt || null,
   };
 }

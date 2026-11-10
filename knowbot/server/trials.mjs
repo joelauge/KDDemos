@@ -36,7 +36,7 @@ import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
-import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet } from './site.mjs';
+import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView } from './site.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -4774,7 +4774,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       fail(404, 'not_found', `no such endpoint ${p}`);
     }
     // the Homepage search (server/site.mjs): GET builds it from the files when missing or stale (?download=1: the how-to
-    // HTML file with the homepage snippet), POST saves the owner's edits ({name, tagline, chips, showOn, showChips,
+    // HTML file with the homepage snippet), POST saves the owner's edits ({name, tagline, logo, chips, showOn, showChips,
     // published}; regenerate:true builds it again)
     if (sub === 'site' && !fid) {
       allow('GET', 'POST');
@@ -4931,7 +4931,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const local = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(self);
     const snippet = overlaySnippet(T.id, local ? { assetBase: self, apiBase: self } : {});
     return { snippet, site: publicSite(T.flags.site, edits, { botId: T.id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }),
-      edits, generated: T.flags.site ? { name: T.flags.site.name, tagline: T.flags.site.tagline, chips: T.flags.site.chips } : null,
+      edits: editsView(edits), generated: T.flags.site ? { name: T.flags.site.name, tagline: T.flags.site.tagline, chips: T.flags.site.chips } : null,
       published: !!edits.published, hostedUrl: hosted, previewPath: `/site/?bot=${encodeURIComponent(T.id)}` };
   }
   /** GET /api/site/:id (server/devapi.mjs): a site's public view, or null (no such trial, no site yet, expired). */
@@ -4943,6 +4943,15 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!T.flags.site) { if (!had) trials.delete(id); return null; }
     if (!T.expiresAt || T.expiresAt <= now()) return null;
     return { site: publicSite(T.flags.site, T.spec.site || {}, { botId: id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }), published: !!T.spec.site?.published, expiresAt: T.expiresAt };
+  }
+  /** GET /api/site/:id/logo (server/devapi.mjs): the owner's uploaded logo as bytes, or null. */
+  async function siteLogoPublic(id) {
+    if (!TRIAL_ID_RE.test(String(id)) || deletedTrials.has(id)) return null;
+    const had = trials.has(id);
+    const T = trialFor(id);
+    await loadSpecDoc(T);
+    if (!T.expiresAt || T.expiresAt <= now()) { if (!had) trials.delete(id); return null; }
+    return siteLogo(T.spec.site || {});
   }
   function shareLinkOf(req, T, origin = originOf(req)) {
     return `${origin}/studio/?t=${encodeURIComponent(T.id)}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
@@ -4998,7 +5007,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (T.asked.length > 500) T.asked.shift();
     pushEvent(T, 'asked', { channel: channel || null, outcome: outcome === 'refused' ? 'refused' : 'answered' });
   }
-  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
+  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };

@@ -98,7 +98,7 @@ try {
   const siteApi = (method = 'GET', body) => api(`/api/studio/trials/${t.trialId}/site`, { method, headers: H(body ? { 'content-type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
   const built = await siteApi();
   check('setup', 'site built', built.site && built.site.name === 'Lumen Bikes', JSON.stringify({ name: built.site?.name, chips: built.site?.chips?.length }));
-  check('setup', 'defaults: first visit, no topic chips', built.site.showOn === 'first-visit' && built.site.showChips === false);
+  check('setup', 'defaults: until dismissed, no topic chips', built.site.showOn === 'until-dismissed' && built.site.showChips === false);
   check('setup', 'the homepage line', new RegExp(`^<script src="${dev.url}/site/overlay\\.js" data-bot="${t.trialId}" data-api="${dev.url}" async></script>$`).test(built.snippet), built.snippet);
   const pub = await siteApi('POST', { published: true });
   check('setup', 'published', pub.published === true);
@@ -195,7 +195,7 @@ try {
     if (!axe2.skipped) check(cell.name, 'axe (closed): no serious or critical violations', !axe2.violations.length, JSON.stringify(axe2.violations));
     await page.reload({ waitUntil: 'load' });
     await page.locator('knowbot-overlay .pill').waitFor({ state: 'visible', timeout: 15000 });
-    check(cell.name, 'first visit only: closed stays closed on the next page view', await page.locator('knowbot-overlay .dialog').isHidden());
+    check(cell.name, 'until dismissed: once closed, it stays closed on the next visit', await page.locator('knowbot-overlay .dialog').isHidden());
     check(cell.name, 'no console errors', !errors.length, errors.join(' | '));
     await ctx.close();
   }
@@ -213,7 +213,7 @@ try {
     await page.locator('knowbot-overlay .dialog').waitFor({ state: 'visible', timeout: 15000 });
     check('options', 'every visit: it opens again on the next page view', await page.locator('knowbot-overlay .dialog').isVisible());
     await ctx.close();
-    await siteApi('POST', { showOn: 'first-visit', showChips: false });
+    await siteApi('POST', { showOn: 'until-dismissed', showChips: false });
   }
 
   // ------------------------------------------------------------------ the hosted link
@@ -300,18 +300,56 @@ try {
     await page.waitForSelector('.gl-sp-pub', { timeout: 20000 });
     const card = await page.textContent('.gl-sp');
     check('studio', 'card: Add to your homepage, the one line with Copy, options, publish, hosted link, how-to', /Add to your homepage/.test(card) && /overlay\.js" data-bot="/.test(await page.textContent('.gl-sp-snip pre'))
-      && await page.isVisible('.gl-sp-snip button') && await page.isVisible('#gl-sp-show-first-visit') && await page.isVisible('#gl-sp-chipson') && /Unpublish/.test(await page.textContent('.gl-sp-pub'))
+      && await page.isVisible('.gl-sp-snip button') && await page.isVisible('.gl-sp .ss input[value="until-dismissed"]') && await page.isVisible('#gl-sp-chipson') && /Unpublish/.test(await page.textContent('.gl-sp-pub'))
       && await page.isVisible('.gl-sp-dl') && /knowbot\.knowdrive\.ai\/site\/\?bot=/.test(await page.textContent('.gl-sp-url')) && await page.isHidden('.gl-sp-chipbox'));
-    await page.fill('#gl-sp-name', 'Lumen Bikes Co');
-    await page.check('#gl-sp-show-every-visit');
-    await page.click('.gl-sp-actions .btn');
-    await page.waitForFunction(() => /Saved/.test(document.querySelector('.gl-sp-status')?.textContent || ''), null, { timeout: 15000 });
+    const ssSaid = (re) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('.gl-sp .ss-status')?.textContent || ''), re.source, { timeout: 15000 });
+    await page.fill('.gl-sp .ss input[name="kb-site-name"]', 'Lumen Bikes Co');
+    await page.press('.gl-sp .ss input[name="kb-site-name"]', 'Enter');
+    await ssSaid(/Name saved/);
+    await page.check('.gl-sp .ss input[value="every-visit"]');
+    await ssSaid(/every visit/);
     const saved = await siteApi();
-    check('studio', 'name and “every visit” are saved', saved.site.name === 'Lumen Bikes Co' && saved.site.showOn === 'every-visit', JSON.stringify({ n: saved.site.name, s: saved.site.showOn }));
+    check('studio', 'name and “every visit” save at once', saved.site.name === 'Lumen Bikes Co' && saved.site.showOn === 'every-visit', JSON.stringify({ n: saved.site.name, s: saved.site.showOn }));
+    // a logo: a 1200x300 PNG is fitted to 600x150 and shows under the wave in place of the name
+    const logoPng = Buffer.from((await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 1200; c.height = 300; const g = c.getContext('2d');
+      g.fillStyle = '#0b6e4f'; g.fillRect(0, 60, 300, 180); g.font = 'bold 150px sans-serif'; g.fillText('LUMEN', 340, 220); return c.toDataURL('image/png'); })).split(',')[1], 'base64');
+    await page.setInputFiles('.gl-sp .ss-file', { name: 'lumen-logo.png', mimeType: 'image/png', buffer: logoPng });
+    await ssSaid(/Logo saved \(600 × 150 px\)/);
+    const withLogo = await siteApi();
+    check('studio', 'logo upload: fitted to 600 wide, saved, served', !!withLogo.site.logo?.path && (await api(withLogo.site.logo.path)).status === 200 && await page.isVisible('.gl-sp .ss-logo-tile img') && /Replace logo/.test(await page.textContent('.gl-sp .ss-logo-act')));
+    await page.locator('.gl-sp-frame').scrollIntoViewIfNeeded();   // the preview frame loads lazily
+    const pf = page.frameLocator('.gl-sp-frame iframe');
+    await pf.locator('knowbot-overlay .brandlogo').waitFor({ timeout: 20000 });
+    check('studio', 'the preview shows the logo under the wave, named for screen readers', (await pf.locator('knowbot-overlay #kb-h .brandlogo').getAttribute('alt')) === 'Lumen Bikes Co' && (await pf.locator('knowbot-overlay #kb-h').textContent()).trim() === '');
+    await page.waitForTimeout(400);
+    await page.locator('.gl-sp-frame').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(SHOTS, 'studio-site-logo-preview.png') });
+    await page.locator('.gl-sp .ss').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(SHOTS, 'studio-site-settings.png') });
     await page.locator('.gl-sp').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(SHOTS, 'studio-setup-site.png') });
-    await page.click('.gl-sp-pub');
-    await page.waitForFunction(() => /Unpublished/.test(document.querySelector('.gl-sp-status')?.textContent || ''), null, { timeout: 15000 });
+    // the bot spec drawer: the same name, logo and timing, while the Homepage search is one of the bot's surfaces
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+    await page.evaluate(() => document.querySelector('#st-botchip')?.click());
+    await page.waitForSelector('#st-spec-site .ss', { timeout: 20000 });
+    await page.locator('#st-spec-site').scrollIntoViewIfNeeded();
+    check('spec', 'bot spec: Homepage search block with the saved name, logo and timing', await page.isVisible('#st-spec-site .ss-logo-tile img')
+      && (await page.inputValue('#st-spec-site input[name="kb-site-name"]')) === 'Lumen Bikes Co' && await page.isChecked('#st-spec-site input[value="every-visit"]'));
+    await page.screenshot({ path: path.join(SHOTS, 'spec-site.png') });
+    await page.check('#st-spec-site input[value="until-dismissed"]');
+    await page.waitForFunction(() => /until the visitor closes it/.test(document.querySelector('#st-spec-site .ss-status')?.textContent || ''), null, { timeout: 15000 });
+    await page.click('#st-spec-site .ss-rm');
+    await page.waitForFunction(() => /Logo removed/.test(document.querySelector('#st-spec-site .ss-status')?.textContent || ''), null, { timeout: 15000 });
+    const fromSpec = await siteApi();
+    check('spec', 'changes in the bot spec save to the same settings', fromSpec.site.showOn === 'until-dismissed' && fromSpec.site.logo === null, JSON.stringify({ s: fromSpec.site.showOn, l: fromSpec.site.logo }));
+    await page.click('label[for="st-surf-site"]');
+    await page.waitForTimeout(300);
+    check('spec', 'the block hides when the Homepage search is not one of the surfaces', await page.isHidden('#st-spec-site'));
+    await page.click('label[for="st-surf-site"]');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+    await siteApi('POST', { published: false });
     check('studio', 'unpublish takes it down', (await api(`/api/site/${t.trialId}`)).status === 404);
     check('studio', 'no page errors', !errors.length, errors.join(' | '));
     await ctx.close();

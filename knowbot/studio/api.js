@@ -419,6 +419,11 @@ export async function insights() { return request('GET', trialPath('/insights'))
 /** POST /notes {question, answer, tags[]} -> {file, tags, usage}: the owner's missing answer, saved as a source file. */
 export async function addNote(body) { return request('POST', trialPath('/notes'), { body }); }
 
+/** GET /site -> the Homepage search view {site, edits, snippet, published, hostedUrl, ...} (built from the files when missing). */
+export async function getSite() { return request('GET', trialPath('/site')); }
+/** POST /site {name?, logo? (image data URL | null), showOn?, ...} -> the same view, saved. */
+export async function saveSite(body) { return request('POST', trialPath('/site'), { body }); }
+
 /** POST /email -> {sent, link}. */
 export async function sendEmail(email) { return request('POST', trialPath('/email'), { body: { email } }); }
 

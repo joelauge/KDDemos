@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
-import { buildSite, factsFrom, brandColors, contrast, validateSiteEdit, publicSite, siteHtml, siteNameOf, fileLabel, overlaySnippet } from '../site.mjs';
+import { buildSite, factsFrom, brandColors, contrast, validateSiteEdit, publicSite, siteHtml, siteNameOf, fileLabel, overlaySnippet, siteLogo, editsView } from '../site.mjs';
 import { brandOfHtml, frameableOf } from '../storeimport.mjs';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -104,9 +104,9 @@ describe('site generator (pure)', () => {
     assert.equal(frameableOf({ 'content-security-policy': "script-src 'self'" }), true, 'a CSP without frame-ancestors');
     assert.equal(frameableOf(null), false, 'unknown is no');
   });
-  test('options: show on first visit (default) or every visit; topic chips off unless turned on', () => {
+  test('options: show until dismissed (default) or every visit; topic chips off unless turned on', () => {
     const p0 = publicSite(g, {}, { botId: 'acme' });
-    assert.equal(p0.showOn, 'first-visit');
+    assert.equal(p0.showOn, 'until-dismissed');
     assert.equal(p0.showChips, false);
     assert.ok(p0.chips.length >= 1, 'chips stay in the spec for the owner to turn on');
     const e = validateSiteEdit({ showOn: 'every-visit', showChips: true });
@@ -118,6 +118,24 @@ describe('site generator (pure)', () => {
       assert.throws(() => validateSiteEdit(bad), (err) => err.status === 400 && err.field === field, JSON.stringify(bad));
     }
     assert.deepEqual(validateSiteEdit({ showOn: null }, { showOn: 'every-visit' }), {}, 'null goes back to the default');
+    assert.deepEqual(validateSiteEdit({ showOn: 'first-visit' }), { showOn: 'until-dismissed' }, 'the earlier name still works');
+    assert.equal(publicSite(g, { showOn: 'first-visit' }, { botId: 'acme' }).showOn, 'until-dismissed', 'saved under the earlier name');
+  });
+  test('logo: PNG, JPEG or WebP data URL up to 150 KB; served by path with a digest; null removes it', () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 1)]);
+    const e = validateSiteEdit({ logo: `data:image/png;base64,${png.toString('base64')}` });
+    assert.equal(e.logo.type, 'image/png');
+    assert.match(e.logo.v, /^[a-f0-9]{12}$/);
+    assert.deepEqual(siteLogo(e).bytes, png);
+    assert.deepEqual(editsView(e).logo, { type: 'image/png', v: e.logo.v }, 'the Studio is never sent the bytes back');
+    const p = publicSite(g, e, { botId: 'acme' });
+    assert.deepEqual(p.logo, { path: `/api/site/acme/logo?v=${e.logo.v}` });
+    assert.equal(publicSite(g, {}, { botId: 'acme' }).logo, null);
+    assert.deepEqual(validateSiteEdit({ logo: null }, e), {}, 'null removes it');
+    const big = Buffer.concat([png, Buffer.alloc(151 * 1024)]);
+    for (const bad of ['data:image/svg+xml;base64,PHN2Zy8+', `data:image/png;base64,${Buffer.from('not a png').toString('base64')}`, `data:image/png;base64,${big.toString('base64')}`, 'https://example.com/logo.png', 42]) {
+      assert.throws(() => validateSiteEdit({ logo: bad }), (err) => err.status === 400 && err.field === 'logo', String(bad).slice(0, 40));
+    }
   });
   test('owner edits: validated, 400 with the field name on junk', () => {
     const e = validateSiteEdit({ name: '  Lumen  Bikes ', tagline: 'Bikes for trails.', chips: ['Opening hours?', { label: 'Returns', q: 'How do returns work?' }], published: true });
@@ -204,7 +222,7 @@ describe('Homepage search over HTTP', () => {
     assert.equal(v.published, false);
     assert.equal(v.hostedUrl, `https://knowbot.knowdrive.ai/site/?bot=${t.trialId}`);
     assert.match(v.snippet, new RegExp(`^<script src="http://127\\.0\\.0\\.1:\\d+/site/overlay\\.js" data-bot="${t.trialId}" data-api="http://127\\.0\\.0\\.1:\\d+" async></script>$`), 'a loopback dev server: its own copy');
-    assert.equal(v.site.showOn, 'first-visit');
+    assert.equal(v.site.showOn, 'until-dismissed');
     assert.equal(v.site.showChips, false);
     // facts: each one a verbatim line of the file it names
     assert.ok(v.site.facts.length >= 3, JSON.stringify(v.site.facts));
@@ -259,6 +277,20 @@ describe('Homepage search over HTTP', () => {
     assert.deepEqual(again.site.chips, chips);
     assert.equal(again.site.showOn, 'every-visit', 'options survive a reload');
     assert.equal((await site('POST', { showOn: 'often' })).status, 400);
+    // a logo: saved, served as bytes (cached by its digest), never echoed back to the Studio, removable
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
+    const withLogo = await (await site('POST', { logo: `data:image/png;base64,${png.toString('base64')}` })).json();
+    assert.match(withLogo.site.logo.path, new RegExp(`^/api/site/${t.trialId}/logo\\?v=[a-f0-9]{12}$`));
+    assert.equal(withLogo.edits.logo.data, undefined);
+    const lr = await fetch(`${S.base}${withLogo.site.logo.path}`);
+    assert.equal(lr.status, 200);
+    assert.equal(lr.headers.get('content-type'), 'image/png');
+    assert.match(lr.headers.get('cache-control'), /immutable/);
+    assert.deepEqual(Buffer.from(await lr.arrayBuffer()), png);
+    assert.equal((await site('POST', { logo: 'data:image/png;base64,AAAA' })).status, 400);
+    const noLogo = await (await site('POST', { logo: null })).json();
+    assert.equal(noLogo.site.logo, null);
+    assert.equal((await fetch(`${S.base}/api/site/${t.trialId}/logo`)).status, 404);
     assert.ok(again.site.facts.length >= 3, 'the generated site was saved too');
     // a spec PATCH that carries the site field is not a way around validation (read-only there)
     assert.equal((await fetch(`${S.base}/api/studio/trials/${t.trialId}`, { method: 'PATCH', headers: tok({ 'content-type': 'application/json' }), body: JSON.stringify({ site: { name: 'x', published: true } }) })).status, 200);

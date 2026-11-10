@@ -61,7 +61,7 @@ export const EXPOSE_HEADERS = 'content-type, retry-after, x-request-id, x-rateli
 /** True for the paths createDevApi().handle serves (the one dispatch test server.mjs uses). */
 // Every /v1 route is also served under /api/v1 (and /p under /api/p): the production Worker forwards only /api/*.
 export const isDevApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p === '/api/v1' || p.startsWith('/api/v1/') || /^\/(?:api\/)?p\/[A-Za-z0-9_-]+$/.test(p)
-  || /^\/api\/instances\/[^/]+\/(?:keys|insights)(?:\/[^/]*)?$/.test(p) || /^\/api\/studio\/trials\/[^/]+\/devkey$/.test(p) || /^\/api\/site\/[^/]+$/.test(p);
+  || /^\/api\/instances\/[^/]+\/(?:keys|insights)(?:\/[^/]*)?$/.test(p) || /^\/api\/studio\/trials\/[^/]+\/devkey$/.test(p) || /^\/api\/site\/[^/]+(?:\/logo)?$/.test(p);
 
 export class ApiError extends Error {
   constructor(status, code, message, extra = {}, headers = {}) { super(message); this.status = status; this.code = code; this.extra = extra; this.headers = headers; }
@@ -1308,6 +1308,20 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     }
     // the Homepage search (server/site.mjs): its public view and a key that can only ask questions. Published sites
     // only; the owner's own trial key (the Studio's preview) also opens a site that is not published yet.
+    // the Homepage search's logo (uploaded in the Studio): bytes, cached by its ?v= digest
+    if ((mt = /^\/api\/site\/([^/]+)\/logo$/.exec(p))) {
+      if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      const id = decodeURIComponent(mt[1]).toLowerCase();
+      const ip = typeof o.clientIp === 'function' ? o.clientIp(req) : (req.socket?.remoteAddress || 'unknown');
+      const rl = limit(`sitelogo:${ip}`, 60);
+      if (rl.limited) throw new ApiError(429, 'rate_limit_exceeded', `Too many requests. Try again in ${rl.retryAfter}s.`, {}, { 'retry-after': String(rl.retryAfter) });
+      const lg = TRIAL_ID_RE.test(id) && studio?.siteLogoPublic ? await studio.siteLogoPublic(id) : null;
+      if (!lg) throw new ApiError(404, 'not_found', 'No logo.');
+      const fresh = url.searchParams.get('v') === lg.v;
+      res.writeHead(200, { 'content-type': lg.type, 'content-length': String(lg.bytes.length), 'cache-control': fresh ? 'public, max-age=31536000, immutable' : 'public, max-age=60',
+        'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'cross-origin', 'access-control-allow-origin': '*' });
+      return res.end(m === 'HEAD' ? undefined : lg.bytes);
+    }
     if ((mt = /^\/api\/site\/([^/]+)$/.exec(p))) {
       if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');
       const id = decodeURIComponent(mt[1]).toLowerCase();

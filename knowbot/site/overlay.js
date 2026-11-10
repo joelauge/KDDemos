@@ -11,7 +11,9 @@
  * It reads the published site (GET <api>/api/site/:bot: name, brand colour, options, source links and a short-lived
  * key that can only ask questions) and asks through the developer API (POST <api>/api/v1/bots/:bot/chat, streamed).
  * Everything lives in one Shadow DOM: the page's CSS can't reach it and its CSS can't reach the page. No framework,
- * no globals. Owner options (KnowBot Studio): showOn 'first-visit' (closed stays closed for the visit) | 'every-visit',
+ * no globals. Owner options (KnowBot Studio): showOn 'until-dismissed' (opens on each visit until
+ * the visitor closes it with ×; then only the "Ask" pill, in that browser) | 'every-visit', an uploaded logo (shown under the
+ * wave in place of the name),
  * showChips (topic buttons under the box, default off). The Studio's preview passes the owner's trial key as #k=…
  * (hosted link only), which also opens a site that is not published yet. */
 (() => {
@@ -121,6 +123,9 @@ button { font: inherit; color: inherit; }
   margin: 0 0 28px; color: var(--ink); font-size: clamp(34px, 8vw, 54px); line-height: 1.08; font-weight: 700; letter-spacing: -.03em;
   overflow-wrap: anywhere; display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap;
 }
+.name.has-logo { margin-bottom: 24px; }
+.brandlogo { display: block; max-width: min(300px, 80%); max-height: 100px; width: auto; height: auto; object-fit: contain; }
+.kb.dark .brandlogo { padding: 10px 16px; border-radius: 14px; background: #fff; }
 .logo { width: 48px; height: 48px; border-radius: 12px; object-fit: contain; background: #fff; flex: none; }
 
 /* one big rounded search box with one button */
@@ -235,6 +240,9 @@ button { font: inherit; color: inherit; }
     brandStyle.textContent = c ? `.kb{--kb-accent:${c};--kb-accent-dark:${dk}}` : '';
     const name = String(s.name || 'Our help centre');
     const logo = safeUrl(s.brand?.logo) && /^https:/i.test(s.brand.logo) ? h('img', { class: 'logo', src: s.brand.logo, alt: '', width: '48', height: '48', referrerpolicy: 'no-referrer' }) : null;
+    // the owner's uploaded logo replaces the name under the wave (the name stays its text alternative)
+    const brandLogo = typeof s.logo?.path === 'string' && /^\/api\/site\/[^/]+\/logo\?v=[a-f0-9]+$/.test(s.logo.path)
+      ? h('img', { class: 'brandlogo', src: `${API}${s.logo.path}`, alt: name, referrerpolicy: 'no-referrer', decoding: 'async' }) : null;
     const input = h('input', { id: 'kb-q', class: 'q', type: 'search', name: 'q', autocomplete: 'off', maxlength: '500', placeholder: innerWidth < 480 ? 'Ask anything' : `Ask anything about ${name}`, enterkeyhint: 'search' });
     const go = h('button', { class: 'go', type: 'submit' }, 'Ask');
     const form = h('form', { class: 'form', role: 'search', 'aria-label': `Ask ${name}` },
@@ -251,7 +259,7 @@ button { font: inherit; color: inherit; }
       close,
       h('div', { class: 'col' },
         h('div', { class: 'wave', 'aria-hidden': 'true' }, hand),
-        h('h1', { id: 'kb-h', class: 'name' }, logo, h('span', null, name)),
+        brandLogo ? h('h1', { id: 'kb-h', class: 'name has-logo' }, brandLogo) : h('h1', { id: 'kb-h', class: 'name' }, logo, h('span', null, name)),
         form,
         h('p', { class: 'quiet' }, `Answers come only from ${name}'s own pages.`),
         chips, status, answer),
@@ -303,7 +311,7 @@ button { font: inherit; color: inherit; }
     if (backdrop) backdrop.inert = false;
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('focusin', onFocusIn);
-    if (!HOSTED) sSet('sessionStorage', CLOSED_KEY, '1');
+    if (!HOSTED && site?.showOn !== 'every-visit') sSet('localStorage', CLOSED_KEY, '1');
     const back = prevFocus && prevFocus.isConnected && prevFocus !== ui.pill ? prevFocus : ui.pill;
     try { back.focus({ preventScroll: true }); } catch { ui.pill.focus(); }
     status.textContent = '';
@@ -465,7 +473,7 @@ button { font: inherit; color: inherit; }
     ui = build(site);
     document.body.append(host);
     const q = HOSTED ? params.get('q') : null;
-    const closedBefore = !HOSTED && site.showOn !== 'every-visit' && sGet('sessionStorage', CLOSED_KEY) === '1';
+    const closedBefore = !HOSTED && site.showOn !== 'every-visit' && sGet('localStorage', CLOSED_KEY) === '1';
     // inside someone else's frame (the hosted link showing this homepage) it waits behind its button
     if (HOSTED || (!closedBefore && !framed)) { openIt(null); if (q) ask(q); }
     else ui.pill.hidden = false;

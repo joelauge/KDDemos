@@ -19,6 +19,7 @@
 
 import { mountWidget } from './kdw.js?v=d18ee6b';
 import { mountNumbers, numberCache } from './numbers.js?v=d18ee6b';
+import { siteSettings } from './sitebrand.js?v=d18ee6b';
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -985,13 +986,6 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     }
     function paint() {
       const s = v.site;
-      const name = h('input', { id: 'gl-sp-name', class: 'input gl-input', type: 'text', maxlength: '60', value: s.name, autocomplete: 'organization' });
-      const showOn = s.showOn === 'every-visit' ? 'every-visit' : 'first-visit';
-      const radio = (val, label) => {
-        const r = h('input', { type: 'radio', name: 'gl-sp-show', id: `gl-sp-show-${val}`, value: val });
-        r.checked = showOn === val;
-        return h('label', { class: 'gl-sp-opt', for: `gl-sp-show-${val}` }, r, h('span', null, label));
-      };
       const showChips = h('input', { type: 'checkbox', id: 'gl-sp-chipson' });
       showChips.checked = !!s.showChips;
       const chips = (s.chips || []).map((c) => ({ ...c }));
@@ -1012,15 +1006,12 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       showChips.addEventListener('change', () => { chipBox.hidden = !showChips.checked; });
       const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Save changes');
       const form = h('form', { class: 'gl-sp-form' },
-        h('label', { class: 'gl-sp-l', for: 'gl-sp-name' }, 'Business name'), name,
-        h('fieldset', { class: 'gl-sp-set' }, h('legend', { class: 'gl-sp-l' }, 'When it shows'), radio('first-visit', 'On a visitor’s first visit (once closed, it stays closed)'), radio('every-visit', 'On every visit')),
         h('label', { class: 'gl-sp-opt', for: 'gl-sp-chipson' }, showChips, h('span', null, 'Show topic buttons under the search box')),
         chipBox,
         h('div', { class: 'gl-sp-actions' }, save));
       form.addEventListener('submit', async (e) => {
         e.preventDefault(); save.disabled = true; status.textContent = 'Saving…';
-        const when = form.querySelector('input[name="gl-sp-show"]:checked')?.value || 'first-visit';
-        try { v = await call('POST', { name: name.value.trim() || null, showOn: when, showChips: showChips.checked, chips: chips.filter((c) => c.label.trim()).map((c) => ({ label: c.label.trim(), q: c.q })) }); paint(); status.textContent = 'Saved. The preview shows your changes.'; }
+        try { v = await call('POST', { showChips: showChips.checked, chips: chips.filter((c) => c.label.trim()).map((c) => ({ label: c.label.trim(), q: c.q })) }); paint(); status.textContent = 'Saved. The preview shows your changes.'; }
         catch (err) { status.textContent = err.message; save.disabled = false; }
       });
       const pub = h('button', { type: 'button', class: `btn ${v.published ? 'btn-ghost' : 'btn-primary'} gl-sp-pub`, 'aria-pressed': String(!!v.published) }, v.published ? 'Unpublish' : 'Publish');
@@ -1041,20 +1032,24 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         } catch { status.textContent = "Couldn't download the how-to. Try again."; }
         dl.disabled = false;
       });
+      let fr = null;
       const snippet = v.snippet || overlayLine();
       const line = h('div', { class: 'gl-code gl-sp-snip' },
         h('div', { class: 'gl-code-bar' }, h('span', { class: 'gl-code-label' }, 'Paste before </body>'),
           h('div', { class: 'gl-code-tools' }, copyButton(snippet, 'Copy', { what: 'Line copied', aria: 'Copy the line for your homepage', iconOnly: false }))),
         h('pre', { class: 'gl-sp-pre' }, h('code', { class: 'gl-mono' }, snippet)));
       const link = h('div', { class: 'gl-url gl-sp-url' }, h('code', { class: 'gl-mono gl-url-v' }, v.hostedUrl), copyButton(v.hostedUrl, 'Copy', { what: 'Link copied', aria: 'Copy the link to your page', iconOnly: true }));
-      box.replaceChildren(
+      box.replaceChildren(...[
         h('div', { class: 'gl-sp-pubrow' }, h('span', { class: `chip ${v.published ? 'green' : 'gray'} is-label` }, v.published ? 'Published' : 'Not published'), pub, dl),
         h('h4', { class: 'gl-h4' }, 'Add to your homepage'),
         h('p', { class: 'gl-note' }, 'Paste this one line into your homepage. The search box shows on top of your site; visitors close it with ×.'),
         line,
         v.published ? null : h('p', { class: 'gl-note' }, 'It shows on your homepage once you publish.'),
-        frame(), form,
-        h('h4', { class: 'gl-h4' }, 'Hosted link'), link);
+        (fr = frame()),
+        h('h4', { class: 'gl-h4' }, 'Look and timing'),
+        siteSettings({ view: v, onSaved: (j) => { v = j; const nf = frame(); fr.replaceWith(nf); fr = nf; } }),
+        form,
+        h('h4', { class: 'gl-h4' }, 'Hosted link'), link].filter(Boolean));   // replaceChildren would print a null
     }
   }
 
