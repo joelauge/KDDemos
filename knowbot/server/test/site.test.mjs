@@ -121,6 +121,15 @@ describe('site generator (pure)', () => {
     assert.deepEqual(validateSiteEdit({ showOn: 'first-visit' }), { showOn: 'until-dismissed' }, 'the earlier name still works');
     assert.equal(publicSite(g, { showOn: 'first-visit' }, { botId: 'acme' }).showOn, 'until-dismissed', 'saved under the earlier name');
   });
+  test('subline: the line under the search box, owner-set or the default (null)', () => {
+    const e = validateSiteEdit({ subline: '  Ask about rules, campaigns   and dice. ' });
+    assert.deepEqual(e, { subline: 'Ask about rules, campaigns and dice.' });
+    assert.equal(publicSite(g, e, { botId: 'acme' }).subline, 'Ask about rules, campaigns and dice.');
+    assert.equal(publicSite(g, {}, { botId: 'acme' }).subline, null, 'the overlay then shows its default sentence');
+    assert.deepEqual(validateSiteEdit({ subline: '' }, e), {}, 'empty resets it');
+    assert.throws(() => validateSiteEdit({ subline: 'x'.repeat(141) }), (err) => err.status === 400 && err.field === 'subline');
+    assert.throws(() => validateSiteEdit({ subline: 7 }), (err) => err.status === 400 && err.field === 'subline');
+  });
   test('logo: PNG, JPEG or WebP data URL up to 150 KB; served by path with a digest; null removes it', () => {
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 1)]);
     const e = validateSiteEdit({ logo: `data:image/png;base64,${png.toString('base64')}` });

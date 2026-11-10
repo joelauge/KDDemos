@@ -309,11 +309,22 @@ try {
     await page.fill('.gl-sp .ss input[name="kb-site-name"]', 'Lumen Bikes Co');
     await page.press('.gl-sp .ss input[name="kb-site-name"]', 'Enter');
     await ssSaid(/Name saved/);
+    await page.fill('.gl-sp .ss input[name="kb-site-subline"]', 'Ask about bikes, repairs and rentals.');
+    await page.press('.gl-sp .ss input[name="kb-site-subline"]', 'Enter');
+    await ssSaid(/Line saved/);
     await page.check('.gl-sp .ss input[value="every-visit"]');
     await ssSaid(/every visit/);
     const saved = await siteApi();
     check('studio', 'name and “every visit” save at once', saved.site.name === 'Lumen Bikes Co' && saved.site.showOn === 'every-visit', JSON.stringify({ n: saved.site.name, s: saved.site.showOn }));
     // a logo: the sample shop's own (studio/samples/lumen-bikes/logo.png, 502x158), kept at its size
+    // a square logo (200x200) stays inside the preview tile, then the real one replaces it
+    const squarePng = Buffer.from((await page.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 200; const g = c.getContext('2d');
+      g.fillStyle = '#8b1e2b'; g.beginPath(); g.moveTo(100, 4); g.lineTo(196, 196); g.lineTo(4, 196); g.fill(); return c.toDataURL('image/png'); })).split(',')[1], 'base64');
+    await page.setInputFiles('.gl-sp .ss-file', { name: 'square.png', mimeType: 'image/png', buffer: squarePng });
+    await ssSaid(/Logo saved \(200 × 200 px\)/);
+    await page.waitForFunction(() => { const i = document.querySelector('.gl-sp .ss-logo-tile img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 15000 });
+    const fit = await page.$eval('.gl-sp .ss-logo-tile', (t) => { const a = t.getBoundingClientRect(), i = t.querySelector('img').getBoundingClientRect(); return { inside: i.top >= a.top - 0.5 && i.bottom <= a.bottom + 0.5 && i.left >= a.left - 0.5 && i.right <= a.right + 0.5, h: Math.round(i.height) }; });
+    check('studio', 'a square logo stays inside its preview tile', fit.inside && fit.h >= 40, JSON.stringify(fit));
     const logoPng = await fsp.readFile(path.join(__dirname, '..', 'samples', 'lumen-bikes', 'logo.png'));
     await page.setInputFiles('.gl-sp .ss-file', { name: 'lumen-logo.png', mimeType: 'image/png', buffer: logoPng });
     await ssSaid(/Logo saved \(502 × 158 px\)/);
@@ -322,6 +333,7 @@ try {
     await page.locator('.gl-sp-frame').scrollIntoViewIfNeeded();   // the preview frame loads lazily
     const pf = page.frameLocator('.gl-sp-frame iframe');
     await pf.locator('knowbot-overlay .brandlogo').waitFor({ timeout: 20000 });
+    check('studio', 'the preview shows the owner’s line under the search box', /Ask about bikes, repairs and rentals\./.test(await pf.locator('knowbot-overlay .quiet').textContent()));
     check('studio', 'the preview shows the logo under the wave, named for screen readers', (await pf.locator('knowbot-overlay #kb-h .brandlogo').getAttribute('alt')) === 'Lumen Bikes Co' && (await pf.locator('knowbot-overlay #kb-h').textContent()).trim() === '');
     await page.waitForTimeout(400);
     await page.locator('.gl-sp-frame').scrollIntoViewIfNeeded();

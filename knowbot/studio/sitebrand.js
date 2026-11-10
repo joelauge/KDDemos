@@ -74,6 +74,14 @@ export function siteSettings({ view, onSaved = () => {}, compact = false }) {
   name.addEventListener('change', saveName);
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveName(); } });
 
+  // the line under the search box: empty = the default sentence
+  const defLine = () => `Answers come only from ${v.site?.name || 'your'}'s own pages.`;
+  const sub = h('input', { id: `${id}-sub`, class: 'input ss-input', type: 'text', maxlength: '140', name: 'kb-site-subline', value: v.site?.subline || '', placeholder: defLine() });
+  let lastSub = sub.value;
+  const saveSub = () => { const t = sub.value.trim(); if (t === lastSub.trim()) return; lastSub = sub.value; save({ subline: t || null }, t ? 'Line saved.' : 'Line reset to the default.'); };
+  sub.addEventListener('change', saveSub);
+  sub.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveSub(); } });
+
   // logo
   const file = h('input', { type: 'file', accept: ACCEPT, class: 'ss-file', id: `${id}-file`, tabindex: '-1', 'aria-hidden': 'true' });
   const tile = h('div', { class: 'ss-logo-tile' });
@@ -87,6 +95,8 @@ export function siteSettings({ view, onSaved = () => {}, compact = false }) {
     up.textContent = has ? 'Replace logo' : 'Upload logo';
     rm.hidden = !has; rm.disabled = false; up.disabled = false;
     if (name.value.trim() !== (v.site?.name || '') && document.activeElement !== name) { name.value = v.site?.name || ''; lastName = name.value; }
+    sub.placeholder = defLine();
+    if (document.activeElement !== sub && sub.value.trim() !== (v.site?.subline || '')) { sub.value = v.site?.subline || ''; lastSub = sub.value; }
     for (const r of radios) r.checked = r.value === (v.site?.showOn === 'every-visit' ? 'every-visit' : 'until-dismissed');
   }
   file.addEventListener('change', async () => {
@@ -112,9 +122,11 @@ export function siteSettings({ view, onSaved = () => {}, compact = false }) {
   const el = h('div', { class: `ss${compact ? ' ss-compact' : ''}` },
     h('div', { class: 'ss-field' }, h('label', { class: 'ss-l', for: name.id }, 'Business name'), name,
       h('p', { class: 'ss-hint' }, 'Used for the search box and the "Ask" button. A logo replaces it under the wave.')),
+    h('div', { class: 'ss-field' }, h('label', { class: 'ss-l', for: sub.id }, 'Line under the search box'), sub,
+      h('p', { class: 'ss-hint' }, 'Up to 140 characters. Leave it empty for the default shown in grey.')),
     h('div', { class: 'ss-field' }, h('span', { class: 'ss-l', id: `${id}-logo-l` }, 'Logo'),
       h('div', { class: 'ss-logo', role: 'group', 'aria-labelledby': `${id}-logo-l` }, tile, h('div', { class: 'ss-logo-act' }, up, rm)), file,
-      h('p', { class: 'ss-hint' }, `Suggested: ${LOGO_BOX.w} × ${LOGO_BOX.h} px (3:1), a PNG or SVG with a transparent background. Larger images are fitted to that size.`)),
+      h('p', { class: 'ss-hint' }, `Suggested: ${LOGO_BOX.w} × ${LOGO_BOX.h} px (3:1), a PNG or SVG with a transparent background. Square logos work too. Larger images are fitted to that size.`)),
     h('fieldset', { class: 'ss-field ss-set' }, h('legend', { class: 'ss-l' }, 'When it shows'),
       opt('until-dismissed', 'Until the visitor closes it', 'Opens on each visit until they close it with ×. After that, only the small "Ask" button shows.'),
       opt('every-visit', 'On every visit', 'Opens every time someone visits your homepage, even if they closed it before.')),

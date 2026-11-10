@@ -214,7 +214,7 @@ export function editsView(edits = {}) {
   return logo ? { ...rest, logo: { type: logo.type, v: logo.v } } : rest;
 }
 /**
- * Owner edits from POST /site: { name?, tagline?, logo?, chips?, showOn?, showChips?, published? } → validated, or
+ * Owner edits from POST /site: { name?, tagline?, subline?, logo?, chips?, showOn?, showChips?, published? } → validated, or
  * throws { status:400, field }. showOn: 'until-dismissed' (default: it opens on each visit until the visitor closes it
  * with ×; after that only the small "Ask" button shows, in that browser) or 'every-visit' (it opens on every visit).
  * logo: an image data URL, or null to remove it (the business name shows instead). showChips: topic buttons under the search box (default off).
@@ -224,7 +224,7 @@ export function validateSiteEdit(body, current = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) bad('body', 'must be a JSON object');
   const next = { ...current };
   for (const k of Object.keys(body)) {
-    if (!['name', 'tagline', 'logo', 'chips', 'showOn', 'showChips', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
+    if (!['name', 'tagline', 'subline', 'logo', 'chips', 'showOn', 'showChips', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
   }
   if (body.name !== undefined) {
     if (body.name === null || body.name === '') delete next.name;
@@ -233,6 +233,11 @@ export function validateSiteEdit(body, current = {}) {
   if (body.tagline !== undefined) {
     if (body.tagline === null || body.tagline === '') delete next.tagline;
     else { if (typeof body.tagline !== 'string') bad('tagline', 'must be a string'); const t = oneLine(body.tagline); if (t.length > 160) bad('tagline', 'must be 160 characters or fewer'); next.tagline = t; }
+  }
+  // subline: the quiet line under the search box (default: "Answers come only from <name>'s own pages.")
+  if (body.subline !== undefined) {
+    if (body.subline === null || body.subline === '') delete next.subline;
+    else { if (typeof body.subline !== 'string') bad('subline', 'must be a string'); const t = oneLine(body.subline); if (!t) delete next.subline; else { if (t.length > 140) bad('subline', 'must be 140 characters or fewer'); next.subline = t; } }
   }
   if (body.chips !== undefined) {
     if (body.chips === null) delete next.chips;
@@ -275,6 +280,7 @@ export function publicSite(gen, edits = {}, { botId, trial = true, expiresAt = n
     bot: botId, name: edits.name || g.name || 'Our help centre', tagline: edits.tagline ?? g.tagline ?? '',
     chips: Array.isArray(edits.chips) ? edits.chips : g.chips || [], questions: g.questions || [], facts: g.facts || [],
     links: g.links || { byId: {}, byName: {} }, brand: g.brand || brandColors(null), homeUrl: g.homeUrl || null, homeFrame: g.homeFrame || null, initials: g.initials || 'KB',
+    subline: edits.subline || null,
     logo: edits.logo?.v && botId ? { path: `/api/site/${encodeURIComponent(botId)}/logo?v=${edits.logo.v}` } : null,
     showOn: showOnOf(edits.showOn), showChips: edits.showChips === true,
     published: !!edits.published, trial: !!trial, noindex: !!trial, expiresAt, generatedAt: g.generatedAt || null,

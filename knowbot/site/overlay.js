@@ -124,7 +124,7 @@ button { font: inherit; color: inherit; }
   overflow-wrap: anywhere; display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap;
 }
 .name.has-logo { margin-bottom: 24px; }
-.brandlogo { display: block; max-width: min(300px, 80%); max-height: 100px; width: auto; height: auto; object-fit: contain; }
+.brandlogo { display: block; max-width: min(300px, 80%); max-height: 120px; width: auto; height: auto; object-fit: contain; }
 .kb.dark .brandlogo { padding: 10px 16px; border-radius: 14px; background: #fff; }
 .logo { width: 48px; height: 48px; border-radius: 12px; object-fit: contain; background: #fff; flex: none; }
 
@@ -261,7 +261,7 @@ button { font: inherit; color: inherit; }
         h('div', { class: 'wave', 'aria-hidden': 'true' }, hand),
         brandLogo ? h('h1', { id: 'kb-h', class: 'name has-logo' }, brandLogo) : h('h1', { id: 'kb-h', class: 'name' }, logo, h('span', null, name)),
         form,
-        h('p', { class: 'quiet' }, `Answers come only from ${name}'s own pages.`),
+        h('p', { class: 'quiet' }, typeof s.subline === 'string' && s.subline.trim() ? s.subline.trim().slice(0, 140) : `Answers come only from ${name}'s own pages.`),
         chips, status, answer),
       h('div', { class: 'foot' }, h('a', { class: 'built', href: 'https://knowbot.knowdrive.ai/', target: '_blank', rel: 'noopener' }, 'Built with KnowBot', h('span', { class: 'sr' }, ' (opens in a new tab)'))));
     const dialog = h('div', { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'kb-h', hidden: true }, panel);
