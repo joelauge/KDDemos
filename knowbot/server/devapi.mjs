@@ -16,7 +16,7 @@
 //   trial (Studio bearer token):
 //   GET  /api/studio/trials/:id/devkey                                         the trial's kb_trial_ key
 //   public:
-//   GET  /api/site/:botId                                                      a published Single-page site + a key that can
+//   GET  /api/site/:botId                                                      a published Homepage search + a key that can
 //                                                                              only ask questions (scope "site", a few hours)
 //
 // Keys: kb_live_<32 random bytes, base64url>. Only a SHA-256 of each key is kept, in a registry document that is itself
@@ -152,7 +152,7 @@ export function createDevApi(o = {}) {
   const limits = {
     live: Number(env.KNOWBOT_API_RATE_LIMIT || 60),        // requests per minute per live key
     trial: Number(env.KNOWBOT_API_TRIAL_RATE_LIMIT || 20), // per trial key
-    site: Number(env.KNOWBOT_SITE_RATE_LIMIT || 60),       // Single-page site: questions per minute per bot (all visitors)
+    site: Number(env.KNOWBOT_SITE_RATE_LIMIT || 60),       // Homepage search: questions per minute per bot (all visitors)
     siteIp: Number(env.KNOWBOT_SITE_IP_RATE_LIMIT || 10),  // … and per visitor address
     siteKeyMs: Number(env.KNOWBOT_SITE_KEY_MS || 6 * 3600 * 1000), // a site key's life (never past its trial)
     channel: Number(env.KNOWBOT_CHANNEL_RATE_LIMIT || 12), // per caller per bot per channel
@@ -243,7 +243,7 @@ export function createDevApi(o = {}) {
 
   // ---------------------------------------------------------------- trial keys (stateless)
   const trialSig = (payload) => createHmac('sha256', `knowbot-devkey\n${trialSecret}`).update(payload).digest().subarray(0, 18).toString('base64url');
-  // scope "site": the Single-page site's key (GET /api/site/:id). It can only ask questions (POST /v1/bots/:id/chat), is
+  // scope "site": the Homepage search's key (GET /api/site/:id). It can only ask questions (POST /v1/bots/:id/chat), is
   // limited per bot and per visitor address, and lives a few hours: the page fetches a fresh one when it runs out.
   function trialKey(trialId, expiresAt, scope = null) {
     const payload = b64u(JSON.stringify({ t: trialId, e: Number(expiresAt), ...(scope ? { s: scope } : {}) }));
@@ -274,7 +274,7 @@ export function createDevApi(o = {}) {
       if (!d) throw new ApiError(401, 'invalid_api_key', BAD_KEY);
       if (!(d.e > now())) throw new ApiError(401, 'expired_api_key', 'This trial key expired with its trial.');
       who = d.s === 'site' ? { kind: 'trial', scope: 'site', bot: d.t, keyId: `site:${d.t}`, expiresAt: d.e } : { kind: 'trial', bot: d.t, keyId: `trial:${d.t}`, expiresAt: d.e };
-      if (who.scope === 'site' && !site) throw new ApiError(403, 'wrong_scope', 'This key can only ask questions on its Single-page site.');
+      if (who.scope === 'site' && !site) throw new ApiError(403, 'wrong_scope', 'This key can only ask questions on its Homepage search.');
     } else {
       await loadKeys();
       const rec = K.byHash.get(sha256(token));
@@ -1306,7 +1306,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         endpoints: { chat: `${base}/v1/bots/${id}/chat`, completions: `${base}/v1/chat/completions`, voice: `${base}/v1/bots/${id}/voice`, channels: `${base}/v1/channels/${id}` },
         channels: channelsInfo(req, id, await resolveTarget(id).catch(() => null)).channels });
     }
-    // the Single-page site (server/site.mjs): its public view and a key that can only ask questions. Published sites
+    // the Homepage search (server/site.mjs): its public view and a key that can only ask questions. Published sites
     // only; the owner's own trial key (the Studio's preview) also opens a site that is not published yet.
     if ((mt = /^\/api\/site\/([^/]+)$/.exec(p))) {
       if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');

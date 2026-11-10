@@ -456,8 +456,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-talk="hold" for push-to-talk; data-target="#id" to place it inline -->` },
           { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
         ] },
-      // Single-page site (server/site.mjs, ../site/overlay.js): a simple search box that hovers over the homepage
-      { id: 'site', name: 'Single-page site', blurb: 'A simple search box that hovers over your homepage. Visitors ask anything; answers quote your pages and link to them. They close it with × and see your site as usual.', provider: 'One line on your homepage', hue: 6, url: null, status: 'Try it now', tryLabel: 'On your homepage',
+      // Homepage search (server/site.mjs, ../site/overlay.js): a simple search box that hovers over the homepage
+      { id: 'site', name: 'Homepage search', blurb: 'A simple search box that hovers over your homepage. Visitors ask anything; answers quote your pages and link to them. They close it with × and see your site as usual.', provider: 'One line on your homepage', hue: 6, url: null, status: 'Try it now', tryLabel: 'On your homepage',
         needs: ['Nothing to connect: it is built from your files', 'Access to your homepage\'s HTML, or your website builder\'s custom code box'],
         steps: ['Check the preview on the right: the search box over your homepage. Press × to see your homepage underneath.',
           'Pick when it shows (first visit or every visit), then press Publish.',
@@ -952,7 +952,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
 
   // Text chatbot: a working widget (streams deltas, [n] chips open the quoted excerpt inline).
-  // ------------------------------------------------------------ Single-page site: preview, edit, publish, download
+  // ------------------------------------------------------------ Homepage search: preview, edit, publish, download
   const siteLink = () => `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(botId())}`;
   function overlayLine() { return `<script src="https://knowbot.knowdrive.ai/site/overlay.js" data-bot="${encodeURIComponent(botId())}" async></script>`; }
   function siteTry(el) {

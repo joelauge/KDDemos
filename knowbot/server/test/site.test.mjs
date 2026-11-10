@@ -1,4 +1,4 @@
-// The Single-page site answer surface, a search overlay on the business's homepage (server/site.mjs, site/overlay.js,
+// The Homepage search answer surface, a search overlay on the business's homepage (server/site.mjs, site/overlay.js,
 // GET|POST /api/studio/trials/:id/site, GET /api/site/:id, scope "site" keys): nothing invented (facts are verbatim
 // lines with their source, chips and popular questions only from validated questions), owner edits and options persist,
 // publish gates the public page, the site key can only ask questions, the homepage line and how-to download.
@@ -171,7 +171,7 @@ async function boot() {
 }
 const sse = (text) => text.split('\n\n').map((fr) => { const ev = /^event: (.*)$/m.exec(fr)?.[1]; return ev ? { event: ev, data: JSON.parse(/^data: (.*)$/m.exec(fr)?.[1] || 'null') } : null; }).filter(Boolean);
 
-describe('Single-page site over HTTP', () => {
+describe('Homepage search over HTTP', () => {
   let S, t, tok, files;
   const ip = '198.51.100.77';
   before(async () => {

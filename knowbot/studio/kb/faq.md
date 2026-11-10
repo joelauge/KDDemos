@@ -16,7 +16,7 @@ Yes, in two ways. Building and testing a bot in KnowBot Studio is free and needs
 
 Source: /studio/
 
-Yes. Each answer surface is $249 per month, or $2,499 per year: website chat, SMS, WhatsApp, email, phone, the web voice assistant and the single-page site are separate answer surfaces, all answering from the same sources. Each surface starts with the first 30 days free, and building and testing are free.
+Yes. Each answer surface is $249 per month, or $2,499 per year: website chat, SMS, WhatsApp, email, phone, the web voice assistant and the homepage search are separate answer surfaces, all answering from the same sources. Each surface starts with the first 30 days free, and building and testing are free.
 
 ## Do I need a credit card?
 

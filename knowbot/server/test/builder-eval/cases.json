@@ -5911,7 +5911,7 @@
      {
       "name": "kb_search",
       "input": {
-       "query": "single-page site homepage overlay"
+       "query": "homepage search overlay"
       }
      }
     ],
@@ -5950,7 +5950,7 @@
      {
       "name": "kb_search",
       "input": {
-       "query": "add single-page site to homepage one line"
+       "query": "add homepage search to homepage one line"
       }
      }
     ],

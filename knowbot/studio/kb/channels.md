@@ -4,7 +4,7 @@
 
 Source: /studio/
 
-A launched KnowBot can answer on seven channels: a website chat widget, SMS, telephone (phone calls), WhatsApp, email, a voice chatbot in the browser, and a single-page site. Every channel uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. The Channels gallery in KnowBot Studio shows each channel's webhook address and copyable setup.
+A launched KnowBot can answer on seven channels: a website chat widget, SMS, telephone (phone calls), WhatsApp, email, a voice chatbot in the browser, and homepage search. Every channel uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. The Channels gallery in KnowBot Studio shows each channel's webhook address and copyable setup.
 
 ## Website chat widget
 
@@ -60,13 +60,13 @@ Source: /studio/
 
 The voice chatbot lets a visitor talk to the bot in their browser and hear the answer. In KnowBot Studio, "Try it" works with no account. It uses the same live voice as phone calls: the visitor talks naturally, and the bot answers out loud from the bot's files while the sources show on screen as links.
 
-## Single-page site
+## Homepage search
 
 Source: /studio/
 
-The single-page site is a simple search box that sits on top of your homepage as an overlay. It hovers over your homepage instead of replacing it: your site shows faintly behind it. It is built from the bot's own files and is kept very simple: a waving hand, the business name, one big search box with an "Ask" button, and one quiet line that says answers come only from your own pages. Visitors ask a question and get the same cited answers as the website chat, with a Sources list that links each answer to the page it came from on your website, or to the proof page for an uploaded file. When the answer is not in the files, it says the same refusal sentence as every other channel. Visitors close it with the × button in the top right corner and see your homepage as usual; a small "Ask" button stays in the bottom right corner to open it again. In KnowBot Studio you can change the business name, choose whether it shows on a visitor's first visit only or on every visit, turn topic buttons under the search box on or off (they are off by default), and publish it.
+The homepage search is a simple search box that sits on top of your homepage as an overlay. It hovers over your homepage instead of replacing it: your site shows faintly behind it. It is built from the bot's own files and is kept very simple: a waving hand, the business name, one big search box with an "Ask" button, and one quiet line that says answers come only from your own pages. Visitors ask a question and get the same cited answers as the website chat, with a Sources list that links each answer to the page it came from on your website, or to the proof page for an uploaded file. When the answer is not in the files, it says the same refusal sentence as every other channel. Visitors close it with the × button in the top right corner and see your homepage as usual; a small "Ask" button stays in the bottom right corner to open it again. In KnowBot Studio you can change the business name, choose whether it shows on a visitor's first visit only or on every visit, turn topic buttons under the search box on or off (they are off by default), and publish it.
 
-## Adding the single-page site to your homepage
+## Adding the homepage search to your homepage
 
 Source: /studio/
 

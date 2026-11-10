@@ -412,8 +412,8 @@ const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone
 // answer surfaces: where the bot answers (studio/surfaces.js SURFACE_IDS, same order). Not material: the answers and the
 // bot version never change with them; each one is its own plan line at launch (shown only after testing).
 export const SURFACE_IDS = ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice', 'site'];
-const SURFACE_LABEL = { webchat: 'Website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', phone: 'Phone', webvoice: 'Web voice assistant', site: 'Single-page site' };
-// site: the Single-page site's owner edits (name, tagline, chips, published) are saved through POST /trials/:id/site
+const SURFACE_LABEL = { webchat: 'Website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', phone: 'Phone', webvoice: 'Web voice assistant', site: 'Homepage search' };
+// site: the Homepage search's owner edits (name, tagline, chips, published) are saved through POST /trials/:id/site
 const READ_ONLY_KEYS = new Set(['instructions', 'version', 'sampleSet', 'site']);
 const MATERIAL = ['tone', 'length', 'sources', 'floor', 'purpose', 'audience', 'name'];
 const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
@@ -656,7 +656,7 @@ const SURFACE_WORDS = [
   ['webchat', /\b(?:web\s*chat|website\s*chat|site\s+chat|chat\s+widget|web\s+widget|website\s+widget|live\s+chat|chat\s+on\s+(?:my|our|the)\s+(?:website|site))\b/i],
   ['sms', /\b(?:sms|text\s+messag(?:e|es|ing)|texting|by\s+text)\b/i],
   ['whatsapp', /\bwhats\s?app\b/i],
-  // the Single-page site: an answer page to use as the homepage (after web chat, so "chat on my website" stays web chat)
+  // the Homepage search: an answer page to use as the homepage (after web chat, so "chat on my website" stays web chat)
   ['site', SITE_WORD_RE],
   ['email', /\b(?:e-?mails?|by\s+mail|inbox)\b/i],
   ['phone', /\b(?:(?:tele)?phone(?!\s*(?:number|no\.?|#))(?:\s+(?:calls?|line))?|phone\s*calls?|voice\s+calls?|calls?\s+(?:in|from\s+customers)|hotline)\b/i],
@@ -4773,7 +4773,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       if (fid === 'confirm') { allow('POST'); limitTrialAndIp(T, req, 'numconfirm', 30, 60, 'payment checks'); return sendJson(res, 200, await numbers.confirm(T, (await readBody(req)).sessionId)); }
       fail(404, 'not_found', `no such endpoint ${p}`);
     }
-    // the Single-page site (server/site.mjs): GET builds it from the files when missing or stale (?download=1: the how-to
+    // the Homepage search (server/site.mjs): GET builds it from the files when missing or stale (?download=1: the how-to
     // HTML file with the homepage snippet), POST saves the owner's edits ({name, tagline, chips, showOn, showChips,
     // published}; regenerate:true builds it again)
     if (sub === 'site' && !fid) {
@@ -4899,7 +4899,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     }
     fail(404, 'not_found', `no such endpoint ${p}`);
   }
-  // ------------------------------------------------------------------------- the Single-page site
+  // ------------------------------------------------------------------------- the Homepage search
   /** Ready, enabled files in reading order: the site's own pages (policies, FAQ, help) before products and uploads. */
   async function siteFiles(T) {
     const files = (await filesOf(T)).filter((f) => f.stage === 'ready' && f.enabled);

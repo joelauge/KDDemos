@@ -130,7 +130,7 @@ html[data-motion="reduce"] .ks-float, html[data-motion="reduce"] .ks-shadow, htm
 .ks-shadow { position: absolute; left: 19%; top: calc(40px + 12px + var(--ks-stage-h) + 8px); margin: 0; z-index: 0; }
 @media (max-width: 1099px) { .kl-show { --ks-stage-h: 440px; } }
 @media (max-width: 480px) { .kl-show { --ks-stage-h: 430px; } }
-/* single-page site: a search page as the homepage */
+/* homepage search: a search page as the homepage */
 .ks-op-body { flex: 1; padding: 26px 18px 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
 .ks-op-h { font: 800 20px/1.2 var(--font-sans, system-ui); color: #111827; }
 .ks-op-box { margin: 0; width: 100%; padding: 10px 12px; border-radius: 10px; border: 1.5px solid #c7d2fe; background: #fff; color: #111827; text-align: left; font: 13px/1.4 var(--font-sans, system-ui); }

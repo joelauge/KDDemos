@@ -22,7 +22,7 @@
     { id: 'email', label: 'Email' },
     { id: 'phone', label: 'Phone' },
     { id: 'webvoice', label: 'Web voice' },
-    { id: 'site', label: 'Single-page site' },
+    { id: 'site', label: 'Homepage search' },
   ];
   var ICON = {
     webchat: '<path d="M4 5h16v11H9l-5 4z"/>',

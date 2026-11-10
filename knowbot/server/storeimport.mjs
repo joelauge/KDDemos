@@ -613,7 +613,7 @@ export function brandOfHtml(html, base) {
 }
 
 /**
- * Whether the home page lets another site show it in a frame (the Single-page site's hosted link shows its overlay over
+ * Whether the home page lets another site show it in a frame (the Homepage search's hosted link shows its overlay over
  * the real homepage only then). Response headers as a plain object (lower-case names). Any X-Frame-Options value, or a
  * CSP frame-ancestors list without "*", "https:" or the KnowBot host, means no. Unknown (no headers) is no.
  */

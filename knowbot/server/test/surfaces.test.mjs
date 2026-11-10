@@ -24,7 +24,7 @@ describe('answer surfaces: shared ids and plan math (studio/surfaces.js)', () =>
     assert.deepEqual(SURFACE_IDS, ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice', 'site']);
     assert.deepEqual(SERVER_IDS, SURFACE_IDS, 'server/trials.mjs SURFACE_IDS matches studio/surfaces.js');
     assert.deepEqual(TOOL_IDS, SURFACE_IDS, 'server/builder/tools.mjs SURFACES matches studio/surfaces.js');
-    assert.deepEqual(SURFACES.map((s) => s.label), ['Website chat', 'SMS', 'WhatsApp', 'Email', 'Phone', 'Web voice assistant', 'Single-page site']);
+    assert.deepEqual(SURFACES.map((s) => s.label), ['Website chat', 'SMS', 'WhatsApp', 'Email', 'Phone', 'Web voice assistant', 'Homepage search']);
   });
   test('normalize: known ids only, deduped, canonical order, website chat when empty', () => {
     assert.deepEqual(normalizeSurfaces(['sms', 'webchat', 'sms', 'nope', 'WhatsApp']), ['webchat', 'sms', 'whatsapp']);
@@ -131,7 +131,7 @@ describe('landing: "Where should it answer?" (studio/index.html, landing.js) nev
   test('the Builder knowledge base states the per-surface price truthfully (asked directly, cited)', () => {
     const kb = read('studio/kb/pricing-and-trial.md');
     assert.match(kb, /Each answer surface is \$249 per month, or \$2,499 per year/);
-    assert.match(kb, /website chat, SMS, WhatsApp, email, phone, the web voice assistant, and the single-page site/);
+    assert.match(kb, /website chat, SMS, WhatsApp, email, phone, the web voice assistant, and the homepage search/);
     assert.match(read('studio/kb/faq.md'), /Each answer surface is \$249 per month, or \$2,499 per year/);
   });
 });

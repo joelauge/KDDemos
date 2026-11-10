@@ -629,7 +629,7 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .nb-packs, .nb-list { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* Single-page site card (golive.js siteTry): publish, link, download, preview, edits */
+/* Homepage search card (golive.js siteTry): publish, link, download, preview, edits */
 .gl-sp { display: grid; gap: 10px; }
 .gl-sp-status { margin: 8px 0 0; min-height: 1.4em; font-size: 13px; color: var(--dim); }
 .gl-sp-pubrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

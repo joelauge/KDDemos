@@ -24,7 +24,7 @@ import { createBuilderTools, CLIENT_ACTIONS, OFFER_ONLY_ACTIONS, readyFiles, quo
 import { preparse } from './preparse.mjs';
 
 export const DEFAULT_MODEL = 'claude-haiku-5-5';
-const SURFACE_WORD = { webchat: 'website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'email', phone: 'phone', webvoice: 'web voice', site: 'single-page site' };
+const SURFACE_WORD = { webchat: 'website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'email', phone: 'phone', webvoice: 'web voice', site: 'homepage search' };
 const clip = (s, n) => { s = String(s ?? ''); return s.length <= n ? s : `${s.slice(0, Math.max(0, n - 1)).replace(/\s+\S*$/, '')}…`; };
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 /** Text that came from files, sites or the visitor is data: no tags, no line breaks, bounded. */

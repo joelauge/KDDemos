@@ -1,4 +1,4 @@
-// KnowBot "Single-page site" answer surface: a simple search overlay that hovers over the business's own homepage
+// KnowBot "Homepage search" answer surface: a simple search overlay that hovers over the business's own homepage
 // (site/overlay.js, installed with one script line), and the site spec it reads, built from a bot's own files.
 // Pure (no network, no DOM): server/trials.mjs gathers the inputs (files, validated questions, atoms, the website
 // import's name and brand) and calls buildSite(); server/devapi.mjs serves publicSite() at GET /api/site/:botId.

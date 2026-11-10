@@ -83,7 +83,7 @@
 /* phone + voice hosts */
 .sh-phone, .sh-voice { padding-top: 4px; }
 .sh-voice-mount { width: 100%; max-width: 440px; }
-/* single-page site: the real page (../site/) in a browser-like frame */
+/* homepage search: the real page (../site/) in a browser-like frame */
 .sh-site { max-width: 760px; }
 .sh-site-bar { align-self: stretch; display: flex; align-items: center; gap: 5px; padding: 8px 12px; border: 1px solid var(--border-base, var(--line)); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--surface-hover, #f3f4f7); }
 .sh-site-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--n-400, #d4d6de); }
