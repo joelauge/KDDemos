@@ -51,6 +51,8 @@ export async function handleWhatsApp(cx) {
     const body = String(params.Body || '').trim();
     if (!body) return sendXml(res, `<Message>${xml('Send me a question and I will answer from my files, with sources.')}</Message>`);
     if (cx.limited(`whatsapp|${from}`)) return sendXml(res, `<Message>${xml('You are sending questions very quickly. Try again in a minute.')}</Message>`);
+    const si = await cx.sendInfo?.(body, { channel: 'whatsapp', callerKey: from });
+    if (si) return sendXml(res, `<Message>${xml(si.reply)}</Message>`);
     const r = await cx.ask(body, { channel: 'whatsapp', callerKey: from });
     return sendXml(res, `<Message>${xml(formatWhatsApp(r, r.refused ? null : r.proofUrl))}</Message>`);
   }
@@ -78,7 +80,12 @@ export async function handleWhatsApp(cx) {
       let body;
       if (!m.text) body = 'I can answer text questions. Send me one and I will reply with sources.';
       else if (cx.limited(`whatsapp|${m.from}`)) body = 'You are sending questions very quickly. Try again in a minute.';
-      else { const r = await cx.ask(m.text.slice(0, 1000), { channel: 'whatsapp', callerKey: m.from }); body = formatWhatsApp(r, r.refused ? null : r.proofUrl); }
+      else {
+        // "can you email me that?": the send-info flow answers instead (server/sendinfo.mjs)
+        const si = await cx.sendInfo?.(m.text.slice(0, 1000), { channel: 'whatsapp', callerKey: m.from });
+        if (si) body = si.reply;
+        else { const r = await cx.ask(m.text.slice(0, 1000), { channel: 'whatsapp', callerKey: m.from }); body = formatWhatsApp(r, r.refused ? null : r.proofUrl); }
+      }
       await sendWhatsApp(env, m.from, body);
     })().catch((e) => cx.log(`[channels] whatsapp reply failed: ${e.message}`)));
   }

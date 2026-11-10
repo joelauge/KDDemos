@@ -12,6 +12,7 @@ import { InstanceRegistry, InstanceError, MAX_UPLOAD_BYTES } from './instances.m
 import { completeWith, ProviderError } from './providers.mjs';
 import { createStudio } from './trials.mjs';
 import { createDevApi, isDevApiPath, EXPOSE_HEADERS as DEV_EXPOSE_HEADERS } from './devapi.mjs';
+import { createSendInfo } from './sendinfo.mjs';
 import { phoneSessions } from './channels/voice-live.mjs';
 import { activeWebVoiceSessions } from './channels/webvoice.mjs';
 import { createResearchAgent } from './research.mjs';
@@ -109,12 +110,16 @@ export function createKnowBotServer(opts = {}) {
 
   // ------------------------------------------------------------ KnowBot Studio (/api/studio/*, server/trials.mjs)
   const kdConfig = kd; // { baseUrl, apiKey, store }: the same knowDrive config as the registry (null in local mode)
+  // "send me this" (server/sendinfo.mjs): one instance for the Studio and every /v1 surface (one memory, one opt-out list)
+  const sendInfo = createSendInfo({ env, log, dataDir });
   const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent,
-    rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, ...(opts.studio || {}) });
+    rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, sendInfo,
+    // a Studio answer's public proof link (/p/<id>) for what it sends, made by the developer API (created below)
+    proofLink: (req, trialId, a) => devapi.proofLink(req, trialId, a), ...(opts.studio || {}) });
 
   // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
   const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, readRaw, readJson, clientIp, requireAdmin,
-    logger: log, dataDir, llmModel, canonical: CANONICAL, ...(opts.devapi || {}) });
+    logger: log, dataDir, llmModel, canonical: CANONICAL, sendInfo, ...(opts.devapi || {}) });
 
   // ------------------------------------------------------------ events / SSE
   mkdirSync(dataDir, { recursive: true });

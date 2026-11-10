@@ -40,6 +40,7 @@ import { handleWhatsApp } from './channels/whatsapp.mjs';
 import { handleEmail } from './channels/email.mjs';
 import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
 import { createResearchAgent } from './research.mjs';
+import { createSendInfo } from './sendinfo.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
 export const KEY_RE = /^kb_(live|trial)_[A-Za-z0-9_.-]{20,600}$/;
@@ -145,6 +146,8 @@ export function createDevApi(o = {}) {
     channel: Number(env.KNOWBOT_CHANNEL_RATE_LIMIT || 12), // per caller per bot per channel
     ...(o.limits || {}),
   };
+  // "send me this": one shared instance (server.mjs passes the same one to the Studio), else this module's own
+  const sendInfo = o.sendInfo || createSendInfo({ env, log, now, dataDir: o.dataDir });
   const background = new Set();
   const track = (p) => { const q = Promise.resolve(p).catch(() => {}).finally(() => background.delete(q)); background.add(q); return q; };
 
@@ -655,6 +658,37 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
    * the site's 404.html forwards /p/<id> to this server's proof page), so a texted link never shows the API's address. */
   const PROOF_URL = String(env.KNOWBOT_PROOF_URL || '').replace(/\/+$/, '');
   const proofUrlFor = (req, id) => (id ? (PROOF_URL ? `${PROOF_URL}/p/${id}` : `${publicBase(req, env)}${PROOF_PREFIX}/p/${id}`) : null);
+  // ---------------------------------------------------------------- "send me this" (sendinfo.mjs)
+  /** A bot's own texting number once it has one (provisioned lines); else the server's shared line is used. */
+  const botFromNumber = (target) => target?.inst?.smsNumber || target?.inst?.phoneNumber || target?.spec?.smsNumber || target?.spec?.phoneNumber || null;
+  const siOf = (target) => ({ botId: target.id, botName: target.name || 'KnowBot', replyTo: target.inst?.replyTo || target.spec?.replyTo || null, fromNumber: botFromNumber(target),
+    scopeTags: target.kind === 'trial' ? [`trial:${target.id}`] : [`bot:${target.id}`] });
+  /** A proof link for any answer that has none yet (a remembered or Studio answer): saved like any other proof. */
+  const proofLinkFor = (req, target, channel) => (a) => {
+    if (a.proofUrl) return a.proofUrl;
+    if (!a.citations?.length) return null;
+    const id = saveProof({ bot: target.id, botName: target.name, question: a.question || '', answer: a.answer, refused: false, citations: a.citations, proof: { quoted: a.proof?.quoted || [], hits: a.proof?.hits || [] } }, channel);
+    return proofUrlFor(req, id);
+  };
+  /**
+   * One visitor turn on a text surface: null to answer normally, else {reply, status, ...} to send instead. Grounded answers
+   * on the same conversation key are remembered by rememberAnswer() so "send me that" sends the last one.
+   */
+  function sendInfoTurn(req, target, { key, question, history = [], channel, caller = null, callerKey = null, lastAnswer = null }) {
+    return sendInfo.maybeSendInfo({ ...siOf(target), key, question, history, channel, caller, callerKey, lastAnswer, proofUrlFor: proofLinkFor(req, target, channel),
+      answerFor: async (q) => {
+        const a = await answer(target, String(q || '').slice(0, MAX_Q), { channel, callerKey });
+        a.proofId = a.refused ? null : saveProof(a, channel);
+        a.proofUrl = proofUrlFor(req, a.proofId);
+        return a;
+      } });
+  }
+  const rememberAnswer = (key, a, req) => { if (!a.refused) sendInfo.remember(key, { ...a, proofUrl: a.proofUrl || proofUrlFor(req, a.proofId) }); };
+  const siView = (si) => ({ status: si.status, ...(si.via ? { via: si.via } : {}), ...(si.to ? { to: si.to } : {}) });
+  /** A send-info reply in the developer API's answer shape (no citations: it is the bot speaking, not an answer). */
+  const sendInfoAnswer = (target, question, si) => ({ id: `ans_${rid(16)}`, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: target.id, question: scrubQuestion(question), answer: si.reply, format: 'text',
+    citations: [], refused: false, grounded: false, proof: { hits: [], quoted: [], floor: { min: null, top: null } }, sendInfo: siView(si), usage: { latencyMs: 0 } });
+
   function send(res, status, body, headers = {}) {
     if (res.headersSent) { try { res.end(); } catch {} return; }
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
@@ -729,9 +763,22 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     const question = String(body.question || '').replace(/\s+/g, ' ').trim().slice(0, MAX_Q);
     if (!question) throw new ApiError(400, 'invalid_request_error', 'question is required');
     const target = await resolveTarget(botId, who);
+    // "send me this" in the channel's own shape: the preview conversation is the key's, per channel
+    const siKey = `${target.id}|preview:${channel}|${who.keyId}`;
+    const si = await sendInfoTurn(req, target, { key: siKey, question, history: Array.isArray(body.history) ? body.history.slice(-8) : [], channel, callerKey: who.keyId,
+      caller: typeof body.from === 'string' ? body.from.slice(0, 200) : null });
+    if (si) {
+      const out = { channel, question: scrubQuestion(question), refused: false, proofUrl: null, citations: [], text: si.reply, sendInfo: siView(si) };
+      if (channel === 'email') {
+        const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        out.html = `<p>${esc(si.reply)}</p>`; out.subject = `Re: ${question.slice(0, 120)}`; out.from = target.name || 'KnowBot';
+      }
+      return send(res, 200, out);
+    }
     const a = await answer(target, question, { channel, callerKey: who.keyId });
     a.proofId = a.refused ? null : saveProof(a, channel);
     const proofUrl = a.refused ? null : proofUrlFor(req, a.proofId);
+    rememberAnswer(siKey, { ...a, proofUrl }, req);
     const r = { ...a, question };
     const out = { channel, question, refused: !!a.refused, proofUrl, citations: publicAnswer(a, req).citations || [] };
     if (channel === 'sms') out.text = formatSms(r, proofUrl, SMS_MAX);
@@ -749,6 +796,16 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     const channel = typeof body.channel === 'string' && CHANNELS.includes(body.channel) ? body.channel : 'api';
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
     const format = formatOf(body);
+    const siKey = `${target.id}|${channel}|${callerKey}`;
+    const si = await sendInfoTurn(req, target, { key: siKey, question, history, channel, callerKey });
+    if (si) {
+      const out = sendInfoAnswer(target, question, si);
+      if (body.stream !== true) return send(res, 200, out);
+      sseHead(res);
+      const frame = (id, event, data) => `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+      res.write(frame(1, 'delta', { text: si.reply, n: [], raw: si.reply }) + frame(2, 'final', out) + frame(3, 'done', { latencyMs: 0 }));
+      return res.end();
+    }
     if (body.stream === true) {
       sseHead(res);
       let n = 0;
@@ -756,6 +813,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
       try {
         const a = await answer(target, question, { history, channel, callerKey, onRetrieval: (r) => emit('retrieval', r) });
         a.proofId = a.refused ? null : saveProof(a, channel);
+        rememberAnswer(siKey, a, req);
         for (const piece of answerPieces(a, format)) emit('delta', { text: piece.text ?? piece.raw, n: piece.n, raw: piece.raw });
         emit('final', publicAnswer(a, req, format));
         emit('done', { latencyMs: a.latencyMs });
@@ -767,6 +825,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     }
     const a = await answer(target, question, { history, channel, callerKey });
     a.proofId = a.refused ? null : saveProof(a, channel);
+    rememberAnswer(siKey, a, req);
     return send(res, 200, publicAnswer(a, req, format));
   }
 
@@ -876,8 +935,14 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
         const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel, callerKey });
         a.proofId = a.refused ? null : saveProof(a, channel);
         a.proofUrl = proofUrlFor(req, a.proofId);
+        rememberAnswer(`${target.id}|${channel}|${callerKey}`, a, req);
         return a;
       },
+      // "send me this": null (answer normally) or {reply, status} to send instead; the caller's own address is known
+      sendInfo: (question, { channel, callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|${channel}|${callerKey}`, question, channel, caller: callerKey, callerKey }),
+      // a texted STOP / START (the opt-out list sendinfo.mjs honours before every text)
+      optOut: (number) => sendInfo.optOut(target.id, number),
+      optIn: (number) => sendInfo.optIn(target.id, number),
     };
     return h(cx);
   }
@@ -917,8 +982,13 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
           const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'voice', callerKey });
           a.proofId = a.refused ? null : saveProof(a, 'voice');
           a.proofUrl = proofUrlFor(req, a.proofId);
+          rememberAnswer(`${target.id}|voice|${callerKey}`, a, req);
           return a;
         },
+        // "send me this": typed turns (text engine) and the send_info tool (live engine; the visitor confirms out loud)
+        sendInfoMedia: sendInfo.media(botFromNumber(target)),
+        maybeSendInfo: (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }),
+        sendInfo: ({ via, to, answer: ans, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice') }),
         onEnd: ({ sid, engine, questions }) => log(`[webvoice] ${sid} ended (${engine || 'not started'}, ${questions} questions)`),
       });
     })().catch((e) => { log(`[webvoice] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
@@ -948,8 +1018,12 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
         ask: async (question) => {
           const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'phone', callerKey: ws.callerKey || null });
           a.proofId = a.refused ? null : saveProof(a, 'phone');
+          a.proofUrl = proofUrlFor(req, a.proofId);
           return a;
         },
+        // "send me this" on a call: the send_info tool (texts default to the verified caller ID; the caller confirms first)
+        sendInfoMedia: sendInfo.media(botFromNumber(target)),
+        sendInfo: ({ via, to, answer: ans }) => sendInfo.send({ ...siOf(target), channel: 'phone', via, to, answer: ans, callerKey: ws.callerKey || null, proofUrlFor: proofLinkFor(req, target, 'phone') }),
         searchRaw: (q) => searchRaw(target, q),
         onStart: ({ from }) => { ws.callerKey = from || null; },
         // a spoken figure with no search behind it: flagged in the questions loop for the owner to review
@@ -980,6 +1054,8 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
         webVoice: { configured: true, engine: webVoiceEngine(env), live: webVoiceEngine(env) === 'gemini', socket: `${base.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId)}/voice/live`,
           embed: `${publicBase(req, env)}/lib/embed.js`, widget: `${publicBase(req, env)}/lib/voice-widget.js` },
       },
+      // "send me this": which media a visitor can ask to be sent this bot's answers by (both false: never offered)
+      sendInfo: sendInfo.media(botFromNumber(target)),
     };
   }
 
@@ -1203,7 +1279,9 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
   }
 
   return {
-    handle, upgrade, answer, resolveTarget, logLive, logChat, trialKey, createKey, revokeKey,
+    handle, upgrade, answer, resolveTarget, logLive, logChat, trialKey, createKey, revokeKey, sendInfo,
+    /** The Studio's "send me this" proof link: a public /p/<id> for a trial answer (sendinfo.mjs normalizeAnswer shape). */
+    proofLink: async (req, trialId, a) => proofLinkFor(req, await resolveTarget(trialId), 'studio')(a),
     /** Resolves when background work (question logs, WhatsApp replies, proof files) has settled. Tests. */
     idle: async () => { while (background.size) await Promise.all([...background]); },
     close() { clearInterval(sweep); },

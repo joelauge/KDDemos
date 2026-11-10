@@ -2,6 +2,7 @@
 // Reply: TwiML <Message>, at most 320 characters, [n] citation markers plus a short proof link (/p/<id>).
 // Needs TWILIO_AUTH_TOKEN (every request's X-Twilio-Signature is checked); without it the route answers 503.
 import { ChannelError, notConfigured, parseForm, twilioValid, sendXml, xml, formatSms } from './util.mjs';
+import { isStopWord, isStartWord } from '../sendinfo.mjs';
 
 export const SMS_MAX = 320;
 
@@ -15,7 +16,13 @@ export async function handleSms(cx) {
   const from = String(params.From || '');
   const body = String(params.Body || '').trim();
   if (!body) return sendXml(res, `<Message>${xml('Text me a question and I will answer from my files, with sources.')}</Message>`);
+  // STOP / START: the opt-out list "send me this" texts honour (the carrier confirms an opt-out itself, so no reply here)
+  if (isStopWord(body)) { await cx.optOut?.(from); return sendXml(res, ''); }
+  if (isStartWord(body)) { await cx.optIn?.(from); return sendXml(res, ''); }
   if (cx.limited(`sms|${from}`)) return sendXml(res, `<Message>${xml('You are sending questions very quickly. Try again in a minute.')}</Message>`);
+  // "can you email me that?": the send-info flow answers instead (server/sendinfo.mjs)
+  const si = await cx.sendInfo?.(body, { channel: 'sms', callerKey: from });
+  if (si) return sendXml(res, `<Message>${xml(si.reply)}</Message>`);
   const r = await cx.ask(body, { channel: 'sms', callerKey: from });
   return sendXml(res, `<Message>${xml(formatSms(r, r.refused ? null : r.proofUrl, SMS_MAX))}</Message>`);
 }

@@ -29,6 +29,9 @@ export class KnowBotContainer extends Container {
         // plain vars (wrangler.jsonc "vars" or --var), optional
         // (no SHOP_DOMAIN: product links come from each bot's own Shopify store import, never one server-wide store)
         'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PROOF_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS']),
+      // "Send me this information" (server/sendinfo.mjs): the mail API key (secret) and the sending address (plain var);
+      // without the key, answers are offered by text only (or not at all when texting is off too)
+      ...pick(env, ['RESEND_API_KEY', 'KNOWBOT_EMAIL_FROM']),
     };
   }
 

@@ -36,7 +36,8 @@
 // KNOWBOT_WEBVOICE_MAX_PER_BOT (default 10), KNOWBOT_WEBVOICE_MAX_PER_IP (default 2), KNOWBOT_WEBVOICE_ENGINE=text.
 // Over any cap the start is refused with {type:'error', code:'busy'} and close code 1013.
 import { NOT_IN_DATA, formatSpoken, humanTitle } from './util.mjs';
-import { connectGemini, createToolRunner, systemInstruction as phoneSystemInstruction, toolDeclarations as phoneToolDeclarations, greetingFor as phoneGreeting } from './voice-live.mjs';
+import { connectGemini, createToolRunner, systemInstruction as phoneSystemInstruction, toolDeclarations as phoneToolDeclarations, greetingFor as phoneGreeting,
+  sendInfoInstruction, sendInfoDeclaration } from './voice-live.mjs';
 
 export const MAX_QUESTIONS_PER_SESSION = 40;
 let active = 0;
@@ -56,7 +57,7 @@ export function webGreeting(botName) {
   return `Hi, I'm ${botName || 'KnowBot'}. I answer from my files and show you where each answer comes from. What would you like to know?`;
 }
 
-export function webSystemInstruction({ botName, org }) {
+export function webSystemInstruction({ botName, org, sendInfo = null }) {
   const who = botName || 'KnowBot';
   const orgName = org || botName || 'this business';
   return `You are ${who}, the voice assistant on ${orgName}'s website, speaking with a visitor through their browser microphone. You are a kind librarian: you answer only from ${orgName}'s own files and you say which file each answer comes from. The visitor also sees the sources on screen while you speak.
@@ -74,13 +75,14 @@ Speaking style:
 
 Session flow:
 - The session starts with the message "[visitor connected]". Greet the visitor with: "${webGreeting(botName)}"
-- Typed messages from the visitor arrive as text; treat them exactly like spoken questions.`;
+- Typed messages from the visitor arrive as text; treat them exactly like spoken questions.${sendInfoInstruction(sendInfo, { who: 'visitor' })}`;
 }
 
-export function webToolDeclarations({ org }) {
+export function webToolDeclarations({ org, sendInfo = null }) {
   return [{ functionDeclarations: [
     { name: 'search_knowledge_base', description: `Search ${org || 'this business'}'s own files and get the answer to speak, with its source. Required before answering any question.`,
       parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'A complete, standalone question in plain English.' } }, required: ['query'] } },
+    ...(sendInfo && (sendInfo.email || sendInfo.text) ? [sendInfoDeclaration()] : []),
   ] }];
 }
 
@@ -145,6 +147,12 @@ export function handleWebVoice(ws, cx) {
   async function answerText(text) {
     const q = String(text || '').replace(/\s+/g, ' ').trim();
     if (!q) return;
+    // "can you email me that?": the send-info flow answers instead (server/sendinfo.mjs)
+    const si = cx.maybeSendInfo ? await cx.maybeSendInfo(q, { callerKey }).catch((e) => { log(`[webvoice] ${sid} send-info failed: ${e.message}`); return null; }) : null;
+    if (si) {
+      transcript.push({ role: 'user', text: q }, { role: 'agent', text: si.reply });
+      return sendJson({ type: 'answer', question: q, text: si.reply, spoken: si.reply, refused: false, citations: [], proofUrl: null, sendInfo: { status: si.status, ...(si.to ? { to: si.to } : {}) } });
+    }
     let a;
     try { a = await ask(q); } catch (e) {
       return sendJson({ type: 'error', code: e.limit ? 'question_limit' : 'answer_failed', message: e.limit ? 'This session has reached its question limit. Start a new one to keep going.' : "Couldn't answer right now. Please try again." });
@@ -163,6 +171,7 @@ export function handleWebVoice(ws, cx) {
       if (!hangupTimer) { hangupTimer = setTimeout(() => closeAll('hangup'), Number(cx.hangupFallbackMs || 15000)); hangupTimer.unref?.(); }
       return { status: 'ok', note: 'The call will end after your goodbye finishes playing.' };
     }
+    if (call?.name === 'send_info') return runShared(call);
     if (call?.name !== 'search_knowledge_base') return { status: 'error', reason: `Unknown tool ${call?.name}` };
     if (!call.args?.query && userText.trim()) call.args = { ...call.args, query: userText.trim() };
     const query = String(call.args?.query || '').trim();
@@ -196,9 +205,11 @@ export function handleWebVoice(ws, cx) {
     }
   }
   async function openGemini() {
+    // "send me this": the browser has no caller number, so a text needs the number they say (and confirm)
+    const sendInfo = cx.sendInfo && cx.sendInfoMedia ? { ...cx.sendInfoMedia, callerKnown: false } : null;
     const s = await connectGemini(env, {
-      systemInstruction: phone ? phoneSystemInstruction({ botName: cx.botName, org: cx.org, productLinks: false }) : webSystemInstruction({ botName: cx.botName, org: cx.org }),
-      tools: phone ? phoneToolDeclarations({ org: cx.org || cx.botName, productLinks: false }) : webToolDeclarations({ org: cx.org || cx.botName }),
+      systemInstruction: phone ? phoneSystemInstruction({ botName: cx.botName, org: cx.org, productLinks: false, sendInfo }) : webSystemInstruction({ botName: cx.botName, org: cx.org, sendInfo }),
+      tools: phone ? phoneToolDeclarations({ org: cx.org || cx.botName, productLinks: false, sendInfo }) : webToolDeclarations({ org: cx.org || cx.botName, sendInfo }),
       onMessage: onGeminiMessage,
       onClose: () => { sessionReady = false; closeAll('model_closed'); },
       timeoutMs: Number(cx.geminiTimeoutMs || 10000),
@@ -228,7 +239,7 @@ export function handleWebVoice(ws, cx) {
       runShared = createToolRunner({ ask: (q) => ask(q).then((a) => {
         sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names }), citations: citationChips(a), proofUrl: a.proofUrl || null });
         return a;
-      }), env, botName: cx.botName, org: cx.org, callSid: sid, log });
+      }), sendInfo: cx.sendInfo ? (x) => cx.sendInfo({ ...x, callerKey }) : null, env, botName: cx.botName, org: cx.org, callSid: sid, log });
       try { session = await openGemini(); } catch (e) {
         log(`[webvoice] ${sid} Gemini Live unavailable (${e.message}); text engine`);
         engine = 'text'; note = 'Live voice is unavailable right now, so your browser recognizes and speaks instead.';

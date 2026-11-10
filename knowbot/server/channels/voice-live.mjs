@@ -11,7 +11,8 @@
 // returns the answer already spoken with its attribution ("According to the Shipping page, …"). The model reads that,
 // never its own knowledge. Each search is logged to the questions loop with channel 'phone'.
 // Tools: search_knowledge_base, end_call (hang up after the goodbye), send_product_link (only when the bot has a Shopify
-// store: see shop.mjs; items[] of up to 5 products in ONE cart link; at most 3 texts per call).
+// store: see shop.mjs; items[] of up to 5 products in ONE cart link; at most 3 texts per call), send_info ("send me this":
+// the last answer from the files, by text or e-mail, through server/sendinfo.mjs; offered only when the server can send).
 // This is the phone channel's only engine: without GEMINI_API_KEY the call webhook says the line isn't set up and hangs up.
 // Security: the media WebSocket must present, in its first "start" message, the one-time token the signed webhook issued
 // for that CallSid and bot; anything else is closed before a Gemini session is opened.
@@ -120,7 +121,29 @@ export function greetingFor(botName) {
   return `Hi, you've reached ${name}I answer from my files and tell you where each answer comes from. What would you like to know?`;
 }
 
-export function systemInstruction({ botName, org, productLinks = false }) {
+/**
+ * The "send me this" part of a voice prompt. sendInfo: { email, text, callerKnown } (what this line can send, and whether
+ * the caller's own number is known); null or neither medium → nothing (the assistant never offers).
+ */
+export function sendInfoInstruction(sendInfo, { who = 'caller' } = {}) {
+  if (!sendInfo || (!sendInfo.email && !sendInfo.text)) return '';
+  const lines = [`- If the ${who} asks you to send, text or email them the information, you can send your last answer from the files, with its sources and a link to them. Don't offer it unprompted more than once.`];
+  if (sendInfo.text && sendInfo.callerKnown) lines.push(`- For a text, offer: "I can text that to the number you're calling from." Confirm using the last four digits you were given ("to the number ending in 0378?") and get a yes. If they give a different mobile number, read it back digit by digit and get a yes.`);
+  else if (sendInfo.text) lines.push(`- For a text, ask for their mobile number, read it back digit by digit and get a yes.`);
+  if (sendInfo.email) lines.push(`- For an email, ask for their email address, spell it back to them and get a yes before sending.`);
+  if (!sendInfo.email) lines.push(`- Email isn't available here; offer a text instead.`);
+  if (!sendInfo.text) lines.push(`- Texts aren't available here; offer an email instead.`);
+  lines.push(`- Only after they confirm, call send_info with channel "text" or "email" and "to" set to the number or address they confirmed${sendInfo.text && sendInfo.callerKnown ? ' (leave "to" empty to text the number they are calling from)' : ''}.`);
+  lines.push(`- When it succeeds, tell them it's on its way. If it reports a problem, say so briefly and offer the other way. If it says there is nothing to send yet, ask what they'd like to know first. Never read out the link.`);
+  return `\n\nSending the answer:\n${lines.join('\n')}`;
+}
+export const sendInfoDeclaration = () => ({ name: 'send_info', description: 'Send the caller your last answer from the files (the answer, its sources and a link to them) by text or email. Only after they asked for it and confirmed the number or address.',
+  parameters: { type: 'OBJECT', properties: {
+    channel: { type: 'STRING', enum: ['text', 'email'], description: 'text or email.' },
+    to: { type: 'STRING', description: 'The mobile number or email address the caller confirmed, as they said it. Empty to text the number they are calling from.' },
+  }, required: ['channel'] } });
+
+export function systemInstruction({ botName, org, productLinks = false, sendInfo = null }) {
   const who = botName || 'KnowBot';
   const orgName = org || botName || 'this business';
   const base = `You are ${who}, the phone assistant for ${orgName}, speaking with a caller on a live phone call. You are a kind librarian: you answer only from ${orgName}'s own files and you say which file each answer comes from.
@@ -139,7 +162,7 @@ Speaking style:
 
 Call flow:
 - The call starts with a message like "[call connected] Caller's number ends in 0378." Greet the caller with: "${greetingFor(botName)}"
-- When the caller says goodbye or that they're done, say a short goodbye and then call end_call.`;
+- When the caller says goodbye or that they're done, say a short goodbye and then call end_call.${sendInfoInstruction(sendInfo)}`;
   if (!productLinks) return base;
   return `${base}
 
@@ -157,13 +180,14 @@ Texting product links:
 - Never read out the link itself.`;
 }
 
-export function toolDeclarations({ org, productLinks = false }) {
+export function toolDeclarations({ org, productLinks = false, sendInfo = null }) {
   const orgName = org || 'this business';
   const fns = [
     { name: 'search_knowledge_base', description: `Search ${orgName}'s own files and get the answer to speak, with its source. Required before answering any question.`,
       parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'A complete, standalone question in plain English.' } }, required: ['query'] } },
     { name: 'end_call', description: 'Hang up after you have said goodbye to the caller.', parameters: { type: 'OBJECT', properties: {} } },
   ];
+  if (sendInfo && (sendInfo.email || sendInfo.text)) fns.splice(1, 0, sendInfoDeclaration());
   if (productLinks) {
     fns.splice(1, 0, { name: 'send_product_link', description: 'Text the caller ONE link that puts the listed products in a new cart and opens checkout. Only after the caller agreed and confirmed the number.',
       parameters: { type: 'OBJECT', properties: {
@@ -209,8 +233,9 @@ export function twilioRest(env = {}) {
  * @param {string|null} [o.shopDomain]  product links on when set
  * @param {(to: string) => boolean} [o.textAllowed]  per-destination / per-bot text quota (devapi.mjs); false → 'texts are limited'
  */
-export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, env = {}, botName = '', org = '', log = () => {} }) {
+export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, sendInfo = null, env = {}, botName = '', org = '', log = () => {} }) {
   let textsSent = 0;
+  let lastAnswer = null; // the last grounded answer on this call: what send_info sends
   const seen = []; // retrieved text this call (citation excerpts + urls), for product handle lookup
   const answers = []; // {query, refused, spoken, citations:[{n,title,file}]} for the call log
   const names = [botName, org].filter(Boolean);
@@ -240,9 +265,23 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
       const spoken = r.refused ? NOT_IN_DATA : formatSpoken(r, 450, { names });
       answers.push({ query, refused: !!r.refused, spoken, citations: (r.citations || []).map((c) => ({ n: c.n, title: humanTitle(c), file: c.file })) });
       if (r.refused) return { status: 'not_in_data', say: NOT_IN_DATA };
+      lastAnswer = r;
       // only the answer to speak and the titles it came from: no raw excerpts (prices, figures) the model could read
       // from beyond the answer, and no page addresses (product handles come from this call's own `seen` list)
       return { status: 'ok', say: spoken, source_titles: [...new Set((r.citations || []).slice(0, 4).map((c) => humanTitle(c)))] };
+    }
+    if (call?.name === 'send_info') {
+      // "send me this" (server/sendinfo.mjs): validation, rate limits, the opt-out list and delivery live there
+      if (!sendInfo) return { status: 'error', retryable: false, reason: 'Sending is not set up on this line.' };
+      if (!lastAnswer) return { status: 'nothing_to_send', reason: 'There is no answer from the files on this call yet. Ask what they would like to know first.' };
+      const via = String(args.channel || '').toLowerCase() === 'email' ? 'email' : 'text';
+      const to = String(args.to || '').trim() || (via === 'text' ? callerNumber : '');
+      if (!to) return { status: via === 'email' ? 'need_email_address' : 'need_phone_number', reason: via === 'email' ? 'Ask for their email address and spell it back.' : 'Ask for their mobile number and read it back.' };
+      let r;
+      try { r = await sendInfo({ via, to, answer: lastAnswer }); } catch (e) { log(`[voice-live] ${callSid} send_info failed: ${e.message}`); return { status: 'error', retryable: false, reason: "It couldn't be sent." }; }
+      log(`[voice-live] ${callSid} send_info by ${via}: ${r.status}`);
+      if (r.status === 'sent') return { status: 'ok', sent_by: via, ...(via === 'text' ? { sent_to_last_four: String(r.to || '').replace(/\D/g, '').slice(-4) } : {}) };
+      return { status: r.status, retryable: r.status === 'invalid', reason: r.reply };
     }
     if (call?.name === 'send_product_link') {
       if (!shop) return { status: 'error', retryable: false, reason: 'Product links are not set up for this bot.' };
@@ -466,9 +505,10 @@ export function handleMediaStream(twilioWs, cx) {
 
   async function openSession() {
     const productLinks = !!cx.shopDomain && rest.canText;
+    const sendInfo = cx.sendInfo && cx.sendInfoMedia ? { ...cx.sendInfoMedia, callerKnown: !!toE164(callerNumber) } : null;
     session = await connectGemini(env, {
-      systemInstruction: systemInstruction({ botName: cx.botName, org: cx.org, productLinks }),
-      tools: toolDeclarations({ org: cx.org || cx.botName, productLinks }),
+      systemInstruction: systemInstruction({ botName: cx.botName, org: cx.org, productLinks, sendInfo }),
+      tools: toolDeclarations({ org: cx.org || cx.botName, productLinks, sendInfo }),
       onMessage: onGeminiMessage,
       onClose: () => { sessionReady = false; closeAll(); },
     });
@@ -512,7 +552,7 @@ export function handleMediaStream(twilioWs, cx) {
         lifeTimer.unref?.();
         cx.onStart?.({ callSid, from: callerNumber });
         runShared = createToolRunner({ ask: cx.ask, searchRaw: cx.searchRaw, callSid, callerNumber, sendSms: rest.canText ? rest.sendSms : null,
-          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, env, botName: cx.botName, org: cx.org, log });
+          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, sendInfo: cx.sendInfo || null, env, botName: cx.botName, org: cx.org, log });
         log(`[voice-live] ${callSid} media stream started (bot ${cx.botId})`);
         openSession().catch((e) => { log(`[voice-live] ${callSid} could not open a Gemini session: ${e.message}`); closeAll(); });
         break;

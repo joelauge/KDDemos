@@ -5,7 +5,7 @@
   "description": "KnowBot server: the only runtime dependency is the Anthropic SDK, loaded lazily for bots that answer with Claude.",
   "scripts": {
     "start": "node server/server.mjs",
-    "test": "node --test lib/test/core.test.mjs server/test/server.test.mjs server/test/instances.test.mjs server/test/providers.test.mjs server/test/trials.test.mjs server/test/storeimport.test.mjs server/test/sitefinder.test.mjs server/test/questions.test.mjs server/test/devapi.test.mjs server/test/channels.test.mjs server/test/voice-live.test.mjs server/test/webvoice.test.mjs server/test/builder-kb.test.mjs server/test/builder-engine.test.mjs server/test/builder-eval.test.mjs server/test/surfaces.test.mjs",
+    "test": "node --test lib/test/core.test.mjs server/test/server.test.mjs server/test/instances.test.mjs server/test/providers.test.mjs server/test/trials.test.mjs server/test/storeimport.test.mjs server/test/sitefinder.test.mjs server/test/questions.test.mjs server/test/devapi.test.mjs server/test/channels.test.mjs server/test/voice-live.test.mjs server/test/webvoice.test.mjs server/test/builder-kb.test.mjs server/test/builder-engine.test.mjs server/test/builder-eval.test.mjs server/test/surfaces.test.mjs server/test/sendinfo.test.mjs",
     "studio:dev": "node studio/test/dev-server.mjs",
     "studio:smoke": "node studio/test/smoke.mjs",
     "builder:eval": "node scripts/builder-eval.mjs"

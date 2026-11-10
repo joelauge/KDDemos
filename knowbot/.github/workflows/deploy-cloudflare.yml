@@ -37,6 +37,7 @@ jobs:
           KNOWDRIVE_API_KEY: ${{ secrets.KNOWDRIVE_API_KEY }}
           KNOWBOT_ADMIN_TOKEN: ${{ secrets.KNOWBOT_ADMIN_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
           TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
@@ -44,6 +45,7 @@ jobs:
         run: |
           if [ -n "$KNOWDRIVE_API_KEY" ]; then printf '%s' "$KNOWDRIVE_API_KEY" | npx wrangler secret put KNOWDRIVE_API_KEY; else echo "::warning::KNOWDRIVE_API_KEY not set; the container will answer from the bundled corpus"; fi
           if [ -n "$ANTHROPIC_API_KEY" ]; then printf '%s' "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY; else echo "::notice::ANTHROPIC_API_KEY not set; the Studio Builder uses its scripted engine"; fi
+          if [ -n "$RESEND_API_KEY" ]; then printf '%s' "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY; else echo "::notice::RESEND_API_KEY not set; bots offer to send answers by text only"; fi
           # Phone + SMS channels (optional; each feature stays off without its secret)
           for n in GEMINI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM_NUMBER; do
             v="${!n}"; if [ -n "$v" ]; then printf '%s' "$v" | npx wrangler secret put "$n"; else echo "::notice::$n not set; the phone/SMS feature that needs it stays off"; fi

@@ -558,11 +558,11 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     await until(() => c.closeCode != null, 15000, 'the call to end');
     const s = G.sessions.at(-1);
     assert.ok(!s.error, s.error?.stack);
-    // setup: the bot's persona, grounding prompt and tools (product links on: a shop and Twilio texting are configured)
+    // setup: the bot's persona, grounding prompt and tools (product links and send_info on: a shop and texting are configured)
     assert.match(s.setup.model, /^models\/gemini-3\.8-live$/);
     assert.deepEqual(s.setup.generationConfig.responseModalities, ['AUDIO']);
     assert.match(s.setup.systemInstruction.parts[0].text, /You are Front Desk/);
-    assert.deepEqual(s.setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'send_product_link', 'end_call']);
+    assert.deepEqual(s.setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'send_product_link', 'send_info', 'end_call']);
     assert.equal(toolResponses[0].hello, "[call connected] Caller's number ends in 0199.");
     // caller audio reached Gemini as 16 kHz PCM
     const audio = s.received.find((m) => m.realtimeInput?.audio);
@@ -724,8 +724,8 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
         await c.closed;
       }
       const names = (k) => G.sessions[at + k].setup.tools[0].functionDeclarations.map((f) => f.name);
-      assert.deepEqual(names(0), ['search_knowledge_base', 'send_product_link', 'end_call']);
-      assert.deepEqual(names(1), ['search_knowledge_base', 'end_call']);
+      assert.deepEqual(names(0), ['search_knowledge_base', 'send_product_link', 'send_info', 'end_call']);
+      assert.deepEqual(names(1), ['search_knowledge_base', 'send_info', 'end_call']);
       assert.ok(!/send_product_link/.test(G.sessions[at + 1].setup.systemInstruction.parts[0].text));
     } finally { mode.current = 'full'; }
   });

@@ -46,6 +46,12 @@ export async function parseInbound(raw, contentType) {
     autoSubmitted: /auto-submitted:\s*auto-/i.test(String(f.headers || '')) ? 'auto' : '' };
 }
 
+/** A short note from the bot (the send-info flow's reply) as a plain e-mail body. */
+function noteEmail(note, botName) {
+  const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return { text: `${note}\n\n${botName}`, html: `<div style="font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111;max-width:600px"><p>${esc(note)}</p><p style="color:#777;font-size:13px">${esc(botName)}</p></div>` };
+}
+
 async function deliver(env, mail) {
   if (env.EMAIL_REPLY_WEBHOOK) {
     const r = await fetch(env.EMAIL_REPLY_WEBHOOK, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(mail), signal: AbortSignal.timeout(10000) });
@@ -103,10 +109,13 @@ export async function handleEmail(cx) {
   if (!question) return sendJsonRes(res, 200, { ok: true, ignored: true, reason: 'empty' });
   if (cx.limited(`email|${mail.from}`)) return sendJsonRes(res, 429, { error: { code: 'rate_limited', message: 'Too many messages from this sender.' } }, { 'retry-after': '60' });
 
-  const r = await cx.ask(question, { channel: 'email', callerKey: mail.from });
-  const { text, html } = formatEmail(r, { proofUrl: r.refused ? null : r.proofUrl, botName: cx.botName || 'KnowBot', question });
+  // "send it to my other address": the send-info flow answers instead (server/sendinfo.mjs); its reply still goes by e-mail
+  const si = await cx.sendInfo?.(question, { channel: 'email', callerKey: mail.from });
+  const r = si ? null : await cx.ask(question, { channel: 'email', callerKey: mail.from });
+  const { text, html } = si ? noteEmail(si.reply, cx.botName || 'KnowBot') : formatEmail(r, { proofUrl: r.refused ? null : r.proofUrl, botName: cx.botName || 'KnowBot', question });
   const reply = { to: mail.from, from: env.EMAIL_FROM || null, subject: `Re: ${subject || 'your question'}`, text, html };
   let delivered = null;
   try { delivered = await deliver(env, reply); } catch (e) { cx.log(`[channels] email reply failed: ${e.message}`); }
+  if (si) return sendJsonRes(res, 200, { ok: true, provider: mail.provider, delivered: !!delivered, via: delivered, reply: { subject: reply.subject, text, html }, refused: false, citations: [], sendInfo: { status: si.status, ...(si.to ? { to: si.to } : {}) } });
   return sendJsonRes(res, 200, { ok: true, provider: mail.provider, delivered: !!delivered, via: delivered, reply: { subject: reply.subject, text, html }, refused: r.refused, citations: r.citations });
 }
