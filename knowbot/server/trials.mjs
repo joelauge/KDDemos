@@ -28,6 +28,7 @@ import { promises as fsp, readdirSync, statSync } from 'node:fs';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as kbLib from '../lib/knowbot.js';
 import { createResearchAgent } from './research.mjs';
+import { createEvidenceSelector, isRefusal, isAnswerable } from './evidence.mjs';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
 import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS } from './storeimport.mjs';
@@ -1136,6 +1137,9 @@ export function createStudio(o = {}) {
   // Research step for the trial bots' answers (lib researchAnswer): Claude reads whole passages, may search again, picks
   // line spans to quote and may add a verified summary. Without a key it is null and answers use the select path.
   const researchAgent = o.researchAgent !== undefined ? o.researchAgent : createResearchAgent(env, { key: () => providerKey() || env.ANTHROPIC_API_KEY || null, log });
+  // Evidence selector (server/evidence.mjs; KNOWBOT_EVIDENCE=attend): when it answers, it picks the passages an answer
+  // may quote instead of retrieve() + the research agent's search tool; null (off, down, failed) keeps today's path
+  const evidence = o.evidence !== undefined ? o.evidence : createEvidenceSelector(env, { log });
   const localKb = createLocalKb({ pricing: { checkoutUrl: checkoutBase } });
   let remoteKb = null;
   try { remoteKb = enabled && store && o.builderKb !== false ? createBuilderKb({ kdJson, store, log, now }) : null; } catch (e) { log(`[studio] builder kb: ${e.message}`); }
@@ -1814,6 +1818,46 @@ export function createStudio(o = {}) {
     return { vector: merged, hybridOnly, top, files };
   }
 
+  /**
+   * The evidence selector's passages for one question, as retrieve() hits (null: use retrieve()). The trial's own files
+   * (scope tag, none of the excluded or disabled tfile: tags) and, when the trial uses the shared samples, the sample set
+   * are two calls, merged in that order; then the same fences as retrieve(): disabled files by id, shared samples only
+   * once the replay has reached them, own files only when they are this trial's.
+   */
+  async function evidenceSelect(T, question, files, signal) {
+    if (!evidence || !store) return null;
+    const filter = scopeFilter(T, files);
+    const sharedSet = !T.converted && T.flags.sharedSet && T.flags.sharedAt ? T.flags.sharedSet : null;
+    const scopes = [{ tags_all: filter.all_of, tags_none: filter.none_of },
+      ...(sharedSet ? [{ tags_all: [`sample-set:${sharedSet}`, 'kind:trial-sample'], tags_none: ALWAYS_EXCLUDE }] : [])];
+    const sel = await evidence.select({ store, question, scopes, signal }).catch(() => null);
+    if (!sel || (!isRefusal(sel) && !isAnswerable(sel))) return null;
+    if (isRefusal(sel)) return { ...sel, hits: [] };
+    const own = new Set(files.filter((f) => f.enabled && !(sharedSet && f.replay)).map((f) => f.id));
+    const sharedOk = new Set(files.filter((f) => f.enabled && f.replay && ['vectorizing', 'ready'].includes(f.stage)).map((f) => f.id));
+    const hits = sel.sources.filter((x) => own.has(x.file_id) || sharedOk.has(x.file_id)).map((x) => ({
+      fileId: x.file_id, atomId: null, seq: x.seq, offset: null, text: x.text, filename: x.path, similarity: null, rrf: null, mode: 'evidence',
+      tags: null, page: null, slide: null, sheet: null, row: null, ts: null, crumb: null, kind: null, url: null, contentHash: x.content_hash, evidence: true,
+    }));
+    // every passage dropped by the fences: nothing in this bot's files answers it
+    if (!hits.length) return { ...sel, status: 'none_in_window', sources: [], hits: [] };
+    // the atom's id, breadcrumb and location, from the file's atoms (cached), so the answer and its proof read as today
+    await Promise.all([...new Set(hits.map((h) => h.fileId))].map(async (fid) => {
+      let atoms = [];
+      try { atoms = await allAtoms(T, fid); } catch { return; }
+      for (const h of hits.filter((x) => x.fileId === fid)) {
+        const a = atoms.find((y) => y.seq === h.seq && normText(y.text) === normText(h.text)) || atoms.find((y) => normText(y.text) === normText(h.text));
+        if (a) {
+          const m = a.meta || {};
+          Object.assign(h, { atomId: a.id, seq: a.seq, offset: a.offset == null ? null : Number(a.offset), crumb: m.breadcrumb ? String(m.breadcrumb) : null, kind: a.kind,
+            page: m.page_number ?? m.page ?? null, slide: m.slide ?? m.slide_number ?? null, sheet: m.sheet ?? null, row: m.row ?? null });
+        }
+        h.atomsTotal = atoms.length || null;
+      }
+    }));
+    return { ...sel, hits };
+  }
+
   // ------------------------------------------------------------------------- summaries + questions
   function headingsOf(atoms) {
     const hs = [];
@@ -2253,20 +2297,32 @@ export function createStudio(o = {}) {
       emit('status', { step: 'embed', t: ms() });
       const files = await filesOf(T);
       emit('status', { step: 'search', t: ms() });
-      const r = await retrieve(T, question, { files, signal: ac.signal });
+      const floor = spec.floor;
+      // the evidence selector, when on and answering, replaces the search (and the research agent's search tool)
+      const sel = await evidenceSelect(T, question, files, ac.signal);
+      if (ac.signal.aborted) { clearInterval(ping); return; }
+      const receipt = sel?.receipt?.digest ? { digest: sel.receipt.digest } : null;
+      if (sel && isRefusal(sel)) {
+        const tRet0 = ms();
+        const ready0 = files.filter((f) => f.enabled && f.stage === 'ready');
+        emit('retrieval', { ms: tRet0, searched: { atoms: files.filter((f) => f.enabled).reduce((s, f) => s + (f.vectorized || 0), 0), files: ready0.length }, floor: { min: floor, top: 0 }, hits: [] });
+        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: 0, ...(receipt ? { receipt } : {}) },
+          why: { best: 0, floor, candidates: [], reason: sel.status === 'underspecified' ? 'the question names nothing to look for' : 'nothing in the files answers the question' },
+          closeMiss: null, guard: null, latencyMs: { retrieve: tRet0, select: 0, quote: 0, total: ms() } });
+      }
+      const r = sel ? { vector: sel.hits, hybridOnly: [], top: floor, files } : await retrieve(T, question, { files, signal: ac.signal });
       const tRet = ms();
       // 3. normalize, join, keep
-      const floor = spec.floor;
       const top = r.top;
-      const above = r.vector.filter((h) => (h.similarity ?? 0) >= floor).slice(0, 6);
+      const above = sel ? [...sel.hits] : r.vector.filter((h) => (h.similarity ?? 0) >= floor).slice(0, 6);
       const kept = [...above];
-      if (top >= floor) for (const h of r.hybridOnly.filter((x) => x.hybridRank <= 3)) if (kept.length < 6) { h.keyword = true; kept.push(h); }
-      const shown = [...kept, ...r.vector.filter((h) => !kept.includes(h)), ...r.hybridOnly.filter((h) => !kept.includes(h))].slice(0, 12);
-      await resolveAtoms(T, shown);
+      if (!sel && top >= floor) for (const h of r.hybridOnly.filter((x) => x.hybridRank <= 3)) if (kept.length < 6) { h.keyword = true; kept.push(h); }
+      const shown = [...kept, ...r.vector.filter((h) => !kept.includes(h)), ...r.hybridOnly.filter((h) => !kept.includes(h))].slice(0, sel ? kept.length : 12);
+      if (!sel) await resolveAtoms(T, shown);
       const fileName = (id) => files.find((f) => f.id === id)?.name || '';
       const hitView = (h, i) => ({
         rank: i + 1, fileId: h.fileId, file: fileName(h.fileId), atomId: h.atomId, seq: h.seq, similarity: h.similarity == null ? null : round4(h.similarity),
-        rrf: h.rrf == null ? null : round4(h.rrf), match: pct(h.similarity), label: h.similarity == null ? 'keyword match' : 'match',
+        rrf: h.rrf == null ? null : round4(h.rrf), match: pct(h.similarity), label: h.evidence ? 'selected passage' : h.similarity == null ? 'keyword match' : 'match',
         excerpt: clip(oneLine(h.text), 240), kept: kept.includes(h), locator: locatorOf(h, h.atomsTotal),
       });
       emit('status', { step: 'rank', t: ms() });
@@ -2298,7 +2354,8 @@ export function createStudio(o = {}) {
       // research first (when the server has the agent): reads whole passages, may search the files again
       let rfin = null;
       if (researchAgent) {
-        const searchMore = async (q) => {
+        // with the selector's evidence the agent quotes only from those passages: no search tool
+        const searchMore = sel ? undefined : async (q) => {
           const r2 = await retrieve(T, q, { files, signal: ac.signal });
           const hits = [...r2.vector.filter((h) => (h.similarity ?? 0) >= floor * 0.85).slice(0, 8), ...r2.hybridOnly.filter((x) => x.hybridRank <= 3)];
           await resolveAtoms(T, hits);
@@ -2306,7 +2363,7 @@ export function createStudio(o = {}) {
           tagHits(got.sources, got.srcHit);
           return got.sources;
         };
-        rfin = await kbLib.researchAnswer({ question, sources, search: searchMore, agent: researchAgent, persona, voice: true, k: 8, signal: ac.signal,
+        rfin = await kbLib.researchAnswer({ question, sources, search: searchMore, searchTool: !sel, agent: researchAgent, persona, voice: true, k: 8, signal: ac.signal,
           onEvent: (e) => { if (e.type === 'search') emit('research', { query: e.query, t: ms() }); else if (e.type === 'error') log(`[studio] research failed: ${e.message}`); } }).catch((e) => { log(`[studio] research failed: ${e?.message}`); return null; });
         if (ac.signal.aborted) { clearInterval(ping); return; }
         if (rfin) {
@@ -2341,7 +2398,7 @@ export function createStudio(o = {}) {
       const fin = citeQuotedLines(fin0, kbLib.requireCitations);
       if (fin.refused) {
         const cands = r.vector.slice(0, 5).map((h) => ({ file: fileName(h.fileId), similarity: round4(h.similarity ?? 0), match: pct(h.similarity), excerpt: clip(oneLine(h.text), 200) }));
-        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: lines.length },
+        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: lines.length, ...(receipt ? { receipt } : {}) },
           why: { best: round4(top), floor, candidates: cands, reason: 'no line answered the question' }, closeMiss: closeMissOf(top, floor, question), guard: null, latencyMs: { retrieve: tRet, select: tSel, quote: 0, total: ms() } });
       }
       const quotes = [];
@@ -2352,7 +2409,7 @@ export function createStudio(o = {}) {
         const c = fin.citations.find((x) => x.file_id === src.file_id);
         if (!c) continue;
         const lv = lineView(line);
-        quotes.push({ n: c.n, L, text: line.text, fileId: h.fileId, file: src.filename, atomId: h.atomId, seq: h.seq, offset: lv.offset, derived: lv.derived, hit: h });
+        quotes.push({ n: c.n, L, text: line.text, fileId: h.fileId, file: src.filename, atomId: h.atomId, seq: h.seq, offset: lv.offset, derived: lv.derived, hit: h, ...(h.contentHash ? { contentHash: h.contentHash } : {}) });
       }
       const outLines = String(fin.text).split('\n').filter((l) => l.trim());
       // proof claims: the cited lines only (a courtesy opener/closer is not a claim, and a "Here's what “X” says [1]:"
@@ -2390,7 +2447,7 @@ export function createStudio(o = {}) {
         return { sentence: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: nn ?? q?.n ?? null, quote: q?.text ?? null, file: q?.file ?? null,
           locator: q ? locatorOf(q.hit, q.hit.atomsTotal) : null, verified: !!q && (q.offset != null || q.derived) };
       });
-      const quotedLines = quotes.map((q) => ({ n: q.n, L: q.L, text: q.text, file: q.file, fileId: q.fileId, atomId: q.atomId, offset: q.offset }));
+      const quotedLines = quotes.map((q) => ({ n: q.n, L: q.L, text: q.text, file: q.file, fileId: q.fileId, atomId: q.atomId, offset: q.offset, ...(q.contentHash ? { contentHash: q.contentHash } : {}) }));
       const tQ = ms() - tQ0;
       // fixer r3: the Proof Run checks the answer says what was asked (sample questions carry expected substrings)
       // CONTRACT-GAP: studio/samplebot.js evaluate() (not owner A) passes a row on status 'grounded' + unsupported 0; it
@@ -2398,7 +2455,7 @@ export function createStudio(o = {}) {
       // answer can never earn a "passed" stamp.
       const check = answerCheck(question, quotes.map((q) => q.text), await expectedFor(T, files, question));
       return finish({ ...base, text: fin.text, refused: false, status: 'grounded', citations, check,
-        proof: { quotedLines, claims, verified: { claims: claims.length, verified: claims.filter((c) => c.verified).length }, unsupported, candidates: lines.length, picked: fin0.selected || [], floor },
+        proof: { quotedLines, claims, verified: { claims: claims.length, verified: claims.filter((c) => c.verified).length }, unsupported, candidates: lines.length, picked: fin0.selected || [], floor, ...(receipt ? { receipt } : {}) },
         why: null, guard: null, latencyMs: { retrieve: tRet, select: tSel, quote: tQ, total: ms() } });
     } catch (e) {
       clearInterval(ping);

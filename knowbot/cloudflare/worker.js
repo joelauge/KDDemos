@@ -35,6 +35,8 @@ export class KnowBotContainer extends Container {
       // "Send me this information" (server/sendinfo.mjs): the mail API key (secret) and the sending address (plain var);
       // without the key, answers are offered by text only (or not at all when texting is off too)
       ...pick(env, ['RESEND_API_KEY', 'KNOWBOT_EMAIL_FROM']),
+      // Evidence selector (plain vars, optional): KNOWBOT_EVIDENCE=attend turns it on; unset keeps today's search path
+      ...pick(env, ['KNOWBOT_EVIDENCE', 'KNOWBOT_EVIDENCE_WEAK', 'ATTENDD_URL']),
     };
   }
 

@@ -1,5 +1,21 @@
-# KnowBot API container: llama.cpp llama-server (Qwen2.5-1.5B-Instruct Q4_K_M) + the KnowBot Node server.
+# KnowBot API container: llama.cpp llama-server (Qwen2.5-1.5B-Instruct Q4_K_M) + the KnowBot Node server, plus the
+# optional evidence selector (attendd, loopback only).
 # Build context is the knowbot/ root (see wrangler.jsonc image_build_context).
+
+# attendd: built only when the engine source was fetched into .engine-src (scripts/fetch-engine.sh; git-ignored, never
+# committed). Without it this stage leaves an empty /out and the image runs without attendd (the old evidence path).
+# "COPY attendd/ENGINE_SHA .engine-sr[c]" tolerates a missing .engine-src (a glob that matches nothing is skipped).
+FROM golang:1.26-bookworm AS attendd
+ENV GOTOOLCHAIN=auto CGO_ENABLED=0
+WORKDIR /src
+COPY attendd/ENGINE_SHA .engine-sr[c] /src/.engine-src/
+COPY attendd /src/attendd
+RUN --mount=type=secret,id=ca,required=false \
+    if [ -s /run/secrets/ca ]; then cp /run/secrets/ca /usr/local/share/ca-certificates/build-ca.crt && update-ca-certificates >/dev/null; fi \
+ && mkdir -p /out \
+ && if [ -f /src/.engine-src/go.mod ]; then cd /src/attendd && go build -trimpath -ldflags='-s -w' -o /out/attendd . && echo "attendd built"; \
+    else echo "no engine source: image without attendd"; fi
+
 FROM node:22-bookworm-slim
 
 ARG LLAMA_TAG=b11450
@@ -30,6 +46,8 @@ COPY corpus ./corpus
 COPY studio/samples ./studio/samples
 # KnowBot Studio Builder: the bundled KnowBot knowledge base (server/builder/local-kb.mjs + kb.mjs read studio/kb/*.md)
 COPY studio/kb ./studio/kb
+# The evidence selector (absent when the build had no engine source; entrypoint.sh then skips it)
+COPY --from=attendd /out/ /opt/attendd/
 COPY cloudflare/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

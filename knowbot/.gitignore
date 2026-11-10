@@ -10,8 +10,12 @@ llama.cpp/
 # Server runtime data (events.jsonl etc.)
 server/data/
 node_modules/
+node_modules
 # Secrets: never commit. This repo is served as the public website (GitHub Pages), so a committed .env would be
 # downloadable. Local runs read .env; the live server gets the same values from GitHub encrypted secrets.
 .env
 .env.*
 !.env.example
+# Evidence engine source (private module, fetched at build time by scripts/fetch-engine.sh): never commit
+.engine-src/
+attendd/attendd

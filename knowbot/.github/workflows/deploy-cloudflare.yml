@@ -3,12 +3,14 @@
 # KNOWDRIVE_API_KEY (the store the bot answers from) and KNOWBOT_ADMIN_TOKEN (dashboard instance management).
 # Optional (phone/SMS channels): GEMINI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER.
 # Optional (KnowBot numbers bought in the Studio): STRIPE_RESTRICTED_KEY (preferred) or STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY, STRIPE_WEBHOOK_SECRET.
+# Optional (evidence selector): GITLAB_TOKEN (read_api + read_repository on the engine project), used only to fetch the
+# engine source at build time; turn the selector on with the plain var KNOWBOT_EVIDENCE=attend (wrangler.jsonc vars).
 name: Deploy KnowBot API to Cloudflare
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['cloudflare/**', 'lib/**', 'server/**', 'corpus/**', '.github/workflows/deploy-cloudflare.yml']
+    paths: ['cloudflare/**', 'lib/**', 'server/**', 'corpus/**', 'attendd/**', 'scripts/fetch-engine.sh', '.github/workflows/deploy-cloudflare.yml']
 concurrency: { group: cloudflare-deploy, cancel-in-progress: false }
 jobs:
   deploy:
@@ -56,6 +58,13 @@ jobs:
             v="${!n}"; if [ -n "$v" ]; then printf '%s' "$v" | npx wrangler secret put "$n"; else echo "::notice::$n not set; the phone/SMS feature that needs it stays off"; fi
           done
           if [ -n "$KNOWBOT_ADMIN_TOKEN" ]; then printf '%s' "$KNOWBOT_ADMIN_TOKEN" | npx wrangler secret put KNOWBOT_ADMIN_TOKEN; else echo "::warning::KNOWBOT_ADMIN_TOKEN not set; chat instances can't be created or edited from the dashboard"; fi
+      - name: Fetch the evidence engine source (optional; never committed, never passed to the Worker)
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          if [ -z "$GITLAB_TOKEN" ]; then echo "::notice::GITLAB_TOKEN not set; the image is built without attendd (answers use the search path)"; exit 0; fi
+          scripts/fetch-engine.sh || echo "::warning::engine fetch failed; the image is built without attendd"
       - name: Deploy (builds the container image with Docker)
         if: steps.guard.outputs.ok == 'true'
         working-directory: cloudflare

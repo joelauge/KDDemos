@@ -40,6 +40,7 @@ import { handleWhatsApp } from './channels/whatsapp.mjs';
 import { handleEmail } from './channels/email.mjs';
 import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
 import { createResearchAgent } from './research.mjs';
+import { createEvidenceSelector, selectForRetriever, isRefusal, isAnswerable, hashFor } from './evidence.mjs';
 import { createSendInfo } from './sendinfo.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
@@ -137,6 +138,8 @@ export function createDevApi(o = {}) {
   const llmModel = o.llmModel || env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
   // every bot's answers (chat, API, widget, phone, SMS, WhatsApp, email): the research step when the server has a key
   const researchAgent = o.researchAgent !== undefined ? o.researchAgent : createResearchAgent(env, { log });
+  // the evidence selector (server/evidence.mjs; KNOWBOT_EVIDENCE=attend): when it answers, its passages replace the search
+  const evidence = o.evidence !== undefined ? o.evidence : createEvidenceSelector(env, { log });
   const CANON = o.canonical || { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
   const sealSecret = String(o.secret || registry?.secret || env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || 'knowbot-local-dev');
   const trialSecret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || randomBytes(32).toString('hex');
@@ -392,6 +395,23 @@ export function createDevApi(o = {}) {
     return hits;
   }
 
+  /** The selector's evidence for a trial bot, fenced like trialSearch (scope tags, disabled files, stored questions). */
+  async function trialEvidence(t, question) {
+    if (!evidence || !studio?.store) return null;
+    const none = [...NEVER_CITE_TAGS, 'kind:trial-spec'];
+    const disabled = new Set(Object.entries(t.spec.sources || {}).filter(([, v]) => v === false).map(([k]) => k));
+    const shared = t.T?.flags?.sharedSet && t.T?.flags?.sharedAt ? t.T.flags.sharedSet : null;
+    const scopes = [{ tags_all: [`trial:${t.id}`], tags_none: none }, ...(shared ? [{ tags_all: [`sample-set:${shared}`, 'kind:trial-sample'], tags_none: none }] : [])];
+    const sel = await evidence.select({ store: studio.store, question, scopes }).catch(() => null);
+    if (!sel || (!isRefusal(sel) && !isAnswerable(sel))) return null;
+    const results = sel.sources.filter((x) => !disabled.has(x.file_id) && !isQuestionFile(x.path)).map((x) => {
+      const filename = String(x.path || '').split('/').pop();
+      return { ...x, filename, title: docTitle(x.title ? String(x.title).split(' · ')[0] : '', filename), url: null, evidence: true };
+    });
+    if (isAnswerable(sel) && !results.length) return { ...sel, status: 'none_in_window', results: [] };
+    return { ...sel, results };
+  }
+
   // ---------------------------------------------------------------- the answer pipeline
   /**
    * @returns {Promise<{ id, bot, botName, question, answer, refused, grounded, citations, proof, latencyMs, guard? }>}
@@ -440,12 +460,17 @@ export function createDevApi(o = {}) {
     // A hit's similarity is its own chunk's vector similarity; a hit only the keyword side found is labelled, not scored.
     const hitView = (r) => {
       const sim = sims.get(chunkKey(r.filename, r.text));
-      return { file: r.filename, similarity: round4(sim ?? null), ...(sim == null ? { label: 'keyword match' } : {}), excerpt: String(r.text || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+      return { file: r.filename, similarity: round4(sim ?? null), ...(sim == null ? { label: r.evidence ? 'selected passage' : 'keyword match' } : {}), excerpt: String(r.text || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
     };
     const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(q, persona, { profile }) : null;
-    let fin = guard, tRet = performance.now(), top = null, candidates = [];
+    let fin = guard, tRet = performance.now(), top = null, candidates = [], sel = null;
     if (!guard) {
-      if (target.kind === 'trial') {
+      // the evidence selector, when on and answering, replaces the search below (and the research agent's search tool)
+      sel = target.kind === 'trial' ? await trialEvidence(target, q) : await selectForRetriever(evidence, retriever, q);
+      if (sel) {
+        results = isRefusal(sel) ? [] : sel.results;
+        candidates = results.slice(0, 5);
+      } else if (target.kind === 'trial') {
         const hits = await trialSearch(target, q);
         top = hits.length ? hits[0].similarity : 0;
         candidates = hits.slice(0, 5);
@@ -464,10 +489,14 @@ export function createDevApi(o = {}) {
       onRetrieval?.({ hits: (results.length ? results : candidates).slice(0, 6).map((r) => ({ ...hitView(r), title: r.title || null, kept: results.includes(r) })),
         floor: { min: floor, top: round4(top) }, ms: Math.round(tRet - t0) });
       // voice: every bot answers as a kind librarian (lib guideText): where it found it, the exact words, one opener/closer
-      const r = await lib.answerFromSources({ question: q, results, complete: safeComplete, search: retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
-        history: Array.isArray(history) ? history : [], mode, settings, voice: target.inst?.voice ?? true,
-        ...(mode === 'select' && researchAgent ? { research: researchAgent, onResearch: (e) => { if (e.type === 'error') log(`[api] research failed: ${e.message}`); } } : {}) });
-      fin = r.fin;
+      // the selector found nothing that answers it: the fixed refusal, no model call
+      if (sel && isRefusal(sel)) fin = { text: NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false };
+      else {
+        const r = await lib.answerFromSources({ question: q, results, complete: safeComplete, search: !sel && retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
+          history: Array.isArray(history) ? history : [], mode, settings, voice: target.inst?.voice ?? true, evidenceOnly: !!sel,
+          ...(mode === 'select' && researchAgent ? { research: researchAgent, onResearch: (e) => { if (e.type === 'error') log(`[api] research failed: ${e.message}`); } } : {}) });
+        fin = r.fin;
+      }
     } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
 
     const refused = !!fin.refused;
@@ -486,7 +515,8 @@ export function createDevApi(o = {}) {
       const t = stripMarks(l).replace(/^\s*[-*•]\s+/, '').replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g, '$1');
       return n && !isCourtesy(t) ? [{ n, text: t }] : [];
     }).filter((x) => x.n && x.text)
-      .map((x) => { const c = (fin.citations || []).find((y) => y.n === x.n); return { ...x, file: c?.filename || null, ...(c?.file_id ? { fileId: c.file_id } : {}) }; });
+      .map((x) => { const c = (fin.citations || []).find((y) => y.n === x.n); const h = sel && c?.file_id ? hashFor(results, c.file_id, x.text) : null;
+        return { ...x, file: c?.filename || null, ...(c?.file_id ? { fileId: c.file_id } : {}), ...(h ? { contentHash: h } : {}) }; });
     // One footnote, one verbatim span: excerpt is the FIRST line quoted under [n] exactly as written (never two lines
     // stitched together); every line quoted under [n] is listed, each verbatim, in spans (and in proof.quoted).
     const citations = refused ? [] : (fin.citations || []).map((c) => {
@@ -508,7 +538,7 @@ export function createDevApi(o = {}) {
       : { prompt: meter.calls ? meter.prompt : Math.ceil((q.length + histChars + ctxChars) / 4) + 8, completion: Math.max(meter.completion, approxTokens(text)), estimated: true, modelCalls: meter.calls };
     const out = {
       id: `ans_${rid(16)}`, bot: target.id, botName: target.name, question: q, answer: text, refused, grounded: !refused && citations.length > 0, citations,
-      proof: { hits, quoted, floor: { min: floor, top: round4(top) } }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
+      proof: { hits, quoted, floor: { min: floor, top: round4(top) }, ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : {}) }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
     };
     logAnswer(target, out, channel, callerKey);
     return out;
@@ -603,7 +633,7 @@ footer{display:flex;flex-direction:column;gap:6px;color:var(--mute);font-size:13
   function saveProof(a, channel) {
     const id = rid(12);
     const rec = { id, bot: a.bot, botName: a.botName, question: scrubQuestion(a.question), answer: a.answer, refused: a.refused, citations: a.citations, quoted: a.proof.quoted,
-      hits: a.proof.hits, channel, at: new Date(now()).toISOString() };
+      hits: a.proof.hits, ...(a.proof.receipt?.digest ? { receipt: { digest: String(a.proof.receipt.digest) } } : {}), channel, at: new Date(now()).toISOString() };
     proofs.set(id, rec);
     if (proofs.size > 2000) proofs.delete(proofs.keys().next().value);
     track(fsp.mkdir(proofDir, { recursive: true }).then(() => fsp.writeFile(path.join(proofDir, `${id}.json`), JSON.stringify(rec))).catch(() => {}));
@@ -634,8 +664,9 @@ footer{display:flex;flex-direction:column;gap:6px;color:var(--mute);font-size:13
 ${p.refused ? `<p>${e(p.answer)}</p>` : lines.length > 1 ? `<ul>${lines.map((l) => `<li>${sup(l)}</li>`).join('')}</ul>` : `<p>${sup(lines[0] || '')}</p>`}</section>
 ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="k" id="srch">Every line, quoted from its source</h2><ol>${p.citations.map((c) => {
     const qs = (p.quoted || []).filter((x) => x.n === c.n);
-    return `<li id="s${c.n}"><div class="src"><span class="num mono">${c.n}</span><span class="t">${e(c.title || c.file)}</span></div><div class="meta mono"><span class="file">${e(String(c.file || '').split('/').pop())}</span>${c.similarity != null ? `<span>similarity ${e(Number(c.similarity).toFixed(2))}</span>` : ''}${qs.length ? `<span>${qs.length} line${qs.length === 1 ? '' : 's'} quoted</span>` : ''}</div>${(qs.length ? qs.map((x) => `<blockquote><mark>${e(x.text)}</mark></blockquote>`) : c.excerpt ? [`<blockquote>${e(c.excerpt)}</blockquote>`] : []).join('')}</li>`;
+    return `<li id="s${c.n}"><div class="src"><span class="num mono">${c.n}</span><span class="t">${e(c.title || c.file)}</span></div><div class="meta mono"><span class="file">${e(String(c.file || '').split('/').pop())}</span>${c.similarity != null ? `<span>similarity ${e(Number(c.similarity).toFixed(2))}</span>` : ''}${qs.length ? `<span>${qs.length} line${qs.length === 1 ? '' : 's'} quoted</span>` : ''}</div>${(qs.length ? qs.map((x) => `<blockquote><mark>${e(x.text)}</mark>${x.contentHash ? `<span class="meta mono">content hash ${e(String(x.contentHash))}</span>` : ''}</blockquote>`) : c.excerpt ? [`<blockquote>${e(c.excerpt)}</blockquote>`] : []).join('')}</li>`;
   }).join('')}</ol></section>` : ''}
+${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(String(p.receipt.digest))}</span></p>` : ''}
 <footer><span>${e(bot)} answers only from its own files. Every sentence above is a line from the cited file; a question the files do not cover gets a plain “not in my files”.</span><span class="mono">Powered by KnowDrive</span></footer>
 </main></body></html>`;
   }
@@ -673,7 +704,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
   const proofLinkFor = (req, target, channel) => (a) => {
     if (a.proofUrl) return a.proofUrl;
     if (!a.citations?.length) return null;
-    const id = saveProof({ bot: target.id, botName: target.name, question: a.question || '', answer: a.answer, refused: false, citations: a.citations, proof: { quoted: a.proof?.quoted || [], hits: a.proof?.hits || [] } }, channel);
+    const id = saveProof({ bot: target.id, botName: target.name, question: a.question || '', answer: a.answer, refused: false, citations: a.citations, proof: { quoted: a.proof?.quoted || [], hits: a.proof?.hits || [], ...(a.proof?.receipt ? { receipt: a.proof.receipt } : {}) } }, channel);
     return proofUrlFor(req, id);
   };
   /**
@@ -749,7 +780,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
   const formatOf = (body) => (String(body?.format || '').toLowerCase() === 'bullets' ? 'bullets' : 'prose');
   const publicAnswer = (a, req, format = 'prose') => ({
     id: a.id, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: a.bot, question: a.question, answer: answerText(a, format), format: a.refused ? 'text' : format, citations: a.citations.map(({ similarity, ...c }) => c),
-    refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
+    refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
     ...(a.guard ? { guard: a.guard } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
   });
   const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title}${c.page ? `, page ${c.page}` : ''}${c.section ? `, “${c.section}”` : ''} — ` : ''}${c.file}${c.url ? ` <${c.url}>` : ''}`).join('\n')}`.trim());
@@ -847,7 +878,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     const id = `chatcmpl-${rid(24)}`, created = Math.floor(now() / 1000), modelName = who.bot;
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
     const format = formatOf(body);
-    const ext = (a) => ({ citations: a.citations.map(({ similarity, ...c }) => c), refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor },
+    const ext = (a) => ({ citations: a.citations.map(({ similarity, ...c }) => c), refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) },
       ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}), latencyMs: a.latencyMs, usageEstimated: a.tokens ? !!a.tokens.estimated : true });
     // real provider usage when every model call reported it; otherwise an estimate from the FULL prompt sent to the model
     // (system, grounding context, history, question: chars / 4), flagged knowbot.usageEstimated so metering can tell

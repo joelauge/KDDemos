@@ -17,6 +17,7 @@ import { logSendEvent } from './questions.mjs';
 import { phoneSessions } from './channels/voice-live.mjs';
 import { activeWebVoiceSessions } from './channels/webvoice.mjs';
 import { createResearchAgent } from './research.mjs';
+import { createEvidenceSelector, selectForRetriever, isRefusal } from './evidence.mjs';
 
 /**
  * The header the Cloudflare Worker sends on internal calls to this server (GET /api/internal/busy): an HMAC of a fixed
@@ -68,6 +69,8 @@ export function createKnowBotServer(opts = {}) {
   const llmBase = String(env.LLM_BASE_URL || 'http://127.0.0.1:8080/v1').replace(/\/+$/, '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
   const researchAgent = opts.researchAgent !== undefined ? opts.researchAgent : createResearchAgent(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
+  // Evidence selector (server/evidence.mjs): off unless KNOWBOT_EVIDENCE=attend; shared by every answer path
+  const evidence = opts.evidence !== undefined ? opts.evidence : createEvidenceSelector(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
   // Models a bot can answer with. Today one local model; KNOWBOT_MODELS (JSON [{id,label,baseUrl?,apiKeyEnv?}]) adds more.
   const models = (() => {
     const base = [{ id: llmModel, label: env.LLM_MODEL_LABEL || 'Qwen2.5 1.5B Instruct (Q4_K_M, llama.cpp)', default: true }];
@@ -120,13 +123,13 @@ export function createKnowBotServer(opts = {}) {
     Promise.resolve(studio?.numbers?.meterFor?.({ kind: 'trial', id: e.botId, flags: T?.flags, T })).then((m) => m && m.phoneNumber === e.fromNumber && m.charge('text', Math.max(1, Math.ceil((e.length || 160) / 153)), 'send_info'))
       .catch((err) => log(`[sendinfo] credit not recorded: ${err.message}`));
   } });
-  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent,
+  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent, evidence,
     rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, sendInfo,
     // a Studio answer's public proof link (/p/<id>) for what it sends, made by the developer API (created below)
     proofLink: (req, trialId, a) => devapi.proofLink(req, trialId, a), ...(opts.studio || {}) });
 
   // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
-  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, readRaw, readJson, clientIp, requireAdmin,
+  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, evidence, readRaw, readJson, clientIp, requireAdmin,
     logger: log, dataDir, llmModel, canonical: CANONICAL, sendInfo, ...(opts.devapi || {}) });
 
   // ------------------------------------------------------------ events / SSE
@@ -275,7 +278,9 @@ export function createKnowBotServer(opts = {}) {
     const settings = { ...CANONICAL, ...(lib.CANONICAL || {}) };
     const t0 = performance.now();
     const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(question, persona, { profile: inst.guards || 'general' }) : null;
-    const ret = guard ? { source: 'guard', results: [] } : await retriever.search(question, k);
+    // the evidence selector, when on and answering, replaces the search: its passages are the answer's only evidence
+    const sel = guard ? null : await selectForRetriever(evidence, retriever, question);
+    const ret = guard ? { source: 'guard', results: [] } : sel ? { source: 'knowdrive', results: sel.results } : await retriever.search(question, k);
     const tRet = performance.now();
     const results = ret.results;
     const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}`, instance: inst.id };
@@ -284,13 +289,15 @@ export function createKnowBotServer(opts = {}) {
 
     // Same path as KnowBot.ask() in lib/knowbot.js: guard -> retrieval -> answerFromSources (select mode by default).
     let fin = guard, tGen = tRet;
-    if (!guard) {
+    // the selector found nothing that answers it: the fixed refusal, no model call
+    if (!guard && sel && isRefusal(sel)) fin = { text: lib.NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false };
+    else if (!guard) {
       const provider = inst.provider || 'local';
       const complete = provider === 'local'
         ? (m, c) => llmComplete(m, c?.settings || settings, inst.model || llmModel)
         : (m, c) => completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
       const answerMode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
-      const r = await lib.answerFromSources({ question, results, complete, search: (x) => retriever.search(x, k), persona, minScore, k,
+      const r = await lib.answerFromSources({ question, results, complete, search: sel ? undefined : (x) => retriever.search(x, k), persona, minScore, k, evidenceOnly: !!sel,
         history: Array.isArray(history) ? history : [], mode: answerMode, settings,
         ...(answerMode === 'select' && researchAgent ? { research: researchAgent } : {}),
         // Owner rule: every live bot answers as a kind librarian (opener, "In “Title”, page N, it says: “…” [1].", closer).
@@ -301,6 +308,7 @@ export function createKnowBotServer(opts = {}) {
     const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
     const answer = {
       ...fin,
+      ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : {}),
       latencyMs, engine, surface,
       sessionId: sessionId ?? null,
       turnId: turnId ?? `canonical.${randomUUID().slice(0, 8)}`,
