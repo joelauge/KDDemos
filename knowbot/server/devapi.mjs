@@ -373,7 +373,7 @@ export function createDevApi(o = {}) {
     };
     // resolve mode: one ranked window over the trial's scope and its shared samples (ORed), resolve's order kept; each
     // passage's similarity (its cosine with the question) is the floor's measure, as a vector hit's is. null: search.
-    const rw = resolver ? await resolver.resolve({ store, question, scopes: filters.map((f) => ({ tags_all: f.all_of, tags_none: f.none_of })), limit: 20 }) : null;
+    const rw = resolver ? await resolver.resolve({ store, question, scopes: filters.map((f) => ({ tags_all: f.all_of, tags_none: f.none_of })), limit: 20, bot: t.id }) : null;
     // production: a pure vector search under a narrow tag filter (one trial) can come back empty while hybrid, same
     // filter, finds the atoms and still reports each hit's vector `distance`; keep only those (simOf scores by distance,
     // never by the RRF score)

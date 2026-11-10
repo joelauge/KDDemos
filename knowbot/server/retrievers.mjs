@@ -328,7 +328,7 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true, resolver = null }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true, resolver = null, botId = null }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0; this.rescueMargin = Number(rescueMargin) || 0; this.cards = cards !== false;
@@ -342,6 +342,7 @@ export class KnowDriveRetriever {
     // resolve mode (server/evidence.mjs createResolver, KNOWBOT_EVIDENCE=resolve): query() reads the sidecar's ranked
     // window instead of knowDrive's search; null (or any failure): knowDrive's search, as before
     this.resolver = resolver || null;
+    this.botId = botId; // the bot this retriever answers for (KNOWBOT_EVIDENCE_BOTS matches it)
     this.resolved = new Map(); // in-flight / recent windows: key -> { at, p }
     this.allOf = [...(this.tag ? [this.tag] : []), ...(this.dirFilter ? this.prefix.split('/').filter(Boolean).map((d) => `dir:${d}`) : []),
       ...(Array.isArray(include) ? include : []).filter(Boolean)];
@@ -370,7 +371,7 @@ export class KnowDriveRetriever {
     for (const [k, v] of this.resolved) if (now - v.at > 10000) this.resolved.delete(k);
     let hit = this.resolved.get(key);
     if (!hit) {
-      hit = { at: now, p: this.resolver.resolve({ store: this.store, question: query, scope, limit: 20 }).catch(() => null) };
+      hit = { at: now, p: this.resolver.resolve({ store: this.store, question: query, scope, limit: 20, bot: this.botId }).catch(() => null) };
       this.resolved.set(key, hit);
     }
     return hit.p;
@@ -515,7 +516,7 @@ export function createRetriever({ corpusDir, env = process.env, logger, watch = 
       store: env.KNOWDRIVE_STORE || DEFAULT_STORE, tag: env.KNOWDRIVE_TAG ?? DEFAULT_TAG, prefix: env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX, local, logger,
       minSimilarity: Number(env.KNOWDRIVE_MIN_SIMILARITY ?? DEFAULT_MIN_SIMILARITY),
       exclude: env.KNOWDRIVE_EXCLUDE_TAGS || '', // e.g. kind:canonical to A/B the answer cards
-      resolver,
+      resolver, botId: env.KNOWBOT_BUILTIN_ID || 'ugm',
     });
     return { mode: 'knowdrive', retriever: kd, local };
   }

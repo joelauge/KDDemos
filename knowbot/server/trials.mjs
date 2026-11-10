@@ -1871,8 +1871,9 @@ export function createStudio(o = {}) {
   async function resolvedRetrieve(T, query, { files, filter, sharedFilter, ok, signal }) {
     const scopes = [{ tags_all: filter.all_of, tags_none: filter.none_of }, ...(sharedFilter ? [{ tags_all: sharedFilter.all_of, tags_none: sharedFilter.none_of }] : [])];
     const clauses = questionClauses(query);
-    const [main, ...per] = await Promise.all([resolver.resolve({ store, question: query, scopes, limit: 20, signal }),
-      ...(clauses.length > 1 ? clauses.map((c) => resolver.resolve({ store, question: c, scopes, limit: 6, signal })) : [])]);
+    const bot = T.id;
+    const [main, ...per] = await Promise.all([resolver.resolve({ store, question: query, scopes, limit: 20, signal, bot }),
+      ...(clauses.length > 1 ? clauses.map((c) => resolver.resolve({ store, question: c, scopes, limit: 6, signal, bot })) : [])]);
     if (!main) return null;
     const got = per.filter(Boolean);
     const r = resolvedRetrieval([main.docs, ...got.map((x) => x.docs)], ok);

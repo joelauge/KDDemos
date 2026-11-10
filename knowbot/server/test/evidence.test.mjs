@@ -585,3 +585,27 @@ describe('resolve mode: shared samples, developer API and live bots', () => {
     } finally { await S.close(); }
   });
 });
+
+describe('resolve mode per bot (KNOWBOT_EVIDENCE_BOTS)', () => {
+  test('only the listed bots use the sidecar; others, and no bot, keep today\'s search; KNOWBOT_EVIDENCE=resolve is everyone', async () => {
+    const { createResolver } = await import('../evidence.mjs');
+    assert.equal(createResolver({}), null, 'off by default');
+    const calls = [];
+    const fake = async (url, init) => {
+      calls.push(url);
+      if (url.endsWith('/healthz')) return new Response('{"ok":true}', { status: 200 });
+      return new Response(JSON.stringify({ spans: [{ file_id: 'f1', path: 'a.md', text: 'hello', atom_index: 0, similarity: 0.9, score: 0.03, rank: 1 }], receipt: { digest: 'sha256:x' } }), { status: 200 });
+    };
+    const r = createResolver({ KNOWBOT_EVIDENCE_BOTS: ' tr_AAAAAAAAAAAAAAAA , ugm ' }, { fetch: fake });
+    assert.ok(r && !r.all);
+    const q = { store: 'vs_x', question: 'hi', scope: { tags_all: ['trial:x'] } };
+    assert.ok(await r.resolve({ ...q, bot: 'tr_aaaaaaaaaaaaaaaa' }), 'listed (case-insensitive)');
+    assert.ok(await r.resolve({ ...q, bot: 'ugm' }));
+    const before = calls.length;
+    assert.equal(await r.resolve({ ...q, bot: 'tr_bbbbbbbbbbbbbbbb' }), null, 'not listed');
+    assert.equal(await r.resolve(q), null, 'no bot named');
+    assert.equal(calls.length, before, 'no sidecar call for an unlisted bot');
+    const all = createResolver({ KNOWBOT_EVIDENCE: 'resolve' }, { fetch: fake });
+    assert.ok(all.all && await all.resolve({ ...q, bot: 'anyone' }));
+  });
+});

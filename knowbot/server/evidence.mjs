@@ -234,13 +234,23 @@ export function combineDigests(digests = []) {
 }
 
 /**
- * Off unless KNOWBOT_EVIDENCE=resolve. Settings as the selector's: ATTENDD_URL, ATTENDD_TIMEOUT_MS.
+ * Off unless KNOWBOT_EVIDENCE=resolve (every bot) or KNOWBOT_EVIDENCE_BOTS names bots (those bots only; every other bot
+ * keeps today's search). Settings as the selector's: ATTENDD_URL, ATTENDD_TIMEOUT_MS.
  * @param {object} env
  * @param {{ log?: (s: string) => void, fetch?: typeof fetch, now?: () => number, timeoutMs?: number }} [o]
  * @returns {null | { url: string, healthy: () => Promise<boolean>, resolve: (q: object) => Promise<null | { docs: object[], digest: string|null, rankMode: string|null, scoreKind: string|null, calls: number, ms: number }> }}
  */
+/** Bots on resolve mode (KNOWBOT_EVIDENCE_BOTS, comma list of bot / trial ids): resolve for those bots only. */
+export function resolveBots(env = {}) {
+  return new Set(String(env.KNOWBOT_EVIDENCE_BOTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+}
+
 export function createResolver(env = {}, o = {}) {
-  if (evidenceMode(env) !== 'resolve') return null;
+  const all = evidenceMode(env) === 'resolve';
+  const bots = resolveBots(env);
+  if (!all && !bots.size) return null;
+  /** resolve for this bot? Everyone under KNOWBOT_EVIDENCE=resolve, else only the bots KNOWBOT_EVIDENCE_BOTS names. */
+  const forBot = (bot) => all || (bot != null && bots.has(String(bot).toLowerCase()));
   const url = String(env.ATTENDD_URL || 'http://127.0.0.1:7071').replace(/\/+$/, '');
   const log = typeof o.log === 'function' ? o.log : () => {};
   const doFetch = o.fetch || fetch;
@@ -269,7 +279,8 @@ export function createResolver(env = {}, o = {}) {
    * One ranked window for a question over one or more scopes (ORed; one call when they fold into a tag query).
    * null: use today's search (sidecar off, down, slow, an error, or a span without a similarity).
    */
-  async function resolve({ store, question, scope, scopes, limit = 20, signal } = {}) {
+  async function resolve({ store, question, scope, scopes, limit = 20, signal, bot } = {}) {
+    if (!forBot(bot)) return null;
     const list = (Array.isArray(scopes) && scopes.length ? scopes : [scope || {}])
       .map((s) => ({ tags_all: s.tags_all || [], tags_any: s.tags_any || [], tags_none: s.tags_none || [] }));
     if (!store || !question || !(await healthy())) return null;
@@ -293,5 +304,5 @@ export function createResolver(env = {}, o = {}) {
     }
   }
 
-  return { url, healthy, resolve };
+  return { url, healthy, resolve, forBot, all, bots: [...bots] };
 }
