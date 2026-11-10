@@ -4497,16 +4497,22 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         clearTimeout(T.specTimer); T.specTimer = null; T.specDirty = false;
         if (T.poller) { clearTimeout(T.poller); T.poller = null; }
         for (const c of [...T.clients]) { try { c.res.end(); } catch { /* gone */ } }
-        const rows = await listRows({ tags_all: `trial:${T.id}` });
-        let deleted = 0;
-        for (const r of rows) {
+        // a KnowBot number bought for this bot: its plan is cancelled and the number released with the bot
+        try { await numbers.expire(T.id); } catch (e) { log(`[studio] start over ${T.id}: number: ${e.message}`); }
+        const rows = (await listRows({ tags_all: `trial:${T.id}` })).filter((r) => {
           const tags = r.tags || [];
-          if (!tags.includes(`trial:${T.id}`) || !tags.includes('kind:trial') || tags.includes('kind:trial-sample')) continue; // fail closed
-          try { await deleteRow(r.id); deleted++; } catch (e) { log(`[studio] start over ${T.id}: delete ${r.id}: ${e.message}`); }
-        }
+          return tags.includes(`trial:${T.id}`) && tags.includes('kind:trial') && !tags.includes('kind:trial-sample'); // fail closed
+        });
         deletedTrials.add(T.id);
         trials.delete(T.id);
-        return sendJson(res, 200, { deleted });
+        // A website import can leave hundreds of files: delete 8 at a time, and answer once the bot is gone (at most
+        // ~8 s) so the browser never gives up on a long delete; whatever is left keeps deleting in the background.
+        let deleted = 0, next = 0;
+        const worker = async () => { while (next < rows.length) { const r = rows[next++]; try { await deleteRow(r.id); deleted++; } catch (e) { log(`[studio] start over ${T.id}: delete ${r.id}: ${e.message}`); } } };
+        const all = Promise.all(Array.from({ length: Math.min(8, rows.length) }, worker))
+          .then(() => { if (rows.length > 20) log(`[studio] start over ${T.id}: deleted ${deleted} of ${rows.length} files`); });
+        const done = await Promise.race([all.then(() => true), new Promise((r) => { const t = setTimeout(() => r(false), Number(o.startOverWaitMs ?? 8000)); t.unref?.(); })]);
+        return sendJson(res, 200, { deleted, total: rows.length, ...(done ? {} : { pending: rows.length - deleted }) });
       }
       allow('GET', 'PATCH', 'DELETE');
     }

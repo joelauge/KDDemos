@@ -598,6 +598,8 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     url: `http://${host}:${port}`, port, calls, files, failNext,
     /** Pins the store record's `progress` block (undefined = derive it from the files). */
     setProgress(v) { progressOverride = v; },
+    /** Adds a delay to every request from now on (slow-store tests). */
+    setLatency(ms) { latencyMs = Math.max(0, Number(ms) || 0); },
     /** Adds a file directly (already processed unless pipeline:true). */
     add,
     /** Resolves once every file has reached a terminal phase (or STALL). */

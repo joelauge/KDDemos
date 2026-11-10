@@ -2410,3 +2410,27 @@ describe("Didn't get the answer you needed? POST /trials/:id/notes", () => {
     } finally { await S.close(); }
   });
 });
+
+describe('Start over with many files', () => {
+  test('answers quickly (deletes in parallel, the rest in the background) and every file of the trial is gone', async () => {
+    const S = await boot({ studio: { startOverWaitMs: 300 } });
+    try {
+      const c = client(S);
+      const t = await c.trial();
+      for (let i = 0; i < 24; i++) assert.equal((await c.upload(t, `page-${i}.md`, Buffer.from(`# Page ${i}\n\nThe shop opens at ${i % 12 + 1}am on day ${i}.\n`))).status, 201);
+      await S.kd.settle();
+      const mine = () => [...S.kd.files.values()].filter((f) => f.tags.includes(`trial:${t.trialId}`) && f.tags.includes('kind:trial')).length;
+      assert.ok(mine() >= 24);
+      S.kd.setLatency?.(250);
+      const t0 = Date.now();
+      const r = await c.json(t, '', 'DELETE');
+      assert.equal(r.status, 200);
+      const j = await r.json();
+      assert.ok(Date.now() - t0 < 3000, `answered in ${Date.now() - t0} ms`);
+      assert.ok(j.total >= 24);
+      for (let i = 0; i < 100 && mine() > 0; i++) await sleep(100);
+      assert.equal(mine(), 0, 'every file deleted');
+      assert.equal((await c.json(t, '/files')).status === 200, false, 'the trial is gone');
+    } finally { await S.close(); }
+  });
+});
