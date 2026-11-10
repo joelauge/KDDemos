@@ -1,12 +1,19 @@
 #!/usr/bin/env node
-// Single-page site smoke (site/ + server/site.mjs) against studio/test/dev-server.mjs (fake knowDrive + fake model on
-// 127.0.0.1). Builds a trial bot from the sample files plus a contact page, publishes its site, then opens the real page
-// in four cells (desktop / phone × light / dark): asks a popular question, sees the quote blocks and the Sources links,
-// asks something that is not in the files (the refusal sentence), and checks no console errors, no horizontal scroll,
-// 44px targets and axe (serious/critical; skipped when axe-core is unreachable, or AXE_PATH=/path/to/axe.min.js).
+// Homepage overlay smoke (site/overlay.js + server/site.mjs) against studio/test/dev-server.mjs (fake knowDrive + fake
+// model on 127.0.0.1). Builds a trial bot from the sample files plus a contact page and publishes its site. Then:
+//   - the one-line snippet on a fake "existing homepage" (another origin, with hostile CSS), in four cells (desktop /
+//     phone × light / dark): it overlays the page, focus is trapped, Esc and × close it and reveal the page, the
+//     "Ask <name>" button opens it again and focus comes back, a question gets quote blocks and Sources, a question not in
+//     the files gets the refusal sentence, the page's CSS can't touch it (Shadow DOM) and it leaks no globals; no console
+//     errors, no horizontal scroll, 44px targets, axe (serious/critical; skipped when axe-core is unreachable, or
+//     AXE_PATH=/path/to/axe.min.js); closed stays closed on reload (first visit), every-visit and topic chips options;
+//   - the hosted link (neutral backdrop; a ?q= link asks at once; an unknown bot is "not available");
+//   - a website import: the hosted link shows the overlay over the store's own homepage in a frame;
+//   - the Studio: See it as → Site (the overlay over the homepage, × works) and the Set up card (line, options, publish).
 //
 //   node studio/test/site-smoke.mjs                 # screenshots to studio/test/screens/site/ (not committed)
 //   SITE_SHOTS=/some/dir node studio/test/site-smoke.mjs
+import http from 'node:http';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +35,7 @@ const CELLS = [
   { name: 'phone-dark', viewport: { width: 390, height: 844 }, theme: 'dark', mobile: true },
 ];
 let failed = 0;
-const check = (cell, name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${cell} ${name}${detail ? ` · ${String(detail).slice(0, 200)}` : ''}`); return ok; };
+const check = (cell, name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${cell} ${name}${detail ? ` · ${String(detail).slice(0, 240)}` : ''}`); return ok; };
 
 let axeSource = null;
 async function runAxe(page) {
@@ -44,8 +51,38 @@ async function runAxe(page) {
   } catch (e) { return { skipped: true, error: e.message }; }
 }
 
+/** A business's existing homepage on its own origin, with CSS that would wreck anything it could reach. */
+function homepageHtml(snippet) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen Bikes · Bikes for trails and towns</title>
+<style>
+  * { font-family: "Comic Sans MS", cursive !important; letter-spacing: 3px !important; box-sizing: content-box !important; }
+  body { margin: 0; color: #222; background: #fffaf0; }
+  button { background: lime !important; padding: 40px !important; border: 6px dotted red !important; }
+  input { border: 5px dashed red !important; font-size: 9px !important; }
+  h1 { font-size: 40px; color: #b91c1c; }
+  a { color: #0f766e; }
+  knowbot-overlay, knowbot-overlay * { opacity: .1 !important; transform: scale(.5) !important; display: none !important; }
+  .site-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: #0f766e; color: #fff; }
+  .site-head a { color: #fff; margin-left: 16px; }
+  .hero { padding: 64px 24px; background: linear-gradient(120deg, #0f766e, #14b8a6); color: #fff; }
+  .hero h1 { color: #fff; margin: 0 0 8px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; padding: 24px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; min-height: 120px; box-shadow: 0 2px 8px rgb(0 0 0 / .08); }
+</style>
+<script>window.__kbBefore = Object.keys(window);</script>
+</head><body>
+<header class="site-head"><strong>Lumen Bikes</strong><nav><a href="#shop">Shop</a><a href="#help">Help</a><a href="#cart">Cart</a></nav></header>
+<main><section class="hero"><h1 id="page-h1">Ride further.</h1><p>Bikes for trails and towns, built to last.</p><button id="page-btn" type="button">Shop bikes</button></section>
+<section class="cards"><div class="card">Trail Pro</div><div class="card">Commuter Lite</div><div class="card">E-City 500</div><div class="card">Kids 20</div></section></main>
+<footer style="padding:24px">© Lumen Bikes</footer>
+${snippet}
+</body></html>`;
+}
+
 const dev = await startDevServer({ speed: 4 });
 const api = (p, init = {}) => fetch(`${dev.url}${p}`, init);
+let homeSrv = null;
 try {
   // ------------------------------------------------------------------ a bot with a published site
   const t = await (await api('/api/studio/trials', { method: 'POST' })).json();
@@ -58,70 +95,155 @@ try {
     if (j.files.length >= 5 && j.files.every((f) => f.stage === 'ready')) break;
     await new Promise((r) => setTimeout(r, 250));
   }
-  const built = await (await api(`/api/studio/trials/${t.trialId}/site`, { headers: H() })).json();
-  check('setup', 'site built', built.site && built.site.name === 'Lumen Bikes', JSON.stringify({ name: built.site?.name, chips: built.site?.chips?.length, q: built.site?.questions?.length, facts: built.site?.facts?.length }));
-  check('setup', 'chips and popular questions', built.site.chips.length >= 1 && built.site.questions.length >= 1);
-  const pub = await (await api(`/api/studio/trials/${t.trialId}/site`, { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: JSON.stringify({ published: true }) })).json();
+  const siteApi = (method = 'GET', body) => api(`/api/studio/trials/${t.trialId}/site`, { method, headers: H(body ? { 'content-type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
+  const built = await siteApi();
+  check('setup', 'site built', built.site && built.site.name === 'Lumen Bikes', JSON.stringify({ name: built.site?.name, chips: built.site?.chips?.length }));
+  check('setup', 'defaults: first visit, no topic chips', built.site.showOn === 'first-visit' && built.site.showChips === false);
+  check('setup', 'the homepage line', new RegExp(`^<script src="${dev.url}/site/overlay\\.js" data-bot="${t.trialId}" data-api="${dev.url}" async></script>$`).test(built.snippet), built.snippet);
+  const pub = await siteApi('POST', { published: true });
   check('setup', 'published', pub.published === true);
   const q = built.site.questions[0];
 
-  // ------------------------------------------------------------------ the page
+  // the business's existing homepage, on its own origin, with the line pasted in
+  const snippet = built.snippet;
+  homeSrv = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(homepageHtml(snippet)); });
+  await new Promise((r) => homeSrv.listen(0, '127.0.0.1', r));
+  const homeUrl = `http://127.0.0.1:${homeSrv.address().port}/`;
+
   const browser = await chromium.launch({ headless: !process.env.HEADED });
   await fsp.mkdir(SHOTS, { recursive: true });
+  const inShadow = (page, fn, arg) => page.evaluate(([src, a]) => { const sr = document.querySelector('knowbot-overlay')?.shadowRoot; return sr ? (0, eval)(`(${src})`)(sr, a) : null; }, [fn.toString(), arg]);
+  const activeInDialog = (page) => inShadow(page, (sr) => document.activeElement === sr.host && !!sr.activeElement && !!sr.activeElement.closest('.dialog'));
+  const activeId = (page) => inShadow(page, (sr) => (document.activeElement === sr.host ? (sr.activeElement?.id || sr.activeElement?.className || '') : `page:${document.activeElement?.tagName}`));
+
+  // ------------------------------------------------------------------ the snippet on an existing homepage
   for (const cell of CELLS) {
     const ctx = await browser.newContext({ viewport: cell.viewport, isMobile: !!cell.mobile, hasTouch: !!cell.mobile, colorScheme: cell.theme, deviceScaleFactor: cell.mobile ? 2 : 1 });
     const page = await ctx.newPage();
     const errors = [];
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.goto(`${dev.url}/site/?bot=${t.trialId}`, { waitUntil: 'networkidle' });
-    await page.waitForSelector('#ks-h1', { timeout: 15000 });
-    check(cell.name, 'hero: the business name and the search box', (await page.textContent('#ks-h1')) === 'Lumen Bikes' && await page.isVisible('label[for="ks-q"]'));
-    check(cell.name, 'title + description from the site', /Lumen Bikes/.test(await page.title()) && /Lumen bikes/i.test(await page.getAttribute('meta[name="description"]', 'content')));
-    check(cell.name, 'noindex while a trial', (await page.getAttribute('meta[name="robots"]', 'content')) === 'noindex');
-    check(cell.name, 'dark theme follows the system', (await page.evaluate(() => document.documentElement.classList.contains('dark'))) === (cell.theme === 'dark'));
-    check(cell.name, 'topic chips', (await page.locator('.ks-chip').count()) >= 1);
-    check(cell.name, 'key facts quoted with their source', (await page.locator('.ks-fact').count()) >= 1 && /\(555\) 123-4567/.test(await page.textContent('.ks-facts')));
-    if (cell.name === 'desktop-light' || cell.name === 'phone-dark') await page.screenshot({ path: path.join(SHOTS, `${cell.name}-home.png`), fullPage: false });
-    // ask a popular question (typed, like a visitor)
-    await page.fill('#ks-q', q);
-    await page.click('.ks-go');
-    await page.waitForSelector('.ks-turn:not([aria-busy]) .ks-sources li, .ks-turn:not([aria-busy]) .ks-refusal', { timeout: 30000 });
-    const quotes = await page.locator('.ks-turn .ks-quote').count();
-    const links = await page.$$eval('.ks-src-link', (as) => as.map((a) => a.href));
-    check(cell.name, 'answer quotes in blocks with [n] marks', quotes >= 1 && (await page.locator('.ks-turn .ks-n').count()) >= 1, `${quotes} quotes`);
-    check(cell.name, 'Sources list links (page or proof page)', links.length >= 1 && links.every((h) => /^https?:\/\//.test(h)), links.join(' '));
-    check(cell.name, 'shareable ?q=', new URL(page.url()).searchParams.get('q') === q);
-    check(cell.name, 'status announced (aria-live)', /Answer ready/.test(await page.textContent('#ks-status')));
-    check(cell.name, 'follow-up box', await page.isVisible('.ks-follow input'));
-    if (cell.name !== 'phone-light') await page.screenshot({ path: path.join(SHOTS, `${cell.name}-answer.png`), fullPage: false });
+    await page.goto(homeUrl, { waitUntil: 'load' });
+    await page.locator('knowbot-overlay .dialog').waitFor({ state: 'visible', timeout: 15000 });
+    const dlg = page.locator('knowbot-overlay .dialog');
+    check(cell.name, 'overlay opens over the page: dialog, aria-modal, labelled', (await dlg.getAttribute('role')) === 'dialog' && (await dlg.getAttribute('aria-modal')) === 'true' && (await dlg.getAttribute('aria-labelledby')) === 'kb-h');
+    check(cell.name, 'the existing homepage is still there, under a see-through scrim', await page.isVisible('#page-h1') && /blur/.test(await inShadow(page, (sr) => getComputedStyle(sr.querySelector('.scrim')).backdropFilter || getComputedStyle(sr.querySelector('.scrim')).webkitBackdropFilter)));
+    check(cell.name, 'simple start: hand, name, one search box, one button, one quiet line', (await page.locator('knowbot-overlay .hand').textContent()) === '👋'
+      && (await page.locator('knowbot-overlay #kb-h').textContent()).trim() === 'Lumen Bikes' && (await page.locator('knowbot-overlay input').count()) === 1
+      && (await page.locator('knowbot-overlay .go').textContent()) === 'Ask' && /Answers come only from Lumen Bikes's own pages/.test(await page.locator('knowbot-overlay .quiet').textContent()));
+    check(cell.name, 'no chips, popular questions or facts on the start screen', (await page.locator('knowbot-overlay .chip').count()) === 0 && !(await page.locator('knowbot-overlay .dialog').textContent()).includes('(555) 123-4567'));
+    check(cell.name, 'the hand waves on arrival', await inShadow(page, (sr) => sr.querySelector('.hand').classList.contains('waving') && getComputedStyle(sr.querySelector('.hand')).animationName === 'kb-wave'));
+    check(cell.name, 'focus starts in the search box', (await activeId(page)) === 'kb-q');
+    check(cell.name, 'dark theme follows the system', (await inShadow(page, (sr) => sr.querySelector('.kb').classList.contains('dark'))) === (cell.theme === 'dark'));
+    check(cell.name, 'page behind does not scroll while open', await page.evaluate(() => document.documentElement.style.overflow === 'hidden'));
+    // the page's CSS can't reach it (Shadow DOM + a host that resets everything)
+    const st = await inShadow(page, (sr) => { const go = getComputedStyle(sr.querySelector('.go')); const qi = getComputedStyle(sr.querySelector('.q')); const nm = getComputedStyle(sr.querySelector('.name'));
+      return { goBg: go.backgroundColor, goPad: go.paddingTop, qBorder: qi.borderTopStyle, qSize: qi.fontSize, font: nm.fontFamily, ls: nm.letterSpacing, hostOpacity: getComputedStyle(sr.host).opacity, hostDisplay: getComputedStyle(sr.host).display, hostTransform: getComputedStyle(sr.host).transform }; });
+    check(cell.name, 'the page’s CSS can’t restyle it', st.goBg !== 'rgb(0, 255, 0)' && st.goPad !== '40px' && st.qBorder !== 'dashed' && st.qSize === '18px' && !/comic/i.test(st.font) && st.ls !== '3px'
+      && st.hostOpacity === '1' && st.hostDisplay === 'block' && st.hostTransform === 'none', JSON.stringify(st));
+    const leak = await page.evaluate(() => ({ h1: getComputedStyle(document.getElementById('page-h1')).fontSize, btn: getComputedStyle(document.getElementById('page-btn')).backgroundColor, globals: Object.keys(window).filter((k) => !window.__kbBefore.includes(k) && k !== '__kbBefore') }));
+    check(cell.name, 'and it can’t restyle the page; no globals', leak.h1 === '40px' && leak.btn === 'rgb(0, 255, 0)' && !leak.globals.length, JSON.stringify(leak));
+    // focus trap
+    let trapped = true;
+    for (let i = 0; i < 8; i++) { await page.keyboard.press(i % 3 === 2 ? 'Shift+Tab' : 'Tab'); if (!(await activeInDialog(page))) trapped = false; }
+    check(cell.name, 'focus stays inside while open (Tab, Shift+Tab)', trapped);
+    if (cell.name === 'desktop-light' || cell.name === 'phone-dark') await page.screenshot({ path: path.join(SHOTS, `overlay-${cell.name}.png`) });
+    // ask a question (typed, like a visitor)
+    await page.locator('knowbot-overlay #kb-q').fill(q);
+    await page.locator('knowbot-overlay .go').click();
+    await page.locator('knowbot-overlay .turn:not([aria-busy]) .sources li, knowbot-overlay .turn:not([aria-busy]) .refusal').first().waitFor({ timeout: 30000 });
+    const quotes = await page.locator('knowbot-overlay .turn .quote').count();
+    const links = await page.locator('knowbot-overlay .src-link').evaluateAll((as) => as.map((a) => a.href));
+    check(cell.name, 'answer quotes in blocks with [n] marks', quotes >= 1 && (await page.locator('knowbot-overlay .turn .n').count()) >= 1, `${quotes} quotes`);
+    check(cell.name, 'Sources list links (page or proof page), new tab', links.length >= 1 && links.every((x) => /^https?:\/\//.test(x)) && (await page.locator('knowbot-overlay .src-link').first().getAttribute('target')) === '_blank', links.join(' '));
+    check(cell.name, 'status announced (aria-live)', /Answer ready/.test(await page.locator('knowbot-overlay [role="status"]').textContent()));
+    const before = page.url();
+    await page.locator('knowbot-overlay .turn .n').first().click();
+    check(cell.name, 'a [n] mark jumps to its source, the page URL untouched', page.url() === before && (await inShadow(page, (sr) => !!sr.querySelector('.src.hit'))));
+    check(cell.name, 'a quiet “Ask another”', await page.locator('knowbot-overlay .again').isVisible());
+    if (cell.name !== 'phone-light') await page.screenshot({ path: path.join(SHOTS, `answer-${cell.name}.png`) });
     // not in the files: the refusal sentence
-    await page.fill('.ks-follow input', 'What is the capital of Australia?');
-    await page.click('.ks-follow .ks-go');
-    await page.waitForFunction(() => document.querySelectorAll('.ks-turn').length === 2 && !document.querySelector('.ks-turn[aria-busy]'), null, { timeout: 30000 });
-    check(cell.name, 'refusal sentence when not in the files', (await page.textContent('.ks-turn:last-of-type .ks-a')).includes(NOT_IN_DATA));
+    await page.locator('knowbot-overlay .again').click();
+    check(cell.name, '“Ask another” clears the answer and focuses the box', (await page.locator('knowbot-overlay .turn').count()) === 0 && (await activeId(page)) === 'kb-q');
+    await page.locator('knowbot-overlay #kb-q').fill('What is the capital of Australia?');
+    await page.keyboard.press('Enter');
+    await page.locator('knowbot-overlay .turn:not([aria-busy])').waitFor({ timeout: 30000 });
+    check(cell.name, 'refusal sentence when not in the files', (await page.locator('knowbot-overlay .turn .ab').textContent()).includes(NOT_IN_DATA));
     // layout and accessibility
     check(cell.name, 'no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
-    const wide = await page.$$eval('.ks-turn, .ks-card, .ks-search, .ks-follow, .ks-chips', (els) => els.map((e) => Math.round(e.getBoundingClientRect().right)).filter((r) => r > window.innerWidth));
+    const wide = await inShadow(page, (sr) => [...sr.querySelectorAll('.panel, .box, .answer, .quote, .sources')].map((e) => Math.round(e.getBoundingClientRect().right)).filter((r) => r > window.innerWidth));
     check(cell.name, 'nothing wider than the screen', !wide.length, JSON.stringify(wide));
-    const small = await page.$$eval('button, .ks-qlink, .ks-home, .ks-built a, input', (els) => els.filter((e) => e.offsetParent).map((e) => { const r = e.getBoundingClientRect(); return { t: e.textContent.trim().slice(0, 30) || e.id, h: Math.round(r.height) }; }).filter((x) => x.h < 44));
+    const small = await inShadow(page, (sr) => [...sr.querySelectorAll('button, input, .built')].filter((e) => e.getClientRects().length).map((e) => { const r = e.getBoundingClientRect(); return { t: e.textContent.trim().slice(0, 30) || e.className, h: Math.round(r.height), w: Math.round(r.width) }; }).filter((x) => x.h < 44 || x.w < 44));
     check(cell.name, '44px targets', !small.length, JSON.stringify(small));
     const axe = await runAxe(page);
     if (axe.skipped) console.log(`  [warn] ${cell.name} axe skipped (axe-core unreachable)`);
-    else check(cell.name, 'axe: no serious or critical violations', !axe.violations.length, JSON.stringify(axe.violations));
+    else check(cell.name, 'axe (open): no serious or critical violations', !axe.violations.length, JSON.stringify(axe.violations));
+    // Esc closes and shows the page; the button in the corner opens it again; × closes it; focus comes back
+    await page.keyboard.press('Escape');
+    check(cell.name, 'Esc closes it: the page shows, the “Ask Lumen Bikes” button waits in the corner', await page.locator('knowbot-overlay .dialog').isHidden() && await page.locator('knowbot-overlay .pill').isVisible()
+      && /Ask Lumen Bikes/.test(await page.locator('knowbot-overlay .pill').textContent()) && await page.evaluate(() => document.documentElement.style.overflow === ''));
+    check(cell.name, 'focus goes to the button that opens it again', (await activeId(page)) === 'pill');
+    const pb = await page.locator('knowbot-overlay .pill').boundingBox();
+    check(cell.name, 'the button sits bottom-right, 44px tall', pb && pb.x + pb.width > cell.viewport.width - 40 && pb.y + pb.height > cell.viewport.height - 40 && pb.height >= 44, JSON.stringify(pb));
+    await page.keyboard.press('Enter');
+    check(cell.name, 'the button opens it again, focus in the box', await page.locator('knowbot-overlay .dialog').isVisible() && (await activeId(page)) === 'kb-q');
+    await page.locator('knowbot-overlay .x').click();
+    check(cell.name, '× (labelled Close) closes it and returns focus', (await page.locator('knowbot-overlay .x').getAttribute('aria-label')) === 'Close' && await page.locator('knowbot-overlay .dialog').isHidden() && (await activeId(page)) === 'pill');
+    check(cell.name, 'the page works again once closed', await page.evaluate(() => { const r = document.getElementById('page-btn').getBoundingClientRect(); const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return el?.id === 'page-btn'; }));
+    if (cell.name === 'desktop-light' || cell.name === 'phone-dark') await page.screenshot({ path: path.join(SHOTS, `closed-${cell.name}.png`) });
+    const axe2 = await runAxe(page);
+    if (!axe2.skipped) check(cell.name, 'axe (closed): no serious or critical violations', !axe2.violations.length, JSON.stringify(axe2.violations));
+    await page.reload({ waitUntil: 'load' });
+    await page.locator('knowbot-overlay .pill').waitFor({ state: 'visible', timeout: 15000 });
+    check(cell.name, 'first visit only: closed stays closed on the next page view', await page.locator('knowbot-overlay .dialog').isHidden());
     check(cell.name, 'no console errors', !errors.length, errors.join(' | '));
     await ctx.close();
   }
-  // a site that is not published (or no bot): a calm "not available" page, no errors
+
+  // ------------------------------------------------------------------ owner options: every visit, topic chips
   {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await siteApi('POST', { showOn: 'every-visit', showChips: true });
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await ctx.newPage();
+    await page.goto(homeUrl, { waitUntil: 'load' });
+    await page.locator('knowbot-overlay .dialog').waitFor({ state: 'visible', timeout: 15000 });
+    check('options', 'topic chips when the owner turns them on', (await page.locator('knowbot-overlay .chip').count()) >= 1);
+    await page.locator('knowbot-overlay .x').click();
+    await page.reload({ waitUntil: 'load' });
+    await page.locator('knowbot-overlay .dialog').waitFor({ state: 'visible', timeout: 15000 });
+    check('options', 'every visit: it opens again on the next page view', await page.locator('knowbot-overlay .dialog').isVisible());
+    await ctx.close();
+    await siteApi('POST', { showOn: 'first-visit', showChips: false });
+  }
+
+  // ------------------------------------------------------------------ the hosted link
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'dark', deviceScaleFactor: 2 });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(`${dev.url}/site/?bot=${t.trialId}`, { waitUntil: 'load' });
+    await page.locator('knowbot-overlay .dialog').waitFor({ state: 'visible', timeout: 15000 });
+    check('hosted', 'the overlay over a neutral stand-in page', await page.locator('.kh-page').count() === 1 && /Lumen Bikes/.test(await page.title()));
+    check('hosted', 'noindex while a trial', (await page.getAttribute('meta[name="robots"]', 'content')) === 'noindex');
+    check('hosted', 'the page behind is inert while open', await page.evaluate(() => document.querySelector('.kh-page').inert === true));
+    await page.locator('knowbot-overlay .x').click();
+    check('hosted', '× shows the page and the button', await page.locator('knowbot-overlay .pill').isVisible() && await page.evaluate(() => document.querySelector('.kh-page').inert === false));
+    check('hosted', 'no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+    const axe = await runAxe(page);
+    if (!axe.skipped) check('hosted', 'axe: no serious or critical violations', !axe.violations.length, JSON.stringify(axe.violations));
+    check('hosted', 'no console errors', !errors.length, errors.join(' | '));
+    await page.goto(`${dev.url}/site/?bot=${t.trialId}&q=${encodeURIComponent(q)}`, { waitUntil: 'load' });
+    await page.locator('knowbot-overlay .turn:not([aria-busy])').waitFor({ timeout: 30000 });
+    check('hosted', 'a ?q= link asks at once', (await page.locator('knowbot-overlay .aq').textContent()) === q);
     await page.goto(`${dev.url}/site/?bot=tr_aaaaaaaaaaaaaaaa`, { waitUntil: 'load' });
-    await page.waitForSelector('.ks-empty h1', { timeout: 15000 });
-    check('missing', 'not available page', /not available/i.test(await page.textContent('h1')));
+    await page.locator('knowbot-overlay #kb-h').waitFor({ timeout: 15000 });
+    check('hosted', 'an unknown bot: not available', /not available/i.test(await page.locator('knowbot-overlay #kb-h').textContent()));
     await ctx.close();
   }
-  // a website import: the site takes the store's name and colour, and a Sources link opens the store's own page
+
+  // ------------------------------------------------------------------ a website import: over the store's own homepage
   {
     const s = await (await api('/api/studio/trials', { method: 'POST' })).json();
     const SH = (x = {}) => ({ authorization: `Bearer ${s.token}`, ...x });
@@ -132,22 +254,24 @@ try {
       await new Promise((r) => setTimeout(r, 250));
     }
     const v = await (await api(`/api/studio/trials/${s.trialId}/site`, { method: 'POST', headers: SH({ 'content-type': 'application/json' }), body: JSON.stringify({ published: true, regenerate: true }) })).json();
-    const pageLinks = Object.values(v.site.links.byId || {});
-    check('store', 'site named after the store, in its colour', v.site.name === 'Lumen Bikes' && v.site.brand.color === '#0f766e' && v.site.brand.fromSite === true, JSON.stringify({ name: v.site.name, brand: v.site.brand }));
-    check('store', 'every imported page has its own link', pageLinks.length >= 2 && pageLinks.every((u) => u.startsWith(dev.shopUrl)), pageLinks.join(' '));
+    check('store', 'site named after the store, in its colour; its homepage can be framed', v.site.name === 'Lumen Bikes' && v.site.brand.color === '#0f766e' && v.site.homeFrame === dev.shopUrl, JSON.stringify({ name: v.site.name, brand: v.site.brand, homeFrame: v.site.homeFrame }));
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'light' });
     const page = await ctx.newPage();
     const errors = [];
-    page.on('pageerror', (e) => errors.push(e.message));
+    // the fake store's own homepage script (in the frame behind) throws on its own; only the overlay's errors count
+    page.on('pageerror', (e) => { if (!/Shopify is not defined/.test(e.message)) errors.push(e.message); });
     await page.goto(`${dev.url}/site/?bot=${s.trialId}&q=${encodeURIComponent('Can I return a bike I rode?')}`, { waitUntil: 'load' });
-    await page.waitForSelector('.ks-turn:not([aria-busy]) .ks-sources li, .ks-turn:not([aria-busy]) .ks-refusal', { timeout: 30000 });
-    const links = await page.$$eval('.ks-src-link', (as) => as.map((a) => a.href));
-    check('store', 'a ?q= link asks at once; Sources open the store’s own page', links.length >= 1 && links.some((h) => h.startsWith(dev.shopUrl)), links.join(' '));
+    check('store', 'the hosted link shows the store’s own homepage behind', (await page.locator('iframe.kh-home').getAttribute('src')) === dev.shopUrl);
+    await page.locator('knowbot-overlay .turn:not([aria-busy]) .sources li, knowbot-overlay .turn:not([aria-busy]) .refusal').first().waitFor({ timeout: 30000 });
+    const links = await page.locator('knowbot-overlay .src-link').evaluateAll((as) => as.map((a) => a.href));
+    check('store', 'Sources open the store’s own page', links.length >= 1 && links.some((x) => x.startsWith(dev.shopUrl)), links.join(' '));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(SHOTS, 'store-over-homepage-answer.png') });
     check('store', 'no page errors', !errors.length, errors.join(' | '));
-    await page.screenshot({ path: path.join(SHOTS, 'store-desktop-light-answer.png') });
     await ctx.close();
   }
-  // the Studio: "See it as → Site" previews the page in the bot pane; Set up → Single-page site edits and unpublishes
+
+  // ------------------------------------------------------------------ the Studio
   {
     await api(`/api/studio/trials/${t.trialId}`, { method: 'PATCH', headers: H({ 'content-type': 'application/json' }), body: JSON.stringify({ surfaces: ['webchat', 'site'] }) });
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
@@ -160,33 +284,52 @@ try {
     await page.click('.sh-opt[data-shape="site"]');
     await page.waitForSelector('.sh-site-frame', { timeout: 20000 });
     const frame = page.frameLocator('.sh-site-frame');
-    await frame.locator('#ks-h1').waitFor({ timeout: 20000 });
-    check('studio', 'the bot pane shows the real page', (await frame.locator('#ks-h1').textContent()) === 'Lumen Bikes');
-    await page.waitForTimeout(400);
+    await frame.locator('knowbot-overlay #kb-h').waitFor({ timeout: 20000 });
+    check('studio', 'the bot pane shows the overlay over a homepage', (await frame.locator('knowbot-overlay #kb-h').textContent()).trim() === 'Lumen Bikes' && await frame.locator('.kh-page').count() === 1);
+    await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(SHOTS, 'studio-see-it-as-site.png') });
-    // Set up → the Single-page site card
+    await frame.locator('knowbot-overlay .x').click();
+    check('studio', '× in the preview shows the homepage and the reopen button', await frame.locator('knowbot-overlay .pill').isVisible());
+    await page.screenshot({ path: path.join(SHOTS, 'studio-see-it-as-site-closed.png') });
+    // Set up → the card
     await page.click('.sh-opt[data-shape="webchat"]');
     await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
     await page.waitForSelector('.gl-chcard[data-ch="site"]', { timeout: 20000 });
-    check('studio', 'Set up lists the site first among the bot’s own surfaces', await page.$eval('.gl-chcard[data-ch="site"]', (b) => !!b.querySelector('.gl-mine')));
+    check('studio', 'Set up lists the site among the bot’s own surfaces', await page.$eval('.gl-chcard[data-ch="site"]', (b) => !!b.querySelector('.gl-mine')));
     await page.click('.gl-chcard[data-ch="site"]');
     await page.waitForSelector('.gl-sp-pub', { timeout: 20000 });
-    check('studio', 'card: published, link, download, edits, homepage steps', /Unpublish/.test(await page.textContent('.gl-sp-pub')) && await page.isVisible('.gl-sp-dl') && await page.isVisible('#gl-sp-name')
-      && /homepage/i.test(await page.textContent('.gl-steps')) && /knowbot\.knowdrive\.ai\/site\/\?bot=/.test(await page.textContent('.gl-sp-url')));
+    const card = await page.textContent('.gl-sp');
+    check('studio', 'card: Add to your homepage, the one line with Copy, options, publish, hosted link, how-to', /Add to your homepage/.test(card) && /overlay\.js" data-bot="/.test(await page.textContent('.gl-sp-snip pre'))
+      && await page.isVisible('.gl-sp-snip button') && await page.isVisible('#gl-sp-show-first-visit') && await page.isVisible('#gl-sp-chipson') && /Unpublish/.test(await page.textContent('.gl-sp-pub'))
+      && await page.isVisible('.gl-sp-dl') && /knowbot\.knowdrive\.ai\/site\/\?bot=/.test(await page.textContent('.gl-sp-url')) && await page.isHidden('.gl-sp-chipbox'));
     await page.fill('#gl-sp-name', 'Lumen Bikes Co');
+    await page.check('#gl-sp-show-every-visit');
     await page.click('.gl-sp-actions .btn');
     await page.waitForFunction(() => /Saved/.test(document.querySelector('.gl-sp-status')?.textContent || ''), null, { timeout: 15000 });
-    const saved = await (await api(`/api/studio/trials/${t.trialId}/site`, { headers: H() })).json();
-    check('studio', 'a name edit is saved', saved.site.name === 'Lumen Bikes Co');
+    const saved = await siteApi();
+    check('studio', 'name and “every visit” are saved', saved.site.name === 'Lumen Bikes Co' && saved.site.showOn === 'every-visit', JSON.stringify({ n: saved.site.name, s: saved.site.showOn }));
+    await page.locator('.gl-sp').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(SHOTS, 'studio-setup-site.png') });
     await page.click('.gl-sp-pub');
     await page.waitForFunction(() => /Unpublished/.test(document.querySelector('.gl-sp-status')?.textContent || ''), null, { timeout: 15000 });
-    check('studio', 'unpublish takes the page down', (await api(`/api/site/${t.trialId}`)).status === 404);
+    check('studio', 'unpublish takes it down', (await api(`/api/site/${t.trialId}`)).status === 404);
     check('studio', 'no page errors', !errors.length, errors.join(' | '));
+    await ctx.close();
+  }
+  // unpublished: the snippet on a homepage shows nothing and breaks nothing
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(homeUrl, { waitUntil: 'load' });
+    await page.waitForTimeout(1500);
+    check('unpublished', 'nothing shows on the homepage, no script errors', (await page.locator('knowbot-overlay').count()) === 0 && !errors.length && await page.isVisible('#page-h1'), errors.join(' | '));
     await ctx.close();
   }
   await browser.close();
 } finally {
+  if (homeSrv) await new Promise((r) => homeSrv.close(() => r()));
   await dev.close();
 }
 console.log(failed ? `\nsite smoke: ${failed} failed` : '\nsite smoke: all checks passed');

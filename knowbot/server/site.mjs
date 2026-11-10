@@ -1,4 +1,5 @@
-// KnowBot "Single-page site" answer surface: the site spec built from a bot's own files, and the standalone page.
+// KnowBot "Single-page site" answer surface: a simple search overlay that hovers over the business's own homepage
+// (site/overlay.js, installed with one script line), and the site spec it reads, built from a bot's own files.
 // Pure (no network, no DOM): server/trials.mjs gathers the inputs (files, validated questions, atoms, the website
 // import's name and brand) and calls buildSite(); server/devapi.mjs serves publicSite() at GET /api/site/:botId.
 //
@@ -9,8 +10,10 @@
 //     source; a line that is not found word for word in the atoms is dropped;
 //   - the business name comes from the owner (spec), the website import (og:site_name) or the bot's name;
 //   - the brand colour and logo only when the website import read them from the site's own head, else a default.
-// The page itself (site/index.html + site/site.js + site/site.css) asks the bot through the developer API with a
-// short-lived key that can only ask questions (scope "site"), minted by the server when the site is published.
+// The overlay (site/overlay.js; the hosted link site/index.html shows it over the homepage or a neutral backdrop) asks the
+// bot through the developer API with a short-lived key that can only ask questions (scope "site"), minted by GET
+// /api/site/:id once the site is published. Its start screen is only the name, one search box and one quiet line: topic
+// chips show only when the owner turns them on (showChips); popular questions and key facts stay in the spec, unused.
 
 export const SITE_CHIPS_MAX = 8;
 export const SITE_QUESTIONS_MAX = 5;
@@ -162,22 +165,29 @@ export function buildSite({ spec = {}, files = [], questions = {}, atomsByFile =
   const brand = brandColors(store?.brand?.color, spec.avatar?.hue);
   const logo = typeof store?.brand?.logo === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(store.brand.logo) ? store.brand.logo : null;
   const homeUrl = typeof store?.url === 'string' && /^https?:\/\//i.test(store.url) ? store.url : null;
+  // the hosted link shows the overlay over the real homepage in a frame only when its own headers allow framing
+  const homeFrame = homeUrl && store?.frameable === true ? homeUrl : null;
   const tagline = spec.purpose ? clip(spec.purpose, 160) : `Ask a question. The answer comes from ${name}'s own pages, with the sources.`;
   return {
     v: 1, name, tagline, chips, questions: popular, facts: factsFrom(atomsByFile), links,
-    brand: { ...brand, logo }, homeUrl, initials: String(spec.avatar?.initials || name.slice(0, 2)).toUpperCase().slice(0, 2),
+    brand: { ...brand, logo }, homeUrl, homeFrame, initials: String(spec.avatar?.initials || name.slice(0, 2)).toUpperCase().slice(0, 2),
     fileKey: files.map((f) => f.id).sort().join(','), generatedAt: new Date(now).toISOString(),
   };
 }
 
 // ------------------------------------------------------------------------------------------------ owner edits
-/** Owner edits from POST /site: { name?, tagline?, chips?, published? } → validated, or throws { status:400, field }. */
+export const SHOW_ON = Object.freeze(['first-visit', 'every-visit']);
+/**
+ * Owner edits from POST /site: { name?, tagline?, chips?, showOn?, showChips?, published? } → validated, or throws
+ * { status:400, field }. showOn: 'first-visit' (default: once a visitor closes it, it stays closed for their visit) or
+ * 'every-visit' (it opens on every page view). showChips: topic buttons under the search box (default off).
+ */
 export function validateSiteEdit(body, current = {}) {
   const bad = (field, message) => { const e = new Error(`${field}: ${message}`); e.status = 400; e.code = 'bad_request'; e.field = field; throw e; };
   if (!body || typeof body !== 'object' || Array.isArray(body)) bad('body', 'must be a JSON object');
   const next = { ...current };
   for (const k of Object.keys(body)) {
-    if (!['name', 'tagline', 'chips', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
+    if (!['name', 'tagline', 'chips', 'showOn', 'showChips', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
   }
   if (body.name !== undefined) {
     if (body.name === null || body.name === '') delete next.name;
@@ -201,6 +211,14 @@ export function validateSiteEdit(body, current = {}) {
       });
     }
   }
+  if (body.showOn !== undefined) {
+    if (body.showOn === null) delete next.showOn;
+    else { if (!SHOW_ON.includes(body.showOn)) bad('showOn', `must be ${SHOW_ON.join(' or ')}`); next.showOn = body.showOn; }
+  }
+  if (body.showChips !== undefined) {
+    if (typeof body.showChips !== 'boolean') bad('showChips', 'must be true or false');
+    next.showChips = body.showChips;
+  }
   if (body.published !== undefined) {
     if (typeof body.published !== 'boolean') bad('published', 'must be true or false');
     next.published = body.published;
@@ -214,43 +232,64 @@ export function publicSite(gen, edits = {}, { botId, trial = true, expiresAt = n
   return {
     bot: botId, name: edits.name || g.name || 'Our help centre', tagline: edits.tagline ?? g.tagline ?? '',
     chips: Array.isArray(edits.chips) ? edits.chips : g.chips || [], questions: g.questions || [], facts: g.facts || [],
-    links: g.links || { byId: {}, byName: {} }, brand: g.brand || brandColors(null), homeUrl: g.homeUrl || null, initials: g.initials || 'KB',
+    links: g.links || { byId: {}, byName: {} }, brand: g.brand || brandColors(null), homeUrl: g.homeUrl || null, homeFrame: g.homeFrame || null, initials: g.initials || 'KB',
+    showOn: SHOW_ON.includes(edits.showOn) ? edits.showOn : 'first-visit', showChips: edits.showChips === true,
     published: !!edits.published, trial: !!trial, noindex: !!trial, expiresAt, generatedAt: g.generatedAt || null,
   };
 }
 
-// ------------------------------------------------------------------------------------------------ download
+// ------------------------------------------------------------------------------------------------ install
 const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 /**
- * The single HTML file the owner downloads: the same page as the hosted one (it loads site.js and site.css from the
- * hosted site), with the bot id and API base in the script tag and the title, description and Open Graph tags filled
- * in. Popular questions are in the markup too, so the page reads well before the script runs.
+ * The one line the owner pastes into their homepage. data-api only for a loopback API (a dev server): on a real site
+ * the script finds the hosted API from its own address.
  */
-export function siteHtml(site, { botId, apiBase, assetBase = SITE_HOST } = {}) {
+export function overlaySnippet(botId, { assetBase = SITE_HOST, apiBase = null } = {}) {
   const a = String(assetBase).replace(/\/+$/, '');
-  const title = `${site.name} · Ask anything`;
-  const qs = (site.questions || []).map((q) => `<li><a href="?q=${encodeURIComponent(q)}">${escHtml(q)}</a></li>`).join('');
+  const api = apiBase && /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(apiBase) ? ` data-api="${escHtml(apiBase)}"` : '';
+  return `<script src="${escHtml(a)}/site/overlay.js" data-bot="${escHtml(botId)}"${api} async></script>`;
+}
+
+/**
+ * The HTML file the owner downloads: a short how-to with the line to copy, and that line itself at the end, so opening
+ * the file shows the overlay hovering over the how-to (close it with × to read the steps).
+ */
+export function siteHtml(site, { botId, apiBase = null, assetBase = SITE_HOST } = {}) {
+  const snippet = overlaySnippet(botId, { assetBase, apiBase });
+  const title = `Add ${site.name} search to your homepage`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escHtml(title)}</title>
-<meta name="description" content="${escHtml(site.tagline)}">
-<meta property="og:title" content="${escHtml(title)}">
-<meta property="og:description" content="${escHtml(site.tagline)}">
-<meta property="og:type" content="website">
-${site.noindex ? '<meta name="robots" content="noindex">\n' : ''}<meta name="color-scheme" content="light dark">
-<link rel="preconnect" href="${escHtml(a)}">
-<link rel="stylesheet" href="${escHtml(a)}/vendor/kd-theme/tokens.css">
-<link rel="stylesheet" href="${escHtml(a)}/vendor/knowdrive-widgets/0.4.1/widgets.css">
-<link rel="stylesheet" href="${escHtml(a)}/site/site.css">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<style>
+  body { margin: 0; font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #2b2b38; background: #fff; }
+  main { max-width: 680px; margin: 0 auto; padding: 40px 16px 120px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 12px; color: #15151f; }
+  h2 { font-size: 20px; margin: 28px 0 8px; color: #15151f; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f7; border: 1px solid #e3e3ea; border-radius: 12px; padding: 14px 16px; font-size: 15px; }
+  li { margin: 0 0 8px; }
+  @media (prefers-color-scheme: dark) { body { background: #15151f; color: #d8d8e2; } h1, h2 { color: #fff; } pre { background: #22222e; border-color: #33334a; } }
+</style>
 </head>
 <body>
-<div id="ks-root" class="ks-root">
-  <main class="ks-main"><h1 class="ks-h1">${escHtml(site.name)}</h1><p class="ks-tag">${escHtml(site.tagline)}</p>${qs ? `<ul class="ks-noscript-q">${qs}</ul>` : ''}</main>
-</div>
-<script type="module" src="${escHtml(a)}/site/site.js" data-bot="${escHtml(botId)}" data-api="${escHtml(apiBase)}"></script>
+<main>
+<h1>${escHtml(title)}</h1>
+<p>Visitors see a simple search box on top of your homepage. They ask a question, and the answer comes only from ${escHtml(site.name)}'s own pages, with the sources. They close it with the × button and see your site as usual.</p>
+<h2>1. Copy this line</h2>
+<pre><code>${escHtml(snippet)}</code></pre>
+<h2>2. Paste it into your homepage</h2>
+<ol>
+<li>Open your homepage's HTML, or your website builder's "custom code" or "footer code" box.</li>
+<li>Paste the line just before <code>&lt;/body&gt;</code>. Save and publish your site.</li>
+<li>Open your homepage. The search box shows on top of it.</li>
+</ol>
+<p>It works while your search is published in KnowBot Studio.${site.noindex ? ' While your bot is a trial, search engines are asked not to list it.' : ''}</p>
+</main>
+${snippet}
 </body>
 </html>
 `;

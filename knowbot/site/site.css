@@ -1,3 +1,4 @@
+/* LEGACY: styles for site/site.js (pages downloaded before site/overlay.js). */
 /* KnowBot Single-page site (site/site.js). KnowDrive tokens + widgets (.btn .card .input .chip .chipbtn) underneath;
    --ks-accent is the business's colour (server/site.mjs brandColors: white text reads on it at 4.5:1, and its dark
    variant reads on the dark page). Mobile first: 16px gutters, 44px targets, no horizontal scroll. */

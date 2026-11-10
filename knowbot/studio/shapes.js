@@ -6,8 +6,10 @@
 //              webhook would send it (same pipeline, same formatter), logged to insights under that channel
 //   phone    → the in-browser phone (./phonesim.js) on the live voice socket, phone mode
 //   voice    → the web voice assistant widget (../lib/voice-widget.js)
-//   site     → the Single-page site (../site/) in a frame, built from the files (GET …/trials/:id/site), with the
-//              owner's trial key in the frame's URL fragment so the preview works before it is published
+//   site     → the homepage overlay (../site/, site/overlay.js) in a frame: the search box hovering over the imported
+//              site's homepage (when it can be framed) or a neutral stand-in page; its × shows the homepage and the
+//              "Ask <name>" button. Built from the files (GET …/trials/:id/site), with the owner's trial key in the
+//              frame's URL fragment so the preview works before it is published
 //
 //   const s = mountShapes(selectorHost, frameHost, { getState, base, surfaces, starters: () => [...], onChange(shape) })
 //   s.set('sms'); s.shape; s.destroy()
@@ -273,7 +275,7 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
     return host;
   }
 
-  // Site: the Single-page site in a frame (the same page visitors get at the hosted link)
+  // Site: the overlay over the homepage, in a frame (the same page visitors get at the hosted link)
   function siteFrame() {
     const host = h('div', { class: 'sh-frame sh-site' });
     const note = h('p', { class: 'sh-note', role: 'status' }, 'Building your page from your files…');
@@ -289,10 +291,12 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
       page.searchParams.set('bot', d.botId);
       if (/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(new URL(base).origin)) page.searchParams.set('api', new URL(base).origin);
       page.hash = `k=${encodeURIComponent(d.key)}`;
-      const frame = h('iframe', { class: 'sh-site-frame', title: `${s.site?.name || botName()} · your single-page site`, src: page.href, loading: 'lazy',
+      const frame = h('iframe', { class: 'sh-site-frame', title: `${s.site?.name || botName()} · search over your homepage`, src: page.href, loading: 'lazy',
         sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms', referrerpolicy: 'no-referrer' });
-      host.prepend(h('div', { class: 'sh-site-bar', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('span', null, s.published ? s.hostedUrl.replace(/^https:\/\//, '') : 'Preview · not published yet')), frame);
-      note.textContent = s.published ? 'This is your published page. Change its name, topics or link in Set up.' : 'A search page built from your files. Publish it, download it or use it as your homepage from Set up.';
+      host.prepend(h('div', { class: 'sh-site-bar', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('span', null, s.site?.homeUrl ? s.site.homeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') : 'your homepage')), frame);
+      note.textContent = s.site?.homeFrame
+        ? 'This is how it looks on your homepage. Press × to see your site; the button in the corner opens it again. Add it with one line from Set up.'
+        : 'This is how it looks over your homepage (shown here as a plain stand-in page). Press × to close it; the button in the corner opens it again. Add it with one line from Set up.';
     });
     return host;
   }

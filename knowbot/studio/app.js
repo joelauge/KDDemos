@@ -813,7 +813,7 @@ const CHANNEL_HINTS = [
   { id: 'phone', re: /\b(telephone|phone( calls?| line| number)?|calls?|call in)\b/i, name: 'Telephone', need: 'Phone calls need a KnowBot number; callers ask out loud and it answers by voice, naming the source. Try the call simulator now.' },
   { id: 'email', re: /\b(e-?mails?|inbox|support@)\b/i, name: 'Email', need: 'Email needs an inbound-parse webhook (SendGrid, Postmark or Mailgun); replies carry footnoted citations and a source list.' },
   { id: 'voice', re: /\bvoice ?(bot|chat\w*|assistant|agent|channel)?\b|\bspeak|\btalk to\b/i, name: 'Voice chatbot', need: 'The voice chatbot runs in the browser, no account needed. Press Try it and talk to your bot.' },
-  { id: 'site', re: /\b(home ?page|landing page|search page|front ?page|(?:single|one)[- ]page (?:web)?site)\b/i, name: 'Single-page site', need: 'The single-page site is a clean search page built from your files: answers quote your pages and link to them. Publish it, download it, or use it as your homepage.' },
+  { id: 'site', re: /\b(home ?page|landing page|search page|front ?page|(?:single|one)[- ]page (?:web)?site)\b/i, name: 'Single-page site', need: 'The single-page site is a simple search box that hovers over your homepage. Answers quote your pages and link to them. Visitors close it with ×. You add it with one line of code.' },
   { id: 'text', re: /\b(widget|embed\w*|website|my site|chat ?bubble|full-?page)\b/i, name: 'Text chatbot', need: 'The chat widget is one line of embed code; you can try it right here before you launch.' },
 ];
 function channelOf(text) { const hit = CHANNEL_HINTS.find((c) => c.re.test(text)); return hit || null; }

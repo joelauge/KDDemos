@@ -1,3 +1,6 @@
+// LEGACY: the first Single-page site (a full search page). Kept only for HTML files owners downloaded before the
+// homepage overlay (site/overlay.js) replaced it; the hosted link and new downloads use the overlay.
+//
 // KnowBot Single-page site: a clean search page built from one bot's own files (server/site.mjs).
 //
 //   hosted:     https://knowbot.knowdrive.ai/site/?bot=<botId>[&q=<question>]

@@ -36,7 +36,7 @@ import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
-import { buildSite, validateSiteEdit, publicSite, siteHtml } from './site.mjs';
+import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet } from './site.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -2999,7 +2999,7 @@ export function createStudio(o = {}) {
       let capped = r.capped;
       if (quotaOut) capped = { ...(capped || {}), bytes: { limit: QUOTA_BYTES, droppedProducts: (capped?.bytes?.droppedProducts || 0) + (leftOutQuota.product || 0), droppedSections: (capped?.bytes?.droppedSections || 0) + quotaOut, leftOut: report.leftOut.quota } };
       if (failedUp) capped = { ...(capped || {}), failed: { files: failedUp, leftOut: leftOutFailed } };
-      T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, hosts: storeHostsOf(r.base, r.plan?.helpdesks), platform: r.platform, name: r.name || null, ...(r.brand ? { brand: r.brand } : {}), files: uploaded,
+      T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, hosts: storeHostsOf(r.base, r.plan?.helpdesks), platform: r.platform, name: r.name || null, ...(r.brand ? { brand: r.brand } : {}), frameable: r.frameable === true, files: uploaded,
         found: r.report.found, written, leftOut: report.leftOut, timeUp: !!r.report.timeUp, ...(kinds ? { kinds } : {}) };
       const pj = pjOf();
       if (pj) Object.assign(pj, { state: 'done', finishedAt: now(), uploaded, done: written, activeMs: jobActiveMs(T, job) });
@@ -4773,8 +4773,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       if (fid === 'confirm') { allow('POST'); limitTrialAndIp(T, req, 'numconfirm', 30, 60, 'payment checks'); return sendJson(res, 200, await numbers.confirm(T, (await readBody(req)).sessionId)); }
       fail(404, 'not_found', `no such endpoint ${p}`);
     }
-    // the Single-page site (server/site.mjs): GET builds it from the files when missing or stale (?download=1: the HTML
-    // file), POST saves the owner's edits ({name, tagline, chips, published}; regenerate:true builds it again)
+    // the Single-page site (server/site.mjs): GET builds it from the files when missing or stale (?download=1: the how-to
+    // HTML file with the homepage snippet), POST saves the owner's edits ({name, tagline, chips, showOn, showChips,
+    // published}; regenerate:true builds it again)
     if (sub === 'site' && !fid) {
       allow('GET', 'POST');
       if (m === 'POST') {
@@ -4794,7 +4795,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       if (url.searchParams.get('download') === '1') {
         const api = /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(url.searchParams.get('api') || '') ? url.searchParams.get('api') : selfOriginOf(req);
         const html = siteHtml(publicSite(T.flags.site, T.spec.site || {}, { botId: T.id, trial: !T.converted }), { botId: T.id, apiBase: api, assetBase: url.searchParams.get('assets') === 'self' ? selfOriginOf(req) : undefined });
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-disposition': 'attachment; filename="index.html"', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-disposition': 'attachment; filename="add-to-homepage.html"', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
         return res.end(html);
       }
       return sendJson(res, 200, siteView(req, T));
@@ -4925,7 +4926,11 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   function siteView(req, T) {
     const edits = T.spec.site || {};
     const hosted = `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(T.id)}`;
-    return { site: publicSite(T.flags.site, edits, { botId: T.id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }),
+    // the homepage snippet: the hosted script on a real deploy; a loopback dev server's own copy (and API) locally
+    const self = selfOriginOf(req);
+    const local = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(self);
+    const snippet = overlaySnippet(T.id, local ? { assetBase: self, apiBase: self } : {});
+    return { snippet, site: publicSite(T.flags.site, edits, { botId: T.id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }),
       edits, generated: T.flags.site ? { name: T.flags.site.name, tagline: T.flags.site.tagline, chips: T.flags.site.chips } : null,
       published: !!edits.published, hostedUrl: hosted, previewPath: `/site/?bot=${encodeURIComponent(T.id)}` };
   }

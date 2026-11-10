@@ -5911,18 +5911,18 @@
      {
       "name": "kb_search",
       "input": {
-       "query": "single-page site homepage"
+       "query": "single-page site homepage overlay"
       }
      }
     ],
-    "reply": "{{quote:It can replace your homepage}}"
+    "reply": "{{quote:It hovers over your homepage instead of replacing it}}"
    }
   },
   {
    "id": "channels-09",
    "category": "channels",
    "input": {
-    "message": "how do I use the site as my homepage?"
+    "message": "how do I add the site to my homepage?"
    },
    "state": "samples-ready",
    "expect": {
@@ -5931,7 +5931,7 @@
     ],
     "cites": true,
     "replyMust": [
-     "/domain|html|link/i"
+     "/line|code|script|paste/i"
     ],
     "mustNotTools": [
      "update_bot",
@@ -5950,11 +5950,11 @@
      {
       "name": "kb_search",
       "input": {
-       "query": "single-page site as homepage domain"
+       "query": "add single-page site to homepage one line"
       }
      }
     ],
-    "reply": "{{quote:point your domain at the hosted link}}"
+    "reply": "{{quote:paste one line of code into your homepage}}"
    }
   },
   {

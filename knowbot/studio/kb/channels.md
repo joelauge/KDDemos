@@ -64,13 +64,13 @@ The voice chatbot lets a visitor talk to the bot in their browser and hear the a
 
 Source: /studio/
 
-The single-page site is a clean web page built from the bot's own files: the business name, a big search box ("Ask anything about …"), topic buttons, popular questions, and contact details only when they are quoted word for word from the files. It can replace your homepage. Visitors search it and get the same cited answers as the website chat, with a Sources list that links each answer to the page it came from on your website, or to the proof page for an uploaded file. When the answer is not in the files, it says the same refusal sentence as every other channel. You can change the name, the one-line description and the topic buttons in KnowBot Studio, then publish it.
+The single-page site is a simple search box that sits on top of your homepage as an overlay. It hovers over your homepage instead of replacing it: your site shows faintly behind it. It is built from the bot's own files and is kept very simple: a waving hand, the business name, one big search box with an "Ask" button, and one quiet line that says answers come only from your own pages. Visitors ask a question and get the same cited answers as the website chat, with a Sources list that links each answer to the page it came from on your website, or to the proof page for an uploaded file. When the answer is not in the files, it says the same refusal sentence as every other channel. Visitors close it with the × button in the top right corner and see your homepage as usual; a small "Ask" button stays in the bottom right corner to open it again. In KnowBot Studio you can change the business name, choose whether it shows on a visitor's first visit only or on every visit, turn topic buttons under the search box on or off (they are off by default), and publish it.
 
-## Using the single-page site as your homepage
+## Adding the single-page site to your homepage
 
 Source: /studio/
 
-Once it is published, the site has a hosted link at knowbot.knowdrive.ai/site/ with your bot id, and you can download it as one HTML file. To use it as your homepage, you can point your domain at the hosted link, paste the downloaded HTML file in as your home page, or link to it from your site's menu, for example as "Search" or "Help". While the bot is a trial, the page tells search engines not to list it.
+To add it to your homepage, paste one line of code into your homepage, just before the closing body tag, or into your website builder's custom code box. The line is a script tag that loads knowbot.knowdrive.ai/site/overlay.js with your bot id, and you can copy it from Set up in KnowBot Studio. Your own homepage stays as it is: the search box shows on top of it, and your site's styles and the search box's styles never mix. It only shows while the site is published. It also has a hosted link at knowbot.knowdrive.ai/site/ with your bot id that shows the search box over your homepage, and you can download a short how-to page with the line to paste. While the bot is a trial, the hosted link tells search engines not to list it.
 
 ## When a channel is not set up
 

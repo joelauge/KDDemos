@@ -647,3 +647,12 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .gl-sp-addrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .gl-sp-addrow .btn, .gl-sp-actions .btn { min-height: 44px; }
 .gl-sp-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+/* the homepage line, and the options (when it shows, topic buttons) */
+.gl-sp-pre { margin: 0; padding: 12px 14px; font: 400 12.5px/1.6 var(--mono); color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+.gl-sp-snip .co-copy { min-height: 44px; }
+.gl-sp-set { margin: 0; padding: 0; border: 0; min-width: 0; display: grid; gap: 2px; }
+.gl-sp-opt { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 14px; cursor: pointer; }
+.gl-sp-opt input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+.gl-sp-chipbox { display: grid; gap: 6px; }
+.gl-sp-chipbox[hidden] { display: none; }
+.gl-sp-frame iframe { height: 560px; }

@@ -1,6 +1,7 @@
-// The Single-page site answer surface (server/site.mjs, GET|POST /api/studio/trials/:id/site, GET /api/site/:id, scope
-// "site" keys): nothing invented (facts are verbatim lines with their source, chips and popular questions only from
-// validated questions), owner edits persist, publish gates the public page, the site key can only ask questions.
+// The Single-page site answer surface, a search overlay on the business's homepage (server/site.mjs, site/overlay.js,
+// GET|POST /api/studio/trials/:id/site, GET /api/site/:id, scope "site" keys): nothing invented (facts are verbatim
+// lines with their source, chips and popular questions only from validated questions), owner edits and options persist,
+// publish gates the public page, the site key can only ask questions, the homepage line and how-to download.
 // Fakes only (127.0.0.1): never touches knowDrive or a real model.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,8 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
-import { buildSite, factsFrom, brandColors, contrast, validateSiteEdit, publicSite, siteHtml, siteNameOf, fileLabel } from '../site.mjs';
-import { brandOfHtml } from '../storeimport.mjs';
+import { buildSite, factsFrom, brandColors, contrast, validateSiteEdit, publicSite, siteHtml, siteNameOf, fileLabel, overlaySnippet } from '../site.mjs';
+import { brandOfHtml, frameableOf } from '../storeimport.mjs';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,7 +48,7 @@ describe('site generator (pure)', () => {
   const questions = { starters: [{ q: 'How long do I have to return a bike?', fileId: 'f1' }, { q: 'What is the capital of Peru?', fileId: 'nope' }],
     proof: [{ q: 'How do refunds work?', fileId: 'f1' }, { q: 'How do I adjust the brakes?', fileId: 'f2' }, { q: 'How long do I have to return a bike?', fileId: 'f1' }] };
   const atomsByFile = [{ file: files[0], atoms: [{ text: 'Questions? Call us on +1 555 123 4567, Monday to Friday.' }, { text: '- Email **help@lumen.example** for returns.' }] }];
-  const g = buildSite({ spec: { name: 'Lumen Bikes Help', avatar: { hue: 2, initials: 'LB' } }, files, questions, atomsByFile, store: { name: 'Lumen Bikes', url: 'https://lumen.example', brand: { color: '#ffd400', logo: 'https://lumen.example/icon.png' } } });
+  const g = buildSite({ spec: { name: 'Lumen Bikes Help', avatar: { hue: 2, initials: 'LB' } }, files, questions, atomsByFile, store: { name: 'Lumen Bikes', url: 'https://lumen.example', frameable: true, brand: { color: '#ffd400', logo: 'https://lumen.example/icon.png' } } });
 
   test('chips and popular questions only from validated questions about ready files', () => {
     const valid = new Set(['How long do I have to return a bike?', 'How do refunds work?', 'How do I adjust the brakes?']);
@@ -80,6 +83,8 @@ describe('site generator (pure)', () => {
     assert.equal(brandColors(null, 0).color, '#4f46e5');
     assert.equal(brandColors(null, 0).fromSite, false);
     assert.equal(g.homeUrl, 'https://lumen.example');
+    assert.equal(g.homeFrame, 'https://lumen.example', 'a homepage that allows framing shows behind the hosted overlay');
+    assert.equal(buildSite({ spec: {}, store: { url: 'https://lumen.example' } }).homeFrame, null, 'unknown framing: a neutral backdrop');
     assert.equal(fileLabel('site/x.example/faq/shipping-and-returns.md'), 'Shipping and returns');
     assert.equal(fileLabel('lumen-store-faq.txt', 'Lumen Bikes'), 'Store FAQ', 'the business name is not repeated on every chip');
   });
@@ -89,6 +94,31 @@ describe('site generator (pure)', () => {
     assert.equal(brandOfHtml('<meta name="theme-color" content="red"><link rel="icon" href="/favicon.ico">', 'https://shop.example/'), null, 'named colours and tiny icons are not used');
     assert.deepEqual(brandOfHtml('<link rel="icon" href="/logo.svg">', 'http://shop.example/'), null, 'http icons are not used');
   });
+  test('frameableOf: only a homepage whose headers allow framing', () => {
+    assert.equal(frameableOf({}), true, 'no frame headers');
+    assert.equal(frameableOf({ 'x-frame-options': 'SAMEORIGIN' }), false);
+    assert.equal(frameableOf({ 'x-frame-options': 'DENY' }), false);
+    assert.equal(frameableOf({ 'content-security-policy': "default-src 'self'; frame-ancestors 'self'" }), false);
+    assert.equal(frameableOf({ 'content-security-policy': "frame-ancestors 'self' https://knowbot.knowdrive.ai" }), true);
+    assert.equal(frameableOf({ 'content-security-policy': 'frame-ancestors *' }), true);
+    assert.equal(frameableOf({ 'content-security-policy': "script-src 'self'" }), true, 'a CSP without frame-ancestors');
+    assert.equal(frameableOf(null), false, 'unknown is no');
+  });
+  test('options: show on first visit (default) or every visit; topic chips off unless turned on', () => {
+    const p0 = publicSite(g, {}, { botId: 'acme' });
+    assert.equal(p0.showOn, 'first-visit');
+    assert.equal(p0.showChips, false);
+    assert.ok(p0.chips.length >= 1, 'chips stay in the spec for the owner to turn on');
+    const e = validateSiteEdit({ showOn: 'every-visit', showChips: true });
+    assert.deepEqual(e, { showOn: 'every-visit', showChips: true });
+    const p1 = publicSite(g, e, { botId: 'acme' });
+    assert.equal(p1.showOn, 'every-visit');
+    assert.equal(p1.showChips, true);
+    for (const [bad, field] of [[{ showOn: 'sometimes' }, 'showOn'], [{ showChips: 'yes' }, 'showChips']]) {
+      assert.throws(() => validateSiteEdit(bad), (err) => err.status === 400 && err.field === field, JSON.stringify(bad));
+    }
+    assert.deepEqual(validateSiteEdit({ showOn: null }, { showOn: 'every-visit' }), {}, 'null goes back to the default');
+  });
   test('owner edits: validated, 400 with the field name on junk', () => {
     const e = validateSiteEdit({ name: '  Lumen  Bikes ', tagline: 'Bikes for trails.', chips: ['Opening hours?', { label: 'Returns', q: 'How do returns work?' }], published: true });
     assert.deepEqual(e, { name: 'Lumen Bikes', tagline: 'Bikes for trails.', chips: [{ label: 'Opening hours?', q: 'Opening hours?' }, { label: 'Returns', q: 'How do returns work?' }], published: true });
@@ -97,13 +127,32 @@ describe('site generator (pure)', () => {
     }
     assert.deepEqual(validateSiteEdit({ name: null }, { name: 'Old' }), {}, 'null clears an edit (back to the generated value)');
   });
-  test('download: one HTML file that loads the hosted script with the bot id, noindex while a trial', () => {
+  test('the homepage line: one async script tag with the bot id (data-api only for a loopback dev server)', () => {
+    assert.equal(overlaySnippet('tr_abcdefghijklmnop'), '<script src="https://knowbot.knowdrive.ai/site/overlay.js" data-bot="tr_abcdefghijklmnop" async></script>');
+    assert.equal(overlaySnippet('acme', { apiBase: 'https://api.example' }), '<script src="https://knowbot.knowdrive.ai/site/overlay.js" data-bot="acme" async></script>', 'the hosted API is found from the script');
+    assert.equal(overlaySnippet('acme', { assetBase: 'http://127.0.0.1:8080/', apiBase: 'http://127.0.0.1:8080' }), '<script src="http://127.0.0.1:8080/site/overlay.js" data-bot="acme" data-api="http://127.0.0.1:8080" async></script>');
+    assert.equal(overlaySnippet('a"b'), '<script src="https://knowbot.knowdrive.ai/site/overlay.js" data-bot="a&quot;b" async></script>', 'escaped');
+  });
+  test('download: a short how-to with the line to paste, and the line itself (opening it shows the overlay)', () => {
     const html = siteHtml(publicSite(g, { name: 'Lumen <Bikes>' }, { botId: 'tr_abcdefghijklmnop', trial: true }), { botId: 'tr_abcdefghijklmnop', apiBase: 'https://api.example' });
-    assert.match(html, /<title>Lumen &lt;Bikes&gt; · Ask anything<\/title>/);
+    assert.match(html, /<title>Add Lumen &lt;Bikes&gt; search to your homepage<\/title>/);
     assert.match(html, /<meta name="robots" content="noindex">/);
-    assert.match(html, /src="https:\/\/knowbot\.knowdrive\.ai\/site\/site\.js" data-bot="tr_abcdefghijklmnop" data-api="https:\/\/api\.example"/);
-    assert.match(html, /How long do I have to return a bike\?/, 'popular questions in the markup');
-    assert.doesNotMatch(siteHtml(publicSite(g, {}, { botId: 'acme', trial: false }), { botId: 'acme', apiBase: 'https://api.example' }), /noindex/);
+    assert.match(html, /<pre><code>&lt;script src=&quot;https:\/\/knowbot\.knowdrive\.ai\/site\/overlay\.js&quot; data-bot=&quot;tr_abcdefghijklmnop&quot; async&gt;&lt;\/script&gt;<\/code><\/pre>/, 'the line to copy');
+    assert.match(html, /\n<script src="https:\/\/knowbot\.knowdrive\.ai\/site\/overlay\.js" data-bot="tr_abcdefghijklmnop" async><\/script>\n<\/body>/, 'and live at the end');
+    assert.match(html, /before <code>&lt;\/body&gt;<\/code>/);
+    assert.doesNotMatch(html, /site\.js/, 'not the old full page');
+    assert.doesNotMatch(html, /\b(?:AI|OpenAI|Gemini|Twilio|Qwen)\b/, 'no vendor names');
+  });
+  test('overlay.js: the hosted API map matches lib/site-config.js; it parses as a classic script with no globals', () => {
+    const src = readFileSync(path.join(ROOT, 'site', 'overlay.js'), 'utf8');
+    const cfg = readFileSync(path.join(ROOT, 'lib', 'site-config.js'), 'utf8');
+    const pick = (s) => Object.fromEntries([...s.matchAll(/'([a-z0-9.-]+\.[a-z]{2,})':\s*'(https:\/\/[^']+)'/g)].map((m) => [m[1], m[2]]));
+    assert.deepEqual(pick(src), pick(cfg));
+    assert.ok(Object.keys(pick(cfg)).length >= 1);
+    assert.doesNotThrow(() => new vm.Script(src), 'a classic script (async on any page), not a module');
+    assert.match(src, /^\/\*[\s\S]*?\*\/\n\(\(\) => \{/, 'one IIFE: nothing on window');
+    assert.match(src, /attachShadow\(\{ mode: 'open' \}\)/);
+    assert.doesNotMatch(src, /\b(?:OpenAI|Gemini|Twilio|Qwen)\b/, 'no vendor names in what visitors load');
   });
 });
 
@@ -154,6 +203,9 @@ describe('Single-page site over HTTP', () => {
     assert.equal(v.site.name, 'Lumen Bikes');
     assert.equal(v.published, false);
     assert.equal(v.hostedUrl, `https://knowbot.knowdrive.ai/site/?bot=${t.trialId}`);
+    assert.match(v.snippet, new RegExp(`^<script src="http://127\\.0\\.0\\.1:\\d+/site/overlay\\.js" data-bot="${t.trialId}" data-api="http://127\\.0\\.0\\.1:\\d+" async></script>$`), 'a loopback dev server: its own copy');
+    assert.equal(v.site.showOn, 'first-visit');
+    assert.equal(v.site.showChips, false);
     // facts: each one a verbatim line of the file it names
     assert.ok(v.site.facts.length >= 3, JSON.stringify(v.site.facts));
     const byId = new Map(files.map((f) => [f.id, f.name]));
@@ -188,9 +240,11 @@ describe('Single-page site over HTTP', () => {
 
   test('owner edits persist (saved in the spec doc, survive a reload) and junk is a 400', async () => {
     const chips = [{ label: 'Returns', q: 'How many days do I have to return an unused item?' }, { label: 'Hours', q: 'When is the shop open?' }];
-    const r = await site('POST', { name: 'Lumen Bikes Co', tagline: 'Bikes for trails and towns.', chips });
+    const r = await site('POST', { name: 'Lumen Bikes Co', tagline: 'Bikes for trails and towns.', chips, showOn: 'every-visit', showChips: true });
     assert.equal(r.status, 200);
     const v = await r.json();
+    assert.equal(v.site.showOn, 'every-visit');
+    assert.equal(v.site.showChips, true);
     assert.equal(v.site.name, 'Lumen Bikes Co');
     assert.equal(v.site.tagline, 'Bikes for trails and towns.');
     assert.deepEqual(v.site.chips, chips);
@@ -203,6 +257,8 @@ describe('Single-page site over HTTP', () => {
     const again = await (await site()).json();
     assert.equal(again.site.name, 'Lumen Bikes Co');
     assert.deepEqual(again.site.chips, chips);
+    assert.equal(again.site.showOn, 'every-visit', 'options survive a reload');
+    assert.equal((await site('POST', { showOn: 'often' })).status, 400);
     assert.ok(again.site.facts.length >= 3, 'the generated site was saved too');
     // a spec PATCH that carries the site field is not a way around validation (read-only there)
     assert.equal((await fetch(`${S.base}/api/studio/trials/${t.trialId}`, { method: 'PATCH', headers: tok({ 'content-type': 'application/json' }), body: JSON.stringify({ site: { name: 'x', published: true } }) })).status, 200);
@@ -217,6 +273,8 @@ describe('Single-page site over HTTP', () => {
     assert.equal(r.headers.get('cache-control'), 'no-store');
     const pub = await r.json();
     assert.equal(pub.name, 'Lumen Bikes Co');
+    assert.equal(pub.showOn, 'every-visit', 'the overlay reads its options from the public site');
+    assert.equal(pub.showChips, true);
     assert.equal(pub.preview, false);
     assert.match(pub.key, /^kb_trial_/);
     assert.ok(Date.parse(pub.keyExpiresAt) <= Date.now() + 6 * 3600 * 1000 + 5000, 'a few hours at most');
@@ -255,14 +313,21 @@ describe('Single-page site over HTTP', () => {
     assert.deepEqual(j.citations, []);
   });
 
-  test('download: the single HTML file, as an attachment', async () => {
+  test('download: the how-to with the homepage line, as an attachment', async () => {
     const r = await site('GET', null, '?download=1&api=https%3A%2F%2Fapi.example');
     assert.equal(r.status, 200);
-    assert.match(r.headers.get('content-disposition') || '', /attachment; filename="index\.html"/);
+    assert.match(r.headers.get('content-disposition') || '', /attachment; filename="add-to-homepage\.html"/);
     const html = await r.text();
-    assert.match(html, new RegExp(`data-bot="${t.trialId}" data-api="https://api.example"`));
-    assert.match(html, /<title>Lumen Bikes Co · Ask anything<\/title>/);
+    assert.match(html, new RegExp(`<script src="https://knowbot\\.knowdrive\\.ai/site/overlay\\.js" data-bot="${t.trialId}" async></script>`));
+    assert.match(html, /<title>Add Lumen Bikes Co search to your homepage<\/title>/);
     assert.match(html, /noindex/);
+  });
+  test('the hosted link and the overlay script are served', async () => {
+    const page = await (await fetch(`${S.base}/site/`)).text();
+    assert.match(page, /<script src="\.\/overlay\.js(?:\?v=[\w.-]+)?" data-hosted defer><\/script>/);
+    const js = await fetch(`${S.base}/site/overlay.js`);
+    assert.equal(js.status, 200);
+    assert.match(js.headers.get('content-type') || '', /javascript/);
   });
 
   test('unpublish takes the public page down; the trial token is required for the owner routes', async () => {

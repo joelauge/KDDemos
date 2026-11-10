@@ -13,7 +13,7 @@ export const SURFACES = [
   { id: 'email', label: 'Email', short: 'email' },
   { id: 'phone', label: 'Phone', short: 'phone' },
   { id: 'webvoice', label: 'Web voice assistant', short: 'web voice' },
-  // a clean search page built from the bot's files, to use as (or instead of) the homepage: server/site.mjs, site/
+  // a simple search overlay built from the bot's files, on top of the homepage (one script line): server/site.mjs, site/overlay.js
   { id: 'site', label: 'Single-page site', short: 'site' },
 ];
 export const SURFACE_IDS = SURFACES.map((s) => s.id);

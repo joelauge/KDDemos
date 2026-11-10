@@ -104,7 +104,7 @@
     email: 'Replies to your support inbox, with footnoted sources.',
     phone: 'Callers ask out loud; it answers and names the source.',
     webvoice: 'A talk button on your website: it answers out loud.',
-    site: 'A clean search page that can be your homepage. Answers link to your pages.',
+    site: 'A simple search box over your homepage. Answers link to your pages.',
   };
 
   SHAPES.forEach(function (s) {

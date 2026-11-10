@@ -611,6 +611,20 @@ export function brandOfHtml(html, base) {
   }
   return color || logo ? { color, logo } : null;
 }
+
+/**
+ * Whether the home page lets another site show it in a frame (the Single-page site's hosted link shows its overlay over
+ * the real homepage only then). Response headers as a plain object (lower-case names). Any X-Frame-Options value, or a
+ * CSP frame-ancestors list without "*", "https:" or the KnowBot host, means no. Unknown (no headers) is no.
+ */
+export function frameableOf(headers, host = 'knowbot.knowdrive.ai') {
+  if (!headers || typeof headers !== 'object') return false;
+  const get = (n) => [].concat(headers[n] ?? []).join(',');
+  if (get('x-frame-options').trim()) return false;
+  const fa = /(?:^|;)\s*frame-ancestors\s+([^;]*)/i.exec(get('content-security-policy'))?.[1];
+  if (fa == null) return true;
+  return fa.split(/\s+/).some((t) => t === '*' || t === 'https:' || t.replace(/^https:\/\//, '').replace(/\/$/, '') === host || t === `https://*.${host.split('.').slice(1).join('.')}`);
+}
 /** All schema.org JSON-LD objects on a page, flattened (arrays and @graph). */
 export function jsonLdBlocks(html) {
   const out = [];
@@ -1034,6 +1048,7 @@ export async function detectPlatform(url, fetchFn) {
   for (const [k, v] of Object.entries(hint)) if (v) signals.push(`hint:${k}`);
   const name = siteNameOfHtml(html);
   const brand = brandOfHtml(html, home.url || base);
+  const frameable = frameableOf(h);
   const currency = /Shopify\.currency\s*=\s*\{"active":"([A-Z]{3})"/.exec(html)?.[1]
     || /<meta\b[^>]*(?:property|itemprop)=["'](?:og:price:currency|product:price:currency|priceCurrency)["'][^>]*content=["']([A-Z]{3})["']/i.exec(html)?.[1] || null;
   const quiet = async (fn) => { try { return await fn(); } catch (e) { if (FATAL.has(e.code)) throw e; signals.push(`probe-error:${e.code}`); return null; } };
@@ -1058,10 +1073,10 @@ export async function detectPlatform(url, fetchFn) {
   else if (hint.wordpress && !order.includes('woocommerce')) order.push('woocommerce');
   for (const k of order) {
     const r = await probes[k]();
-    if (r) { signals.push(`api:${k}`); return { platform: k, api: true, base, name: r.name || name, currency: r.currency || currency, brand, signals, home: { url: home.url, html }, apiBase: r.apiBase }; }
+    if (r) { signals.push(`api:${k}`); return { platform: k, api: true, base, name: r.name || name, currency: r.currency || currency, brand, frameable, signals, home: { url: home.url, html }, apiBase: r.apiBase }; }
   }
   const hinted = ['shopify', 'magento', 'squarespace', 'woocommerce', 'bigcommerce', 'wix'].find((k) => hint[k]);
-  return { platform: hinted || 'generic', api: false, base, name, currency, brand, signals, home: { url: home.url, html } };
+  return { platform: hinted || 'generic', api: false, base, name, currency, brand, frameable, signals, home: { url: home.url, html } };
 }
 
 
@@ -1587,7 +1602,7 @@ export async function importStore(input, o = {}) {
     const alreadyN = Object.values(report.already).reduce((a, b) => a + b, 0);
     if (!writer.stats.files && !alreadyN) throw err(quotaOut ? 'quota' : 'no_content');
     emit('built', { n: writer.stats.files, bytes: writer.stats.used, written: report.written, files: files.slice(0, 50).map((x) => ({ name: x.name, path: x.path, bytes: x.size, kind: x.kind })), report });
-    return { platform: det.platform, api: !!det.api && !ctx.feedFailed, base: det.base, host: plan.host, name: det.name, brand: det.brand || null, plan: publicPlan, files, counts, report,
+    return { platform: det.platform, api: !!det.api && !ctx.feedFailed, base: det.base, host: plan.host, name: det.name, brand: det.brand || null, frameable: det.frameable === true, plan: publicPlan, files, counts, report,
       capped: Object.keys(capped).length ? capped : null, skipped: report.skipped, warnings: ctx.warnings, requests: f.stats.total, maxConcurrent: f.stats.maxActive };
   } catch (e) {
     // a cancel wins; an error from the caller's onFiles (e.g. knowDrive refused a batch) keeps its own code

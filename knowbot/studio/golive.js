@@ -456,17 +456,16 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-talk="hold" for push-to-talk; data-target="#id" to place it inline -->` },
           { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
         ] },
-      // Single-page site (server/site.mjs, ../site/): a search page built from the files, to use as the homepage
-      { id: 'site', name: 'Single-page site', blurb: 'A clean search page built from your files. Visitors ask anything; answers quote your pages and link to them. Use it as your homepage.', provider: 'Hosted page · or one HTML file', hue: 6, url: null, status: 'Try it now', tryLabel: 'Your page',
-        needs: ['Nothing to connect: it is built from your files', 'For your homepage: access to your domain settings, or to your site\'s files or menu'],
-        steps: ['Check the page on the right. Change the name, the one-line description and the topic buttons, then press Publish.',
-          'Use it as your homepage: in your domain or hosting settings, send your home address to the hosted link (a redirect), or download the HTML file and upload it as your home page (index.html).',
-          'Or keep your homepage and link to it from your menu, for example as “Search” or “Help”.',
-          'While your bot is a trial, the page asks search engines not to list it.'],
+      // Single-page site (server/site.mjs, ../site/overlay.js): a simple search box that hovers over the homepage
+      { id: 'site', name: 'Single-page site', blurb: 'A simple search box that hovers over your homepage. Visitors ask anything; answers quote your pages and link to them. They close it with × and see your site as usual.', provider: 'One line on your homepage', hue: 6, url: null, status: 'Try it now', tryLabel: 'On your homepage',
+        needs: ['Nothing to connect: it is built from your files', 'Access to your homepage\'s HTML, or your website builder\'s custom code box'],
+        steps: ['Check the preview on the right: the search box over your homepage. Press × to see your homepage underneath.',
+          'Pick when it shows (first visit or every visit), then press Publish.',
+          'Copy the one line under “Add to your homepage” and paste it into your homepage, just before </body>. Save your site.',
+          'While your bot is a trial, search engines are asked not to list the hosted link.'],
         configs: [
+          { label: 'Homepage line', lang: 'html', code: overlayLine() },
           { label: 'Hosted link', lang: 'text', code: siteLink() },
-          { label: 'Menu link', lang: 'html', code: `<a href="${siteLink()}">Search</a>` },
-          { label: 'Redirect', lang: 'text', code: `In your domain or hosting settings:\n  Redirect (301):  https://yourdomain.com/\n  To:              ${siteLink()}` },
         ] },
     ]));
   };
@@ -955,6 +954,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   // Text chatbot: a working widget (streams deltas, [n] chips open the quoted excerpt inline).
   // ------------------------------------------------------------ Single-page site: preview, edit, publish, download
   const siteLink = () => `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(botId())}`;
+  function overlayLine() { return `<script src="https://knowbot.knowdrive.ai/site/overlay.js" data-bot="${encodeURIComponent(botId())}" async></script>`; }
   function siteTry(el) {
     const t = getState().trial;
     const url = `${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/site`;
@@ -978,7 +978,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         page.searchParams.set('bot', d.botId);
         if (/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(apiBase)) page.searchParams.set('api', apiBase);
         page.hash = `k=${encodeURIComponent(d.key)}`;
-        f.replaceChildren(h('iframe', { title: `Preview of ${v.site.name}`, src: page.href, loading: 'lazy', referrerpolicy: 'no-referrer',
+        f.replaceChildren(h('iframe', { title: `Preview: ${v.site.name} search over your homepage`, src: page.href, loading: 'lazy', referrerpolicy: 'no-referrer',
           sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms' }));
       });
       return f;
@@ -986,7 +986,14 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     function paint() {
       const s = v.site;
       const name = h('input', { id: 'gl-sp-name', class: 'input gl-input', type: 'text', maxlength: '60', value: s.name, autocomplete: 'organization' });
-      const tag = h('textarea', { id: 'gl-sp-tag', class: 'input gl-input gl-sp-tag', rows: '2', maxlength: '160' }, s.tagline || '');
+      const showOn = s.showOn === 'every-visit' ? 'every-visit' : 'first-visit';
+      const radio = (val, label) => {
+        const r = h('input', { type: 'radio', name: 'gl-sp-show', id: `gl-sp-show-${val}`, value: val });
+        r.checked = showOn === val;
+        return h('label', { class: 'gl-sp-opt', for: `gl-sp-show-${val}` }, r, h('span', null, label));
+      };
+      const showChips = h('input', { type: 'checkbox', id: 'gl-sp-chipson' });
+      showChips.checked = !!s.showChips;
       const chips = (s.chips || []).map((c) => ({ ...c }));
       const list = h('ul', { class: 'gl-sp-chips', 'aria-label': 'Topic buttons' });
       const paintChips = () => {
@@ -1000,42 +1007,54 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       paintChips();
       const add = h('input', { id: 'gl-sp-add', class: 'input gl-input', type: 'text', maxlength: '140', placeholder: 'A question, e.g. What are your opening hours?' });
       const addBtn = h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => { const q = add.value.trim(); if (!q || chips.length >= 8) return; chips.push({ label: q.length > 40 ? `${q.slice(0, 38)}…` : q, q }); add.value = ''; paintChips(); } }, 'Add topic');
+      const chipBox = h('div', { class: 'gl-sp-chipbox' }, list, h('label', { class: 'co-sr', for: 'gl-sp-add' }, 'New topic question'), h('div', { class: 'gl-sp-addrow' }, add, addBtn));
+      chipBox.hidden = !showChips.checked;
+      showChips.addEventListener('change', () => { chipBox.hidden = !showChips.checked; });
       const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Save changes');
       const form = h('form', { class: 'gl-sp-form' },
         h('label', { class: 'gl-sp-l', for: 'gl-sp-name' }, 'Business name'), name,
-        h('label', { class: 'gl-sp-l', for: 'gl-sp-tag' }, 'One-line description'), tag,
-        h('span', { class: 'gl-sp-l', id: 'gl-sp-chips-l' }, 'Topic buttons'), list,
-        h('label', { class: 'co-sr', for: 'gl-sp-add' }, 'New topic question'), h('div', { class: 'gl-sp-addrow' }, add, addBtn),
+        h('fieldset', { class: 'gl-sp-set' }, h('legend', { class: 'gl-sp-l' }, 'When it shows'), radio('first-visit', 'On a visitor’s first visit (once closed, it stays closed)'), radio('every-visit', 'On every visit')),
+        h('label', { class: 'gl-sp-opt', for: 'gl-sp-chipson' }, showChips, h('span', null, 'Show topic buttons under the search box')),
+        chipBox,
         h('div', { class: 'gl-sp-actions' }, save));
       form.addEventListener('submit', async (e) => {
         e.preventDefault(); save.disabled = true; status.textContent = 'Saving…';
-        try { v = await call('POST', { name: name.value.trim() || null, tagline: tag.value.trim() || null, chips: chips.filter((c) => c.label.trim()).map((c) => ({ label: c.label.trim(), q: c.q })) }); paint(); status.textContent = 'Saved. The preview shows your changes.'; }
+        const when = form.querySelector('input[name="gl-sp-show"]:checked')?.value || 'first-visit';
+        try { v = await call('POST', { name: name.value.trim() || null, showOn: when, showChips: showChips.checked, chips: chips.filter((c) => c.label.trim()).map((c) => ({ label: c.label.trim(), q: c.q })) }); paint(); status.textContent = 'Saved. The preview shows your changes.'; }
         catch (err) { status.textContent = err.message; save.disabled = false; }
       });
       const pub = h('button', { type: 'button', class: `btn ${v.published ? 'btn-ghost' : 'btn-primary'} gl-sp-pub`, 'aria-pressed': String(!!v.published) }, v.published ? 'Unpublish' : 'Publish');
       pub.addEventListener('click', async () => {
         pub.disabled = true; status.textContent = v.published ? 'Unpublishing…' : 'Publishing…';
-        try { v = await call('POST', { published: !v.published }); paint(); status.textContent = v.published ? 'Published. Your page is live at the link below.' : 'Unpublished. The link shows “not available” until you publish again.'; }
+        try { v = await call('POST', { published: !v.published }); paint(); status.textContent = v.published ? 'Published. Paste the line into your homepage, or share the link.' : 'Unpublished. The search box no longer shows on your homepage.'; }
         catch (err) { status.textContent = err.message; pub.disabled = false; }
       });
-      const dl = h('button', { type: 'button', class: 'btn btn-ghost gl-sp-dl' }, 'Download HTML');
+      const dl = h('button', { type: 'button', class: 'btn btn-ghost gl-sp-dl' }, 'Download how-to');
       dl.addEventListener('click', async () => {
         dl.disabled = true;
         try {
           const r = await fetch(`${url}?download=1&api=${encodeURIComponent(apiBase)}`, { headers: auth, credentials: 'omit' });
           if (!r.ok) throw new Error('download');
-          const a = h('a', { href: URL.createObjectURL(await r.blob()), download: 'index.html' });
+          const a = h('a', { href: URL.createObjectURL(await r.blob()), download: 'add-to-homepage.html' });
           document.body.append(a); a.click(); a.remove();
-          status.textContent = 'Downloaded index.html. Upload it as your home page, or anywhere on your site.';
-        } catch { status.textContent = "Couldn't download the page. Try again."; }
+          status.textContent = 'Downloaded add-to-homepage.html: the line to paste and where to paste it.';
+        } catch { status.textContent = "Couldn't download the how-to. Try again."; }
         dl.disabled = false;
       });
+      const snippet = v.snippet || overlayLine();
+      const line = h('div', { class: 'gl-code gl-sp-snip' },
+        h('div', { class: 'gl-code-bar' }, h('span', { class: 'gl-code-label' }, 'Paste before </body>'),
+          h('div', { class: 'gl-code-tools' }, copyButton(snippet, 'Copy', { what: 'Line copied', aria: 'Copy the line for your homepage', iconOnly: false }))),
+        h('pre', { class: 'gl-sp-pre' }, h('code', { class: 'gl-mono' }, snippet)));
       const link = h('div', { class: 'gl-url gl-sp-url' }, h('code', { class: 'gl-mono gl-url-v' }, v.hostedUrl), copyButton(v.hostedUrl, 'Copy', { what: 'Link copied', aria: 'Copy the link to your page', iconOnly: true }));
       box.replaceChildren(
         h('div', { class: 'gl-sp-pubrow' }, h('span', { class: `chip ${v.published ? 'green' : 'gray'} is-label` }, v.published ? 'Published' : 'Not published'), pub, dl),
-        h('h4', { class: 'gl-h4' }, 'Your link'), link,
-        v.published ? null : h('p', { class: 'gl-note' }, 'The link works once you publish.'),
-        frame(), form);
+        h('h4', { class: 'gl-h4' }, 'Add to your homepage'),
+        h('p', { class: 'gl-note' }, 'Paste this one line into your homepage. The search box shows on top of your site; visitors close it with ×.'),
+        line,
+        v.published ? null : h('p', { class: 'gl-note' }, 'It shows on your homepage once you publish.'),
+        frame(), form,
+        h('h4', { class: 'gl-h4' }, 'Hosted link'), link);
     }
   }
 

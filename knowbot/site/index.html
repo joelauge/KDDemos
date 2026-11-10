@@ -8,23 +8,33 @@
 <meta property="og:title" content="Ask anything">
 <meta property="og:description" content="Search this business's own pages. Every answer shows where it came from.">
 <meta property="og:type" content="website">
-<!-- the hosted page is the same template for every bot: kept out of search results. A live site is indexed from the
-     owner's own domain (the downloaded HTML carries its own title, description and robots tags). -->
+<!-- the hosted link is the same template for every bot: kept out of search results (overlay.js lifts it for a launched
+     bot). On a business's own site the overlay is one script line on their homepage (server/site.mjs overlaySnippet). -->
 <meta name="robots" content="noindex">
 <meta name="color-scheme" content="light dark">
-<script>
-  // theme before first paint: ?theme=dark|light, else the visitor's system setting (KnowDrive dark = html.dark)
-  (function () { try { var t = new URLSearchParams(location.search).get('theme'); var d = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; if (d) document.documentElement.classList.add('dark'); } catch (e) {} })();
-</script>
-<link rel="stylesheet" href="../vendor/kd-theme/tokens.css?v=75e6880">
-<link rel="stylesheet" href="../vendor/knowdrive-widgets/0.4.1/widgets.css?v=75e6880">
-<link rel="stylesheet" href="./site.css?v=75e6880">
+<style>
+  /* the hosted link's backdrop (site/overlay.js hostedBackdrop): the business's homepage in a frame, or a calm neutral
+     page. The overlay itself lives in its own Shadow DOM. */
+  :root { color-scheme: light dark; --kh-bg: #f6f6f9; --kh-ink: #15151f; --kh-block: #e4e4ec; --kh-line: #dcdce6; --kh-link: #3f37c9; }
+  @media (prefers-color-scheme: dark) { :root { --kh-bg: #101018; --kh-ink: #f2f2f6; --kh-block: #24242f; --kh-line: #2e2e3c; --kh-link: #b8b4ff; } }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--kh-bg); color: var(--kh-ink); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow-x: hidden; }
+  .kh-home { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+  .kh-page { max-width: 1040px; margin: 0 auto; padding: 0 16px 120px; }
+  .kh-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 0; border-bottom: 1px solid var(--kh-line); }
+  .kh-top b { font-size: 18px; overflow-wrap: anywhere; }
+  .kh-top a { display: inline-flex; align-items: center; min-height: 44px; color: var(--kh-link); font-weight: 600; }
+  .kh-hero { display: grid; gap: 14px; padding: 56px 0 40px; }
+  .kh-hero i { display: block; height: 18px; border-radius: 9px; background: var(--kh-block); }
+  .kh-hero i:first-child { height: 44px; width: min(520px, 80%); }
+  .kh-hero i:nth-child(2) { width: min(640px, 92%); }
+  .kh-hero i:nth-child(3) { width: min(420px, 70%); }
+  .kh-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .kh-cards i { display: block; height: 180px; border-radius: 18px; background: var(--kh-block); }
+</style>
 </head>
 <body>
-<div id="ks-root" class="ks-root">
-  <main class="ks-main"><p class="ks-loading" role="status">Loading…</p></main>
-</div>
-<noscript><p class="ks-noscript">This page needs JavaScript to search.</p></noscript>
-<script type="module" src="./site.js?v=75e6880"></script>
+<noscript><p style="max-width:640px;margin:16px auto;padding:0 16px">This page needs JavaScript to search.</p></noscript>
+<script src="./overlay.js?v=75e6880" data-hosted defer></script>
 </body>
 </html>

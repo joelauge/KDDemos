@@ -132,7 +132,7 @@ export const TOOL_DEFS = [
       greeting: { type: 'string', description: 'First message the bot shows, up to 160 characters.' },
       length: { type: 'string', enum: LENGTHS },
       scope_files: { type: 'array', items: { type: 'string' }, description: 'File names (or ids) the bot may answer from; every other file is switched off.' },
-      surfaces: { type: 'array', items: { type: 'string', enum: SURFACES }, description: 'The complete list of answer surfaces the bot will answer on after launch (webchat = website chat, webvoice = web voice assistant, site = single-page site: a search page built from the files that can replace the homepage). Send the full new list: "add WhatsApp" = current list + whatsapp.' },
+      surfaces: { type: 'array', items: { type: 'string', enum: SURFACES }, description: 'The complete list of answer surfaces the bot will answer on after launch (webchat = website chat, webvoice = web voice assistant, site = single-page site: a simple search box built from the files that hovers over the homepage, added with one line of code). Send the full new list: "add WhatsApp" = current list + whatsapp.' },
     }, additionalProperties: false } },
   { name: 'ask_bot', description: "Ask the visitor's bot a test question, as if the visitor typed it on the right. run=true asks it now; run=false only offers it as a button. Needs at least one ready file.",
     input_schema: { type: 'object', properties: { question: { type: 'string' }, run: { type: 'boolean' } }, required: ['question'], additionalProperties: false } },
