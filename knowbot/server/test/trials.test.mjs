@@ -2402,6 +2402,13 @@ describe("Didn't get the answer you needed? POST /trials/:id/notes", () => {
       assert.match(j.file.name, /^notes\/do-you-take-walk-ins\.md$/);
       const row = [...S.kd.files.values()].find((f) => f.filename.endsWith('notes/do-you-take-walk-ins.md'));
       assert.ok(row && row.tags.includes('src:note') && row.tags.includes('topic:hours') && row.tags.includes(`trial:${t.trialId}`));
+      // GET /notes: the tags this bot already uses, from knowDrive, most used first (offered again in the form)
+      assert.equal((await c.json(t, '/notes', 'POST', { question: 'Can I book online?', answer: 'Yes, book online any time from our website.', tags: ['hours', 'online'] })).status, 201);
+      const tg = await (await c.json(t, '/notes', 'GET')).json();
+      assert.deepEqual(tg.tags.map((x) => x.tag), ['hours', 'booking', 'online']);
+      assert.equal(tg.tags[0].count, 2);
+      const other = await c.trial();
+      assert.deepEqual((await (await c.json(other, '/notes', 'GET')).json()).tags, [], 'another bot sees only its own tags');
       await S.kd.settle();
       await sleep(300);
       const after = (await c.stream(t, '/ask', { question: Q })).find((e) => e.event === 'final').data;

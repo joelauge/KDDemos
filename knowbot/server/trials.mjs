@@ -4072,6 +4072,22 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return { reply: clip(oneLine(j.reply), 600), patch, actions, chips: chips.slice(0, 4) };
   }
 
+  // ------------------------------------------------------------------------- note tags
+  /** This bot's topic tags in knowDrive (topic:<t> on files tagged trial:<id>), as [{tag, count}], most used first. */
+  async function noteTagsOf(T) {
+    const out = new Map();
+    let after = '';
+    for (let page = 0; page < 10; page++) {
+      const qs = new URLSearchParams({ tags_all: `trial:${T.id}`, prefix: 'topic:', limit: '500' });
+      if (after) qs.set('after', after);
+      const j = await kdJson(`/api/v1/vector_stores/${encodeURIComponent(store)}/tags?${qs}`, { timeout: 10000 }, 'listing tags');
+      for (const x of j.data || []) if (typeof x.tag === 'string' && x.tag.startsWith('topic:')) out.set(x.tag.slice(6), (out.get(x.tag.slice(6)) || 0) + (Number(x.count) || 0));
+      after = j.next_after || '';
+      if (!j.has_more || !after) break;
+    }
+    return [...out].filter(([t]) => t).map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)).slice(0, 100);
+  }
+
   // ------------------------------------------------------------------------- samples
   function sampleSets() {
     try {
@@ -4730,7 +4746,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     // "Didn't get the answer you needed?": the owner writes the missing answer; it is saved as a small Markdown file
     // in this bot's sources (tagged src:note plus the owner's own tags) and learned like any upload.
     if (sub === 'notes') {
-      allow('POST');
+      allow('GET', 'POST');
+      // GET: the tags this bot's files already carry (knowDrive topic:* tags, scoped to trial:<id>), most used first,
+      // so the form can offer them again
+      if (m === 'GET') return sendJson(res, 200, { tags: await noteTagsOf(T) });
       limitOrThrow(`upload ${T.id}`, limits.upload, 3600000, 'uploads for this bot');
       const body = await readBody(req);
       const question = oneLine(String(body.question ?? '')).trim().slice(0, 300);

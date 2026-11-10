@@ -954,6 +954,21 @@ details.pf-dspan > span { display: block; margin-top: 4px; }
 .sb-miss-opt { font-weight: 400; color: var(--muted); }
 .sb-miss-in, .sb-miss-ta { width: 100%; font: 400 15px/1.45 var(--font); padding: 9px 11px; box-sizing: border-box; }
 .sb-miss-ta { resize: vertical; min-height: 110px; }
+/* tags: chips in a box, earlier tags offered underneath */
+.sb-tag-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; min-height: 42px; padding: 6px 8px; box-sizing: border-box; cursor: text; }
+.sb-tag-chips { display: contents; }
+.sb-tag { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 4px 0 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-2); font: 600 13px/1 var(--font); }
+.sb-tag-x { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 999px; background: transparent; color: inherit; font: 600 16px/1 var(--font); cursor: pointer; }
+.sb-tag-x:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.sb-tag-in { flex: 1 1 120px; min-width: 100px; height: 28px; border: 0; outline: 0; background: transparent; color: var(--text); font: 400 15px/1.45 var(--font); padding: 0 4px; }
+.sb-tag-box:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sb-tag-hint { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+.sb-tag-sugg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.sb-tag-sugg[hidden] { display: none; }
+.sb-tag-sugg-l { font: 600 12px/1 var(--font); color: var(--muted); margin-right: 2px; }
+.sb-tag-opt { height: 28px; padding: 0 10px; border: 1px dashed var(--line-2, var(--line)); border-radius: 999px; background: var(--panel); color: var(--strong); font: 500 13px/1 var(--font); cursor: pointer; }
+.sb-tag-opt:hover, .sb-tag-opt:focus-visible { border-style: solid; border-color: var(--accent); color: var(--accent-2); }
+@media (pointer: coarse) { .sb-tag-opt, .sb-tag-x { min-height: 36px; } }
 .sb-miss-err { margin: 6px 0 0; font-size: 13px; color: var(--bad, #b91c1c); }
 .sb-miss-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 @media (max-width: 599px) {

@@ -416,6 +416,8 @@ export async function questions() { return request('GET', trialPath('/questions'
 
 /** GET /insights (SPEC 11.1) -> {total, answered, refused, top:[{q, count, lastAt, outcome}], gaps:[{q, count, lastAt}]}. */
 export async function insights() { return request('GET', trialPath('/insights')); }
+/** GET /notes -> {tags:[{tag, count}]}: the tags this bot's notes and files already use (knowDrive topic:* tags). */
+export async function noteTags() { return request('GET', trialPath('/notes')); }
 /** POST /notes {question, answer, tags[]} -> {file, tags, usage}: the owner's missing answer, saved as a source file. */
 export async function addNote(body) { return request('POST', trialPath('/notes'), { body }); }
 

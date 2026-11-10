@@ -3244,7 +3244,34 @@ export function mount(ctx) {
     if (missDlg) missDlg.remove();
     const qIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-q', maxlength: '300', value: lastMissed(), placeholder: 'e.g. Do you take walk-ins?' });
     const aIn = h('textarea', { class: 'input sb-miss-ta', id: 'sb-miss-a', rows: '5', maxlength: '20000', required: true, placeholder: 'Write it the way you’d want your bot to say it. For example: “Yes, we take walk-ins Monday to Friday, 9am to noon.”' });
-    const tIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-t', maxlength: '200', placeholder: 'e.g. hours, booking' });
+    // tags: chips the owner picks or types; the bot's earlier tags (knowDrive topic:* tags) are offered underneath
+    const tagOf = (t) => String(t).toLowerCase().trim().replace(/[^a-z0-9 _-]+/g, '').replace(/\s+/g, '-').slice(0, 32);
+    const picked = [];
+    let known = [];
+    const tIn = h('input', { class: 'sb-tag-in', id: 'sb-miss-t', maxlength: '40', autocomplete: 'off', placeholder: 'Add a tag', 'aria-describedby': 'sb-miss-t-hint' });
+    const chipsEl = h('span', { class: 'sb-tag-chips' });
+    const tagBox = h('div', { class: 'input sb-tag-box', onclick: (e) => { if (e.target === tagBox) tIn.focus(); } }, chipsEl, tIn);
+    const sugg = h('div', { class: 'sb-tag-sugg', role: 'group', 'aria-label': 'Tags you used before', hidden: true });
+    const hint = h('p', { class: 'sb-tag-hint', id: 'sb-miss-t-hint' }, 'Press Enter or a comma to add a tag. Up to 8.');
+    const paintTags = () => {
+      chipsEl.replaceChildren(...picked.map((t) => h('span', { class: 'sb-tag' }, t,
+        h('button', { type: 'button', class: 'sb-tag-x', 'aria-label': `Remove tag ${t}`, onclick: () => { picked.splice(picked.indexOf(t), 1); paintTags(); tIn.focus(); } }, '×'))));
+      const q = tagOf(tIn.value);
+      const list = known.filter((k) => !picked.includes(k.tag) && (!q || k.tag.includes(q))).slice(0, 12);
+      sugg.replaceChildren(...(list.length ? [h('span', { class: 'sb-tag-sugg-l' }, q ? 'Matching tags' : 'Used before'),
+        ...list.map((k) => h('button', { type: 'button', class: 'sb-tag-opt', title: `${k.count} ${k.count === 1 ? 'file' : 'files'}`, onclick: () => { addTag(k.tag); tIn.value = ''; paintTags(); tIn.focus(); } }, `+ ${k.tag}`))] : []));
+      sugg.hidden = !list.length;
+      tIn.placeholder = picked.length ? '' : (known.length ? 'Pick below or type a tag' : 'e.g. hours, booking');
+    };
+    const addTag = (raw) => { const t = tagOf(raw); if (t && !picked.includes(t) && picked.length < 8) picked.push(t); };
+    tIn.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ',') && tIn.value.trim()) { e.preventDefault(); addTag(tIn.value); tIn.value = ''; paintTags(); }
+      else if (e.key === 'Enter') e.preventDefault();
+      else if (e.key === 'Backspace' && !tIn.value && picked.length) { picked.pop(); paintTags(); }
+    });
+    tIn.addEventListener('input', () => { if (tIn.value.includes(',')) { for (const part of tIn.value.split(',').slice(0, -1)) addTag(part); tIn.value = tIn.value.split(',').pop(); } paintTags(); });
+    api.noteTags?.().then((r) => { known = Array.isArray(r?.tags) ? r.tags : []; paintTags(); }).catch(() => {});
+    paintTags();
     const err = h('p', { class: 'sb-miss-err', role: 'alert', hidden: true });
     const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Save and teach my bot');
     const cancel = h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => missDlg.close() }, 'Cancel');
@@ -3253,7 +3280,7 @@ export function mount(ctx) {
       h('p', { class: 'sb-miss-sub' }, 'Your bot only answers from its sources. Add what it’s missing and it will answer from it next time, with this note as its source.'),
       h('label', { for: 'sb-miss-q' }, 'The question'), qIn,
       h('label', { for: 'sb-miss-a' }, 'The answer your bot should give'), aIn,
-      h('label', { for: 'sb-miss-t' }, 'Tags ', h('span', { class: 'sb-miss-opt' }, '(optional, separated by commas)')), tIn,
+      h('label', { for: 'sb-miss-t' }, 'Tags ', h('span', { class: 'sb-miss-opt' }, '(optional)')), tagBox, hint, sugg,
       err, h('div', { class: 'sb-miss-actions' }, cancel, save));
     formEl.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3261,7 +3288,8 @@ export function mount(ctx) {
       if (answer.length < 3) { err.textContent = 'Write the information your bot should know.'; err.hidden = false; aIn.focus(); return; }
       err.hidden = true; save.disabled = true; save.textContent = 'Saving…';
       try {
-        const r = await api.addNote({ question: qIn.value.trim(), answer, tags: tIn.value.split(',').map((x) => x.trim()).filter(Boolean) });
+        if (tIn.value.trim()) { addTag(tIn.value); tIn.value = ''; }
+        const r = await api.addNote({ question: qIn.value.trim(), answer, tags: [...picked] });
         formEl.replaceChildren(
           h('h2', { class: 'sb-miss-h' }, ico('checkCircle', 18), ' Saved'),
           h('p', { class: 'sb-miss-sub' }, `Your bot is learning it now as ${r?.file?.name || 'a new source'}${r?.tags?.length ? `, tagged ${r.tags.join(', ')}` : ''}. Ask again in a moment and it will answer from it.`),

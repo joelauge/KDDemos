@@ -526,8 +526,9 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
         if ((m = /^\/api\/v1\/vector_stores\/([^/]+)\/tags$/.exec(p)) && req.method === 'GET') {
           const store = decodeURIComponent(m[1]);
           const want = (url.searchParams.get('tags_all') || '').split(',').filter(Boolean);
+          const prefix = url.searchParams.get('prefix') || '';
           const counts = new Map();
-          for (const f of files.values()) if (f.store === store && want.every((t) => f.tags.includes(t))) for (const t of f.tags) counts.set(t, (counts.get(t) || 0) + 1);
+          for (const f of files.values()) if (f.store === store && want.every((t) => f.tags.includes(t))) for (const t of f.tags) if (t.startsWith(prefix)) counts.set(t, (counts.get(t) || 0) + 1);
           return json(200, { object: 'list', data: [...counts].map(([tag, count]) => ({ tag, count })), has_more: false });
         }
 
