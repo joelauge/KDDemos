@@ -74,6 +74,7 @@ const GLYPH = {
   whatsapp: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.2 5.2 16A8.4 8.4 0 1 1 8.4 19Z"/><path d="M9.2 8.6c.2-.5.5-.6.8-.6h.5c.2 0 .4.1.5.4l.7 1.6c.1.2 0 .5-.1.7l-.5.6c-.1.2-.1.4 0 .6.6 1 1.4 1.8 2.4 2.4.2.1.4.1.6 0l.6-.5c.2-.1.5-.2.7-.1l1.6.7c.3.1.4.3.4.5v.5c0 .3-.1.6-.6.8-.6.3-1.6.4-2.9-.2a9 9 0 0 1-4.1-4.1c-.6-1.3-.5-2.3-.2-2.9Z"/></svg>',
   email: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="m3.8 7 8.2 6 8.2-6"/></svg>',
   text: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="3"/><path d="M8 21h8M12 17v4M7.5 9h9M7.5 12.5h5.5"/></svg>',
+  site: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 8.5h18"/><circle cx="11" cy="14" r="2.6"/><path d="m13 16 2.2 2.2"/></svg>',
   voice: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10v4M7.5 7v10M11 4.5v15M14.5 8v8M18 10.5v3M21 11.5v1"/></svg>',
 };
 
@@ -226,7 +227,7 @@ const devCache = { info: null, at: 0, promise: null };
  * helpers come from checkout.js: {h, copyButton, copyText, lastQA, botName, hueVar, price}.
  */
 // answer surface id (studio/surfaces.js) → channel card id
-const SURFACE_CH = { webchat: 'text', sms: 'sms', whatsapp: 'whatsapp', email: 'email', phone: 'phone', webvoice: 'voice' };
+const SURFACE_CH = { webchat: 'text', sms: 'sms', whatsapp: 'whatsapp', email: 'email', phone: 'phone', webvoice: 'voice', site: 'site' };
 export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = null, helpers = {}, inline = null, surfaces = null } = {}) {
   if (current && !inline) { current.select(tab, channel); return current.close; }
   const { store, api, motion, icons, slots, announce } = ctx;
@@ -455,6 +456,18 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-talk="hold" for push-to-talk; data-target="#id" to place it inline -->` },
           { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
         ] },
+      // Single-page site (server/site.mjs, ../site/): a search page built from the files, to use as the homepage
+      { id: 'site', name: 'Single-page site', blurb: 'A clean search page built from your files. Visitors ask anything; answers quote your pages and link to them. Use it as your homepage.', provider: 'Hosted page · or one HTML file', hue: 6, url: null, status: 'Try it now', tryLabel: 'Your page',
+        needs: ['Nothing to connect: it is built from your files', 'For your homepage: access to your domain settings, or to your site\'s files or menu'],
+        steps: ['Check the page on the right. Change the name, the one-line description and the topic buttons, then press Publish.',
+          'Use it as your homepage: in your domain or hosting settings, send your home address to the hosted link (a redirect), or download the HTML file and upload it as your home page (index.html).',
+          'Or keep your homepage and link to it from your menu, for example as “Search” or “Help”.',
+          'While your bot is a trial, the page asks search engines not to list it.'],
+        configs: [
+          { label: 'Hosted link', lang: 'text', code: siteLink() },
+          { label: 'Menu link', lang: 'html', code: `<a href="${siteLink()}">Search</a>` },
+          { label: 'Redirect', lang: 'text', code: `In your domain or hosting settings:\n  Redirect (301):  https://yourdomain.com/\n  To:              ${siteLink()}` },
+        ] },
     ]));
   };
   /** Phone calls are Gemini Live voice-to-voice only (GET …/devkey → channels.voice). Texted checkout links are described
@@ -480,8 +493,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     panel.innerHTML = '';
     const intro = h('div', { class: 'gl-intro' },
       inline
-        ? h('p', null, h('b', null, 'Your bot can answer in 6 places.'), ' Pick one to see how to set it up, and try it right here. Every place uses the same files and shows its sources.')
-        : h('p', null, h('b', null, '6 channel templates.'), ' Webhook URLs are prefilled with your bot id. Connect the accounts when you\'re ready; every channel logs to your question insights.'));
+        ? h('p', null, h('b', null, 'Your bot can answer in 7 places.'), ' Pick one to see how to set it up, and try it right here. Every place uses the same files and shows its sources.')
+        : h('p', null, h('b', null, '7 channel templates.'), ' Webhook URLs are prefilled with your bot id. Connect the accounts when you\'re ready; every channel logs to your question insights.'));
     chGrid = h('div', { class: 'gl-chgrid', role: 'list', 'aria-label': 'Channels' });
     chDetail = h('section', { class: 'card gl-chdetail', id: 'gl-chdetail', 'aria-live': 'polite' });
     const list = CH();
@@ -757,6 +770,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     if (c.id === 'voice') { webVoiceTry(el); return; }
     if (c.id === 'phone') { phoneTry(el); return; }
     if (c.id === 'text') { widgetTry(el); return; }
+    if (c.id === 'site') { siteTry(el); return; }
     previewTry(el, c.id);
   }
 
@@ -939,6 +953,92 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
 
   // Text chatbot: a working widget (streams deltas, [n] chips open the quoted excerpt inline).
+  // ------------------------------------------------------------ Single-page site: preview, edit, publish, download
+  const siteLink = () => `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(botId())}`;
+  function siteTry(el) {
+    const t = getState().trial;
+    const url = `${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/site`;
+    const auth = { authorization: `Bearer ${t.token}` };
+    const status = h('p', { class: 'gl-sp-status', role: 'status', 'aria-live': 'polite' }, 'Building your page from your files…');
+    const box = h('div', { class: 'gl-sp' });
+    el.append(box, status);
+    let v = null;
+    const call = async (method, body) => {
+      const r = await fetch(url, { method, credentials: 'omit', headers: body ? { ...auth, 'content-type': 'application/json' } : auth, body: body ? JSON.stringify(body) : undefined });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error?.message || "Couldn't save that. Try again.");
+      return j;
+    };
+    call('GET').then((j) => { v = j; paint(); status.textContent = ''; }).catch(() => { status.textContent = "Your page couldn't be built right now. Try again in a moment."; });
+    function frame() {
+      const f = h('div', { class: 'gl-sp-frame' }, h('p', { class: 'gl-note' }, 'Loading the preview…'));
+      loadDev().then((d) => {
+        if (d.status !== 'ok' || !f.isConnected) return;
+        const page = new URL('../site/', location.href);
+        page.searchParams.set('bot', d.botId);
+        if (/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(apiBase)) page.searchParams.set('api', apiBase);
+        page.hash = `k=${encodeURIComponent(d.key)}`;
+        f.replaceChildren(h('iframe', { title: `Preview of ${v.site.name}`, src: page.href, loading: 'lazy', referrerpolicy: 'no-referrer',
+          sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms' }));
+      });
+      return f;
+    }
+    function paint() {
+      const s = v.site;
+      const name = h('input', { id: 'gl-sp-name', class: 'input gl-input', type: 'text', maxlength: '60', value: s.name, autocomplete: 'organization' });
+      const tag = h('textarea', { id: 'gl-sp-tag', class: 'input gl-input gl-sp-tag', rows: '2', maxlength: '160' }, s.tagline || '');
+      const chips = (s.chips || []).map((c) => ({ ...c }));
+      const list = h('ul', { class: 'gl-sp-chips', 'aria-label': 'Topic buttons' });
+      const paintChips = () => {
+        list.replaceChildren(...chips.map((c, i) => {
+          const inp = h('input', { class: 'input gl-input', type: 'text', maxlength: '40', value: c.label, 'aria-label': `Topic ${i + 1} name (asks: ${c.q})`, title: `Asks: ${c.q}` });
+          inp.addEventListener('input', () => { c.label = inp.value; });
+          return h('li', null, inp, h('button', { type: 'button', class: 'btn btn-ghost gl-sp-x', 'aria-label': `Remove topic ${c.label}`, onclick: () => { chips.splice(i, 1); paintChips(); } }, '✕'));
+        }));
+        if (!chips.length) list.append(h('li', { class: 'gl-note' }, 'No topic buttons. Add one below.'));
+      };
+      paintChips();
+      const add = h('input', { id: 'gl-sp-add', class: 'input gl-input', type: 'text', maxlength: '140', placeholder: 'A question, e.g. What are your opening hours?' });
+      const addBtn = h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => { const q = add.value.trim(); if (!q || chips.length >= 8) return; chips.push({ label: q.length > 40 ? `${q.slice(0, 38)}…` : q, q }); add.value = ''; paintChips(); } }, 'Add topic');
+      const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Save changes');
+      const form = h('form', { class: 'gl-sp-form' },
+        h('label', { class: 'gl-sp-l', for: 'gl-sp-name' }, 'Business name'), name,
+        h('label', { class: 'gl-sp-l', for: 'gl-sp-tag' }, 'One-line description'), tag,
+        h('span', { class: 'gl-sp-l', id: 'gl-sp-chips-l' }, 'Topic buttons'), list,
+        h('label', { class: 'co-sr', for: 'gl-sp-add' }, 'New topic question'), h('div', { class: 'gl-sp-addrow' }, add, addBtn),
+        h('div', { class: 'gl-sp-actions' }, save));
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault(); save.disabled = true; status.textContent = 'Saving…';
+        try { v = await call('POST', { name: name.value.trim() || null, tagline: tag.value.trim() || null, chips: chips.filter((c) => c.label.trim()).map((c) => ({ label: c.label.trim(), q: c.q })) }); paint(); status.textContent = 'Saved. The preview shows your changes.'; }
+        catch (err) { status.textContent = err.message; save.disabled = false; }
+      });
+      const pub = h('button', { type: 'button', class: `btn ${v.published ? 'btn-ghost' : 'btn-primary'} gl-sp-pub`, 'aria-pressed': String(!!v.published) }, v.published ? 'Unpublish' : 'Publish');
+      pub.addEventListener('click', async () => {
+        pub.disabled = true; status.textContent = v.published ? 'Unpublishing…' : 'Publishing…';
+        try { v = await call('POST', { published: !v.published }); paint(); status.textContent = v.published ? 'Published. Your page is live at the link below.' : 'Unpublished. The link shows “not available” until you publish again.'; }
+        catch (err) { status.textContent = err.message; pub.disabled = false; }
+      });
+      const dl = h('button', { type: 'button', class: 'btn btn-ghost gl-sp-dl' }, 'Download HTML');
+      dl.addEventListener('click', async () => {
+        dl.disabled = true;
+        try {
+          const r = await fetch(`${url}?download=1&api=${encodeURIComponent(apiBase)}`, { headers: auth, credentials: 'omit' });
+          if (!r.ok) throw new Error('download');
+          const a = h('a', { href: URL.createObjectURL(await r.blob()), download: 'index.html' });
+          document.body.append(a); a.click(); a.remove();
+          status.textContent = 'Downloaded index.html. Upload it as your home page, or anywhere on your site.';
+        } catch { status.textContent = "Couldn't download the page. Try again."; }
+        dl.disabled = false;
+      });
+      const link = h('div', { class: 'gl-url gl-sp-url' }, h('code', { class: 'gl-mono gl-url-v' }, v.hostedUrl), copyButton(v.hostedUrl, 'Copy', { what: 'Link copied', aria: 'Copy the link to your page', iconOnly: true }));
+      box.replaceChildren(
+        h('div', { class: 'gl-sp-pubrow' }, h('span', { class: `chip ${v.published ? 'green' : 'gray'} is-label` }, v.published ? 'Published' : 'Not published'), pub, dl),
+        h('h4', { class: 'gl-h4' }, 'Your link'), link,
+        v.published ? null : h('p', { class: 'gl-note' }, 'The link works once you publish.'),
+        frame(), form);
+    }
+  }
+
   function widgetTry(el) {
     const s = getState().spec;
     const msgs = h('div', { class: 'gl-wmsgs', role: 'log', 'aria-live': 'polite', 'aria-label': `${botName()} widget conversation` });

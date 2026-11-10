@@ -588,6 +588,29 @@ function siteNameOfHtml(html) {
   const t = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(html);
   return t ? clip(oneLine(t[1]).split(/\s[|–—-]\s/)[0], 80) : null;
 }
+/**
+ * The site's own brand, as its home page states it in <head>: <meta name="theme-color"> (a #hex only) and a square
+ * icon (apple-touch-icon, else an icon link with sizes 64+ or an SVG), absolute https only. Nothing is guessed: no
+ * colour sampled from images, no og:image (usually a product photo). { color, logo } or null.
+ */
+export function brandOfHtml(html, base) {
+  const head = String(html || '').slice(0, 200000);
+  const attr = (tag, name) => new RegExp(`\\b${name}=["']([^"']*)["']`, 'i').exec(tag)?.[1] ?? null;
+  let color = null, logo = null;
+  for (const m of head.matchAll(/<meta\b[^>]*>/gi)) {
+    if (!/\bname=["']theme-color["']/i.test(m[0]) || /\bmedia=["'][^"']*dark/i.test(m[0])) continue;
+    const c = String(attr(m[0], 'content') || '').trim();
+    if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(c)) { color = c.toLowerCase(); break; }
+  }
+  const icons = [...head.matchAll(/<link\b[^>]*>/gi)].map((m) => m[0]).filter((t) => /\brel=["'][^"']*icon[^"']*["']/i.test(t));
+  const score = (t) => { const rel = String(attr(t, 'rel') || '').toLowerCase(); const href = String(attr(t, 'href') || ''); const size = Number(/(\d+)x\d+/.exec(String(attr(t, 'sizes') || ''))?.[1] || 0);
+    return rel.includes('apple-touch-icon') ? 3 : /\.svg(?:$|\?)/i.test(href) ? 2 : size >= 64 ? 1 : 0; };
+  const best = icons.filter((t) => score(t) > 0).sort((a, b) => score(b) - score(a))[0];
+  if (best) {
+    try { const u = new URL(String(attr(best, 'href') || ''), base); if (u.protocol === 'https:' && u.href.length <= 500) logo = u.href; } catch { /* not a URL */ }
+  }
+  return color || logo ? { color, logo } : null;
+}
 /** All schema.org JSON-LD objects on a page, flattened (arrays and @graph). */
 export function jsonLdBlocks(html) {
   const out = [];
@@ -1010,6 +1033,7 @@ export async function detectPlatform(url, fetchFn) {
   };
   for (const [k, v] of Object.entries(hint)) if (v) signals.push(`hint:${k}`);
   const name = siteNameOfHtml(html);
+  const brand = brandOfHtml(html, home.url || base);
   const currency = /Shopify\.currency\s*=\s*\{"active":"([A-Z]{3})"/.exec(html)?.[1]
     || /<meta\b[^>]*(?:property|itemprop)=["'](?:og:price:currency|product:price:currency|priceCurrency)["'][^>]*content=["']([A-Z]{3})["']/i.exec(html)?.[1] || null;
   const quiet = async (fn) => { try { return await fn(); } catch (e) { if (FATAL.has(e.code)) throw e; signals.push(`probe-error:${e.code}`); return null; } };
@@ -1034,10 +1058,10 @@ export async function detectPlatform(url, fetchFn) {
   else if (hint.wordpress && !order.includes('woocommerce')) order.push('woocommerce');
   for (const k of order) {
     const r = await probes[k]();
-    if (r) { signals.push(`api:${k}`); return { platform: k, api: true, base, name: r.name || name, currency: r.currency || currency, signals, home: { url: home.url, html }, apiBase: r.apiBase }; }
+    if (r) { signals.push(`api:${k}`); return { platform: k, api: true, base, name: r.name || name, currency: r.currency || currency, brand, signals, home: { url: home.url, html }, apiBase: r.apiBase }; }
   }
   const hinted = ['shopify', 'magento', 'squarespace', 'woocommerce', 'bigcommerce', 'wix'].find((k) => hint[k]);
-  return { platform: hinted || 'generic', api: false, base, name, currency, signals, home: { url: home.url, html } };
+  return { platform: hinted || 'generic', api: false, base, name, currency, brand, signals, home: { url: home.url, html } };
 }
 
 
@@ -1563,7 +1587,7 @@ export async function importStore(input, o = {}) {
     const alreadyN = Object.values(report.already).reduce((a, b) => a + b, 0);
     if (!writer.stats.files && !alreadyN) throw err(quotaOut ? 'quota' : 'no_content');
     emit('built', { n: writer.stats.files, bytes: writer.stats.used, written: report.written, files: files.slice(0, 50).map((x) => ({ name: x.name, path: x.path, bytes: x.size, kind: x.kind })), report });
-    return { platform: det.platform, api: !!det.api && !ctx.feedFailed, base: det.base, host: plan.host, name: det.name, plan: publicPlan, files, counts, report,
+    return { platform: det.platform, api: !!det.api && !ctx.feedFailed, base: det.base, host: plan.host, name: det.name, brand: det.brand || null, plan: publicPlan, files, counts, report,
       capped: Object.keys(capped).length ? capped : null, skipped: report.skipped, warnings: ctx.warnings, requests: f.stats.total, maxConcurrent: f.stats.maxActive };
   } catch (e) {
     // a cancel wins; an error from the caller's onFiles (e.g. knowDrive refused a batch) keeps its own code

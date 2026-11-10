@@ -73,7 +73,7 @@ export async function startFakeStore({ host = '127.0.0.1' } = {}) {
   ].map(([title, handle, price, desc, vs], i) => ({ id: i + 1, title, handle, vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: `<p>${desc}</p>`,
     variants: vs.length ? vs.map(([t, sku, available]) => ({ title: t, price, sku, available })) : [{ title: 'Default Title', price, sku: handle.toUpperCase(), available: true }] }));
   const routes = {
-    '/': () => [200, 'text/html', page('Lumen Bikes', '<p>Bikes for trails and towns.</p>', '<link href="https://cdn.shopify.com/s/theme.css"><script>Shopify.currency={"active":"USD"};</script><meta property="og:site_name" content="Lumen Bikes">')],
+    '/': () => [200, 'text/html', page('Lumen Bikes', '<p>Bikes for trails and towns.</p>', '<link href="https://cdn.shopify.com/s/theme.css"><script>Shopify.currency={"active":"USD"};</script><meta property="og:site_name" content="Lumen Bikes"><meta name="theme-color" content="#0f766e">')],
     '/products.json': (u) => [200, 'application/json', JSON.stringify({ products: Number(u.searchParams.get('page') || 1) > 1 ? [] : products })],
     '/policies/refund-policy': () => [200, 'text/html', page('Refund policy', '<p>Unridden bikes can be returned within 30 days of delivery for a full refund.</p><p>Ridden bikes can be exchanged within 14 days.</p>')],
     '/policies/shipping-policy': () => [200, 'text/html', page('Shipping policy', '<p>Orders ship within 2 business days. Shipping is free in the US on orders over $100.</p>')],

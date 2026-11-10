@@ -36,6 +36,7 @@ import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
+import { buildSite, validateSiteEdit, publicSite, siteHtml } from './site.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -410,9 +411,10 @@ const TONES = ['friendly', 'neutral', 'formal'], LENGTHS = ['short', 'normal'], 
 const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces']);
 // answer surfaces: where the bot answers (studio/surfaces.js SURFACE_IDS, same order). Not material: the answers and the
 // bot version never change with them; each one is its own plan line at launch (shown only after testing).
-export const SURFACE_IDS = ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice'];
-const SURFACE_LABEL = { webchat: 'Website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', phone: 'Phone', webvoice: 'Web voice assistant' };
-const READ_ONLY_KEYS = new Set(['instructions', 'version', 'sampleSet']);
+export const SURFACE_IDS = ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice', 'site'];
+const SURFACE_LABEL = { webchat: 'Website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', phone: 'Phone', webvoice: 'Web voice assistant', site: 'Single-page site' };
+// site: the Single-page site's owner edits (name, tagline, chips, published) are saved through POST /trials/:id/site
+const READ_ONLY_KEYS = new Set(['instructions', 'version', 'sampleSet', 'site']);
 const MATERIAL = ['tone', 'length', 'sources', 'floor', 'purpose', 'audience', 'name'];
 const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
 
@@ -648,11 +650,14 @@ export function parseIntent(message, ctx = {}) {
   return { patch, actions, intents, scope, customTone, business };
 }
 // answer surfaces named in a Builder message (order matters: web voice before phone, web chat before plain "chat")
+const SITE_WORD_RE = /\b(?:(?:single|one)[- ]page\s+(?:web\s*)?site|home\s?page|landing\s+page|search\s+page|front[- ]page(?:\s+of\s+(?:my|our|the)\s+(?:web\s*)?site)?|(?:build|make|create|generate|turn\s+(?:it|this|my\s+files|them)\s+into)\s+(?:me\s+)?(?:a|an|my|our)\s+(?:new\s+|simple\s+|clean\s+|ai\s+|search\s+)?(?:web\s*site|site))\b/i;
 const SURFACE_WORDS = [
   ['webvoice', /\b(?:web\s*voice(?:\s+assistant)?|voice\s+(?:assistant|bot|chat(?:bot)?|agent)|browser\s+voice|talk(?:ing)? to it (?:on|in) (?:my|the|our) (?:website|site|browser))\b/i],
   ['webchat', /\b(?:web\s*chat|website\s*chat|site\s+chat|chat\s+widget|web\s+widget|website\s+widget|live\s+chat|chat\s+on\s+(?:my|our|the)\s+(?:website|site))\b/i],
   ['sms', /\b(?:sms|text\s+messag(?:e|es|ing)|texting|by\s+text)\b/i],
   ['whatsapp', /\bwhats\s?app\b/i],
+  // the Single-page site: an answer page to use as the homepage (after web chat, so "chat on my website" stays web chat)
+  ['site', SITE_WORD_RE],
   ['email', /\b(?:e-?mails?|by\s+mail|inbox)\b/i],
   ['phone', /\b(?:(?:tele)?phone(?!\s*(?:number|no\.?|#))(?:\s+(?:calls?|line))?|phone\s*calls?|voice\s+calls?|calls?\s+(?:in|from\s+customers)|hotline)\b/i],
 ];
@@ -675,7 +680,8 @@ export function surfacesIntentOf(msg, current) {
   if (!named.length && !all) return null;
   const remove = /\b(?:remove|drop|delete|without|stop|turn\s+off|disable|exclude|cancel|take\s+(?:off|out)|get\s+rid\s+of|no\s+(?:more\s+)?(?=\w)|don'?t\s+(?:need|want))\b/i.test(s);
   const only = /\b(?:just|only)\b/i.test(s);
-  const add = /\b(?:add|also|plus|include|enable|turn\s+on|switch\s+on|as\s+well|too|and\s+(?:on|by|over|via))\b/i.test(s);
+  const add = /\b(?:add|also|plus|include|enable|turn\s+on|switch\s+on|as\s+well|too|and\s+(?:on|by|over|via))\b/i.test(s)
+    || (named.includes('site') && /\b(?:replace|build|make|create|generate|turn|want|need|get|use)\b/i.test(s));
   const answer = /\b(?:answers?|answering|reply|replies|respond|work|works|live|available|surfaces?|channels?)\b[^.?!]{0,24}\b(?:on|by|over|via|in|through)\b|\b(?:surfaces?|channels?)\b|\bwhere (?:should|does|will) it answer\b/i.test(s);
   const question = /\?\s*$/.test(s) && !/^\s*(?:can|could|would|will)\s+you\s+(?:add|remove|drop|include|enable)\b/i.test(s);
   if (question && !(add || remove || only)) return null;
@@ -2993,7 +2999,7 @@ export function createStudio(o = {}) {
       let capped = r.capped;
       if (quotaOut) capped = { ...(capped || {}), bytes: { limit: QUOTA_BYTES, droppedProducts: (capped?.bytes?.droppedProducts || 0) + (leftOutQuota.product || 0), droppedSections: (capped?.bytes?.droppedSections || 0) + quotaOut, leftOut: report.leftOut.quota } };
       if (failedUp) capped = { ...(capped || {}), failed: { files: failedUp, leftOut: leftOutFailed } };
-      T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, hosts: storeHostsOf(r.base, r.plan?.helpdesks), platform: r.platform, name: r.name || null, files: uploaded,
+      T.flags.storeLast = { at: new Date(now()).toISOString(), url: r.base, hosts: storeHostsOf(r.base, r.plan?.helpdesks), platform: r.platform, name: r.name || null, ...(r.brand ? { brand: r.brand } : {}), files: uploaded,
         found: r.report.found, written, leftOut: report.leftOut, timeUp: !!r.report.timeUp, ...(kinds ? { kinds } : {}) };
       const pj = pjOf();
       if (pj) Object.assign(pj, { state: 'done', finishedAt: now(), uploaded, done: written, activeMs: jobActiveMs(T, job) });
@@ -4767,6 +4773,32 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       if (fid === 'confirm') { allow('POST'); limitTrialAndIp(T, req, 'numconfirm', 30, 60, 'payment checks'); return sendJson(res, 200, await numbers.confirm(T, (await readBody(req)).sessionId)); }
       fail(404, 'not_found', `no such endpoint ${p}`);
     }
+    // the Single-page site (server/site.mjs): GET builds it from the files when missing or stale (?download=1: the HTML
+    // file), POST saves the owner's edits ({name, tagline, chips, published}; regenerate:true builds it again)
+    if (sub === 'site' && !fid) {
+      allow('GET', 'POST');
+      if (m === 'POST') {
+        const body = await readBody(req);
+        let edits;
+        try { edits = validateSiteEdit(body, T.spec.site || {}); } catch (e) { fail(400, 'bad_request', e.message, { field: e.field }); }
+        if (body.regenerate === true || (edits.published && !T.flags.site)) { limitTrialAndIp(T, req, 'lookups', limits.lookups, limits.lookupsIp, 'lookups'); await generateSite(T); }
+        if (edits.published && !T.spec.site?.published) edits.publishedAt = new Date(now()).toISOString();
+        T.spec = { ...T.spec, site: edits };
+        await flushSpec(T);
+        return sendJson(res, 200, siteView(req, T));
+      }
+      if (!T.flags.site || url.searchParams.get('refresh') === '1' || await siteStale(T)) {
+        limitTrialAndIp(T, req, 'lookups', limits.lookups, limits.lookupsIp, 'lookups');
+        await generateSite(T);
+      }
+      if (url.searchParams.get('download') === '1') {
+        const api = /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(url.searchParams.get('api') || '') ? url.searchParams.get('api') : selfOriginOf(req);
+        const html = siteHtml(publicSite(T.flags.site, T.spec.site || {}, { botId: T.id, trial: !T.converted }), { botId: T.id, apiBase: api, assetBase: url.searchParams.get('assets') === 'self' ? selfOriginOf(req) : undefined });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-disposition': 'attachment; filename="index.html"', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        return res.end(html);
+      }
+      return sendJson(res, 200, siteView(req, T));
+    }
     if (sub === 'store') { allow('POST', 'GET', 'DELETE'); return storeImport(req, res, T, url); }
     if (sub === 'events') { allow('GET'); await resumeStoreJob(T); return openEvents(req, res, T, url); }
     if (sub === 'channels' && fid && sub2 === 'test') {
@@ -4866,6 +4898,47 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     }
     fail(404, 'not_found', `no such endpoint ${p}`);
   }
+  // ------------------------------------------------------------------------- the Single-page site
+  /** Ready, enabled files in reading order: the site's own pages (policies, FAQ, help) before products and uploads. */
+  async function siteFiles(T) {
+    const files = (await filesOf(T)).filter((f) => f.stage === 'ready' && f.enabled);
+    const rank = (f) => ({ policy: 0, faq: 0, help: 1, page: 2 }[f.page] ?? (f.page ? 4 : 3));
+    return files.map((f, i) => [f, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([f]) => f);
+  }
+  async function siteStale(T) {
+    const g = T.flags.site;
+    if (!g) return true;
+    const key = (await siteFiles(T)).map((f) => f.id).sort().join(',');
+    return g.fileKey !== key && now() - (Date.parse(g.generatedAt) || 0) > 15000;
+  }
+  async function generateSite(T) {
+    const files = await siteFiles(T);
+    const questions = files.length ? await questionsFor(T) : { starters: [], proof: [] };
+    const atomsByFile = [];
+    for (const f of files.filter((x) => x.page !== 'product').slice(0, 10)) {
+      try { atomsByFile.push({ file: f, atoms: await fileAtomsRaw(T, f.id, { limit: 40, offset: 0 }) }); } catch { /* a file we can't read adds no facts */ }
+    }
+    T.flags.site = buildSite({ spec: T.spec, files, questions, atomsByFile, store: T.flags.storeLast || null, now: now() });
+    saveSpecSoon(T);
+    return T.flags.site;
+  }
+  function siteView(req, T) {
+    const edits = T.spec.site || {};
+    const hosted = `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(T.id)}`;
+    return { site: publicSite(T.flags.site, edits, { botId: T.id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }),
+      edits, generated: T.flags.site ? { name: T.flags.site.name, tagline: T.flags.site.tagline, chips: T.flags.site.chips } : null,
+      published: !!edits.published, hostedUrl: hosted, previewPath: `/site/?bot=${encodeURIComponent(T.id)}` };
+  }
+  /** GET /api/site/:id (server/devapi.mjs): a site's public view, or null (no such trial, no site yet, expired). */
+  async function sitePublic(id) {
+    if (!TRIAL_ID_RE.test(String(id)) || deletedTrials.has(id)) return null;
+    const had = trials.has(id);
+    const T = trialFor(id);
+    await loadSpecDoc(T);
+    if (!T.flags.site) { if (!had) trials.delete(id); return null; }
+    if (!T.expiresAt || T.expiresAt <= now()) return null;
+    return { site: publicSite(T.flags.site, T.spec.site || {}, { botId: id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }), published: !!T.spec.site?.published, expiresAt: T.expiresAt };
+  }
   function shareLinkOf(req, T, origin = originOf(req)) {
     return `${origin}/studio/?t=${encodeURIComponent(T.id)}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
   }
@@ -4920,7 +4993,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (T.asked.length > 500) T.asked.shift();
     pushEvent(T, 'asked', { channel: channel || null, outcome: outcome === 'refused' ? 'refused' : 'answered' });
   }
-  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
+  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };

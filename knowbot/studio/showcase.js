@@ -22,6 +22,7 @@
     { id: 'email', label: 'Email' },
     { id: 'phone', label: 'Phone' },
     { id: 'webvoice', label: 'Web voice' },
+    { id: 'site', label: 'Single-page site' },
   ];
   var ICON = {
     webchat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -30,6 +31,7 @@
     email: '<rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
     phone: '<path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/>',
     webvoice: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+    site: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 8.5h18"/><circle cx="11" cy="14" r="2.6"/><path d="m13 16 2.2 2.2"/>',
   };
   var svg = function (id, s) { return '<svg width="' + (s || 16) + '" height="' + (s || 16) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[id] + '</svg>'; };
   var Q = 'How long is the warranty?';
@@ -65,6 +67,10 @@
         '<div class="ks-vw"><div class="ks-vw-head"><span class="ks-mic">' + svg('webvoice', 18) + '</span><b>Ask ' + BOT + '</b><small class="ks-step3">Answering…</small></div>' +
         '<p class="ks-cap ks-me ks-step1">“' + Q + '”</p><div class="ks-wave ks-step3" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>' +
         '<p class="ks-cap ks-bot ks-step3">' + A + '</p><span class="ks-chip ks-step3">1 · ' + SRC + '</span></div></div></div>';
+      case 'site': return '' +
+        '<div class="ks-site ks-onepage"><div class="ks-site-top"><i></i><i></i><i></i><span>lumenbikes.com</span></div><div class="ks-op-body">' +
+        '<b class="ks-op-h">' + BOT + '</b><p class="ks-op-box ks-step1">' + Q + '</p><p class="ks-op-chips" aria-hidden="true"><i>Warranty</i><i>Returns</i><i>Shipping</i></p>' +
+        '<p class="ks-cap ks-bot ks-step3">' + A + ' <span class="ks-n">1</span></p><span class="ks-chip ks-step3">Sources · 1 · ' + SRC + '</span></div></div>';
       default: return '' +
         '<div class="ks-site"><div class="ks-site-top"><i></i><i></i><i></i><span>lumenbikes.com</span></div><div class="ks-site-body"><span></span><span></span><span class="short"></span>' +
         '<div class="ks-chat"><div class="ks-chat-head"><span class="ks-av">LB</span><b>' + BOT + ' Help</b><small>Answers from our docs</small></div>' +
@@ -98,6 +104,7 @@
     email: 'Replies to your support inbox, with footnoted sources.',
     phone: 'Callers ask out loud; it answers and names the source.',
     webvoice: 'A talk button on your website: it answers out loud.',
+    site: 'A clean search page that can be your homepage. Answers link to your pages.',
   };
 
   SHAPES.forEach(function (s) {

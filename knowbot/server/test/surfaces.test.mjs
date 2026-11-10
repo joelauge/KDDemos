@@ -20,11 +20,11 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const read = (p) => readFileSync(path.join(ROOT, p), 'utf8');
 
 describe('answer surfaces: shared ids and plan math (studio/surfaces.js)', () => {
-  test('the six surfaces, in one order, everywhere', () => {
-    assert.deepEqual(SURFACE_IDS, ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice']);
+  test('the seven surfaces, in one order, everywhere', () => {
+    assert.deepEqual(SURFACE_IDS, ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice', 'site']);
     assert.deepEqual(SERVER_IDS, SURFACE_IDS, 'server/trials.mjs SURFACE_IDS matches studio/surfaces.js');
     assert.deepEqual(TOOL_IDS, SURFACE_IDS, 'server/builder/tools.mjs SURFACES matches studio/surfaces.js');
-    assert.deepEqual(SURFACES.map((s) => s.label), ['Website chat', 'SMS', 'WhatsApp', 'Email', 'Phone', 'Web voice assistant']);
+    assert.deepEqual(SURFACES.map((s) => s.label), ['Website chat', 'SMS', 'WhatsApp', 'Email', 'Phone', 'Web voice assistant', 'Single-page site']);
   });
   test('normalize: known ids only, deduped, canonical order, website chat when empty', () => {
     assert.deepEqual(normalizeSurfaces(['sms', 'webchat', 'sms', 'nope', 'WhatsApp']), ['webchat', 'sms', 'whatsapp']);
@@ -39,8 +39,8 @@ describe('answer surfaces: shared ids and plan math (studio/surfaces.js)', () =>
     assert.deepEqual(m.lines.map((l) => [l.id, l.amount]), [['webchat', 249], ['sms', 249], ['whatsapp', 249]]);
     const y = planTotals(['webchat', 'sms', 'whatsapp'], 'year');
     assert.equal(y.total, 7497); assert.equal(y.per, 'yr'); assert.equal(money(y.total), '$7,497');
-    assert.equal(planTotals(SURFACE_IDS, 'month').total, 1494);
-    assert.equal(planTotals(SURFACE_IDS, 'year').total, 14994);
+    assert.equal(planTotals(SURFACE_IDS, 'month').total, 1743);
+    assert.equal(planTotals(SURFACE_IDS, 'year').total, 17493);
     assert.equal(planTotals([], 'month').total, 249, 'no surfaces = the default website chat line');
     assert.equal(planTotals(['sms'], 'bogus').interval, 'month');
     assert.equal(planTotals(['sms', 'email'], 'month', { month: 300 }).total, 600, 'the configured price wins');
@@ -56,7 +56,7 @@ describe('spec.surfaces validation (server/trials.mjs validatePatch)', () => {
     assert.deepEqual(r.diff.map((d) => d.field), ['surfaces']);
     assert.equal(r.material, false);
     assert.equal(r.next.version, spec.version);
-    assert.deepEqual(validatePatch({ surfaces: SURFACE_IDS }, spec).next.surfaces, SURFACE_IDS, 'all six');
+    assert.deepEqual(validatePatch({ surfaces: SURFACE_IDS }, spec).next.surfaces, SURFACE_IDS, 'all seven');
     assert.equal(validatePatch({ surfaces: ['webchat'] }, spec).diff.length, 0, 'same set: no diff');
     assert.equal(validatePatch({ surfaces: ['webchat'] }, { ...spec, surfaces: undefined }).diff.length, 0, 'an old trial without surfaces is website chat');
   });
@@ -100,7 +100,7 @@ describe('the Builder reads surface changes in plain words (parseIntent)', () =>
 describe('landing: "Where should it answer?" (studio/index.html, landing.js) never shows a price', () => {
   const html = read('studio/index.html');
   const land = html.slice(html.indexOf('<div id="kl-landing"'), html.indexOf('<!-- end landing -->') > 0 ? html.indexOf('<!-- end landing -->') : html.indexOf('id="st-app"'));
-  test('six toggle buttons with visible names, website chat pressed by default', () => {
+  test('seven toggle buttons with visible names, website chat pressed by default', () => {
     const btns = [...land.matchAll(/<button type="button" class="kl-ch"[^>]*data-surface="(\w+)" aria-pressed="(true|false)">[\s\S]*?<span class="kl-ch-t">([^<]+)<\/span>/g)];
     assert.deepEqual(btns.map((m) => m[1]), SURFACE_IDS);
     assert.deepEqual(btns.map((m) => m[3]), SURFACES.map((s) => s.label), 'the accessible name is the visible text');
@@ -131,7 +131,7 @@ describe('landing: "Where should it answer?" (studio/index.html, landing.js) nev
   test('the Builder knowledge base states the per-surface price truthfully (asked directly, cited)', () => {
     const kb = read('studio/kb/pricing-and-trial.md');
     assert.match(kb, /Each answer surface is \$249 per month, or \$2,499 per year/);
-    assert.match(kb, /website chat, SMS, WhatsApp, email, phone, and the web voice assistant/);
+    assert.match(kb, /website chat, SMS, WhatsApp, email, phone, the web voice assistant, and the single-page site/);
     assert.match(read('studio/kb/faq.md'), /Each answer surface is \$249 per month, or \$2,499 per year/);
   });
 });

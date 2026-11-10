@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask anything</title>
+<meta name="description" content="Search this business's own pages. Every answer shows where it came from.">
+<meta property="og:title" content="Ask anything">
+<meta property="og:description" content="Search this business's own pages. Every answer shows where it came from.">
+<meta property="og:type" content="website">
+<!-- the hosted page is the same template for every bot: kept out of search results. A live site is indexed from the
+     owner's own domain (the downloaded HTML carries its own title, description and robots tags). -->
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<script>
+  // theme before first paint: ?theme=dark|light, else the visitor's system setting (KnowDrive dark = html.dark)
+  (function () { try { var t = new URLSearchParams(location.search).get('theme'); var d = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; if (d) document.documentElement.classList.add('dark'); } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="../vendor/kd-theme/tokens.css?v=02f5eba">
+<link rel="stylesheet" href="../vendor/knowdrive-widgets/0.4.1/widgets.css?v=02f5eba">
+<link rel="stylesheet" href="./site.css?v=02f5eba">
+</head>
+<body>
+<div id="ks-root" class="ks-root">
+  <main class="ks-main"><p class="ks-loading" role="status">Loading…</p></main>
+</div>
+<noscript><p class="ks-noscript">This page needs JavaScript to search.</p></noscript>
+<script type="module" src="./site.js?v=02f5eba"></script>
+</body>
+</html>
