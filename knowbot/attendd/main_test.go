@@ -43,7 +43,7 @@ func TestAttendAgainstFakeKnowDrive(t *testing.T) {
 	var mu sync.Mutex
 	kd := fakeKnowDrive(t, &seen, &mu)
 	defer kd.Close()
-	s := newServer(apiBase(kd.URL), "test-key", 5*time.Second)
+	s := newServer(apiBase(kd.URL), "test-key", 5*time.Second, false)
 	s.noSection.Store(true)
 	h := s.routes()
 
@@ -99,7 +99,7 @@ func TestAttendAgainstFakeKnowDrive(t *testing.T) {
 }
 
 func TestAttendErrors(t *testing.T) {
-	s := newServer("http://127.0.0.1:9/api", "k", 2*time.Second)
+	s := newServer("http://127.0.0.1:9/api", "k", 2*time.Second, false)
 	h := s.routes()
 	for _, tc := range []struct {
 		body string

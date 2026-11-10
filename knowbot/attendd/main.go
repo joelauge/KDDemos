@@ -4,7 +4,9 @@
 // (scripts/fetch-engine.sh) and never part of this tree.
 //
 // Settings: ATTENDD_ADDR (default 127.0.0.1:7071), KNOWDRIVE_BASE_URL (default https://knowdrive.ai), KNOWDRIVE_API_KEY,
-// ATTENDD_TIMEOUT (default 20s), ATTENDD_SECTION=off (never read neighbouring atoms by vector).
+// ATTENDD_TIMEOUT (default 20s), ATTENDD_SECTION=off (never read neighbouring atoms by vector), ATTENDD_FUSION=on (rank
+// with the engine's client-side deterministic RRF over separate fts and vector searches instead of KnowDB's own hybrid
+// search; default off: one search per ranked head instead of two).
 // Question text is never logged.
 package main
 
@@ -147,30 +149,84 @@ func (f fileTags) FileTags(ctx context.Context, vs string, paths []string) (map[
 type server struct {
 	full, plain *attend.Engine
 	timeout     time.Duration
+	fusion      bool
 	noSection   atomic.Bool
 }
 
-func newServer(base, key string, timeout time.Duration) *server {
+// newServer builds the engines. fusion swaps the ranked search for the engine's client-side RRF (resolve.NewRESTSearcher
+// with fuseHybridClientSide): an fts and a vector search per ranked head, run one after the other, fused with a
+// deterministic (score, atom id) order. Every other channel is NewEngine's.
+func newServer(base, key string, timeout time.Duration, fusion bool) *server {
 	kc := knowdb.New(base, knowdb.WithTokenSource(knowdb.StaticTokenSource(key)))
 	ranked := resolve.NewEngine(kc)
+	if fusion {
+		ranked.Searcher = resolve.NewRESTSearcher(kc, true)
+	}
 	complete := *ranked
 	complete.Searcher = resolve.NewEnumerateSearcher(kc)
 	plain := &attend.Engine{Ranked: busyResolver{ranked}, Complete: busyResolver{&complete}, Tags: ranked, Exclude: isControl, FileTags: fileTags{ranked}}
 	full := *plain
 	full.Embed, full.Neighbours = embedder{kc}, ranked
-	return &server{full: &full, plain: plain, timeout: timeout}
+	return &server{full: &full, plain: plain, timeout: timeout, fusion: fusion}
 }
 
-func (s *server) attend(ctx context.Context, r attend.Request) (*attend.Bundle, error) {
+// rankMode names the ranked search in use, for /healthz and the per-call summary.
+func (s *server) rankMode() string {
+	if s.fusion {
+		return "client_rrf"
+	}
+	return "server_hybrid"
+}
+
+// attend runs the engine with H-section while it is available; when H-section fails, it says so in failed and the call
+// is run again without it (and so is every later call: see noSection).
+func (s *server) attend(ctx context.Context, r attend.Request) (b *attend.Bundle, failed []string, err error) {
 	if !s.noSection.Load() {
 		b, err := s.full.Attend(ctx, r)
 		if err == nil || !strings.Contains(err.Error(), "H-section") || ctx.Err() != nil {
-			return b, err
+			return b, nil, err
 		}
 		log.Printf("attendd: neighbouring sections unavailable (%v); continuing without them", err)
 		s.noSection.Store(true)
+		failed = []string{"H-section"}
 	}
-	return s.plain.Attend(ctx, r)
+	b, err = s.plain.Attend(ctx, r)
+	return b, failed, err
+}
+
+// summary says which heads ran, which failed, which surfaced evidence, and how the ranked search was done.
+type summary struct {
+	HeadsRun          []string       `json:"heads_run"`
+	HeadsFailed       []string       `json:"heads_failed"`
+	HeadsContributing map[string]int `json:"heads_contributing"`
+	SectionAvailable  bool           `json:"section_available"`
+	RankMode          string         `json:"rank_mode"`
+}
+
+// attendOut is the bundle as the engine sealed it (each evidence item names the heads that surfaced it in "via"), plus
+// the summary. The summary is not covered by the receipt.
+type attendOut struct {
+	*attend.Bundle
+	Summary summary `json:"summary"`
+}
+
+func (s *server) summarize(b *attend.Bundle, failed []string) summary {
+	sm := summary{HeadsRun: []string{}, HeadsFailed: []string{}, HeadsContributing: map[string]int{},
+		SectionAvailable: !s.noSection.Load(), RankMode: s.rankMode()}
+	if failed != nil {
+		sm.HeadsFailed = failed
+	}
+	for _, h := range b.Heads {
+		if h.Status != "skipped" {
+			sm.HeadsRun = append(sm.HeadsRun, h.ID)
+		}
+	}
+	for _, it := range b.Evidence {
+		for _, v := range it.Via {
+			sm.HeadsContributing[v]++
+		}
+	}
+	return sm
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -186,7 +242,7 @@ func fail(w http.ResponseWriter, code int, msg string) {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, 200, map[string]any{"ok": true, "section": !s.noSection.Load()})
+		writeJSON(w, 200, map[string]any{"ok": true, "section": !s.noSection.Load(), "fusion": s.fusion, "rank_mode": s.rankMode()})
 	})
 	mux.HandleFunc("POST /attend", func(w http.ResponseWriter, req *http.Request) {
 		var in attendIn
@@ -197,7 +253,7 @@ func (s *server) routes() http.Handler {
 		ctx, cancel := context.WithTimeout(req.Context(), s.timeout)
 		defer cancel()
 		t0 := time.Now()
-		b, err := s.attend(ctx, in.request())
+		b, failed, err := s.attend(ctx, in.request())
 		if err != nil {
 			log.Printf("attendd: attend store=%s failed after %s: %v", in.Store, time.Since(t0).Round(time.Millisecond), err)
 			code := 502
@@ -209,8 +265,9 @@ func (s *server) routes() http.Handler {
 			fail(w, code, err.Error())
 			return
 		}
-		log.Printf("attendd: attend store=%s status=%s evidence=%d in %s", in.Store, b.Status, len(b.Evidence), time.Since(t0).Round(time.Millisecond))
-		writeJSON(w, 200, b)
+		sm := s.summarize(b, failed)
+		log.Printf("attendd: attend store=%s status=%s evidence=%d heads=%v in %s", in.Store, b.Status, len(b.Evidence), sm.HeadsContributing, time.Since(t0).Round(time.Millisecond))
+		writeJSON(w, 200, attendOut{Bundle: b, Summary: sm})
 	})
 	mux.HandleFunc("POST /check", func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
@@ -257,14 +314,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("attendd: ATTENDD_TIMEOUT: %v", err)
 	}
-	s := newServer(apiBase(envOr("KNOWDRIVE_BASE_URL", "https://knowdrive.ai")), key, timeout)
+	s := newServer(apiBase(envOr("KNOWDRIVE_BASE_URL", "https://knowdrive.ai")), key, timeout, fusionOn(os.Getenv("ATTENDD_FUSION")))
 	if strings.EqualFold(os.Getenv("ATTENDD_SECTION"), "off") {
 		s.noSection.Store(true)
 	}
 	if !strings.HasPrefix(addr, "127.0.0.1:") && !strings.HasPrefix(addr, "localhost:") && !strings.HasPrefix(addr, "[::1]:") {
 		log.Fatalf("attendd: ATTENDD_ADDR %q must be a loopback address", addr)
 	}
-	log.Printf("attendd: listening on %s", addr)
+	log.Printf("attendd: listening on %s (ranking: %s, section: %t)", addr, s.rankMode(), !s.noSection.Load())
 	srv := &http.Server{Addr: addr, Handler: s.routes(), ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }
@@ -274,4 +331,13 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// fusionOn reads ATTENDD_FUSION: on (or 1/true/yes) turns client-side fusion on; anything else leaves it off.
+func fusionOn(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "1", "true", "yes":
+		return true
+	}
+	return false
 }

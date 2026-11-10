@@ -107,7 +107,33 @@ export function mergeBundles(bundles = [], { weakAnswers = false } = {}) {
         : st.length && st.every((x) => x === 'underspecified') ? 'underspecified' : 'none_in_window';
   const digests = bundles.map((b) => b.receipt?.bundle_digest).filter(Boolean);
   const digest = digests.length <= 1 ? (digests[0] || null) : `sha256:${createHash('sha256').update(digests.join('\n')).digest('hex')}`;
-  return { status, sources: ANSWER_STATUSES.has(status) ? sources : [], receipt: { digest, bundles: digests } };
+  return { status, sources: ANSWER_STATUSES.has(status) ? sources : [], receipt: { digest, bundles: digests }, attribution: attributionOf(bundles) };
+}
+
+/**
+ * Pure, internal only (never sent to a visitor or put in a proof): which selector heads ran, failed and surfaced each
+ * passage, over every scope's bundle. items follow the merged sources' order (file_id, seq, via); heads counts each
+ * head's passages; section_available is false when any bundle ran without H-section.
+ */
+export function attributionOf(bundles = []) {
+  const runs = new Set(), failed = new Set(), heads = {}, items = [], seen = new Set();
+  let section = bundles.length > 0, rankMode = null;
+  for (const b of bundles) {
+    const sm = b.summary || {};
+    for (const h of sm.heads_run || (b.heads || []).filter((x) => x.status !== 'skipped').map((x) => x.id)) runs.add(h);
+    for (const h of sm.heads_failed || []) failed.add(h);
+    if (sm.section_available === false) section = false;
+    rankMode = rankMode || sm.rank_mode || null;
+    for (const it of b.evidence || []) {
+      const key = `${it.file_id}#${it.atom_index}`;
+      if (!it.file_id || seen.has(key) || !String(it.text || '').trim()) continue;
+      seen.add(key);
+      const via = Array.isArray(it.via) ? it.via.map(String) : [];
+      for (const v of via) heads[v] = (heads[v] || 0) + 1;
+      items.push({ file_id: it.file_id, seq: Number.isFinite(Number(it.atom_index)) ? Number(it.atom_index) : null, via });
+    }
+  }
+  return { heads_run: [...runs], heads_failed: [...failed], section_available: section, rank_mode: rankMode, heads, items };
 }
 
 /** An evidence item as the source shape answers consume (lib normalizeResult's fields, plus seq and content_hash). */

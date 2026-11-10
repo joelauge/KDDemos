@@ -159,6 +159,28 @@ describe('evidence selector: pure parts', () => {
     assert.equal(hashFor(m.sources, 'a', 'ta1'), 'ha1');
   });
 
+  test('mergeBundles attributes each passage to the heads that surfaced it, internally only', () => {
+    const it = (f, i, via) => ({ file_id: f, atom_index: i, path: `x/${f}.md`, text: `t${f}${i}`, via });
+    const m = mergeBundles([
+      { status: 'ok', evidence: [it('a', 0, ['H-query']), it('a', 2, ['H-section'])],
+        summary: { heads_run: ['H-query', 'H-fact', 'H-section'], heads_failed: [], section_available: true, rank_mode: 'client_rrf' } },
+      { status: 'ok', evidence: [it('a', 0, ['H-query']), it('b', 1, ['H-query', 'H-entity'])],
+        summary: { heads_run: ['H-query', 'H-entity'], heads_failed: ['H-section'], section_available: false, rank_mode: 'client_rrf' } },
+    ]);
+    assert.deepEqual(m.attribution.heads, { 'H-query': 2, 'H-section': 1, 'H-entity': 1 });
+    assert.deepEqual(m.attribution.items.map((x) => `${x.file_id}${x.seq}:${x.via.join('+')}`), ['a0:H-query', 'a2:H-section', 'b1:H-query+H-entity']);
+    assert.deepEqual(m.attribution.heads_run, ['H-query', 'H-fact', 'H-section', 'H-entity']);
+    assert.deepEqual(m.attribution.heads_failed, ['H-section']);
+    assert.equal(m.attribution.section_available, false);
+    assert.equal(m.attribution.rank_mode, 'client_rrf');
+    // the sources answers and proofs carry say nothing about heads
+    assert.ok(m.sources.every((s) => !('via' in s)));
+    // an older sidecar without a summary: heads_run comes from the heads it reports
+    const old = mergeBundles([{ status: 'ok', evidence: [it('a', 0, ['H-query'])], heads: [{ id: 'H-query', status: 'ok' }, { id: 'H-entity', status: 'skipped' }] }]);
+    assert.deepEqual(old.attribution.heads_run, ['H-query']);
+    assert.equal(old.attribution.section_available, true);
+  });
+
   test('scopesFromRetriever: tag-scoped knowDrive retrievers only', () => {
     const kd = (tag, ex = []) => ({ allOf: [tag], exclude: ex, store: 'vs_1', prefix: '' });
     assert.deepEqual(scopesFromRetriever({ parts: [{ retriever: kd('bucket:a', ['questions']) }, { retriever: kd('bucket:b') }] }).scopes,
