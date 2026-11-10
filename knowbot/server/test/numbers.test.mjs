@@ -322,6 +322,14 @@ describe('numbers: in-Studio provisioning (fake provider, fake payments)', () =>
     const t2 = await trial(S);
     assert.equal((await call(S, t2, '/topup', 'POST', { pack: 1000 })).status, 409, 'no number yet');
     assert.equal(tw.purchases().length, 1);
+    // the plan ends (cancelled or unpaid): the number is released and stops answering
+    const sub = st.sessions.get([...st.sessions.values()].find((x) => x.metadata.trial === t.trialId && x.mode === 'subscription').id);
+    const del = st.event('customer.subscription.deleted', { id: sub.subscription, object: 'subscription', metadata: sub.subscription_data.metadata }, WHSEC);
+    await j(await hook(S, del.raw, del.header));
+    assert.equal(tw.owned.size, 0, 'released');
+    const s = (await j(await call(S, t, ''))).number;
+    assert.equal(s.state, 'cancelled');
+    assert.equal(await S.kb.studio.numbers.meterFor({ kind: 'trial', id: t.trialId, flags: { number: true } }), null, 'no longer metered or sent from');
     await S.close();
   });
 

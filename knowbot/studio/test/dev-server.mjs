@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../../server/server.mjs';
 import { startFakeKnowDrive } from '../../server/test/fake-knowdrive.mjs';
 import { startFakeLLM } from '../../server/test/fake-llm.mjs';
+import { startFakeTwilio } from '../../server/test/fake-twilio.mjs';
+import { startFakeStripe } from '../../server/test/fake-stripe.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -27,6 +29,9 @@ export const DEV_CHANNEL_SECRETS = Object.freeze({
   WHATSAPP_VERIFY_TOKEN: 'dev-whatsapp-verify', WHATSAPP_APP_SECRET: 'dev-whatsapp-app-secret', WHATSAPP_ACCESS_TOKEN: 'dev-whatsapp-access-token', WHATSAPP_PHONE_NUMBER_ID: '100000000000001',
   EMAIL_WEBHOOK_SECRET: 'dev-email-secret', EMAIL_FROM: 'bot@studio.test',
 });
+// KnowBot numbers (server/numbers.mjs) on the dev server: a fake number provider and fake payments on loopback, with
+// fake keys. A real payments key (sk_live_ / sk_test_ / rk_…) is refused.
+export const DEV_NUMBER_SECRETS = Object.freeze({ STRIPE_SECRET_KEY: 'sk_dev_fake', STRIPE_PUBLISHABLE_KEY: 'pk_dev_fake', STRIPE_WEBHOOK_SECRET: 'whsec_dev_fake' });
 // Keys that would reach a real provider: never accepted by the dev server.
 const REAL_PROVIDER_KEYS = ['SENDGRID_API_KEY', 'POSTMARK_SERVER_TOKEN', 'GOOGLE_API_KEY', 'GOOGLE_STT_API_KEY', 'GOOGLE_TTS_API_KEY', 'GOOGLE_ACCESS_TOKEN', 'MAILGUN_SIGNING_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'];
 
@@ -99,12 +104,14 @@ function assertLoopback(u, what = 'KNOWDRIVE_BASE_URL') {
  * @param {{ speed?: number, port?: number, host?: string, engine?: 'scripted'|'llm', quiet?: boolean, env?: object, studio?: object }} [o]
  * @returns {Promise<{ url: string, studioUrl: string, port: number, kd: object, llm: object, kb: object, close: () => Promise<void> }>}
  */
-export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', engine = 'scripted', quiet = true, env: extra = {}, studio, channels = true } = {}) {
+export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', engine = 'scripted', quiet = true, env: extra = {}, studio, channels = true, numbers = true } = {}) {
   if (extra.KNOWDRIVE_BASE_URL) assertLoopback(extra.KNOWDRIVE_BASE_URL); // refuse before starting anything
   const kd = await startFakeKnowDrive({ speed, queueStaggerMs: 600, honorScope: true, narrowScope: 'all' }); // production: a narrow-filter vector search can come back empty
   const llm = await startFakeLLM();
   const sink = await startFakeChannelSink({ host: '127.0.0.1' });
   const shop = await startFakeStore({ host: '127.0.0.1' });
+  const tw = channels && numbers ? await startFakeTwilio({ host: '127.0.0.1' }) : null;
+  const pay = channels && numbers ? await startFakeStripe({ host: '127.0.0.1' }) : null;
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-studio-dev-'));
   const env = {
     KNOWDRIVE_BASE_URL: kd.url, KNOWDRIVE_API_KEY: 'fake-key', KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials',
@@ -112,6 +119,7 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
     KNOWBOT_CHECKOUT_URL: 'https://knowdrive.ai/signup?plan=knowbot',
     ...(channels ? { ...DEV_CHANNEL_SECRETS, META_GRAPH_BASE_URL: `${sink.url}/graph/v21.0`, EMAIL_REPLY_WEBHOOK: `${sink.url}/email-relay`,
       TWILIO_API_BASE_URL: sink.url, KNOWBOT_STUDIO_CHANNEL_TEST: '1' } : {}),
+    ...(tw && pay ? { ...DEV_NUMBER_SECRETS, TWILIO_API_BASE_URL: tw.url, TWILIO_PRICING_BASE_URL: tw.url, STRIPE_API_BASE_URL: pay.url, STRIPE_JS_URL: `${pay.url}/stripe.js` } : {}),
     ...(engine === 'llm' ? { KNOWBOT_STUDIO_PROVIDER: 'local' } : {}),
     ...extra,
   };
@@ -119,23 +127,29 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
     assertLoopback(env.KNOWDRIVE_BASE_URL);
     assertLoopback(env.LLM_BASE_URL, 'LLM_BASE_URL');
     if (env.KNOWBOT_STUDIO_PROVIDER && env.KNOWBOT_STUDIO_PROVIDER !== 'local') throw new Error('dev-server: only the local (fake) model is allowed');
-    for (const k of ['META_GRAPH_BASE_URL', 'EMAIL_REPLY_WEBHOOK', 'TWILIO_API_BASE_URL']) if (env[k]) assertLoopback(env[k], k);
+    for (const k of ['META_GRAPH_BASE_URL', 'EMAIL_REPLY_WEBHOOK', 'TWILIO_API_BASE_URL', 'TWILIO_PRICING_BASE_URL', 'STRIPE_API_BASE_URL', 'STRIPE_JS_URL']) if (env[k]) assertLoopback(env[k], k);
     for (const k of REAL_PROVIDER_KEYS) if (env[k]) throw new Error(`dev-server refuses to start: ${k} would reach a real provider`);
-  } catch (e) { await kd.close(); await llm.close(); await sink.close(); await shop.close(); throw e; }
+    if (/^(?:sk|rk)_(?:live|test)_/.test(String(env.STRIPE_SECRET_KEY || ''))) throw new Error('dev-server refuses to start: STRIPE_SECRET_KEY is a real payments key');
+    if (env.STRIPE_SECRET_KEY && !env.STRIPE_API_BASE_URL) throw new Error('dev-server refuses to start: STRIPE_SECRET_KEY without a loopback STRIPE_API_BASE_URL');
+  } catch (e) { await kd.close(); await llm.close(); await sink.close(); await shop.close(); await tw?.close(); await pay?.close(); throw e; }
   // "Enter a Store URL" may reach the fake shop's port on loopback only (the importer refuses loopback by default)
   const storeNet = { allowAddresses: ['127.0.0.1'], allowPorts: [shop.port], paceMs: 20 };
   const kb = createKnowBotServer({ root: ROOT, env, quiet, watch: false, dataDir, studio: { sweep: false, storeNet, ...(studio || {}) } });
   await new Promise((r, j) => { kb.server.once('error', j); kb.server.listen(port, host, r); });
   const actual = kb.server.address().port;
   const url = `http://${host}:${actual}`;
+  // fake payments post the signed checkout.session.completed event to this server, like the real webhook
+  if (pay) pay.state.webhook = { url: `${url}/api/studio/numbers/webhook`, secret: DEV_NUMBER_SECRETS.STRIPE_WEBHOOK_SECRET };
   return {
-    url, studioUrl: `${url}/studio/`, port: actual, kd, llm, kb, dataDir, sink, shop, shopUrl: shop.url, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null,
+    url, studioUrl: `${url}/studio/`, port: actual, kd, llm, kb, dataDir, sink, shop, shopUrl: shop.url, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null, numbers: tw && pay ? { provider: tw, payments: pay } : null,
     async close() {
       await new Promise((r) => kb.server.close(() => r()));
       await shop.close();
       await kd.close();
       await llm.close();
       await sink.close();
+      await tw?.close();
+      await pay?.close();
       await fsp.rm(dataDir, { recursive: true, force: true }).catch(() => {});
     },
   };

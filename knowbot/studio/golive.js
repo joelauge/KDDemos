@@ -18,6 +18,7 @@
 // engine and phone prompt as a real call.
 
 import { mountWidget } from './kdw.js?v=fb14305';
+import { mountNumbers, numberCache } from './numbers.js?v=fb14305';
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -504,8 +505,16 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   // missing → green "Ready · send a test"; otherwise the missing settings, by name. No server info → the static hint.
   const CH_KEY = { sms: 'sms', phone: 'voice', whatsapp: 'whatsapp', email: 'email', text: 'chat', voice: 'voiceBot' };
   const TESTABLE = { sms: 'sms', phone: 'voice', whatsapp: 'whatsapp', email: 'email' };
+  /** The bot's own KnowBot number (./numbers.js), once it is live: SMS and Telephone are on. */
+  const liveNumber = () => {
+    const n = numberCache.trial === getState().trial.id ? numberCache.info?.number : null;
+    return n && n.state === 'active' ? n : null;
+  };
   function chStatus(c) {
     const info = dev().channels && dev().channels[CH_KEY[c.id]];
+    const ln = (c.id === 'sms' || c.id === 'phone') ? liveNumber() : null;
+    // (calls also need this server's live voice: without it the card keeps saying so)
+    if (ln && !(info && !info.configured)) return { tone: ln.out ? 'warn' : 'go', label: ln.out ? 'Out of credit' : `Live · ${ln.display}`, needs: [], known: true, info: null };
     if (!info) return { tone: /Try|Live/.test(c.status) ? 'go' : 'off', label: c.status, needs: null, known: false };
     // KnowBot's own voice settings are never the customer's to set, and the provider is never named on screen
     const needs = Array.isArray(info.needs) ? info.needs.filter((n) => n && !/GEMINI|GOOGLE/i.test(String(n))) : [];
@@ -561,6 +570,18 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     }
   }
 
+  // "Get your KnowBot number" (./numbers.js): one panel per dialog, moved between the SMS and Telephone cards (one number
+  // serves both), so a search or a payment in progress survives switching cards
+  let numberEl = null, numberPanel = null;
+  function numberBlock() {
+    if (!numberEl) {
+      numberEl = h('div', { class: 'gl-number' });
+      numberPanel = mountNumbers(numberEl, { apiBase, trial: () => getState().trial, icon, announce: (t, p) => announce && announce(t, p),
+        onState: () => { if (!closing) paintCardStatus({ animate: true }); } });
+      cleanups.push(() => numberPanel?.destroy());
+    }
+    return numberEl;
+  }
   function renderDetail(id, { animate = false, quiet = false } = {}) {
     const c = CH().find((x) => x.id === id) || CH()[0];
     const keep = quiet ? $('.gl-try', chDetail) : null;   // a quiet repaint (dev key arrived) keeps a running Try it
@@ -571,6 +592,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       h('span', { class: 'gl-chcard-ico is-lg', html: GLYPH[c.id] }),
       h('div', null, h('h3', { class: 'gl-cd-title', tabindex: '-1' }, c.name), h('p', { class: 'gl-cd-blurb' }, c.blurb)));
     const left = h('div', { class: 'gl-cd-setup' });
+    const ownNumber = c.id === 'sms' || c.id === 'phone';
+    if (ownNumber) left.append(numberBlock());
     const st = chStatus(c);
     if (st.known) {
       left.append(h('div', { class: `gl-cd-status is-${st.tone}`, role: 'note' },
@@ -587,7 +610,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         h('div', { class: 'gl-url' }, h('span', { class: 'gl-method' }, 'POST'), h('code', { class: 'gl-mono gl-url-v' }, urlParts(c.url)), copyButton(c.url, 'Copy', { what: 'Webhook URL copied', aria: `Copy the ${c.name} ${c.id === 'voice' ? 'voice endpoint' : 'webhook'} URL`, iconOnly: true })));
     }
     if (TESTABLE[c.id]) left.append(h('h4', { class: 'gl-h4' }, 'Test event'), testWebhook(c));
-    left.append(h('h4', { class: 'gl-h4' }, 'Set it up'), h('ol', { class: 'gl-steps' }, c.steps.map((s, i) => h('li', null, h('span', { class: 'gl-step-n' }, String(i + 1)), h('span', null, s)))));
+    left.append(h('h4', { class: 'gl-h4' }, ownNumber ? 'Or use a number you already have' : 'Set it up'), h('ol', { class: 'gl-steps' }, c.steps.map((s, i) => h('li', null, h('span', { class: 'gl-step-n' }, String(i + 1)), h('span', null, s)))));
     left.append(h('h4', { class: 'gl-h4' }, 'Copyable config'), codeTabs(c.configs, `gl-cfg-${c.id}`));
     const right = keep || h('div', { class: 'gl-try' });
     if (!keep) buildTry(c, right);
