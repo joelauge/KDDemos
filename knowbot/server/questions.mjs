@@ -309,6 +309,27 @@ async function writeOne(w, e) {
   }
 }
 
+// ------------------------------------------------------------------ "send me this" events (server/sendinfo.mjs)
+// A send is counted, never stored as a question: per scope, how many answers went out by e-mail and by text, and from
+// how many distinct callers (hashed). No address and no message text is kept. In memory (reset on restart).
+const sendEvents = new Map(); // scopeKey → { email, text, callers:Set(hash), lastAt }
+/** Count one "send me this" delivery for a bot's insights. Never throws. */
+export function logSendEvent({ scopeTags = [], via, callerKey = null, now } = {}) {
+  try {
+    const key = scopeKeyOf(cleanTags(scopeTags));
+    const e = sendEvents.get(key) || { email: 0, text: 0, callers: new Set(), lastAt: 0 };
+    if (via === 'email' || via === 'text') e[via]++;
+    if (callerKey != null && String(callerKey).trim()) e.callers.add(hashCaller(callerKey));
+    e.lastAt = Number.isFinite(now) ? now : Date.now();
+    remember(sendEvents, key, e, 5000);
+  } catch { /* never affects a send */ }
+}
+/** {total, email, text, callers} sends for one scope. */
+export function sendEventCounts(scopeTags = []) {
+  const e = sendEvents.get(scopeKeyOf(cleanTags(scopeTags)));
+  return e ? { total: e.email + e.text, email: e.email, text: e.text, callers: e.callers.size } : { total: 0, email: 0, text: 0, callers: 0 };
+}
+
 /** Waits until every queued question has been written (or failed). For tests and graceful shutdown. */
 export async function flushQuestions() {
   for (let round = 0; round < 50; round++) {
@@ -321,7 +342,7 @@ export async function flushQuestions() {
 /** Forget all in-memory state (tests). */
 export function _resetQuestions() {
   for (const w of writers.values()) if (w.timer) clearTimeout(w.timer);
-  writers.clear(); recent.clear(); seen.clear(); daily.clear(); texts.clear(); cites.clear();
+  writers.clear(); recent.clear(); seen.clear(); daily.clear(); texts.clear(); cites.clear(); sendEvents.clear();
   queued = 0; warnedFull = false; cfg = { ...DEFAULTS };
 }
 
@@ -786,6 +807,8 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
     // 'active' (questions exist) | 'empty' (nothing asked yet) | 'missing' (the trial/bucket's files are gone: show the
     // restore or expired state, never "no questions yet"). With onMissing:'throw' a missing scope throws InsightsScopeError.
     scope: { key: scopeKey, state: scopeState },
+    // answers visitors asked to have sent to them ("send me this"): counts only, never an address
+    sends: sendEventCounts(tags),
     ...(scopeState === 'missing' ? { missing: true, error: { status: 410, code: 'scope_gone', message: SCOPE_GONE_MESSAGE } } : {}),
   };
 }

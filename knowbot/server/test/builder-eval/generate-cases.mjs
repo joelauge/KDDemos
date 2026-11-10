@@ -324,6 +324,7 @@ const channels = [
   ['can I connect it to my own app?', 'connect to my own app API', ['developer API'], '/api/i'],
   ['does SMS reply length have a limit?', 'SMS reply characters', ['320 characters'], '/320/'],
   ['what do I need for whatsapp setup?', 'WhatsApp Meta verify token', ['verify token'], '/token|meta/i'],
+  ['can customers ask the bot to email or text them an answer?', 'send an answer by email or text', ['a visitor can ask the bot to send them the information'], '/email|text/i'],
 ];
 for (const [msg, query, quotes, must] of channels) {
   add('channels', msg, 'samples-ready', { tools: ['kb_search'], cites: true, replyMust: [must], mustNotTools: ['update_bot', 'import_website'], noPatch: true, mustNotActions: NEVER_EXEC, logged: true },

@@ -472,8 +472,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       needs: [...c.needs, 'Texting enabled on that number, for the checkout links it can send'],
       steps: [...c.steps.slice(0, -1),
         'When a caller wants products, it can text them one link that opens a new checkout with exactly those items in the cart (up to 5 products per link, 3 texts per call).',
-        c.steps[c.steps.length - 1]],
-      configs: c.configs.map((x) => (x.label === 'Environment' ? { ...x, code: `${x.code}\nTWILIO_ACCOUNT_SID=your_account_sid\nTWILIO_FROM_NUMBER=+15551234567          # sends checkout links` } : x)) }));
+        c.steps[c.steps.length - 1]] }));
   }
 
   let chGrid = null, chDetail = null;
@@ -600,7 +599,10 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         h('span', { class: 'gl-cd-status-dot', 'aria-hidden': 'true' }),
         h('div', null,
           h('b', null, st.tone === 'go' ? 'Ready on this server' : st.tone === 'warn' ? 'Receiving, one step left' : 'Not connected on this server yet'),
-          st.needs && st.needs.length
+          // SMS and Telephone run on a KnowBot number: never show the phone provider's setting names to a customer
+          (c.id === 'sms' || c.id === 'phone') && st.tone !== 'go'
+            ? h('span', { class: 'gl-cd-needs' }, 'Get your KnowBot number below and texts and calls go live on it.')
+            : st.needs && st.needs.length
             ? h('span', { class: 'gl-cd-needs' }, st.tone === 'warn' ? 'To reply, set ' : 'Set ', st.needs.map((n, i) => [i ? (i === st.needs.length - 1 ? ' and ' : ', ') : '', h('code', { class: 'gl-mono' }, n)]), ' in your KnowBot environment.')
             : h('span', { class: 'gl-cd-needs' }, TESTABLE[c.id] ? 'Signatures are checked on every request. Send a signed test event below.' : 'Nothing to connect: it works today.'))));
     }
@@ -1836,7 +1838,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       ['403', 'bad_signature', 'Channel webhooks: the request signature did not verify', 'a forged SMS webhook'],
       ['404', 'bot_not_found · model_not_found', 'No such bot, or model ≠ your bot id', '"model": "gpt-4o"'],
       ['429', 'rate_limit_exceeded', 'Too many requests for this key. Wait retry-after seconds', 'retry-after: 12'],
-      ['503', 'channel_not_configured', 'A channel webhook whose provider secret is not set', 'SMS without TWILIO_AUTH_TOKEN'],
+      ['503', 'channel_not_configured', 'A channel webhook whose provider secret is not set', 'SMS before the number is connected'],
     ];
     el.append(
       h('p', { class: 'gl-ratelim' }, h('span', { html: icon('bolt', 13) }),

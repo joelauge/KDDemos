@@ -44,7 +44,9 @@ const STRIPE_VERSION = '2024-06-20';
 // The provider's list prices (USD) when its pricing API can't be read; KNOWBOT_NUMBER_COST_* override.
 export const FALLBACK_COSTS = { US: { monthly: 1.15, minute: 0.0085, text: 0.0083 }, CA: { monthly: 1.15, minute: 0.0085, text: 0.0083 } };
 
-export const numbersEnabled = (env = {}) => !!(env.STRIPE_SECRET_KEY && env.STRIPE_PUBLISHABLE_KEY && env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN);
+/** The server-side payments key: a restricted key (rk_…, only the permissions this needs) or a secret key (sk_…). */
+export const stripeKeyOf = (env = {}) => env.STRIPE_RESTRICTED_KEY || env.STRIPE_SECRET_KEY || '';
+export const numbersEnabled = (env = {}) => !!(stripeKeyOf(env) && env.STRIPE_PUBLISHABLE_KEY && env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN);
 
 // ------------------------------------------------------------------ pricing math (pure)
 const cents2 = (x) => Math.round(Number(x) * 100);
@@ -143,7 +145,7 @@ export function createNumbers({ env = {}, log = () => {}, now = () => Date.now()
     return j;
   }
   async function stripe(method, p, body = null) {
-    const init = { method, headers: { authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, 'stripe-version': STRIPE_VERSION }, signal: AbortSignal.timeout(20000) };
+    const init = { method, headers: { authorization: `Bearer ${stripeKeyOf(env)}`, 'stripe-version': STRIPE_VERSION }, signal: AbortSignal.timeout(20000) };
     if (body) { init.headers['content-type'] = 'application/x-www-form-urlencoded'; init.body = stripeForm(body).toString(); }
     const res = await fetch(`${stBase}${p}`, init);
     const j = await res.json().catch(() => ({}));

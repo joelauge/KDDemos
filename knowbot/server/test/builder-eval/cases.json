@@ -6156,6 +6156,45 @@
    "id": "channels-15",
    "category": "channels",
    "input": {
+    "message": "can customers ask the bot to email or text them an answer?"
+   },
+   "state": "samples-ready",
+   "expect": {
+    "tools": [
+     "kb_search"
+    ],
+    "cites": true,
+    "replyMust": [
+     "/email|text/i"
+    ],
+    "mustNotTools": [
+     "update_bot",
+     "import_website"
+    ],
+    "noPatch": true,
+    "mustNotActions": [
+     "remove_samples",
+     "checkout",
+     "start_over"
+    ],
+    "logged": true
+   },
+   "gold": {
+    "calls": [
+     {
+      "name": "kb_search",
+      "input": {
+       "query": "send an answer by email or text"
+      }
+     }
+    ],
+    "reply": "{{quote:a visitor can ask the bot to send them the information}}"
+   }
+  },
+  {
+   "id": "channels-16",
+   "category": "channels",
+   "input": {
     "message": "open the whatsapp setup"
    },
    "state": "own-ready",
@@ -6183,7 +6222,7 @@
    }
   },
   {
-   "id": "channels-16",
+   "id": "channels-17",
    "category": "channels",
    "input": {
     "message": "show me the developer docs"
@@ -6206,7 +6245,7 @@
    }
   },
   {
-   "id": "channels-17",
+   "id": "channels-18",
    "category": "channels",
    "input": {
     "message": "can my customers call it from their phone?"
@@ -6247,7 +6286,7 @@
    }
   },
   {
-   "id": "channels-18",
+   "id": "channels-19",
    "category": "channels",
    "input": {
     "message": "could I call it from my own app?"
@@ -6288,7 +6327,7 @@
    }
   },
   {
-   "id": "channels-19",
+   "id": "channels-20",
    "category": "channels",
    "input": {
     "message": "can people text it on WhatsApp?"
@@ -6329,7 +6368,7 @@
    }
   },
   {
-   "id": "channels-20",
+   "id": "channels-21",
    "category": "channels",
    "input": {
     "message": "can visitors talk to it out loud?"

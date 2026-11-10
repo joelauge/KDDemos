@@ -1382,6 +1382,13 @@ export function mount(ctx) {
     A.el.root.dataset.status = A.status;
     A.el.root.removeAttribute('aria-busy');
     if (lineRaf) { cancelAnimationFrame(lineRaf); flushLines(); }
+    // "send me this": the bot asks for an address or confirms the send. Not an answer: no proof, no fan-out.
+    if (f.status === 'send_info') {
+      renderSendInfo(A);
+      A.stopClock && A.stopClock(); A.settled = true;
+      commit(A, restore ? 'answer:restore' : 'answer:final');
+      return;
+    }
     if (restore) {
       commit(A, 'answer:restore');
       if (f.refused) renderRefusal(A); else renderGrounded(A);
@@ -1731,6 +1738,18 @@ export function mount(ctx) {
   }
 
   // ---------------------------------------------------------------- refusal (B6)
+
+  /** A "send me this" turn: the bot's one-line reply (ask for an email or mobile number, or "Sent to j***@…") and a pill. */
+  function renderSendInfo(A) {
+    const f = A.final;
+    A.el.caret.remove();
+    A.el.body.querySelectorAll('.sb-line').forEach((x) => x.remove());
+    A.el.body.append(h('p', { class: 'sb-sendinfo' }, String(f.text || '')));
+    A.el.srcRow.innerHTML = ''; A.el.strip.innerHTML = '';
+    const sent = f.sendInfo?.status === 'sent';
+    const pill = h('div', { class: 'sb-pill is-sendinfo' }, ico('mail', 14), h('span', null, h('b', null, sent ? 'Sent' : 'Send this to you'), sent && f.sendInfo?.to ? ` · ${f.sendInfo.to}` : ''));
+    A.el.status.innerHTML = ''; A.el.status.append(pill); A.el.pill = pill; A.el.ticker = null;
+  }
 
   function renderRefusal(A) {
     const f = A.final;

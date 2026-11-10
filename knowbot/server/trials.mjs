@@ -2226,7 +2226,22 @@ export function createStudio(o = {}) {
       clearInterval(ping);
       try { res.end(); } catch {}
       recordAnswer(T, final, label, source);
+      // "send me this" (server/sendinfo.mjs) sends the conversation's last grounded answer
+      if (final.status === 'grounded' && source === 'visitor') o.sendInfo?.remember?.(`trial:${T.id}`, final);
     };
+    // "can you email me that?": the send-info flow replies instead of an answer (not a question: never in insights)
+    if (o.sendInfo && source === 'visitor') {
+      const si = await o.sendInfo.maybeSendInfo({ key: `trial:${T.id}`, botId: T.id, botName: spec.name || 'Your bot', replyTo: spec.replyTo || null, question, channel: 'studio',
+        callerKey: T.id, scopeTags: [`trial:${T.id}`], proofUrlFor: (a) => (o.proofLink ? o.proofLink(req, T.id, a) : null) }).catch((e) => { log(`[studio] send-info failed: ${e.message}`); return null; });
+      if (si) {
+        emit('final', { ...base, text: si.reply, refused: false, status: 'send_info', sendInfo: { status: si.status, ...(si.via ? { via: si.via } : {}), ...(si.to ? { to: si.to } : {}) },
+          citations: [], proof: emptyProof(spec.floor), why: null, guard: null, latencyMs: { retrieve: 0, select: 0, quote: 0, total: ms() } });
+        emit('done', { latencyMs: ms() });
+        clearInterval(ping);
+        try { res.end(); } catch {}
+        return;
+      }
+    }
     try {
       // 1. guard
       const g = kbLib.guardRequest(question, persona, { profile: 'general' });

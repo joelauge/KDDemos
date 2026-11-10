@@ -36,6 +36,12 @@ Source: /studio/
 
 On a phone call, a bot built from a Shopify store import can offer to text the caller a link that puts the products in their cart and opens checkout. This keeps working after the bot is launched. Bots without a Shopify store never offer texted links. One link can hold up to 5 products, so several products go in one text. It confirms the version and quantity of each product and the number first, refuses a sold-out version and offers the in-stock ones, and sends at most 3 texts per call. A link opens a new checkout with exactly the items in that link; it does not add to, or include, anything already in a cart on the store's website. Texts go to the number the caller is calling from. Another number is accepted only in the same country as the sending number, and never a premium-rate number or short code. By default one number gets at most 3 texts a day, and each bot has a daily texting cap. Each link is tagged for attribution with UTM parameters, a referral code and the call id. Texting needs a KnowBot number to send from.
 
+## Sending an answer by email or text
+
+Source: /studio/
+
+On every channel, a visitor can ask the bot to send them the information, for example "can you email me that?" or "text me the info". The bot asks for an email address or a mobile number, unless the visitor already gave one, then sends its last answer from the files: the answer, the quoted lines with their sources, and the proof link. It confirms with the address partly hidden, such as "Sent to j***@example.com.", and asks again if the address does not look valid. It never sends a refusal: when nothing has been answered yet, it says there is nothing to send. On a phone call the bot offers to text the number the caller is calling from, and it reads the number back, or spells the email address back, for the caller to confirm before it sends. Emails are sent under the bot's own name from KnowBot's sending address. Texts end with "Reply STOP to opt out", and a number that replies STOP is never texted again. Each visitor can be sent a few messages an hour and each bot has a daily cap. Sends are counted in the bot's question insights, but email addresses and phone numbers are never stored there. If email is not available the bot offers a text instead, and the other way around.
+
 ## WhatsApp
 
 Source: /studio/

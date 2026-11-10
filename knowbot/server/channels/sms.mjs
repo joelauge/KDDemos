@@ -4,6 +4,7 @@
 // A bot on its own KnowBot number (cx.meter, server/numbers.mjs) pays per text segment, in and out, from its prepaid
 // credit; with no credit left the text gets no reply (nothing is sent).
 import { ChannelError, notConfigured, parseForm, twilioValid, sendXml, xml, formatSms, smsInfo } from './util.mjs';
+import { isStopWord, isStartWord } from '../sendinfo.mjs';
 
 export const SMS_MAX = 320;
 
@@ -16,6 +17,10 @@ export async function handleSms(cx) {
   if (!twilioValid(req, env.TWILIO_AUTH_TOKEN, params, env)) throw new ChannelError(403, 'bad_signature', 'X-Twilio-Signature did not verify.');
   const from = String(params.From || '');
   const body = String(params.Body || '').trim();
+  if (!body) return sendXml(res, `<Message>${xml('Text me a question and I will answer from my files, with sources.')}</Message>`);
+  // STOP / START: the opt-out list "send me this" texts honour (the carrier confirms an opt-out itself, so no reply here)
+  if (isStopWord(body)) { await cx.optOut?.(from); return sendXml(res, ''); }
+  if (isStartWord(body)) { await cx.optIn?.(from); return sendXml(res, ''); }
   const meter = cx.meter || null;
   if (meter && !meter.ok()) {
     cx.log?.(`[channels] sms: bot ${cx.botId} is out of credit; no reply sent`);
@@ -25,8 +30,10 @@ export async function handleSms(cx) {
     if (meter) meter.charge('text', Math.max(1, smsInfo(body).segments) + Math.max(1, smsInfo(text).segments), 'sms').catch((e) => cx.log?.(`[channels] sms: credit not recorded: ${e.message}`));
     return sendXml(res, `<Message>${xml(text)}</Message>`);
   };
-  if (!body) return reply('Text me a question and I will answer from my files, with sources.');
   if (cx.limited(`sms|${from}`)) return reply('You are sending questions very quickly. Try again in a minute.');
+  // "can you email me that?": the send-info flow answers instead (server/sendinfo.mjs)
+  const si = await cx.sendInfo?.(body, { channel: 'sms', callerKey: from });
+  if (si) return reply(si.reply);
   const r = await cx.ask(body, { channel: 'sms', callerKey: from });
   return reply(formatSms(r, r.refused ? null : r.proofUrl, SMS_MAX));
 }
