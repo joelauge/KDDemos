@@ -179,8 +179,10 @@ export function toolDeclarations({ org, productLinks = false }) {
 }
 
 // ------------------------------------------------------------------ Twilio REST (hang-up, texts)
-export function twilioRest(env = {}) {
+/** `from`: the bot's own KnowBot number for texts (else the shared TWILIO_FROM_NUMBER). */
+export function twilioRest(env = {}, { from = null } = {}) {
   const sid = env.TWILIO_ACCOUNT_SID, tok = env.TWILIO_AUTH_TOKEN;
+  const fromNumber = from || env.TWILIO_FROM_NUMBER || '';
   const base = String(env.TWILIO_API_BASE_URL || 'https://api.twilio.com').replace(/\/+$/, '');
   const post = async (p, form) => {
     if (!sid || !tok) throw new Error('Twilio is not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)');
@@ -192,11 +194,12 @@ export function twilioRest(env = {}) {
   };
   return {
     canHangUp: !!(sid && tok),
-    canText: !!(sid && tok && env.TWILIO_FROM_NUMBER),
+    canText: !!(sid && tok && fromNumber),
+    fromNumber,
     hangUp: (callSid) => post(`/Calls/${encodeURIComponent(callSid)}.json`, { Status: 'completed' }),
     sendSms: (to, body) => {
-      if (!env.TWILIO_FROM_NUMBER) throw new Error('TWILIO_FROM_NUMBER is not set');
-      return post('/Messages.json', { From: env.TWILIO_FROM_NUMBER, To: to, Body: body });
+      if (!fromNumber) throw new Error('TWILIO_FROM_NUMBER is not set');
+      return post('/Messages.json', { From: fromNumber, To: to, Body: body });
     },
   };
 }
@@ -209,7 +212,8 @@ export function twilioRest(env = {}) {
  * @param {string|null} [o.shopDomain]  product links on when set
  * @param {(to: string) => boolean} [o.textAllowed]  per-destination / per-bot text quota (devapi.mjs); false → 'texts are limited'
  */
-export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, env = {}, botName = '', org = '', log = () => {} }) {
+export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, env = {}, botName = '', org = '', log = () => {}, fromNumber = null }) {
+  const lineNumber = fromNumber || env.TWILIO_FROM_NUMBER;
   let textsSent = 0;
   const seen = []; // retrieved text this call (citation excerpts + urls), for product handle lookup
   const answers = []; // {query, refused, spoken, citations:[{n,title,file}]} for the call log
@@ -252,7 +256,7 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
       // premium-rate or short-code range (texts are paid by the bot owner's Twilio account)
       const spoken = String(args.phone_number || '').trim();
       const own = toE164(callerNumber);
-      const to = spoken && toE164(spoken) !== own ? textableNumber(spoken, env.TWILIO_FROM_NUMBER) : textableNumber(callerNumber, env.TWILIO_FROM_NUMBER);
+      const to = spoken && toE164(spoken) !== own ? textableNumber(spoken, lineNumber) : textableNumber(callerNumber, lineNumber);
       if (!to) {
         if (spoken) return { status: 'error', retryable: false, reason: `Texts can only go to a mobile number in the same country as this line${own ? ', or to the number they are calling from' : ''}.` };
         return { status: 'need_phone_number', reason: "There's no usable number for this caller. Ask for their mobile number and read it back." };
@@ -363,8 +367,10 @@ export function hasFigure(text, { lastFour = '' } = {}) {
  */
 export function handleMediaStream(twilioWs, cx) {
   const { env, log = () => {} } = cx;
-  const rest = twilioRest(env);
+  const rest = twilioRest(env, { from: cx.fromNumber || null });
   const lim = phoneLimits(env);
+  // a bot on its own KnowBot number: the call can't outlast its credit (at least a minute, to say goodbye)
+  if (Number(cx.maxSeconds) > 0) lim.maxSeconds = Math.min(lim.maxSeconds, Math.max(60, Number(cx.maxSeconds)));
   const botKey = String(cx.botId || '');
   let streamSid = null, callSid = null, callerNumber = '';
   let session = null, sessionReady = false, pendingAudio = [];
@@ -511,8 +517,9 @@ export function handleMediaStream(twilioWs, cx) {
         }, lim.maxSeconds * 1000);
         lifeTimer.unref?.();
         cx.onStart?.({ callSid, from: callerNumber });
-        runShared = createToolRunner({ ask: cx.ask, searchRaw: cx.searchRaw, callSid, callerNumber, sendSms: rest.canText ? rest.sendSms : null,
-          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, env, botName: cx.botName, org: cx.org, log });
+        const sendSms = rest.canText ? async (to, body) => { const r = await rest.sendSms(to, body); try { cx.onTextSent?.({ to, body }); } catch { /* metering only */ } return r; } : null;
+        runShared = createToolRunner({ ask: cx.ask, searchRaw: cx.searchRaw, callSid, callerNumber, sendSms,
+          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, env, botName: cx.botName, org: cx.org, log, fromNumber: rest.fromNumber });
         log(`[voice-live] ${callSid} media stream started (bot ${cx.botId})`);
         openSession().catch((e) => { log(`[voice-live] ${callSid} could not open a Gemini session: ${e.message}`); closeAll(); });
         break;

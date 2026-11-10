@@ -65,7 +65,7 @@ function cleanMask(m) {
 }
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
-const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'shopDomain', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
+const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'shopDomain', 'numberTrial', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
 const BUCKET_KEYS = ['id', 'flow', 'name', 'tag', 'builtin', 'createdAt', 'updatedAt'];
 const now = () => new Date().toISOString();
 
@@ -127,6 +127,12 @@ function cleanBot(body, { partial = false, models = [] } = {}) {
       if (!u || !/^https?:$/.test(u.protocol) || v.length > 200 || u.username || u.password) throw new InstanceError(400, 'shopDomain must be a storefront address such as https://shop.example.com');
       out.shopDomain = `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
     } else out.shopDomain = undefined;
+  }
+  // the Studio bot whose KnowBot number (and its credit) this launched bot answers on (set when a trial converts)
+  if (body.numberTrial !== undefined) {
+    const v = String(body.numberTrial ?? '').trim().toLowerCase();
+    if (v && !/^tr_[a-z2-7]{16}$/.test(v)) throw new InstanceError(400, 'numberTrial must be a Studio bot id (tr_…)');
+    out.numberTrial = v || undefined;
   }
   if (body.starters !== undefined) {
     if (!Array.isArray(body.starters)) throw new InstanceError(400, 'starters must be an array of strings');

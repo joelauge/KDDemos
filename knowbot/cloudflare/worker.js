@@ -26,9 +26,12 @@ export class KnowBotContainer extends Container {
       // Phone channel (server/channels/voice.mjs + voice-live.mjs) and SMS: Worker secrets, passed through only when set, so
       // a missing one leaves that feature off ("channel not configured") instead of breaking the container.
       ...pick(env, ['GEMINI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
+        // KnowBot numbers bought and paid for in the Studio (server/numbers.mjs): off unless all four Stripe/Twilio keys are set
+        'STRIPE_SECRET_KEY', 'STRIPE_PUBLISHABLE_KEY', 'STRIPE_WEBHOOK_SECRET',
         // plain vars (wrangler.jsonc "vars" or --var), optional
         // (no SHOP_DOMAIN: product links come from each bot's own Shopify store import, never one server-wide store)
-        'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PROOF_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS']),
+        'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PROOF_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS',
+        'KNOWBOT_NUMBER_COST_MONTHLY', 'KNOWBOT_NUMBER_COST_MINUTE', 'KNOWBOT_NUMBER_COST_TEXT']),
     };
   }
 

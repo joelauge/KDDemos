@@ -28,7 +28,7 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sealKey, openKey } from './providers.mjs';
 import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
-import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle, formatSms, formatWhatsApp, formatEmail } from './channels/util.mjs';
+import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle, formatSms, formatWhatsApp, formatEmail, smsInfo } from './channels/util.mjs';
 import { SMS_MAX } from './channels/sms.mjs';
 import { handleSms } from './channels/sms.mjs';
 import { handleVoice, phoneEngine } from './channels/voice.mjs';
@@ -869,6 +869,8 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     const raw = req.method === 'POST' ? await o.readRaw(req, name === 'email' ? 25 * 1024 * 1024 : 1024 * 1024) : Buffer.alloc(0);
     const base = apiBase(req);
     const cx = {
+      // the bot's own KnowBot number and its prepaid credit (server/numbers.mjs), or null: unmetered, as before
+      meter: name === 'sms' || name === 'voice' ? await meterOf(target) : null,
       env, req, res, url, raw, sub: sub || '', botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, base, log,
       background: (p) => track(p),
       limited: (k) => limit(`ch:${name}:${target.id}:${hashCaller(k)}`, limits.channel).limited,
@@ -880,6 +882,9 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
       },
     };
     return h(cx);
+  }
+  async function meterOf(target) {
+    try { return (await studio?.numbers?.meterFor?.(target)) || null; } catch (e) { log(`[channels] credit lookup for ${target.id} failed: ${e.message}`); return null; }
   }
   // ---------------------------------------------------------------- phone: Twilio Media Streams WebSocket (voice-live.mjs)
   /** Retrieval only (no answer, nothing logged): the bot's own scope. The phone channel's product-handle lookup. */
@@ -937,9 +942,14 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     (async () => {
       let target;
       try { target = await resolveTarget(decodeURIComponent(mt[1])); } catch { return rejectUpgrade(socket, 404, 'No such bot.'); }
+      const meter = await meterOf(target);
       const ws = acceptWebSocket(req, socket, head, { maxMessage: 256 * 1024 });
       if (!ws) return;
+      let callStart = 0;
       handleMediaStream(ws, {
+        // on its own KnowBot number: texts go out from that number, and the call is metered (minutes rounded up)
+        fromNumber: meter?.phoneNumber || null, maxSeconds: meter ? meter.secondsLeft() : 0,
+        onTextSent: meter ? ({ body }) => { meter.charge('text', Math.max(1, smsInfo(body).segments), 'call-text').catch(() => {}); } : null,
         env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null,
         shopDomain: shopDomainFor(target, env),
         // texts cost the owner money: at most PHONE_TEXTS_PER_NUMBER per destination per 24 h and PHONE_TEXTS_PER_DAY per bot
@@ -951,11 +961,15 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
           return a;
         },
         searchRaw: (q) => searchRaw(target, q),
-        onStart: ({ from }) => { ws.callerKey = from || null; },
+        onStart: ({ from }) => { ws.callerKey = from || null; callStart = now(); },
         // a spoken figure with no search behind it: flagged in the questions loop for the owner to review
         onUngrounded: ({ question, text }) => logAnswer(target, { question: question || '(question not transcribed)', refused: false, citations: [], proof: { floor: { top: null } } },
           'phone', ws.callerKey || null, { flags: ['ungrounded'], note: String(text || '').slice(0, 300) }),
-        onEnd: ({ callSid, transcript, answers }) => log(`[voice-live] ${callSid || '?'} ended: ${transcript.length} turns, ${answers.length} searches (${answers.filter((x) => x.refused).length} not in the files)`),
+        onEnd: ({ callSid, transcript, answers }) => {
+          if (meter && callStart) meter.charge('call', Math.max(1, Math.ceil((now() - callStart) / 60000)), callSid || 'call').catch(() => {});
+          callStart = 0;
+          log(`[voice-live] ${callSid || '?'} ended: ${transcript.length} turns, ${answers.length} searches (${answers.filter((x) => x.refused).length} not in the files)`);
+        },
       });
     })().catch((e) => { log(`[voice-live] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
     return true;

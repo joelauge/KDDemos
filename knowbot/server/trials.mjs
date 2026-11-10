@@ -34,6 +34,7 @@ import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS
 import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
+import { createNumbers } from './numbers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -1402,6 +1403,17 @@ export function createStudio(o = {}) {
     T.specTimer = setTimeout(() => { flushSpec(T); }, 2000);
     T.specTimer.unref?.();
   }
+  // KnowBot numbers (server/numbers.mjs): a number for texts and calls, bought in the Studio after payment. Its state is
+  // T.flags.number, saved in the spec doc like every other flag (survives restarts, kept when the trial converts).
+  const numbers = createNumbers({ env, log, now, fail,
+    loadTrial: async (id) => {
+      if (!TRIAL_ID_RE.test(String(id || '')) || deletedTrials.has(id)) return null;
+      const T = trialFor(id);
+      await loadSpecDoc(T);
+      return T;
+    },
+    saveTrial: (T, { soon = false } = {}) => (soon ? saveSpecSoon(T) : flushSpec(T)),
+    onChange: (T, state) => pushEvent(T, 'number', { number: state }) });
   // fixer r7 (D2): who set each identity field. A field the person set (typed in the Builder or edited in the spec) is
   // never overwritten by a sample set's draft; the draft only fills fields that still hold their default.
   const PROVENANCE_FIELDS = ['name', 'org', 'tone', 'length', 'greeting', 'purpose', 'audience'];
@@ -4161,6 +4173,13 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       pushEvent(T, 'converted', { converted: true, convertedFiles: files, files: after.length });
     } catch (e) { log(`[studio] convert snapshot ${T.id}: ${e.message}`); }
     log(`[studio] converted ${T.id} → account:${account} bucket:${bucketId} (${files} files, ${samples.length} samples removed)`);
+    // a KnowBot number moves with the bot: it now answers for the launched bot, which points back at this trial's state
+    if (T.flags.number?.state === 'active' && body.bot) {
+      try {
+        await numbers.repoint(T, String(body.bot));
+        if (o.registry?.update) await o.registry.update(String(body.bot), { numberTrial: T.id });
+      } catch (e) { log(`[studio] convert ${T.id}: could not move the KnowBot number to bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
+    }
     // convert may name the launched bot (body.bot): it gets the storefront at once
     if (shop.shopDomain && body.bot && o.registry?.update) {
       try { await o.registry.update(String(body.bot), { shopDomain: shop.shopDomain }); shop.bot = String(body.bot).toLowerCase(); }
@@ -4358,6 +4377,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         builder: { engine: builderEngine(), provider: studioProvider && builderEngine() === 'llm' ? studioProvider : null },
         samples: sampleSets().map(({ names, ...s }) => s), sampleMode, anchors: ANCHORS, contact, floor: floorDefault,
       });
+    }
+    // the payments webhook (no trial token: verified by its Stripe-Signature; the session's metadata names the bot)
+    if (a === 'numbers' && id === 'webhook' && !sub) {
+      allow('POST');
+      const raw = await o.readRaw(req, 512 * 1024);
+      return sendJson(res, 200, await numbers.webhook(raw, req.headers['stripe-signature']));
     }
     if (a !== 'trials') fail(404, 'not_found', `no such endpoint ${p}`);
 
@@ -4568,6 +4593,20 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       allow('POST', 'DELETE');
     }
 
+    // "Get your KnowBot number": search, pay in place (embedded checkout), confirm, top up (server/numbers.mjs)
+    if (sub === 'number') {
+      if (!fid) { allow('GET'); return sendJson(res, 200, await numbers.status(T)); }
+      if (fid === 'search') {
+        allow('GET');
+        limitTrialAndIp(T, req, 'numsearch', 20, 60, 'number searches');
+        const q = url.searchParams;
+        return sendJson(res, 200, await numbers.search({ areaCode: q.get('areaCode') || '', country: q.get('country') || 'US', city: q.get('city') || '', region: q.get('region') || '' }));
+      }
+      if (fid === 'checkout') { allow('POST'); limitTrialAndIp(T, req, 'numpay', 10, 30, 'checkouts'); return sendJson(res, 200, await numbers.startCheckout(req, T, await readBody(req))); }
+      if (fid === 'topup') { allow('POST'); limitTrialAndIp(T, req, 'numpay', 10, 30, 'checkouts'); return sendJson(res, 200, await numbers.startTopUp(req, T, await readBody(req))); }
+      if (fid === 'confirm') { allow('POST'); limitTrialAndIp(T, req, 'numconfirm', 30, 60, 'payment checks'); return sendJson(res, 200, await numbers.confirm(T, (await readBody(req)).sessionId)); }
+      fail(404, 'not_found', `no such endpoint ${p}`);
+    }
     if (sub === 'store') { allow('POST', 'GET', 'DELETE'); return storeImport(req, res, T, url); }
     if (sub === 'events') { allow('GET'); await resumeStoreJob(T); return openEvents(req, res, T, url); }
     if (sub === 'channels' && fid && sub2 === 'test') {
@@ -4721,7 +4760,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (T.asked.length > 500) T.asked.shift();
     pushEvent(T, 'asked', { channel: channel || null, outcome: outcome === 'refused' ? 'refused' : 'answered' });
   }
-  return { handle, close, sweep, trials, signToken, verifyToken, signRestore, noteAsk, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
+  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };

@@ -20,6 +20,8 @@ export function phoneEngine(env = {}) {
 }
 
 export const PHONE_NOT_SET_UP = "Sorry, this phone line isn't set up yet. Please try again later. Goodbye.";
+/** A bot on its own KnowBot number with no call credit left (cx.meter, server/numbers.mjs). */
+export const PHONE_NO_CREDIT = "Sorry, this line can't take calls right now. Please try again later, or send a text. Goodbye.";
 
 export async function handleVoice(cx) {
   const { env, req, res, raw, sub = '' } = cx;
@@ -40,6 +42,10 @@ export async function handleVoice(cx) {
   if (phoneEngine(env) !== 'gemini') {
     cx.log(`[channels] voice: call on bot ${cx.botId} declined: the phone line is not set up (GEMINI_API_KEY)`);
     return sendXml(res, `${say(PHONE_NOT_SET_UP)}<Hangup/>`);
+  }
+  if (cx.meter && !cx.meter.ok()) {
+    cx.log(`[channels] voice: call on bot ${cx.botId} declined: out of credit`);
+    return sendXml(res, `${say(PHONE_NO_CREDIT)}<Hangup/>`);
   }
   if (!callSid) return sendXml(res, `${say("Sorry, this call couldn't be connected. Please try again. Goodbye.")}<Hangup/>`);
   // a caller redialling fast gets no stream token (each call holds a Gemini Live session)

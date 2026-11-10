@@ -2,6 +2,7 @@
 # Secrets (on the github-pages environment, or as repository secrets): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
 # KNOWDRIVE_API_KEY (the store the bot answers from) and KNOWBOT_ADMIN_TOKEN (dashboard instance management).
 # Optional (phone/SMS channels): GEMINI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER.
+# Optional (KnowBot numbers bought in the Studio): STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY, STRIPE_WEBHOOK_SECRET.
 name: Deploy KnowBot API to Cloudflare
 on:
   workflow_dispatch:
@@ -41,11 +42,14 @@ jobs:
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
           TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
           TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
         run: |
           if [ -n "$KNOWDRIVE_API_KEY" ]; then printf '%s' "$KNOWDRIVE_API_KEY" | npx wrangler secret put KNOWDRIVE_API_KEY; else echo "::warning::KNOWDRIVE_API_KEY not set; the container will answer from the bundled corpus"; fi
           if [ -n "$ANTHROPIC_API_KEY" ]; then printf '%s' "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY; else echo "::notice::ANTHROPIC_API_KEY not set; the Studio Builder uses its scripted engine"; fi
           # Phone + SMS channels (optional; each feature stays off without its secret)
-          for n in GEMINI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM_NUMBER; do
+          for n in GEMINI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM_NUMBER STRIPE_SECRET_KEY STRIPE_PUBLISHABLE_KEY STRIPE_WEBHOOK_SECRET; do
             v="${!n}"; if [ -n "$v" ]; then printf '%s' "$v" | npx wrangler secret put "$n"; else echo "::notice::$n not set; the phone/SMS feature that needs it stays off"; fi
           done
           if [ -n "$KNOWBOT_ADMIN_TOKEN" ]; then printf '%s' "$KNOWBOT_ADMIN_TOKEN" | npx wrangler secret put KNOWBOT_ADMIN_TOKEN; else echo "::warning::KNOWBOT_ADMIN_TOKEN not set; chat instances can't be created or edited from the dashboard"; fi
