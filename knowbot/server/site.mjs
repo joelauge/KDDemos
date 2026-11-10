@@ -197,6 +197,11 @@ function parseLogo(value, bad) {
   if (!LOGO_TYPES[m[1]](bytes)) bad('logo', 'is not a readable image');
   return { type: m[1], data: bytes.toString('base64'), v: createHash('sha256').update(bytes).digest('hex').slice(0, 12) };
 }
+/** A logo file shipped with a sample set (studio/samples/<set>/logo.png), in the stored shape. */
+export function logoFromPng(bytes) {
+  if (!bytes || !LOGO_TYPES['image/png'](bytes) || bytes.length > LOGO_MAX_BYTES) return null;
+  return { type: 'image/png', data: bytes.toString('base64'), v: createHash('sha256').update(bytes).digest('hex').slice(0, 12) };
+}
 /** The stored logo as bytes, or null. */
 export function siteLogo(edits = {}) {
   const l = edits?.logo;
@@ -248,8 +253,9 @@ export function validateSiteEdit(body, current = {}) {
     else { if (![...SHOW_ON, 'first-visit'].includes(body.showOn)) bad('showOn', `must be ${SHOW_ON.join(' or ')}`); next.showOn = showOnOf(body.showOn); }
   }
   if (body.logo !== undefined) {
-    if (body.logo === null || body.logo === '') delete next.logo;
-    else next.logo = parseLogo(body.logo, bad);
+    // removed on purpose: the name shows, and a sample set's own logo (server/trials.mjs) stays away too
+    if (body.logo === null || body.logo === '') { delete next.logo; next.noLogo = true; }
+    else { next.logo = parseLogo(body.logo, bad); delete next.noLogo; }
   }
   if (body.showChips !== undefined) {
     if (typeof body.showChips !== 'boolean') bad('showChips', 'must be true or false');

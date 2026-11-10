@@ -24,6 +24,9 @@ delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** The overlay heading's name: its text, or its logo's alt text (the logo replaces the name under the wave). */
+const headName = (loc) => loc.evaluate((el) => el.querySelector('.brandlogo')?.alt || el.textContent.trim());
 const SHOTS = process.env.SITE_SHOTS || path.join(__dirname, 'screens', 'site');
 const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
@@ -128,8 +131,8 @@ try {
     const dlg = page.locator('knowbot-overlay .dialog');
     check(cell.name, 'overlay opens over the page: dialog, aria-modal, labelled', (await dlg.getAttribute('role')) === 'dialog' && (await dlg.getAttribute('aria-modal')) === 'true' && (await dlg.getAttribute('aria-labelledby')) === 'kb-h');
     check(cell.name, 'the existing homepage is still there, under a see-through scrim', await page.isVisible('#page-h1') && /blur/.test(await inShadow(page, (sr) => getComputedStyle(sr.querySelector('.scrim')).backdropFilter || getComputedStyle(sr.querySelector('.scrim')).webkitBackdropFilter)));
-    check(cell.name, 'simple start: hand, name, one search box, one button, one quiet line', (await page.locator('knowbot-overlay .hand').textContent()) === '👋'
-      && (await page.locator('knowbot-overlay #kb-h').textContent()).trim() === 'Lumen Bikes' && (await page.locator('knowbot-overlay input').count()) === 1
+    check(cell.name, 'simple start: hand, the sample shop’s logo (named Lumen Bikes), one search box, one button, one quiet line', (await page.locator('knowbot-overlay .hand').textContent()) === '👋'
+      && (await headName(page.locator('knowbot-overlay #kb-h'))) === 'Lumen Bikes' && (await page.locator('knowbot-overlay input').count()) === 1
       && (await page.locator('knowbot-overlay .go').textContent()) === 'Ask' && /Answers come only from Lumen Bikes's own pages/.test(await page.locator('knowbot-overlay .quiet').textContent()));
     check(cell.name, 'no chips, popular questions or facts on the start screen', (await page.locator('knowbot-overlay .chip').count()) === 0 && !(await page.locator('knowbot-overlay .dialog').textContent()).includes('(555) 123-4567'));
     check(cell.name, 'the hand waves on arrival', await inShadow(page, (sr) => sr.querySelector('.hand').classList.contains('waving') && getComputedStyle(sr.querySelector('.hand')).animationName === 'kb-wave'));
@@ -285,7 +288,7 @@ try {
     await page.waitForSelector('.sh-site-frame', { timeout: 20000 });
     const frame = page.frameLocator('.sh-site-frame');
     await frame.locator('knowbot-overlay #kb-h').waitFor({ timeout: 20000 });
-    check('studio', 'the bot pane shows the overlay over a homepage', (await frame.locator('knowbot-overlay #kb-h').textContent()).trim() === 'Lumen Bikes' && await frame.locator('.kh-page').count() === 1);
+    check('studio', 'the bot pane shows the overlay over a homepage', (await headName(frame.locator('knowbot-overlay #kb-h'))) === 'Lumen Bikes' && await frame.locator('.kh-page').count() === 1);
     await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(SHOTS, 'studio-see-it-as-site.png') });
     await frame.locator('knowbot-overlay .x').click();
@@ -310,13 +313,12 @@ try {
     await ssSaid(/every visit/);
     const saved = await siteApi();
     check('studio', 'name and “every visit” save at once', saved.site.name === 'Lumen Bikes Co' && saved.site.showOn === 'every-visit', JSON.stringify({ n: saved.site.name, s: saved.site.showOn }));
-    // a logo: a 1200x300 PNG is fitted to 600x150 and shows under the wave in place of the name
-    const logoPng = Buffer.from((await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 1200; c.height = 300; const g = c.getContext('2d');
-      g.fillStyle = '#0b6e4f'; g.fillRect(0, 60, 300, 180); g.font = 'bold 150px sans-serif'; g.fillText('LUMEN', 340, 220); return c.toDataURL('image/png'); })).split(',')[1], 'base64');
+    // a logo: the sample shop's own (studio/samples/lumen-bikes/logo.png, 502x158), kept at its size
+    const logoPng = await fsp.readFile(path.join(__dirname, '..', 'samples', 'lumen-bikes', 'logo.png'));
     await page.setInputFiles('.gl-sp .ss-file', { name: 'lumen-logo.png', mimeType: 'image/png', buffer: logoPng });
-    await ssSaid(/Logo saved \(600 × 150 px\)/);
+    await ssSaid(/Logo saved \(502 × 158 px\)/);
     const withLogo = await siteApi();
-    check('studio', 'logo upload: fitted to 600 wide, saved, served', !!withLogo.site.logo?.path && (await api(withLogo.site.logo.path)).status === 200 && await page.isVisible('.gl-sp .ss-logo-tile img') && /Replace logo/.test(await page.textContent('.gl-sp .ss-logo-act')));
+    check('studio', 'logo upload: saved at its size, served', !!withLogo.site.logo?.path && (await api(withLogo.site.logo.path)).status === 200 && await page.isVisible('.gl-sp .ss-logo-tile img') && /Replace logo/.test(await page.textContent('.gl-sp .ss-logo-act')));
     await page.locator('.gl-sp-frame').scrollIntoViewIfNeeded();   // the preview frame loads lazily
     const pf = page.frameLocator('.gl-sp-frame iframe');
     await pf.locator('knowbot-overlay .brandlogo').waitFor({ timeout: 20000 });

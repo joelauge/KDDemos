@@ -131,7 +131,8 @@ describe('site generator (pure)', () => {
     const p = publicSite(g, e, { botId: 'acme' });
     assert.deepEqual(p.logo, { path: `/api/site/acme/logo?v=${e.logo.v}` });
     assert.equal(publicSite(g, {}, { botId: 'acme' }).logo, null);
-    assert.deepEqual(validateSiteEdit({ logo: null }, e), {}, 'null removes it');
+    assert.deepEqual(validateSiteEdit({ logo: null }, e), { noLogo: true }, 'null removes it (and keeps a sample logo away)');
+    assert.equal(validateSiteEdit({ logo: `data:image/png;base64,${png.toString('base64')}` }, { noLogo: true }).noLogo, undefined, 'a new logo clears that');
     const big = Buffer.concat([png, Buffer.alloc(151 * 1024)]);
     for (const bad of ['data:image/svg+xml;base64,PHN2Zy8+', `data:image/png;base64,${Buffer.from('not a png').toString('base64')}`, `data:image/png;base64,${big.toString('base64')}`, 'https://example.com/logo.png', 42]) {
       assert.throws(() => validateSiteEdit({ logo: bad }), (err) => err.status === 400 && err.field === 'logo', String(bad).slice(0, 40));
@@ -223,6 +224,7 @@ describe('Homepage search over HTTP', () => {
     assert.equal(v.hostedUrl, `https://knowbot.knowdrive.ai/site/?bot=${t.trialId}`);
     assert.match(v.snippet, new RegExp(`^<script src="http://127\\.0\\.0\\.1:\\d+/site/overlay\\.js" data-bot="${t.trialId}" data-api="http://127\\.0\\.0\\.1:\\d+" async></script>$`), 'a loopback dev server: its own copy');
     assert.equal(v.site.showOn, 'until-dismissed');
+    assert.match(v.site.logo?.path || '', /\/logo\?v=[a-f0-9]{12}$/, 'the sample shop shows its own logo');
     assert.equal(v.site.showChips, false);
     // facts: each one a verbatim line of the file it names
     assert.ok(v.site.facts.length >= 3, JSON.stringify(v.site.facts));

@@ -24,7 +24,7 @@
 // ----------------------------------------------------------------------------------------------------------------
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promises as fsp, readdirSync, statSync } from 'node:fs';
+import { promises as fsp, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as kbLib from '../lib/knowbot.js';
 import { createResearchAgent } from './research.mjs';
@@ -36,7 +36,7 @@ import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
-import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView } from './site.mjs';
+import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -4076,7 +4076,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   function sampleSets() {
     try {
       return readdirSync(SAMPLES_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => {
-        const files = readdirSync(path.join(SAMPLES_DIR, d.name)).filter((f) => f !== 'questions.json' && KIND_OF.has(extOf(f)));
+        // questions.json and logo.png (the sample shop's Homepage search logo) are not source files
+        const files = readdirSync(path.join(SAMPLES_DIR, d.name)).filter((f) => f !== 'questions.json' && f !== 'logo.png' && KIND_OF.has(extOf(f)));
         const bytes = files.reduce((s, f) => s + statSync(path.join(SAMPLES_DIR, d.name, f)).size, 0);
         return { id: d.name, title: d.name === 'lumen-bikes' ? 'Lumen Bikes (sample shop)' : titleFromName(d.name), files: files.length, bytes, names: files.sort() };
       });
@@ -4794,7 +4795,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       }
       if (url.searchParams.get('download') === '1') {
         const api = /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(url.searchParams.get('api') || '') ? url.searchParams.get('api') : selfOriginOf(req);
-        const html = siteHtml(publicSite(T.flags.site, T.spec.site || {}, { botId: T.id, trial: !T.converted }), { botId: T.id, apiBase: api, assetBase: url.searchParams.get('assets') === 'self' ? selfOriginOf(req) : undefined });
+        const html = siteHtml(publicSite(T.flags.site, siteEditsOf(T), { botId: T.id, trial: !T.converted }), { botId: T.id, apiBase: api, assetBase: url.searchParams.get('assets') === 'self' ? selfOriginOf(req) : undefined });
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-disposition': 'attachment; filename="add-to-homepage.html"', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
         return res.end(html);
       }
@@ -4923,8 +4924,29 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     saveSpecSoon(T);
     return T.flags.site;
   }
+  /** A sample set's own logo (studio/samples/<set>/logo.png), read once. */
+  const sampleLogos = new Map();
+  function sampleLogoOf(set) {
+    if (!set || !/^[a-z0-9-]+$/.test(set)) return null;
+    if (!sampleLogos.has(set)) {
+      let l = null;
+      try { l = logoFromPng(readFileSync(path.join(SAMPLES_DIR, set, 'logo.png'))); } catch { l = null; }
+      sampleLogos.set(set, l);
+    }
+    return sampleLogos.get(set);
+  }
+  /**
+   * The Homepage search edits as shown: the owner's own, plus the sample shop's logo while the bot runs on a sample set
+   * (and not on an imported website), the owner has no logo of their own and has not removed it.
+   */
+  function siteEditsOf(T) {
+    const e = T.spec.site || {};
+    if (e.logo || e.noLogo || !T.spec.sampleSet || T.flags.storeLast) return e;
+    const l = sampleLogoOf(T.spec.sampleSet);
+    return l ? { ...e, logo: l } : e;
+  }
   function siteView(req, T) {
-    const edits = T.spec.site || {};
+    const edits = siteEditsOf(T);
     const hosted = `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(T.id)}`;
     // the homepage snippet: the hosted script on a real deploy; a loopback dev server's own copy (and API) locally
     const self = selfOriginOf(req);
@@ -4942,7 +4964,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     await loadSpecDoc(T);
     if (!T.flags.site) { if (!had) trials.delete(id); return null; }
     if (!T.expiresAt || T.expiresAt <= now()) return null;
-    return { site: publicSite(T.flags.site, T.spec.site || {}, { botId: id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }), published: !!T.spec.site?.published, expiresAt: T.expiresAt };
+    return { site: publicSite(T.flags.site, siteEditsOf(T), { botId: id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }), published: !!T.spec.site?.published, expiresAt: T.expiresAt };
   }
   /** GET /api/site/:id/logo (server/devapi.mjs): the owner's uploaded logo as bytes, or null. */
   async function siteLogoPublic(id) {
@@ -4951,7 +4973,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const T = trialFor(id);
     await loadSpecDoc(T);
     if (!T.expiresAt || T.expiresAt <= now()) { if (!had) trials.delete(id); return null; }
-    return siteLogo(T.spec.site || {});
+    return siteLogo(siteEditsOf(T));
   }
   function shareLinkOf(req, T, origin = originOf(req)) {
     return `${origin}/studio/?t=${encodeURIComponent(T.id)}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
