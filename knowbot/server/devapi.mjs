@@ -15,6 +15,9 @@
 //   GET  /api/instances/:id/insights                                           top questions and gaps (questions.mjs)
 //   trial (Studio bearer token):
 //   GET  /api/studio/trials/:id/devkey                                         the trial's kb_trial_ key
+//   public:
+//   GET  /api/site/:botId                                                      a published Single-page site + a key that can
+//                                                                              only ask questions (scope "site", a few hours)
 //
 // Keys: kb_live_<32 random bytes, base64url>. Only a SHA-256 of each key is kept, in a registry document that is itself
 // AES-256-GCM sealed (the same sealing as provider keys) and stored in knowDrive at knowbot/_config/devkeys.json
@@ -58,7 +61,7 @@ export const EXPOSE_HEADERS = 'content-type, retry-after, x-request-id, x-rateli
 /** True for the paths createDevApi().handle serves (the one dispatch test server.mjs uses). */
 // Every /v1 route is also served under /api/v1 (and /p under /api/p): the production Worker forwards only /api/*.
 export const isDevApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p === '/api/v1' || p.startsWith('/api/v1/') || /^\/(?:api\/)?p\/[A-Za-z0-9_-]+$/.test(p)
-  || /^\/api\/instances\/[^/]+\/(?:keys|insights)(?:\/[^/]*)?$/.test(p) || /^\/api\/studio\/trials\/[^/]+\/devkey$/.test(p);
+  || /^\/api\/instances\/[^/]+\/(?:keys|insights)(?:\/[^/]*)?$/.test(p) || /^\/api\/studio\/trials\/[^/]+\/devkey$/.test(p) || /^\/api\/site\/[^/]+$/.test(p);
 
 export class ApiError extends Error {
   constructor(status, code, message, extra = {}, headers = {}) { super(message); this.status = status; this.code = code; this.extra = extra; this.headers = headers; }
@@ -149,6 +152,9 @@ export function createDevApi(o = {}) {
   const limits = {
     live: Number(env.KNOWBOT_API_RATE_LIMIT || 60),        // requests per minute per live key
     trial: Number(env.KNOWBOT_API_TRIAL_RATE_LIMIT || 20), // per trial key
+    site: Number(env.KNOWBOT_SITE_RATE_LIMIT || 60),       // Single-page site: questions per minute per bot (all visitors)
+    siteIp: Number(env.KNOWBOT_SITE_IP_RATE_LIMIT || 10),  // … and per visitor address
+    siteKeyMs: Number(env.KNOWBOT_SITE_KEY_MS || 6 * 3600 * 1000), // a site key's life (never past its trial)
     channel: Number(env.KNOWBOT_CHANNEL_RATE_LIMIT || 12), // per caller per bot per channel
     ...(o.limits || {}),
   };
@@ -237,8 +243,10 @@ export function createDevApi(o = {}) {
 
   // ---------------------------------------------------------------- trial keys (stateless)
   const trialSig = (payload) => createHmac('sha256', `knowbot-devkey\n${trialSecret}`).update(payload).digest().subarray(0, 18).toString('base64url');
-  function trialKey(trialId, expiresAt) {
-    const payload = b64u(JSON.stringify({ t: trialId, e: Number(expiresAt) }));
+  // scope "site": the Single-page site's key (GET /api/site/:id). It can only ask questions (POST /v1/bots/:id/chat), is
+  // limited per bot and per visitor address, and lives a few hours: the page fetches a fresh one when it runs out.
+  function trialKey(trialId, expiresAt, scope = null) {
+    const payload = b64u(JSON.stringify({ t: trialId, e: Number(expiresAt), ...(scope ? { s: scope } : {}) }));
     return `kb_trial_${payload}.${trialSig(payload)}`;
   }
   function openTrialKey(key) {
@@ -247,13 +255,13 @@ export function createDevApi(o = {}) {
     if (dot < 1) return null;
     const payload = body.slice(0, dot), sig = body.slice(dot + 1);
     if (!eq(sig, trialSig(payload))) return null;
-    try { const d = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return TRIAL_ID_RE.test(d.t) && Number(d.e) > 0 ? d : null; } catch { return null; }
+    try { const d = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return TRIAL_ID_RE.test(d.t) && Number(d.e) > 0 && (d.s == null || d.s === 'site') ? d : null; } catch { return null; }
   }
 
   // ---------------------------------------------------------------- auth
   const bearerOf = (req) => { const a = String(req.headers.authorization || ''); return /^Bearer\s+/i.test(a) ? a.replace(/^Bearer\s+/i, '').trim() : ''; };
   /** → {kind, bot, keyId, expiresAt?}. Throws 401/403. */
-  async function authKey(req, botId = null) {
+  async function authKey(req, botId = null, { site = false } = {}) {
     const token = bearerOf(req);
     if (!token) throw new ApiError(401, 'missing_api_key', 'Send your KnowBot API key as "Authorization: Bearer kb_…".');
     // a kb_live_/kb_trial_ key that fails to verify is a bad key, not a wrong kind of key: say so
@@ -265,7 +273,8 @@ export function createDevApi(o = {}) {
       const d = openTrialKey(token);
       if (!d) throw new ApiError(401, 'invalid_api_key', BAD_KEY);
       if (!(d.e > now())) throw new ApiError(401, 'expired_api_key', 'This trial key expired with its trial.');
-      who = { kind: 'trial', bot: d.t, keyId: `trial:${d.t}`, expiresAt: d.e };
+      who = d.s === 'site' ? { kind: 'trial', scope: 'site', bot: d.t, keyId: `site:${d.t}`, expiresAt: d.e } : { kind: 'trial', bot: d.t, keyId: `trial:${d.t}`, expiresAt: d.e };
+      if (who.scope === 'site' && !site) throw new ApiError(403, 'wrong_scope', 'This key can only ask questions on its Single-page site.');
     } else {
       await loadKeys();
       const rec = K.byHash.get(sha256(token));
@@ -277,7 +286,12 @@ export function createDevApi(o = {}) {
     return who;
   }
   function rateLimit(res, who) {
-    const n = who.kind === 'trial' ? limits.trial : limits.live;
+    if (who.scope === 'site') {
+      const ip = typeof o.clientIp === 'function' ? o.clientIp(res.req) : (res.req?.socket?.remoteAddress || 'unknown');
+      const r2 = limit(`siteip:${who.bot}:${ip}`, limits.siteIp);
+      if (r2.limited) throw new ApiError(429, 'rate_limit_exceeded', `Too many questions at once. Try again in ${r2.retryAfter}s.`, {}, { 'retry-after': String(r2.retryAfter) });
+    }
+    const n = who.scope === 'site' ? limits.site : who.kind === 'trial' ? limits.trial : limits.live;
     const r = limit(`key:${who.keyId}`, n);
     if (Number.isFinite(n) && n > 0) {
       const rem = String(Math.max(0, r.remaining));
@@ -836,13 +850,13 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   }
 
   async function botChat(req, res, botId) {
-    const who = await authKey(req, botId);
+    const who = await authKey(req, botId, { site: true });
     rateLimit(res, who);
     const body = await bodyJson(req);
     const { question, history } = readConversation(body);
     const target = await resolveTarget(botId, who);
-    const channel = typeof body.channel === 'string' && CHANNELS.includes(body.channel) ? body.channel : 'api';
-    const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
+    const channel = who.scope === 'site' ? 'site' : typeof body.channel === 'string' && CHANNELS.includes(body.channel) ? body.channel : 'api';
+    const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${String(body.user).slice(0, 80)}` : who.keyId;
     const format = formatOf(body);
     const siKey = `${target.id}|${channel}|${callerKey}`;
     const si = await sendInfoTurn(req, target, { key: siKey, question, history, channel, callerKey });
@@ -1291,6 +1305,24 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         rateLimit: { perMinute: limits.trial }, voice: { google: g.stt && g.tts, stt: g.stt ? 'google' : 'browser', tts: g.tts ? 'google' : 'browser' },
         endpoints: { chat: `${base}/v1/bots/${id}/chat`, completions: `${base}/v1/chat/completions`, voice: `${base}/v1/bots/${id}/voice`, channels: `${base}/v1/channels/${id}` },
         channels: channelsInfo(req, id, await resolveTarget(id).catch(() => null)).channels });
+    }
+    // the Single-page site (server/site.mjs): its public view and a key that can only ask questions. Published sites
+    // only; the owner's own trial key (the Studio's preview) also opens a site that is not published yet.
+    if ((mt = /^\/api\/site\/([^/]+)$/.exec(p))) {
+      if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      const id = decodeURIComponent(mt[1]).toLowerCase();
+      const ip = typeof o.clientIp === 'function' ? o.clientIp(req) : (req.socket?.remoteAddress || 'unknown');
+      const rl = limit(`sitecfg:${ip}`, 30);
+      if (rl.limited) throw new ApiError(429, 'rate_limit_exceeded', `Too many requests. Try again in ${rl.retryAfter}s.`, {}, { 'retry-after': String(rl.retryAfter) });
+      const s = TRIAL_ID_RE.test(id) && studio?.sitePublic ? await studio.sitePublic(id) : null;
+      if (!s) throw new ApiError(404, 'site_not_found', 'This page is not available.');
+      let owner = false;
+      if (bearerOf(req)) { try { const who = await authKey(req, id); owner = who.kind === 'trial' && !who.scope; } catch { owner = false; } }
+      if (!s.published && !owner) throw new ApiError(404, 'site_not_found', 'This page is not available.');
+      const exp = Math.min(Number(s.expiresAt) || now() + limits.siteKeyMs, now() + limits.siteKeyMs);
+      res.setHeader('cache-control', 'no-store');
+      return send(res, 200, { ...s.site, preview: !s.published, key: trialKey(id, exp, 'site'), keyExpiresAt: new Date(exp).toISOString(),
+        endpoints: { chat: `${apiBase(req)}/v1/bots/${id}/chat` } });
     }
     // proof pages
     if ((mt = /^\/(?:v1\/)?p\/([A-Za-z0-9_-]+)$/.exec(p))) {

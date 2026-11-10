@@ -792,7 +792,7 @@ function priceIntent(text, label) {
   const m = getState().milestones;
   const surf = normalizeSurfaces(getState().spec?.surfaces);
   const many = surf.length > 1 ? ` ${name} is set to answer on ${surfacesText(surf)}, so that is ${surf.length} plan lines; you can remove any at checkout.` : '';
-  localSay(`Building and testing is free, no card. Going live is **$${amt}/mo** (or $2,499/year) per answer surface (website chat, SMS, WhatsApp, email, phone or web voice), for up to 100 MB, with the first 30 days free and a card required at signup.${many} ${name} gets a hosted link, the embed snippet and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { reply: true, chips: [
+  localSay(`Building and testing is free, no card. Going live is **$${amt}/mo** (or $2,499/year) per answer surface (website chat, SMS, WhatsApp, email, phone, web voice or a single-page site), for up to 100 MB, with the first 30 days free and a card required at signup.${many} ${name} gets a hosted link, the embed snippet and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { reply: true, chips: [
     { id: 'launch', label: `Launch · ${priceText()}`, kind: m.firstCited ? 'primary' : 'default', action: { type: 'show_launch' }, local: true },
     { id: 'what-get', label: 'What do I get?', send: 'What do I get?' },
     m.firstCited ? { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true }
@@ -813,6 +813,7 @@ const CHANNEL_HINTS = [
   { id: 'phone', re: /\b(telephone|phone( calls?| line| number)?|calls?|call in)\b/i, name: 'Telephone', need: 'Phone calls need a KnowBot number; callers ask out loud and it answers by voice, naming the source. Try the call simulator now.' },
   { id: 'email', re: /\b(e-?mails?|inbox|support@)\b/i, name: 'Email', need: 'Email needs an inbound-parse webhook (SendGrid, Postmark or Mailgun); replies carry footnoted citations and a source list.' },
   { id: 'voice', re: /\bvoice ?(bot|chat\w*|assistant|agent|channel)?\b|\bspeak|\btalk to\b/i, name: 'Voice chatbot', need: 'The voice chatbot runs in the browser, no account needed. Press Try it and talk to your bot.' },
+  { id: 'site', re: /\b(home ?page|landing page|search page|front ?page|(?:single|one)[- ]page (?:web)?site)\b/i, name: 'Single-page site', need: 'The single-page site is a clean search page built from your files: answers quote your pages and link to them. Publish it, download it, or use it as your homepage.' },
   { id: 'text', re: /\b(widget|embed\w*|website|my site|chat ?bubble|full-?page)\b/i, name: 'Text chatbot', need: 'The chat widget is one line of embed code; you can try it right here before you launch.' },
 ];
 function channelOf(text) { const hit = CHANNEL_HINTS.find((c) => c.re.test(text)); return hit || null; }
@@ -825,7 +826,7 @@ function channelsIntent(text, label) {
   const line = dev
     ? `${name} has a chat API. It's OpenAI-compatible: point any OpenAI SDK at it by changing the base URL. Every reply carries its citations, or the exact refusal. Opening the Developers tab with your trial key and live-tested snippets.`
     : ch ? `Yes: ${name} can answer on ${ch.name} with the same cited answers. ${ch.need} Opening the ${ch.name} card.`
-      : `${name} can answer on 6 channels: SMS, phone calls, WhatsApp, email, a chat widget and a voice chatbot, all with the same cited answers. Each one has its webhook ready to copy, and most have a Try it. Opening Channels.`;
+      : `${name} can answer on 7 channels: SMS, phone calls, WhatsApp, email, a chat widget, a voice chatbot and a single-page site, all with the same cited answers. Each one has its webhook ready to copy, and most have a Try it. Opening Channels.`;
   localSay(line, { reply: true, chips: [
     { id: 'open_channels', label: ch ? `${ch.name} setup` : 'Channels', kind: dev ? 'default' : 'primary', local: true, run: () => openGoLive('channels', ch?.id) },
     { id: 'open_api', label: 'Developer API', kind: dev ? 'primary' : 'default', local: true, run: () => openGoLive('developers') },

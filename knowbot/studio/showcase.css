@@ -130,3 +130,10 @@ html[data-motion="reduce"] .ks-float, html[data-motion="reduce"] .ks-shadow, htm
 .ks-shadow { position: absolute; left: 19%; top: calc(40px + 12px + var(--ks-stage-h) + 8px); margin: 0; z-index: 0; }
 @media (max-width: 1099px) { .kl-show { --ks-stage-h: 440px; } }
 @media (max-width: 480px) { .kl-show { --ks-stage-h: 430px; } }
+/* single-page site: a search page as the homepage */
+.ks-op-body { flex: 1; padding: 26px 18px 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.ks-op-h { font: 800 20px/1.2 var(--font-sans, system-ui); color: #111827; }
+.ks-op-box { margin: 0; width: 100%; padding: 10px 12px; border-radius: 10px; border: 1.5px solid #c7d2fe; background: #fff; color: #111827; text-align: left; font: 13px/1.4 var(--font-sans, system-ui); }
+.ks-op-chips { margin: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.ks-op-chips i { font: 600 11px/1.4 var(--font-sans, system-ui); font-style: normal; padding: 3px 9px; border-radius: 999px; border: 1px solid #e4e6ef; color: #374151; }
+.ks-onepage .ks-cap.ks-bot { align-self: stretch; text-align: left; background: #f1f2f6; color: #111; border-left: 3px solid #4f46e5; border-radius: 0 10px 10px 0; }

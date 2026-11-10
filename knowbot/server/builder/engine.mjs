@@ -24,7 +24,7 @@ import { createBuilderTools, CLIENT_ACTIONS, OFFER_ONLY_ACTIONS, readyFiles, quo
 import { preparse } from './preparse.mjs';
 
 export const DEFAULT_MODEL = 'claude-haiku-5-5';
-const SURFACE_WORD = { webchat: 'website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'email', phone: 'phone', webvoice: 'web voice' };
+const SURFACE_WORD = { webchat: 'website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'email', phone: 'phone', webvoice: 'web voice', site: 'single-page site' };
 const clip = (s, n) => { s = String(s ?? ''); return s.length <= n ? s : `${s.slice(0, Math.max(0, n - 1)).replace(/\s+\S*$/, '')}…`; };
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 /** Text that came from files, sites or the visitor is data: no tags, no line breaks, bounded. */
@@ -53,7 +53,7 @@ Safety
 Style
 - Warm, plain and concrete. 1 to 3 short sentences. No headings, no lists, no emoji. Use the bot's name. Use the middle dot · as a separator when listing settings.
 - Prices, trial length and plan details are only ever stated with a [n] citation, and you quote only figures that appear in the kb_search results.
-- Answer surfaces (bot.answer_surfaces: webchat, sms, whatsapp, email, phone, webvoice) are where the bot answers after launch; change them with update_bot surfaces when asked ("add WhatsApp", "just web chat") and confirm them in plain words. Never bring up what surfaces cost on your own; if the visitor asks, answer truthfully from kb_search with the citation.
+- Answer surfaces (bot.answer_surfaces: webchat, sms, whatsapp, email, phone, webvoice, site) are where the bot answers after launch; change them with update_bot surfaces when asked ("add WhatsApp", "just web chat", "replace my homepage" = add site) and confirm them in plain words. Never bring up what surfaces cost on your own; if the visitor asks, answer truthfully from kb_search with the citation.
 - Offer the obvious next steps as buttons with offer_choices when no other tool already offered them.`;
 }
 

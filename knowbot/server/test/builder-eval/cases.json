@@ -5853,7 +5853,7 @@
     ],
     "cites": true,
     "replyMust": [
-     "/six|sms|whatsapp/i"
+     "/seven|sms|whatsapp/i"
     ],
     "mustNotTools": [
      "update_bot",
@@ -5876,11 +5876,89 @@
       }
      }
     ],
-    "reply": "{{quote:six channels}}"
+    "reply": "{{quote:seven channels}}"
    }
   },
   {
    "id": "channels-08",
+   "category": "channels",
+   "input": {
+    "message": "can it replace my homepage?"
+   },
+   "state": "samples-ready",
+   "expect": {
+    "tools": [
+     "kb_search"
+    ],
+    "cites": true,
+    "replyMust": [
+     "/homepage|site|page/i"
+    ],
+    "mustNotTools": [
+     "update_bot",
+     "import_website"
+    ],
+    "noPatch": true,
+    "mustNotActions": [
+     "remove_samples",
+     "checkout",
+     "start_over"
+    ],
+    "logged": true
+   },
+   "gold": {
+    "calls": [
+     {
+      "name": "kb_search",
+      "input": {
+       "query": "single-page site homepage"
+      }
+     }
+    ],
+    "reply": "{{quote:It can replace your homepage}}"
+   }
+  },
+  {
+   "id": "channels-09",
+   "category": "channels",
+   "input": {
+    "message": "how do I use the site as my homepage?"
+   },
+   "state": "samples-ready",
+   "expect": {
+    "tools": [
+     "kb_search"
+    ],
+    "cites": true,
+    "replyMust": [
+     "/domain|html|link/i"
+    ],
+    "mustNotTools": [
+     "update_bot",
+     "import_website"
+    ],
+    "noPatch": true,
+    "mustNotActions": [
+     "remove_samples",
+     "checkout",
+     "start_over"
+    ],
+    "logged": true
+   },
+   "gold": {
+    "calls": [
+     {
+      "name": "kb_search",
+      "input": {
+       "query": "single-page site as homepage domain"
+      }
+     }
+    ],
+    "reply": "{{quote:point your domain at the hosted link}}"
+   }
+  },
+  {
+   "id": "channels-10",
    "category": "channels",
    "input": {
     "message": "is there an API?"
@@ -5919,7 +5997,7 @@
    }
   },
   {
-   "id": "channels-09",
+   "id": "channels-11",
    "category": "channels",
    "input": {
     "message": "is the API openai compatible?"
@@ -5958,7 +6036,7 @@
    }
   },
   {
-   "id": "channels-10",
+   "id": "channels-12",
    "category": "channels",
    "input": {
     "message": "what are the API rate limits?"
@@ -5997,7 +6075,7 @@
    }
   },
   {
-   "id": "channels-11",
+   "id": "channels-13",
    "category": "channels",
    "input": {
     "message": "how do I get an API key?"
@@ -6036,7 +6114,7 @@
    }
   },
   {
-   "id": "channels-12",
+   "id": "channels-14",
    "category": "channels",
    "input": {
     "message": "can I connect it to my own app?"
@@ -6075,7 +6153,7 @@
    }
   },
   {
-   "id": "channels-13",
+   "id": "channels-15",
    "category": "channels",
    "input": {
     "message": "does SMS reply length have a limit?"
@@ -6114,7 +6192,7 @@
    }
   },
   {
-   "id": "channels-14",
+   "id": "channels-16",
    "category": "channels",
    "input": {
     "message": "what do I need for whatsapp setup?"
@@ -6153,7 +6231,7 @@
    }
   },
   {
-   "id": "channels-15",
+   "id": "channels-17",
    "category": "channels",
    "input": {
     "message": "can customers ask the bot to email or text them an answer?"
@@ -6192,7 +6270,7 @@
    }
   },
   {
-   "id": "channels-16",
+   "id": "channels-18",
    "category": "channels",
    "input": {
     "message": "open the whatsapp setup"
@@ -6222,7 +6300,7 @@
    }
   },
   {
-   "id": "channels-17",
+   "id": "channels-19",
    "category": "channels",
    "input": {
     "message": "show me the developer docs"
@@ -6245,7 +6323,7 @@
    }
   },
   {
-   "id": "channels-18",
+   "id": "channels-20",
    "category": "channels",
    "input": {
     "message": "can my customers call it from their phone?"
@@ -6286,7 +6364,7 @@
    }
   },
   {
-   "id": "channels-19",
+   "id": "channels-21",
    "category": "channels",
    "input": {
     "message": "could I call it from my own app?"
@@ -6327,7 +6405,7 @@
    }
   },
   {
-   "id": "channels-20",
+   "id": "channels-22",
    "category": "channels",
    "input": {
     "message": "can people text it on WhatsApp?"
@@ -6368,7 +6446,7 @@
    }
   },
   {
-   "id": "channels-21",
+   "id": "channels-23",
    "category": "channels",
    "input": {
     "message": "can visitors talk to it out loud?"

@@ -345,7 +345,7 @@ describe('questions: writer and insights (fake knowDrive)', () => {
     assert.deepEqual([...care.channels].sort(), ['api', 'sms', 'whatsapp']);
     assert.ok(r.top.some((t) => t.q === 'How much is the Premium Plan?' && t.count === 1), 'two named products never merge');
     assert.ok(r.top.some((t) => t.q === 'How much is the Basic Plan?' && t.count === 1));
-    assert.deepEqual(r.byChannel, { studio: 0, web: 2, api: 1, sms: 1, voice: 1, phone: 0, whatsapp: 1, email: 1 });
+    assert.deepEqual(r.byChannel, { studio: 0, web: 2, api: 1, sms: 1, voice: 1, phone: 0, whatsapp: 1, email: 1, site: 0 });
     assert.equal(Object.values(r.byChannel).reduce((a, b) => a + b, 0), r.total);
     // gaps: the in-domain one first and suggesting a file; the off-topic one is working as intended
     assert.deepEqual(r.gaps.map((g) => [g.q, g.inDomain, g.status]), [['Do you deliver on Sundays?', true, 'needs_content'], ['Who won the 1998 World Cup?', false, 'working_as_intended']]);

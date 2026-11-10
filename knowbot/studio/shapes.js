@@ -6,6 +6,8 @@
 //              webhook would send it (same pipeline, same formatter), logged to insights under that channel
 //   phone    → the in-browser phone (./phonesim.js) on the live voice socket, phone mode
 //   voice    → the web voice assistant widget (../lib/voice-widget.js)
+//   site     → the Single-page site (../site/) in a frame, built from the files (GET …/trials/:id/site), with the
+//              owner's trial key in the frame's URL fragment so the preview works before it is published
 //
 //   const s = mountShapes(selectorHost, frameHost, { getState, base, surfaces, starters: () => [...], onChange(shape) })
 //   s.set('sms'); s.shape; s.destroy()
@@ -17,6 +19,7 @@ export const SHAPES = [
   { id: 'email', label: 'Email', short: 'Email', surface: 'email' },
   { id: 'phone', label: 'Phone', short: 'Phone', surface: 'phone' },
   { id: 'voice', label: 'Web voice', short: 'Voice', surface: 'webvoice' },
+  { id: 'site', label: 'Site', short: 'Site', surface: 'site' },
 ];
 const SHAPE_OF_SURFACE = Object.fromEntries(SHAPES.map((s) => [s.surface, s.id]));
 
@@ -27,6 +30,7 @@ const ICON = {
   email: '<rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
   phone: '<path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/>',
   voice: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  site: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 8.5h18"/><circle cx="11" cy="14" r="2.6"/><path d="m13 16 2.2 2.2"/>',
 };
 const svg = (id, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[id]}</svg>`;
 
@@ -137,6 +141,7 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
     if (shape === 'sms' || shape === 'whatsapp') return messagingFrame(shape);
     if (shape === 'email') return emailFrame();
     if (shape === 'phone') return phoneFrame();
+    if (shape === 'site') return siteFrame();
     return voiceFrame();
   }
 
@@ -265,6 +270,30 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
       widget = m.mountVoice(mount, { endpoint: ws, bot: d.botId, key: d.key, name: botName() });
       note.textContent = 'This is the voice button visitors get on your website: they talk, it answers out loud and shows its sources.';
     }).catch(() => { note.textContent = "The voice assistant couldn't load here."; });
+    return host;
+  }
+
+  // Site: the Single-page site in a frame (the same page visitors get at the hosted link)
+  function siteFrame() {
+    const host = h('div', { class: 'sh-frame sh-site' });
+    const note = h('p', { class: 'sh-note', role: 'status' }, 'Building your page from your files…');
+    host.append(note);
+    let stopped = false;
+    st.live = { stop() { stopped = true; } };
+    const t = getState().trial || {};
+    Promise.all([loadDev(), fetch(`${base}/api/studio/trials/${encodeURIComponent(t.id || '')}/site`, { headers: t.token ? { authorization: `Bearer ${t.token}` } : {}, credentials: 'omit' })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null)]).then(([d, s]) => {
+      if (stopped) return;
+      if (!d || !s) { note.textContent = 'Your page is still getting ready. Try again in a moment.'; return; }
+      const page = new URL('../site/', location.href);
+      page.searchParams.set('bot', d.botId);
+      if (/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(new URL(base).origin)) page.searchParams.set('api', new URL(base).origin);
+      page.hash = `k=${encodeURIComponent(d.key)}`;
+      const frame = h('iframe', { class: 'sh-site-frame', title: `${s.site?.name || botName()} · your single-page site`, src: page.href, loading: 'lazy',
+        sandbox: 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms', referrerpolicy: 'no-referrer' });
+      host.prepend(h('div', { class: 'sh-site-bar', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('span', null, s.published ? s.hostedUrl.replace(/^https:\/\//, '') : 'Preview · not published yet')), frame);
+      note.textContent = s.published ? 'This is your published page. Change its name, topics or link in Set up.' : 'A search page built from your files. Publish it, download it or use it as your homepage from Set up.';
+    });
     return host;
   }
 

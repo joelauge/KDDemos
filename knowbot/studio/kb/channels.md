@@ -4,7 +4,7 @@
 
 Source: /studio/
 
-A launched KnowBot can answer on six channels: a website chat widget, SMS, telephone (phone calls), WhatsApp, email, and a voice chatbot in the browser. Every channel uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. The Channels gallery in KnowBot Studio shows each channel's webhook address and copyable setup.
+A launched KnowBot can answer on seven channels: a website chat widget, SMS, telephone (phone calls), WhatsApp, email, a voice chatbot in the browser, and a single-page site. Every channel uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. The Channels gallery in KnowBot Studio shows each channel's webhook address and copyable setup.
 
 ## Website chat widget
 
@@ -59,6 +59,18 @@ The email channel answers messages received through an inbound-parse webhook fro
 Source: /studio/
 
 The voice chatbot lets a visitor talk to the bot in their browser and hear the answer. In KnowBot Studio, "Try it" works with no account. It uses the same live voice as phone calls: the visitor talks naturally, and the bot answers out loud from the bot's files while the sources show on screen as links.
+
+## Single-page site
+
+Source: /studio/
+
+The single-page site is a clean web page built from the bot's own files: the business name, a big search box ("Ask anything about …"), topic buttons, popular questions, and contact details only when they are quoted word for word from the files. It can replace your homepage. Visitors search it and get the same cited answers as the website chat, with a Sources list that links each answer to the page it came from on your website, or to the proof page for an uploaded file. When the answer is not in the files, it says the same refusal sentence as every other channel. You can change the name, the one-line description and the topic buttons in KnowBot Studio, then publish it.
+
+## Using the single-page site as your homepage
+
+Source: /studio/
+
+Once it is published, the site has a hosted link at knowbot.knowdrive.ai/site/ with your bot id, and you can download it as one HTML file. To use it as your homepage, you can point your domain at the hosted link, paste the downloaded HTML file in as your home page, or link to it from your site's menu, for example as "Search" or "Help". While the bot is a trial, the page tells search engines not to list it.
 
 ## When a channel is not set up
 

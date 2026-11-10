@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const stamp = process.argv[2] || execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();
 const REF = /(["'])(\.{1,2}\/[^"'?#\s]+\.(?:js|mjs|css))(?:\?v=[\w.-]+)?\1/g;
 let changed = 0;
-for (const dir of ['dashboard', 'demo', 'lib', 'studio']) {
+for (const dir of ['dashboard', 'demo', 'lib', 'studio', 'site']) {
   for (const f of readdirSync(join(root, dir))) {
     if (!/\.(?:html|js|mjs)$/.test(f)) continue;
     const p = join(root, dir, f);

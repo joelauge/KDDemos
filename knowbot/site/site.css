@@ -1,0 +1,103 @@
+/* KnowBot Single-page site (site/site.js). KnowDrive tokens + widgets (.btn .card .input .chip .chipbtn) underneath;
+   --ks-accent is the business's colour (server/site.mjs brandColors: white text reads on it at 4.5:1, and its dark
+   variant reads on the dark page). Mobile first: 16px gutters, 44px targets, no horizontal scroll. */
+:root { --ks-accent: var(--accent-purple, #6c5ce7); --ks-max: 760px; --ks-radius: 14px; color-scheme: light; }
+html.dark { color-scheme: dark; }
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg-surface, #fbfaff); color: var(--text-body, #5a5a6e); min-width: 0;
+  font: 16px/1.6 "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--text-accent, #4b3fc4); }
+html.dark a { color: color-mix(in srgb, var(--ks-accent) 70%, #fff); }
+:focus-visible { outline: 3px solid var(--ks-accent); outline-offset: 2px; border-radius: 6px; }
+.ks-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.ks-root { min-height: 100vh; display: flex; flex-direction: column; }
+
+/* top bar */
+.ks-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; width: 100%; max-width: calc(var(--ks-max) + 32px); margin: 0 auto; padding: 14px 16px; }
+.ks-brand { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--text-heading, #15151f); font-weight: 800; }
+.ks-brand-name { overflow-wrap: anywhere; }
+.ks-mark, .ks-logo { width: 40px; height: 40px; border-radius: 10px; flex: none; }
+.ks-mark { display: grid; place-items: center; background: var(--ks-accent); color: #fff; font-size: 15px; letter-spacing: .02em; }
+html.dark .ks-mark { color: #15151f; }
+.ks-logo { object-fit: contain; background: #fff; }
+.ks-home { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; text-decoration: none; }
+.ks-home:hover { text-decoration: underline; }
+.ks-preview { margin: 0; text-transform: none; }
+
+/* hero + search */
+.ks-main { flex: 1; width: 100%; max-width: calc(var(--ks-max) + 32px); margin: 0 auto; padding: 0 16px 32px; }
+.ks-hero { padding: 40px 0 24px; text-align: center; transition: padding .25s ease; }
+body.is-asked .ks-hero { padding-top: 12px; }
+.ks-h1 { margin: 0 0 8px; color: var(--text-heading, #15151f); font-size: clamp(30px, 7vw, 46px); line-height: 1.1; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.ks-tag { margin: 0 auto 24px; max-width: 34em; font-size: 17px; }
+.ks-search { margin: 0 auto; max-width: 640px; text-align: left; }
+.ks-label { display: block; margin: 0 0 6px; color: var(--text-heading, #15151f); font-weight: 700; font-size: 15px; }
+.ks-label-sm { font-size: 14px; }
+.ks-search-row { display: flex; gap: 8px; }
+.ks-input { flex: 1; min-width: 0; min-height: 52px; font-size: 17px; padding: 10px 16px; border-radius: 12px; }
+.ks-input:focus { border-color: var(--ks-accent); }
+.ks-go { min-height: 52px; min-width: 88px; padding: 0 18px; border-radius: 12px; background: var(--ks-accent); }
+html.dark .ks-go { color: #15151f; }
+.ks-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 18px auto 0; max-width: 680px; }
+.ks-chip { min-height: 44px; padding: 8px 14px; border-radius: 999px; font-weight: 600; color: var(--text-heading, #15151f); }
+.ks-chip:hover { border-color: var(--ks-accent); }
+
+/* answers */
+.ks-answers { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 8px 0 24px; scroll-margin-top: 12px; }
+.ks-turn { padding: 18px 18px 14px; border-radius: var(--ks-radius); scroll-margin-top: 12px; }
+.ks-q { margin: 0 0 10px; color: var(--text-heading, #15151f); font-size: 19px; line-height: 1.35; overflow-wrap: anywhere; }
+.ks-a p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.ks-from { color: var(--text-muted, #5a5a6e); font-size: 15px; margin-bottom: 4px !important; }
+.ks-quote { margin: 0 0 12px; padding: 8px 14px; border-left: 3px solid var(--ks-accent); background: var(--surface-hover, #f0f0f4); border-radius: 0 10px 10px 0; color: var(--text-heading, #15151f); overflow-wrap: anywhere; }
+.ks-n { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 6px; margin-left: 2px; border-radius: 999px; background: var(--ks-accent); color: #fff !important; font-size: 13px; font-weight: 700; text-decoration: none; vertical-align: 2px; }
+html.dark .ks-n { color: #15151f !important; }
+.ks-refusal { color: var(--text-heading, #15151f); }
+.ks-hint, .ks-err { color: var(--text-muted, #5a5a6e); font-size: 15px; }
+.ks-streaming { color: var(--text-heading, #15151f); }
+.ks-typing { display: flex; align-items: center; min-height: 28px; }
+.ks-dots { display: inline-flex; gap: 5px; }
+.ks-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--ks-accent); opacity: .35; animation: ks-dot 1s infinite ease-in-out; }
+.ks-dots i:nth-child(2) { animation-delay: .15s; } .ks-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes ks-dot { 50% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .ks-dots i { animation: none; opacity: .7; } .ks-hero { transition: none; } }
+.ks-sources { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-base, #ece9f7); }
+.ks-h3 { margin: 0 0 8px; color: var(--text-heading, #15151f); font-size: 15px; }
+.ks-srclist { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ks-src { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; scroll-margin-top: 16px; }
+.ks-src:target { background: var(--surface-accent, #efeefc); border-radius: 8px; }
+.ks-src-n { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; border: 1px solid var(--ks-accent); color: var(--text-heading, #15151f); font-size: 13px; font-weight: 700; }
+.ks-src-body { display: flex; flex-direction: column; min-width: 0; }
+.ks-src-link { font-weight: 700; overflow-wrap: anywhere; min-height: 24px; }
+.ks-src-where { font-size: 13px; color: var(--text-muted, #5a5a6e); overflow-wrap: anywhere; }
+.ks-follow { display: grid; gap: 8px; padding: 4px 0 8px; }
+.ks-share { justify-self: start; min-height: 44px; }
+
+/* popular questions + key facts */
+.ks-more { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.ks-card { padding: 18px; border-radius: var(--ks-radius); }
+.ks-h2 { margin: 0 0 8px; color: var(--text-heading, #15151f); font-size: 18px; }
+.ks-qlist, .ks-factlist { list-style: none; margin: 0; padding: 0; }
+.ks-qlink { display: flex; align-items: center; min-height: 44px; padding: 6px 0; border-bottom: 1px solid var(--border-base, #ece9f7); font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+.ks-qlink:hover { text-decoration: underline; }
+.ks-fact { margin: 0 0 12px; }
+.ks-fact-k { display: block; font-weight: 700; color: var(--text-heading, #15151f); font-size: 14px; }
+.ks-fact .ks-quote { margin: 4px 0 2px; }
+.ks-fact-src { font-size: 13px; }
+
+/* footer, empty states */
+.ks-foot { width: 100%; max-width: calc(var(--ks-max) + 32px); margin: 0 auto; padding: 20px 16px 28px; border-top: 1px solid var(--border-base, #ece9f7); text-align: center; font-size: 14px; }
+.ks-foot p { margin: 0 0 4px; }
+.ks-built a { display: inline-flex; align-items: center; min-height: 44px; color: var(--text-muted, #5a5a6e); }
+.ks-empty { text-align: center; padding-top: 64px; }
+.ks-loading { text-align: center; padding-top: 64px; }
+.ks-noscript, .ks-noscript-q { max-width: 640px; margin: 16px auto; padding: 0 16px; }
+
+@media (min-width: 720px) {
+  .ks-hero { padding: 72px 0 32px; }
+  .ks-more { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .ks-more > :only-child { grid-column: 1 / -1; }
+  .ks-turn { padding: 22px 24px 16px; }
+}

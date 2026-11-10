@@ -41,7 +41,7 @@ Both start with 30 days free, and a credit card is required at signup. There are
 
 Source: /studio/
 
-An answer surface is a place where your bot answers people. There are six: website chat, SMS, WhatsApp, email, phone, and the web voice assistant. All of them answer from the same sources you built the bot with, with the same citations and the same refusal sentence.
+An answer surface is a place where your bot answers people. There are seven: website chat, SMS, WhatsApp, email, phone, the web voice assistant, and the single-page site. All of them answer from the same sources you built the bot with, with the same citations and the same refusal sentence.
 
 Each answer surface is $249 per month, or $2,499 per year. Every surface you launch is its own line on the plan, and each one starts with the first 30 days free. You choose your surfaces when you launch, and you can remove a surface at checkout before you pay. Building and testing on any surface is free.
 
