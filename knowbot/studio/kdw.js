@@ -5,7 +5,7 @@
 // components, never to hand-build FileGauge or Tabs from their classes. This module is the one bridge: it mounts a
 // component into a DOM node the plain-JS modules own, re-renders it with new props, and unmounts it.
 //
-//   import { mountWidget } from './kdw.js?v=5d0d4b2';
+//   import { mountWidget } from './kdw.js?v=02f5eba';
 //   const g = mountWidget(el, 'FileGauge', { phase: 'completed', atomCount: 12, atomsVectorized: 12, name: 'a.md' });
 //   g.update({ ...props });   // cheap: React diffs it
 //   g.unmount();              // when the row goes away
