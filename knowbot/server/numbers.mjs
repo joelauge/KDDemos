@@ -430,6 +430,30 @@ export function createNumbers({ env = {}, log = () => {}, now = () => Date.now()
       return pub(rec);
     });
   }
+  /**
+   * The trial expired without launching (owner: the plan is cancelled when the trial expires): cancel the monthly plan
+   * now (no further charges; prepaid credit is not refunded) and release the number. A launched bot keeps its number.
+   * Idempotent: the subscription.deleted webhook that follows finds the record no longer active.
+   */
+  function expire(trialId) {
+    if (!/^tr_[a-z2-7]{16}$/.test(String(trialId || ''))) return Promise.resolve(null);
+    return withLock(trialId, async () => {
+      const T = await loadTrial(trialId).catch(() => null);
+      const rec = T?.flags?.number;
+      if (!rec || rec.state !== 'active' || T.converted || rec.botId) return null;
+      if (rec.subscriptionId && enabled()) {
+        try { await stripe('DELETE', `/v1/subscriptions/${encodeURIComponent(rec.subscriptionId)}`); }
+        catch (e) { if (e.status !== 404) { log(`[numbers] ${trialId}: cancelling ${rec.subscriptionId} failed: ${e.message}`); return null; } }
+      }
+      try { if (rec.sid) await tw('DELETE', `/IncomingPhoneNumbers/${encodeURIComponent(rec.sid)}.json`); }
+      catch (e) { log(`[numbers] release ${rec.sid} failed: ${e.message}`); }
+      rec.state = 'cancelled'; rec.note = 'Your trial ended without launching, so the number plan was cancelled and the number released.';
+      await saveTrial(T);
+      try { onChange(T, pub(rec)); } catch { /* none */ }
+      log(`[numbers] ${trialId}: trial expired; cancelled ${rec.subscriptionId || 'plan'} and released ${rec.phoneNumber}`);
+      return pub(rec);
+    });
+  }
   /** A trial became a launched bot: its number now answers for that bot. */
   async function repoint(T, botId) {
     const rec = T.flags.number;
@@ -482,5 +506,5 @@ export function createNumbers({ env = {}, log = () => {}, now = () => Date.now()
       quote: await quote(cc), number: pub(rec) };
   }
 
-  return { enabled, status, search, quote, startCheckout, startTopUp, confirm, webhook, fulfill, release, repoint, meterFor, pub, costsOf };
+  return { enabled, status, search, quote, startCheckout, startTopUp, confirm, webhook, fulfill, release, expire, repoint, meterFor, pub, costsOf };
 }

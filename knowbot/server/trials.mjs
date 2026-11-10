@@ -4207,6 +4207,18 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const today = yyyymmdd(now());
     let rows = [];
     try { rows = await listRows({ tags_all: 'kind:trial' }); } catch (e) { log(`[studio] sweep list failed: ${e.message}`); return { deleted: 0, scanned: 0, error: e.message }; }
+    // expired trials that bought a KnowBot number and never launched: cancel the plan and release the number first
+    // (their state file is deleted below, so this must run before the files go)
+    const expiredTrials = new Set();
+    for (const r of rows) {
+      const tags = r.tags || [];
+      const exp = tags.find((t) => /^expires:\d{8}$/.test(t))?.slice(8);
+      const tid = tags.find((t) => /^trial:tr_[a-z2-7]{16}$/.test(t))?.slice(6);
+      if (tags.includes('kind:trial') && exp && exp < today && tid) expiredTrials.add(tid);
+    }
+    for (const tid of expiredTrials) {
+      try { await numbers.expire(tid); } catch (e) { log(`[studio] sweep: number for ${tid}: ${e.message}`); }
+    }
     let deleted = 0;
     for (const r of rows) {
       const tags = r.tags || [];

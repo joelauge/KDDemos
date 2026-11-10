@@ -191,7 +191,7 @@ export function mountNumbers(root, { apiBase, trial, icon = () => '', announce =
       h('div', null, h('dt', null, 'Call and text credit (one time)'), h('dd', null, money(pack.cents))),
       h('div', { class: 'nb-sum-total' }, h('dt', null, 'Pay today'), h('dd', null, money(monthly + pack.cents))),
       h('div', { class: 'nb-sum-then' }, h('dt', null, 'Then each month'), h('dd', null, `${money(monthly)}/mo`))),
-      h('p', { class: 'nb-fine' }, `Calls use ${rate(q.rates.minuteCents)} of credit a minute and texts about ${rate(q.rates.textCents)} each, in or out. We warn you when credit runs low. Cancel any time.`),
+      h('p', { class: 'nb-fine' }, `Calls use ${rate(q.rates.minuteCents)} of credit a minute and texts about ${rate(q.rates.textCents)} each, in or out. We warn you when credit runs low. Cancel any time. If your trial ends before you launch, the plan is cancelled and the number released.`),
       go, h('div', { class: 'nb-pay' }));
   }
 

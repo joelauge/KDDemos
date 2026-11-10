@@ -62,10 +62,10 @@ describe('numbers: in-Studio provisioning (fake provider, fake payments)', () =>
     KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen',
     TWILIO_ACCOUNT_SID: 'ACtest', TWILIO_AUTH_TOKEN: 'tw-secret', TWILIO_API_BASE_URL: tw.url, TWILIO_PRICING_BASE_URL: tw.url, GEMINI_API_KEY: 'fake-gemini',
     STRIPE_SECRET_KEY: 'sk_fake_numbers', STRIPE_PUBLISHABLE_KEY: 'pk_fake_numbers', STRIPE_WEBHOOK_SECRET: WHSEC, STRIPE_API_BASE_URL: st.url, ...extra });
-  async function instance(envExtra = {}) {
+  async function instance(envExtra = {}, studioExtra = {}) {
     const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-numbers-'));
     dataDirs.push(dataDir);
-    const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, trustProxy: true, env: env(envExtra), studio: { sweep: false, pingMs: 200, pollMs: 40, pollSlowMs: 150, pollIdleMs: 400 } });
+    const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, trustProxy: true, env: env(envExtra), studio: { sweep: false, pingMs: 200, pollMs: 40, pollSlowMs: 150, pollIdleMs: 400, ...studioExtra } });
     await new Promise((r) => kb.server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${kb.server.address().port}`;
     const S = { kb, base, api: (p, init = {}) => fetch(base + p, init), close: () => new Promise((r) => (kb.server.listening ? kb.server.close(() => r()) : r())) };
@@ -330,6 +330,28 @@ describe('numbers: in-Studio provisioning (fake provider, fake payments)', () =>
     const s = (await j(await call(S, t, ''))).number;
     assert.equal(s.state, 'cancelled');
     assert.equal(await S.kb.studio.numbers.meterFor({ kind: 'trial', id: t.trialId, flags: { number: true } }), null, 'no longer metered or sent from');
+    await S.close();
+  });
+
+  test('trial expires without launching: the plan is cancelled and the number released by the sweep; an unexpired one is kept', async () => {
+    const clock = { skew: 0 };
+    const S = await instance({}, { now: () => Date.now() + clock.skew });
+    const t = await trial(S);
+    const keep = await trial(S);
+    tw.reset();
+    await provision(S, t, { area: '415', pack: 1000 });
+    const subId = [...st.sessions.values()].find((x) => x.metadata.trial === t.trialId && x.mode === 'subscription').subscription;
+    const before = st.cancelled.length;
+    await S.kb.studio.sweep();
+    assert.equal(st.cancelled.length, before, 'nothing cancelled while the trial is live');
+    assert.equal(tw.owned.size, 1);
+    clock.skew = 9 * 86400000;   // past the 7-day trial
+    await S.kb.studio.sweep();
+    assert.ok(st.cancelled.includes(subId), 'the monthly plan is cancelled');
+    assert.equal(tw.owned.size, 0, 'the number is released');
+    await S.kb.studio.sweep();
+    assert.equal(st.cancelled.filter((x) => x === subId).length, 1, 'cancelled once');
+    void keep;
     await S.close();
   });
 
