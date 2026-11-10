@@ -175,7 +175,9 @@
    (empty) thread absorbs everything that appears later (suggestions, banner), so nothing above it shifts.
    B's post-answer rules (higher specificity) take over once the thread has an answer. */
 .st-bot > #in-intake-slot[data-busy="yes"]:not([data-pcollapsed="yes"]) { flex-shrink: 0; max-height: 38%; min-height: min(30%, 180px); }
-.st-bot > #in-map-slot:not([data-mode="ribbon"]) { flex-shrink: 0; height: min(42%, 440px); }
+/* the map is the one that gives way when the pane is short (the "See it as" bar, a short window): the composer and its
+   meta row must always fit */
+.st-bot > #in-map-slot:not([data-mode="ribbon"]) { flex-shrink: 1; height: min(42%, 440px); min-height: 96px; }
 /* once files exist the band yields room to the rows (all four stage tracks stay in view while they learn) */
 .st-bot > #in-map-slot[data-files="yes"]:not([data-mode="ribbon"]) { height: clamp(200px, 32%, 290px); }
 /* fixer M r1 (D6/D10 CLS): before the first question the rows hold ONE fixed share of the pane from the moment the

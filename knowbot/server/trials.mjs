@@ -4535,6 +4535,28 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       fail(404, 'not_found', `no such endpoint ${p}`);
     }
 
+    // "Didn't get the answer you needed?": the owner writes the missing answer; it is saved as a small Markdown file
+    // in this bot's sources (tagged src:note plus the owner's own tags) and learned like any upload.
+    if (sub === 'notes') {
+      allow('POST');
+      limitOrThrow(`upload ${T.id}`, limits.upload, 3600000, 'uploads for this bot');
+      const body = await readBody(req);
+      const question = oneLine(String(body.question ?? '')).trim().slice(0, 300);
+      const answer = String(body.answer ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 20000);
+      if (answer.length < 3) fail(400, 'bad_request', 'Write the information your bot should know.', { field: 'answer' });
+      const tags = [...new Set((Array.isArray(body.tags) ? body.tags : String(body.tags || '').split(','))
+        .map((t) => String(t).toLowerCase().trim().replace(/[^a-z0-9 _-]+/g, '').replace(/\s+/g, '-').slice(0, 32)).filter(Boolean))].slice(0, 8);
+      const title = question || clip(oneLine(answer), 70);
+      const md = `# ${title}\n\n${answer}\n${tags.length ? `\nTopics: ${tags.join(', ')}\n` : ''}`;
+      const bytes = Buffer.from(md, 'utf8');
+      const files = await filesOf(T);
+      if (usageOf(T, files).bytes + bytes.length > QUOTA_BYTES) fail(413, 'quota', 'Your bot is at its 100 MB limit. Remove a file first.');
+      const slug = (question || answer).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'note';
+      const file = await uploadInto(T, { name: `notes/${slug}.md`, bytes, mime: 'text/markdown', extraTags: ['src:note', ...tags.map((t) => `topic:${t}`)] });
+      kickPoller(T);
+      const all = await filesOf(T);
+      return sendJson(res, 201, { file, tags, usage: usageOf(T, all) });
+    }
     if (sub === 'samples') {
       if (m === 'POST') {
         const body = await readBody(req);

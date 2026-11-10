@@ -2382,3 +2382,31 @@ describe('time left: knowDrive store progress (#886) becomes the eta event', () 
     } finally { await S.close(); }
   });
 });
+
+describe("Didn't get the answer you needed? POST /trials/:id/notes", () => {
+  for (const [label, opts] of [['live samples', {}], ['shared samples, strict scope', { env: { KNOWBOT_STUDIO_SAMPLE_MODE: 'shared' }, kdOpts: { honorScope: true }, samples: true }]])
+  test(`saves the owner answer as a tagged source file, and the bot then answers from it (${label})`, async () => {
+    const S = await boot(opts);
+    try {
+      const c = client(S);
+      const t = await c.trial();
+      if (opts.samples) { assert.ok([200, 201, 202].includes((await c.json(t, '/samples', 'POST', {})).status)); await S.kd.settle(); await sleep(400); }
+      const Q = 'Do you take walk-ins?';
+      const before = (await c.stream(t, '/ask', { question: Q })).find((e) => e.event === 'final')?.data;
+      assert.ok(!before || before.refused || before.status !== 'grounded', 'no answer before the note');
+      assert.equal((await c.json(t, '/notes', 'POST', { question: Q, answer: '' })).status, 400);
+      const r = await c.json(t, '/notes', 'POST', { question: Q, answer: 'Yes, we take walk-ins Monday to Friday, 9am to noon. Afternoons are by appointment.', tags: ['Hours', 'booking!', 'hours'] });
+      assert.equal(r.status, 201);
+      const j = await r.json();
+      assert.deepEqual(j.tags, ['hours', 'booking']);
+      assert.match(j.file.name, /^notes\/do-you-take-walk-ins\.md$/);
+      const row = [...S.kd.files.values()].find((f) => f.filename.endsWith('notes/do-you-take-walk-ins.md'));
+      assert.ok(row && row.tags.includes('src:note') && row.tags.includes('topic:hours') && row.tags.includes(`trial:${t.trialId}`));
+      await S.kd.settle();
+      await sleep(300);
+      const after = (await c.stream(t, '/ask', { question: Q })).find((e) => e.event === 'final').data;
+      assert.equal(after.refused, false, `answered: ${JSON.stringify(after).slice(0, 300)}`);
+      assert.match(after.text, /walk-ins/i);
+    } finally { await S.close(); }
+  });
+});

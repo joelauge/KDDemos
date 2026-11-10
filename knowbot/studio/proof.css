@@ -933,3 +933,30 @@ details.pf-dspan > span { display: block; margin-top: 4px; }
 }
 :is(#st-bot:not([data-view="proof"]) .sb-answer, #st-bot[data-view="proof"] .sb-answer.is-proof-held) .sb-line[data-run] .sb-from a { color: inherit; }
 :is(#st-bot:not([data-view="proof"]) .sb-answer, #st-bot[data-view="proof"] .sb-answer.is-proof-held) .sb-line[data-run] .sb-qm { display: none; }
+
+/* ---- "Didn't get the answer you needed?" (bottom of the bot pane) and its teach-your-bot dialog */
+.sb-miss {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 4px 8px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--muted); font: 500 12.5px/1.3 var(--font); cursor: pointer;
+}
+.sb-miss[hidden] { display: none; }
+.sb-miss:hover { color: var(--accent-2); background: var(--accent-soft); }
+.sb-miss:focus-visible { outline: var(--st-focus, 2px solid var(--accent)); outline-offset: 2px; }
+@media (pointer: coarse) { .sb-miss { min-height: 44px; } }
+.sb-miss-dlg { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text);
+  box-shadow: 0 24px 60px -20px rgba(15, 23, 42, .45); }
+.sb-miss-dlg::backdrop { background: rgba(11, 16, 32, .45); }
+.sb-miss-form { display: flex; flex-direction: column; gap: 6px; padding: 22px 22px 18px; }
+.sb-miss-h { display: flex; align-items: center; gap: 8px; margin: 0; font: 700 18px/1.3 var(--display); color: var(--strong); }
+.sb-miss-h svg { color: var(--good); }
+.sb-miss-sub { margin: 0 0 10px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.sb-miss-form label { margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--strong); }
+.sb-miss-opt { font-weight: 400; color: var(--muted); }
+.sb-miss-in, .sb-miss-ta { width: 100%; font: 400 15px/1.45 var(--font); padding: 9px 11px; box-sizing: border-box; }
+.sb-miss-ta { resize: vertical; min-height: 110px; }
+.sb-miss-err { margin: 6px 0 0; font-size: 13px; color: var(--bad, #b91c1c); }
+.sb-miss-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+@media (max-width: 599px) {
+  .sb-miss-dlg { width: 100vw; max-width: none; margin: auto 0 0; border-radius: 16px 16px 0 0; }
+  .sb-miss-actions .btn { flex: 1 1 auto; min-height: 44px; }
+}

@@ -3197,6 +3197,10 @@ export function mount(ctx) {
   const compBox = h('div', { class: 'input sb-comp-box' }, h('label', { class: 'st-sr', for: inputId }, 'Ask your bot'), ta, send);
   const compMeta = h('div', { class: 'sb-comp-meta' }, scopeBtn, personaPill, hint, moreBtn);
   const form = h('form', { class: 'sb-composer', novalidate: true }, compBox, compMeta);
+  // "Didn't get the answer you needed?": write the missing answer, tag it, and it joins your bot's sources
+  const missBtn = h('button', { type: 'button', class: 'sb-miss', hidden: true, onclick: () => openMiss() },
+    ico('plus', 13), h('span', null, 'Didn’t get the answer you needed?'));
+  compMeta.insertBefore(missBtn, moreBtn);
   dom.composer.innerHTML = '';
   dom.composer.append(form);
   /** Phones: the scope chip and the ⋯ menu move into the composer row (one 44 px row instead of two), so nothing
@@ -3209,6 +3213,53 @@ export function mount(ctx) {
     compMeta.hidden = m && personaPill.hidden;
   }
   placeComposerBits();
+
+  /** The last question your bot could not answer (or the last one asked): what the form starts from. */
+  function lastMissed() {
+    const t = (getState().thread || []).filter((a) => a && a.by !== 'proof' && a.question);
+    const miss = [...t].reverse().find((a) => a.status === 'refused' || a.final?.refused);
+    return (miss || t[t.length - 1] || {}).question || '';
+  }
+  let missDlg = null;
+  function openMiss() {
+    if (missDlg) missDlg.remove();
+    const qIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-q', maxlength: '300', value: lastMissed(), placeholder: 'e.g. Do you take walk-ins?' });
+    const aIn = h('textarea', { class: 'input sb-miss-ta', id: 'sb-miss-a', rows: '5', maxlength: '20000', required: true, placeholder: 'Write it the way you’d want your bot to say it. For example: “Yes, we take walk-ins Monday to Friday, 9am to noon.”' });
+    const tIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-t', maxlength: '200', placeholder: 'e.g. hours, booking' });
+    const err = h('p', { class: 'sb-miss-err', role: 'alert', hidden: true });
+    const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Save and teach my bot');
+    const cancel = h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => missDlg.close() }, 'Cancel');
+    const formEl = h('form', { class: 'sb-miss-form', method: 'dialog', novalidate: true },
+      h('h2', { class: 'sb-miss-h' }, 'Teach your bot the answer'),
+      h('p', { class: 'sb-miss-sub' }, 'Your bot only answers from its sources. Add what it’s missing and it will answer from it next time, with this note as its source.'),
+      h('label', { for: 'sb-miss-q' }, 'The question'), qIn,
+      h('label', { for: 'sb-miss-a' }, 'The answer your bot should give'), aIn,
+      h('label', { for: 'sb-miss-t' }, 'Tags ', h('span', { class: 'sb-miss-opt' }, '(optional, separated by commas)')), tIn,
+      err, h('div', { class: 'sb-miss-actions' }, cancel, save));
+    formEl.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const answer = aIn.value.trim();
+      if (answer.length < 3) { err.textContent = 'Write the information your bot should know.'; err.hidden = false; aIn.focus(); return; }
+      err.hidden = true; save.disabled = true; save.textContent = 'Saving…';
+      try {
+        const r = await api.addNote({ question: qIn.value.trim(), answer, tags: tIn.value.split(',').map((x) => x.trim()).filter(Boolean) });
+        formEl.replaceChildren(
+          h('h2', { class: 'sb-miss-h' }, ico('checkCircle', 18), ' Saved'),
+          h('p', { class: 'sb-miss-sub' }, `Your bot is learning it now as ${r?.file?.name || 'a new source'}${r?.tags?.length ? `, tagged ${r.tags.join(', ')}` : ''}. Ask again in a moment and it will answer from it.`),
+          h('div', { class: 'sb-miss-actions' }, h('button', { type: 'button', class: 'btn btn-primary', onclick: () => { missDlg.close(); const q = qIn.value.trim(); if (q) setComposer(q); ta.focus(); } }, 'Done')));
+        emit('note:added', { fileId: r?.file?.id, tags: r?.tags || [] });
+      } catch (x) {
+        err.textContent = x?.message || 'That didn’t save. Try again.'; err.hidden = false;
+        save.disabled = false; save.textContent = 'Save and teach my bot';
+      }
+    });
+    missDlg = h('dialog', { class: 'sb-miss-dlg', 'aria-labelledby': 'sb-miss-h' }, formEl);
+    formEl.querySelector('.sb-miss-h').id = 'sb-miss-h';
+    missDlg.addEventListener('close', () => { missDlg?.remove(); missDlg = null; missBtn.focus(); });
+    document.body.append(missDlg);
+    missDlg.showModal();
+    (qIn.value ? aIn : qIn).focus();
+  }
 
   function setComposer(text) {
     ta.value = text;
@@ -3261,6 +3312,7 @@ export function mount(ctx) {
     scopeBtn.querySelector('.sb-scope-x').textContent = on === 1 ? ' file searched' : ' files searched';
     scopeBtn.title = scopeText;
     scopeBtn.hidden = !r.total;
+    missBtn.hidden = !r.ready.length;
     if (!r.ready.length) { if (hint.dataset.kind !== 'wait') showHint(r.total ? 'Answers start when the first file is ready.' : '', ''); }
     else showHint('', '');
     const p = PERSONAS.find((x) => x.id === persona);
@@ -3360,6 +3412,7 @@ export function mount(ctx) {
         el.setAttribute('aria-describedby', fid);
         el.append(h('hr', { role: 'separator' }));
       }
+      if (readiness().ready.length) el.append(menuItem('Didn’t get the answer you needed?', { icoName: 'plus', onSelect: () => { closeMenu(); openMiss(); } }));
       el.append(menuItem('Run the Proof Run', { icoName: 'flask', onSelect: () => { closeMenu(); emit('proof:run', { mini: false }); } }));
       el.append(menuItem(getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Show Proof view', { icoName: 'shieldCheck', onSelect: () => { closeMenu(true); emit('view:set', { view: getState().ui.view === 'proof' ? 'bot' : 'proof' }); } }));
       const last = [...answers.values()].filter((x) => x.final && x.by !== 'proof').pop();
