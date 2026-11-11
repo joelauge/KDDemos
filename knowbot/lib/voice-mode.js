@@ -17,8 +17,8 @@
 // with browser speech, a level that follows the spoken words) → listening. Muted: idle.
 // Works inside a Shadow DOM (its styles travel with it) and in a light-DOM page (every class is kbvm- prefixed).
 
-import { createOrb, createMeter, orbId, ORB_PRESETS } from './voice-orb.js?v=09c299f';
-import { micErrorMessage, downsampleToPcm16 } from './voice-widget.js?v=09c299f';
+import { createOrb, createMeter, orbId, ORB_PRESETS } from './voice-orb.js?v=8bb7c43';
+import { micErrorMessage, downsampleToPcm16 } from './voice-widget.js?v=8bb7c43';
 
 const CSS = `
 .kbvm{--vm-ink:#15151f;--vm-text:#33333f;--vm-mute:#5f6170;--vm-line:#dadce3;--vm-soft:#f4f4f7;--vm-bg:#fff;--vm-acc:var(--kbvm-accent,#4f46e5);--vm-on-acc:var(--kbvm-on-accent,#fff);--vm-bad:#b91c1c;--vm-badbg:#fef2f2;--vm-end:#b91c1c;
