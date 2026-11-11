@@ -13,7 +13,7 @@
 // owner can switch features on and off in the Studio without touching the page. Without data-mode and without any of
 // these attributes, a bot whose switches can't be read keeps the old behaviour (the chat bubble). Old snippets
 // (data-mode="voice", data-mode="inline", data-voice="on" in the chat) work as before.
-import { mount, ensureCss } from './widget.js?v=8edc9a1';
+import { mount, ensureCss } from './widget.js?v=14ad5a2';
 
 const me = new URL(import.meta.url);
 const script = [...document.querySelectorAll('script[src]')].find((s) => s.src === me.href)
@@ -68,15 +68,15 @@ const startVoice = async () => {
   const common = { apiBase, endpoint: d.endpoint || undefined, bot: d.bot || instance || '', key: d.key || undefined,
     name: d.name || inst?.botName || inst?.name || 'KnowBot', position: d.position, open: d.open === 'true' };
   if (d.legacy === 'on') {
-    const { mountVoice } = await import('./voice-widget.js?v=8edc9a1');
+    const { mountVoice } = await import('./voice-widget.js?v=14ad5a2');
     window.knowbotVoice = mountVoice(d.target || null, { ...common, talk: d.talk === 'hold' ? 'hold' : 'toggle', lang: d.lang || undefined, engine: d.engine === 'text' ? 'text' : 'auto' });
     return;
   }
-  const { mountVoiceLauncher } = await import('./voice-launcher.js?v=8edc9a1');
+  const { mountVoiceLauncher } = await import('./voice-launcher.js?v=14ad5a2');
   window.knowbotVoice = mountVoiceLauncher(d.target || null, { ...common, orb: d.orb || undefined });
 };
 const startChat = async ({ voice = null } = {}) => {
-  ensureCss(d.css || new URL('./knowbot.css?v=8edc9a1', me).href);
+  ensureCss(d.css || new URL('./knowbot.css?v=14ad5a2', me).href);
   const inst = await instanceConfig();
   window.knowbot = mount(d.mode || 'widget', d.target || null, {
     apiBase,
@@ -99,7 +99,7 @@ const startChat = async ({ voice = null } = {}) => {
 const startHomepage = () => {
   if (!botId || document.querySelector('knowbot-overlay, script[data-knowbot-overlay]')) return;
   const s = document.createElement('script');
-  s.src = new URL('../site/overlay.js?v=8edc9a1', me).href;
+  s.src = new URL('../site/overlay.js?v=14ad5a2', me).href;
   s.async = true;
   s.dataset.bot = botId;
   s.dataset.knowbotOverlay = '1';
@@ -124,7 +124,7 @@ const start = async () => {
   if (want.chat == null) want.chat = want.homepage !== true;
   if (want.chat) await startChat({ voice: want.voice ? voiceOpts : null });
   else if (want.voice) {
-    const { mountVoiceLauncher } = await import('./voice-launcher.js?v=8edc9a1');
+    const { mountVoiceLauncher } = await import('./voice-launcher.js?v=14ad5a2');
     window.knowbotVoice = mountVoiceLauncher(d.target || null, { apiBase: v1Base, bot: botId || '', key: d.key || undefined, orb: d.orb || undefined,
       name: d.name || 'KnowBot', position: d.position, open: d.open === 'true', endpoint: d.endpoint || undefined });
   }
