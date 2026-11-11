@@ -10,7 +10,7 @@ KnowBot is a chatbot that answers only from the files and website pages you give
 
 Source: /studio/
 
-A KnowBot answer is canonical: every fact in it is taken word for word from your files, and every fact carries a numbered citation such as [1]. KnowBot does not answer from general knowledge or the internet, and it does not guess. If your files do not contain the answer, KnowBot replies with one fixed sentence: "I can't seem to find an answer to that in any of my current data sources."
+A KnowBot answer is canonical: every fact in it is taken word for word from your files, and every fact carries a numbered citation such as [1]. KnowBot does not answer from general knowledge or the internet, and it does not guess. If your files do not contain the answer, KnowBot replies with one fixed sentence: "The answer to that doesn't seem to be in my files."
 
 ## What KnowBot Studio does
 

@@ -26,7 +26,7 @@ if (/^#k=kb_trial_/.test(location.hash)) {
   ownerKey = decodeURIComponent(location.hash.slice(3));
   try { history.replaceState(null, '', location.pathname + location.search); } catch { /* keep going */ }
 }
-const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 
 // ---------------------------------------------------------------------------------------------------- helpers
 function h(t, props, ...kids) {

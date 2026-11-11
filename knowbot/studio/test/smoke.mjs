@@ -23,7 +23,7 @@ const { chromium } = require('playwright');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCREENS = path.join(__dirname, 'screens');
 const FIXTURES = path.join(__dirname, 'fixtures');
-const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const SAMPLE_FILES = ['lumen-warranty-returns.md', 'lumen-service-plans.html', 'lumen-store-faq.txt', 'lumen-price-list-2026.md'];
 const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 
@@ -136,11 +136,16 @@ async function press(loc, label = '') {
 /** Click a Builder chip whose label matches `re` (latest first); returns true when clicked. */
 async function clickBuilderChip(page, cell, re) {
   await pane(page, cell, 'setup');
-  const chips = page.locator('#st-log .st-chips:not([hidden]) .st-chip');
-  const n = await chips.count();
-  for (let i = n - 1; i >= 0; i--) {
-    const t = (await chips.nth(i).innerText().catch(() => '')) || '';
-    if (re.test(t)) { await press(chips.nth(i), `Builder chip ${t}`); return true; }
+  const chips = page.locator('#st-log .st-chips:not([hidden]) .st-chip:visible');
+  for (let pass = 0; pass < 2; pass++) {
+    const n = await chips.count();
+    for (let i = n - 1; i >= 0; i--) {
+      const t = (await chips.nth(i).innerText().catch(() => '')) || '';
+      if (re.test(t)) { await press(chips.nth(i), `Builder chip ${t}`); return true; }
+    }
+    // r10: the first turn keeps its other ways to start behind "More ways to start"
+    const more = page.locator('#st-log .st-more-ways:visible');
+    if (!pass && await more.count()) await more.first().click(); else break;
   }
   return false;
 }
@@ -229,7 +234,11 @@ async function journey(browser, dev, cell) {
   await page.waitForTimeout(700);
   const logText = await page.innerText('#st-log').catch(() => '');
   check('01-landing', 'B0 text visible', /Start with your files(, your website)? or ours\?/.test(logText), { detail: `${firstMsgMs} ms to first Builder message` });
-  const chipTexts = await page.locator('#st-log .st-chips:not([hidden]) .st-chip').allInnerTexts();
+  // r10: the first turn shows one chip; "More ways to start" shows the others (upload, website)
+  const oneChip = (await page.locator('#st-log .st-chips:not([hidden]) .st-chip:visible').allInnerTexts());
+  check('01-landing', 'first turn: one chip (Use sample files), the rest behind "More ways to start"', oneChip.length === 1 && /Use sample files/.test(oneChip[0]) && await page.locator('#st-log .st-more-ways:visible').count() === 1, { detail: oneChip.join(' | ') });
+  await page.locator('#st-log .st-more-ways:visible').first().click().catch(() => {});
+  const chipTexts = await page.locator('#st-log .st-chips:not([hidden]) .st-chip:visible').allInnerTexts();
   check('01-landing', 'first-run choices: samples (primary), upload, store URL', chipTexts.length >= 3 && /Use sample files/.test(chipTexts[0]) && /Upload my files/.test(chipTexts[1]) && /Enter (a Store URL|your website)|Add website/.test(chipTexts[2]) &&
     await page.locator('#st-log .st-chip-primary').first().innerText().then((t) => /Use sample files/.test(t)).catch(() => false), { detail: chipTexts.join(' | ') });
   await waitState(page, (s) => s.trial.status === 'ready', { timeout: 8000 });
@@ -606,6 +615,7 @@ async function journey(browser, dev, cell) {
   await waitState(p2, (s) => s.trial.status === 'ready', { timeout: 8000 });
   await p2.waitForTimeout(500);
   const chooser = p2.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null);
+  if (await p2.locator('#st-log .st-more-ways:visible').count()) await p2.locator('#st-log .st-more-ways:visible').first().click();
   await p2.locator('#st-log .st-chip', { hasText: /Upload my files/ }).first().click();
   const fc = await chooser;
   check('14-own-file', 'picker opens from the chip', !!fc);

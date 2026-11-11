@@ -39,7 +39,7 @@ const V = '1';
 const { getState, setState, on, emit, mark } = store;
 const { icon, fileIcon } = icons;
 
-const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const PROBE_Q = "What's the weather in Paris today?";
 const STEPS = [
   { key: 'purpose', label: 'Purpose' }, { key: 'sources', label: 'Sources' }, { key: 'learn', label: 'Learn' },
@@ -297,7 +297,8 @@ function updateIdentity() {
   const chip = $('#st-botchip');
   if (chip) {
     chip.classList.toggle('is-placeholder', placeholder);
-    $('.st-botchip-name', chip).textContent = spec.name;
+    // r10: the placeholder name never shows ("SampleBot" appearing, then flipping): "Your bot" until it has its own
+    $('.st-botchip-name', chip).textContent = placeholder ? 'Your bot' : spec.name;
     paintAvatar($('.st-avatar', chip), spec);
   }
   const head = $('#st-bothead');
@@ -306,7 +307,7 @@ function updateIdentity() {
     paintAvatar($('.st-avatar', head), spec);
   }
   const tab = $('#st-tab-bot .st-tab-label');
-  if (tab) tab.textContent = spec.name;
+  if (tab) tab.textContent = placeholder ? 'Your bot' : spec.name;
   slots.bot.setAttribute('aria-label', `${spec.name} (your bot)`);
   updateVersionChip();
 }
@@ -704,30 +705,8 @@ function renderHero() {
 }
 let landingMO = null;
 function dedupeLandingLink() {
-  const run = () => {
-    if (getState().fileOrder.length) return;
-    for (const b of $$('.sb-empty .sb-link', slots.bot)) {
-      if (!/sample files/i.test(b.textContent || '') || b.hidden) continue;
-      b.hidden = true;
-      const prev = b.previousElementSibling;   // 'Add a file or try the sample files.' -> 'Add a file.'
-      if (prev && /^\s*or\s*$/i.test(prev.textContent || '')) prev.hidden = true;
-    }
-    // the third first-run choice in the bot pane's empty state too: '… Add a file. Or enter your store's URL.'
-    // CONTRACT-GAP: studio/samplebot.js (C) could render this link itself (builderAction({ type: 'import_store' }));
-    // B adds it to C's empty-state line until then (app.js also handles 'import_store' on builder:action).
-    if (!isLive()) for (const p of $$('.sb-empty', slots.bot)) {
-      if (p.querySelector('[data-store-link]')) continue;
-      const link = h('button', { type: 'button', class: 'sb-link', dataset: { storeLink: '1' },
-        onclick: () => { addUserMessage('Enter your website'); dispatchAction({ type: 'import_store' }, { fromClick: true }); } }, 'add your website');
-      p.append(h('span', { class: 'sb-store' }, ' Or ', link, '.'));
-    }
-    // "… Or write a note.": the same form as "Didn't get the answer you needed?" (samplebot.js), titled for a first note
-    for (const p of $$('.sb-empty', slots.bot)) {
-      if (p.querySelector('[data-note-link]')) continue;
-      const link = h('button', { type: 'button', class: 'sb-link', dataset: { noteLink: '1' }, onclick: (e) => openNote(e.currentTarget) }, 'write a note');
-      p.append(h('span', { class: 'sb-note' }, ' Or ', link, '.'));
-    }
-  };
+  // r10: the empty state is one calm line with one quiet "Add files" link (samplebot.js); nothing is added to it here
+  const run = () => {};
   run();
   if (!landingMO && slots.suggest) { landingMO = new MutationObserver(run); landingMO.observe(slots.suggest, { childList: true, subtree: true }); }
 }
@@ -760,6 +739,8 @@ function initFtue(fresh) {
       websiteLine: () => import('./golive.js?v=8bb7c43').then((m) => m.websiteLine(ctx)),
       isLive,
       onDismiss: () => toast({ kind: 'info', text: 'Guide hidden. Bring it back any time from ⋯ → Show the guide.' }),
+      // the guide is done or dismissed: the Builder's held "Keep this bot" offer comes now
+      onEnd: () => { if (emailHeld) { emailHeld = false; setTimeout(offerEmail, 600); } },
     });
     ctx.ftue = ftue;
   } catch (err) { console.error('[studio] the first-time guide failed to mount; the studio keeps working', err); }
@@ -1498,12 +1479,16 @@ function allSampleFiles() {
   const files = s.fileOrder.map((id) => s.files[id]).filter((f) => f && f.phase !== 'rejected');
   return files.length > 0 && files.every((f) => f.sample);
 }
+/** The first-time guide (ftue.js) is on screen: 'on' (steps 1-4) or 'done' (step 5). */
+const guideFlag = () => document.documentElement.getAttribute('data-ftue');
 /** A milestone nudge that a later milestone overtook is dropped instead of arriving stale (e.g. after the first answer). */
 function staleEvent(ev) {
   const m = getState().milestones;
   switch (ev?.type) {
     case 'file_ready': case 'files_queued': case 'file_atomized':
       if (narrationQuiet()) return true;
+      // r10: while the guide shows reading progress, the Builder keeps no per-file "x is ready" commentary
+      if (guideFlag() && ev.type !== 'files_queued') return true;
       // r8 (D2): once the "All N files ready" summary is posted, a late per-file progress turn would arrive out of
       // order ("x is ready" after "All 4 ready"): dropped unless it still carries the naming offer (own files)
       if (ev.type === 'file_atomized' && learn && learn.complete && (allSampleFiles() || getState().spec.name !== 'SampleBot')) return true;
@@ -1740,7 +1725,7 @@ function onTurnEvent(rec, st, type, data, input) {
         // r7 (D2): a row that changes nothing (a user-set field the samples left alone) is not a change
         if (Array.isArray(data.data.rows)) data.data.rows = withPurpose([...data.data.rows]).filter((r) => r.from == null || r.from === '' || r.from === '—' || String(r.from) !== String(r.to));
       }
-      if (data.type === 'email-capture') { if (getState().milestones.emailOffered || launchOnTable()) break; mark('emailOffered'); }
+      if (data.type === 'email-capture') { if (getState().milestones.emailOffered || launchOnTable()) break; if (guideFlag()) { emailHeld = true; break; } mark('emailOffered'); }
       if (data.type === 'launch') {
         // a server turn can carry the Launch / Make it yours card too: same rules as setup:post (sticky, never twice)
         const kind = data.data?.variant === 'make-it-yours' ? 'make-it-yours' : 'launch';
@@ -3955,6 +3940,7 @@ store.registerCard('insights', (data, el) => {
 });
 
 let emailOffered = false;
+let emailHeld = false;   // r10: asked for while the first-time guide was on; offered once it is done or dismissed
 /** Lead capture never follows the paywall: once a Launch card is on the table, its checkout email field covers it. */
 function launchOnTable() {
   const m = getState().milestones;
@@ -3962,6 +3948,7 @@ function launchOnTable() {
 }
 function offerEmail() {
   if (emailOffered || getState().milestones.emailOffered || launchOnTable()) return;
+  if (guideFlag()) { emailHeld = true; return; }
   emailOffered = true;
   mark('emailOffered');
   // checked again when its turn comes: a Launch card posted while this line waited in the queue wins
@@ -4217,6 +4204,8 @@ let textRO = null;
 async function createLearning(summaries) {
   if (learn && !learn.complete) { for (const d of summaries) mergeLearning(d); return updateLearning(null); }
   const { text, done, ready } = learningCopy();
+  // r10: while the guide shows "n of m files ready", the Builder posts only the "all ready" line, never one per file
+  if (guideFlag() && !done) return;
   if (!ready.length && !summaries.length) return;
   const summaryData = summaries[0] || null;
   // r8 (D2): one file, already introduced by its progress turn (often with the naming offer): that turn becomes the
@@ -4426,6 +4415,7 @@ on('setup:event', (d) => {
 on('setup:post', (d) => {
   if (!d) return;
   if (d.card?.type === 'email-capture' && launchOnTable()) return;   // never lead capture after the paywall
+  if (d.card?.type === 'email-capture' && guideFlag()) { emailHeld = true; return; }   // r10: after the guide
   if (d.card?.type === 'success') { successPosted = true; setActivating(false); }
   if (d.card?.type === 'activating') setActivating(true);
   if (d.role === 'user') { addUserMessage(d.text || '', { tag: d.tag || null }); return; }
@@ -5318,13 +5308,21 @@ function renderB0() {
   rec.text = B0_TEXT;
   finishAssistant(rec);
   rec.el.dataset.anchor = 'purpose';
-  if (isMobile()) rec.cardsEl.append(ghostPreview());
   setChips(rec, [
     { id: 'use_samples', label: 'Use sample files · 30s demo', kind: 'primary', action: { type: 'attach_samples', set: 'lumen-bikes' }, local: true },
     { id: 'upload_files', label: 'Upload my files', action: { type: 'request_upload' }, local: true },
     { id: 'import_store', label: 'Add website', action: { type: 'import_store' }, local: true },
     { id: 'what_canonical', label: "How does it avoid making things up?", local: true, run: explainCanonical },
   ], { still: hydrating });
+  // r10: one Builder chip at a time on the empty state; the other ways to start wait behind one quiet line
+  // (studio.css hides every chip but the first in the first turn until this is pressed)
+  if (!$('.st-more-ways', rec.el)) {
+    const more = h('button', { type: 'button', class: 'st-more-ways', 'aria-expanded': 'false', onclick: () => {
+      rec.el.dataset.moreOpen = ''; more.setAttribute('aria-expanded', 'true'); more.hidden = true;
+      const next = $$('.st-chip', rec.chipsEl)[1]; if (next) { next.tabIndex = 0; next.focus(); }
+    } }, 'More ways to start');
+    rec.chipsEl.after(more);
+  }
   if (hydrating) {
     staticB0 = false;
     // a tap that landed before the modules loaded is replayed now (the picker needs a fresh tap: it is focused instead)

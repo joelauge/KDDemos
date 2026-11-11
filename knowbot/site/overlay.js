@@ -46,7 +46,7 @@
   }
   const framed = (() => { try { return window.top !== window; } catch { return true; } })();
   const CLOSED_KEY = `knowbot-overlay-closed:${BOT}`;
-  const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+  const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
   const store = (kind) => { try { return window[kind]; } catch { return null; } };
   const sGet = (kind, k) => { try { return store(kind)?.getItem(k) ?? null; } catch { return null; } };
   const sSet = (kind, k, v) => { try { store(kind)?.setItem(k, v); } catch { /* private mode */ } };

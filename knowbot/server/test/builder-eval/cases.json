@@ -4001,7 +4001,7 @@
     ],
     "cites": true,
     "replyMust": [
-     "/can't seem to find|only from your files|refus/i"
+     "/seem to be in my files|only from your files|refus/i"
     ]
    },
    "gold": {
@@ -4013,7 +4013,7 @@
       }
      }
     ],
-    "reply": "{{quote:can't seem to find an answer}}"
+    "reply": "{{quote:seem to be in my files}}"
    }
   },
   {

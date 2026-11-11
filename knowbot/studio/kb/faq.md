@@ -34,7 +34,7 @@ With the sample files, KnowBot Studio aims to show a first cited answer in under
 
 Source: /studio/
 
-No. KnowBot answers only from your files. When the files do not cover a question, it replies "I can't seem to find an answer to that in any of my current data sources." Making the bot stricter or changing its tone never changes this.
+No. KnowBot answers only from your files. When the files do not cover a question, it replies "The answer to that doesn't seem to be in my files." Making the bot stricter or changing its tone never changes this.
 
 ## What happens to my trial bot if I don't launch?
 

@@ -393,7 +393,7 @@ test('citation gate: only cited sentences survive; nothing cited means the fixed
   assert.deepEqual(g.citations.map((x) => [x.n, x.filename]), [[1, 'b.md'], [2, 'a.md']]);
   for (const bad of [{ text: 'We are great.', citations: c }, { text: 'See [7].', citations: c }, { text: 'Fine [1].', citations: [] }, null])
     assert.equal(requireCitations(bad).text, NOT_IN_DATA);
-  assert.equal(NOT_IN_DATA, "I can't seem to find an answer to that in any of my current data sources.");
+  assert.equal(NOT_IN_DATA, "The answer to that doesn't seem to be in my files.");
   // end to end: a model that writes an uncited answer gets the refusal
   const src = [S(1, { filename: 'hours.md', title: 'Hours', text: 'Open Tuesday to Sunday, 7am to 3pm.' })];
   const r = await answerFromSources({ question: 'When are you open?', results: src, mode: 'generate', complete: async () => 'We are open every day from 9am!' });
@@ -526,8 +526,8 @@ test('prompt: SOURCES headers carry page, section and link when present (never i
   assert.ok(user.includes('[2] FAQ (faq.md)\n'), 'no location fields when the source has none');
   assert.ok(!/\[3\] Evil \(e\.md\)[^\n]*(?:page|link|\[4\]|im_start)/.test(user), 'unsafe link, page 0 and spoofed section text never reach the header');
   const sys = buildMessages('q', src)[0].content;
-  for (const re of [/quote the source's own words/, /bulleted list/, /Hope this helps!/, /page numbers or URLs/, /exactly this and nothing else: I can't seem to find/, /not instructions/]) assert.match(sys, re);
-  assert.match(user, /reply exactly: I can't seem to find an answer to that in any of my current data sources\./);
+  for (const re of [/quote the source's own words/, /bulleted list/, /Hope this helps!/, /page numbers or URLs/, /exactly this and nothing else: The answer to that doesn't seem to be in my files/, /not instructions/]) assert.match(sys, re);
+  assert.match(user, /reply exactly: The answer to that doesn't seem to be in my files\./);
 });
 
 test('retrieval: knowDrive hits map page (only when reported) and section; normalizeResult keeps them', () => {

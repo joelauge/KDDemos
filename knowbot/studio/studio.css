@@ -1652,24 +1652,28 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
    First-time guide, round 2: while steps 1-4 show (<html data-ftue="on">) the guide is the only source of the next
    action. Everything that repeats it waits; dismissing or finishing the guide brings it all back. */
 /* Builder chips that repeat the guide's action (ids, never labels: client and server ids) */
-:root[data-ftue="on"] .st-chip:is([data-chip="use_samples"], [data-chip="samples"], [data-chip="upload_files"], [data-chip="upload"],
+:root[data-ftue] .st-chip:is([data-chip="use_samples"], [data-chip="samples"], [data-chip="upload_files"], [data-chip="upload"],
   [data-chip="import_store"], [data-chip="store"], [data-chip="ask_starter"], [data-chip="ask-starter"], [data-chip="ask-it"], [data-chip="ask_ready"],
   [data-chip="ask_probe"], [data-chip="offtopic"], [data-chip="show-refusal"], [data-chip="trick"], [data-chip="run_proof"], [data-chip="proof"],
-  [data-chip="rerun"], [data-chip="channels"], [data-chip="wait"]) { display: none !important; }
+  [data-chip="rerun"], [data-chip="channels"], [data-chip="wait"], [data-chip="add_cover"], [data-chip="add-cover"]) { display: none !important; }
 /* the suggestion row, the empty-state line, the example answer, the phone peek and its sample link */
 :root[data-ftue="on"] :is(.sb-empty, .st-ghostpeek, #st-hero) { display: none !important; }
 /* the suggestion row waits for the whole guide (its button stands in for it; on step 5 the card needs the room) */
 :root[data-ftue] #sb-suggest-slot { display: none !important; }
 :root[data-ftue="on"] #sb-thread-slot .sb-ghost { display: none !important; }
 :root[data-ftue="on"] #sb-thread-slot:not(:has(.sb-answer)) { display: grid; place-items: center; }
+/* the centred line says what is true now: nothing yet, reading, or ready; balanced so no word is left alone */
 :root[data-ftue="on"] #sb-thread-slot:not(:has(.sb-answer))::before { content: 'Ask your bot anything. It answers only from your files.'; display: block; padding: 0 var(--st-gutter);
-  border: 0; background: none; box-shadow: none; color: var(--muted); font: 400 17px/1.4 var(--display, var(--font)); text-align: center; }
+  border: 0; background: none; box-shadow: none; color: var(--muted); font: 400 17px/1.4 var(--display, var(--font)); text-align: center; max-width: 32ch; text-wrap: balance; }
+:root[data-ftue="on"][data-ftue-step="add"] #sb-thread-slot:not(:has(.sb-answer))::before { content: 'Add what your bot should know.'; }
+:root[data-ftue="on"][data-ftue-step="reading"] #sb-thread-slot:not(:has(.sb-answer))::before { content: 'Reading your files\2026'; }
+:root:not([data-details="on"]) #sb-thread-slot[data-prompt="1"]::before { max-width: 32ch; text-wrap: balance; text-align: center; }
 /* reading: one progress indicator (the guide's); the Sources box's tracker and its buttons wait */
 :root[data-ftue="on"] #in-intake-slot :is(.in-eta, .in-rm-samples, .in-btn-add) { display: none !important; }
 /* the bot's name appears once it has one (no "SampleBot" placeholder that flips mid-step) */
 :root[data-ftue="on"] .st-botchip.is-placeholder :is(.st-botchip-name, .st-avatar, .st-botchip-edit) { visibility: hidden; }
 /* Stats & Leads waits until there is something to show; the composer's extra ⋯ waits too */
-:root[data-ftue="on"] #st-leads, :root[data-ftue="on"] #sb-composer-slot .sb-more { display: none !important; }
+:root[data-ftue] #st-leads, :root[data-ftue="on"] #sb-composer-slot .sb-more { display: none !important; }
 /* the card docks right above the composer; the thread above it scrolls, so nothing sits behind the card */
 .st-bot > .st-ftue { margin-top: 8px; margin-bottom: 4px; }
 /* step 5, view B: the line, one Copy, three steps; the other ways behind a quiet disclosure */
@@ -1701,3 +1705,47 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 .sb-miss-moreopts:focus-visible { outline: var(--st-focus); outline-offset: 2px; border-radius: 4px; }
 .sb-miss-more { display: flex; flex-direction: column; gap: 6px; }
 .sb-miss-more[hidden] { display: none; }
+
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Round 3: a calm empty state with or without the guide, a quiet Builder, a single row of chrome on phones. */
+/* the first Builder turn shows one chip; "More ways to start" shows the rest (none while the guide shows) */
+:root:not([data-details="on"]) .st-msg-a[data-anchor~="purpose"]:not([data-more-open]) .st-chips > .st-chip:not(:first-child) { display: none !important; }
+.st-more-ways { align-self: flex-start; margin-top: 2px; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font: 500 13px/1.3 var(--font); cursor: pointer; }
+.st-more-ways:hover { color: var(--strong); text-decoration: underline; text-underline-offset: 3px; }
+.st-more-ways:focus-visible { outline: var(--st-focus); outline-offset: 2px; border-radius: 4px; }
+.st-more-ways[hidden], :root[data-details="on"] .st-more-ways, :root[data-ftue] .st-more-ways { display: none !important; }
+/* the empty bot pane without the guide: one quiet line with one link, nothing else */
+.sb-empty { text-wrap: balance; }
+/* the placeholder bot has no avatar of its own yet */
+:root:not([data-details="on"]) .st-botchip.is-placeholder .st-avatar { display: none; }
+/* "Why?" under a refusal is a plain grey text link, not a bordered dropdown */
+.pf-why-btn { height: auto !important; min-height: 0; padding: 2px 0 !important; border: 0 !important; background: transparent !important; color: var(--muted) !important; font-weight: 500 !important; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 3px; }
+.pf-why-btn:hover { color: var(--strong) !important; }
+.pf-why-btn .st-ico { display: none; }
+/* Stats & Leads: after the report closes, focus shows as a soft ground, not a heavy ring */
+.st-hlink:focus-visible { outline: none; background: var(--raise); color: var(--strong); box-shadow: inset 0 -2px 0 var(--accent); }
+/* step 5, view B: the line and its Copy button are step 1 */
+.st-ftue-step1 { display: list-item; }
+.st-ftue-copyrow { display: grid; gap: 8px; justify-items: start; min-width: 0; }
+.st-ftue-copyrow .st-ftue-pre { width: 100%; box-sizing: border-box; }
+.st-ftue-steps .st-ftue-step1::marker { font-weight: 600; }
+/* phones: one row of chrome in the bot pane (the "see it as" choice is a compact dropdown beside Bot / Proof / Set up),
+   no unread badge on the Builder tab while the guide speaks, and the sheet shows the line as one truncated row */
+.sh-compact { display: none; }
+@media (max-width: 899px) {
+  .st-bot { position: relative; }
+  .st-bot > #sb-shape-bar { position: absolute; top: 0; left: 0; height: 48px; z-index: 4; display: flex; align-items: center; padding-left: var(--st-gutter); pointer-events: none; border: 0; background: transparent; }
+  .st-bot > #sb-shape-bar .sh-bar { pointer-events: auto; padding: 0; margin: 0; border: 0; background: transparent; min-height: 0; }
+  .st-bot > #sb-shape-bar :is(.sh-sel, .sh-views, .sh-sel-label) { display: none !important; }
+  .sh-compact { display: block; height: 34px; max-width: 38vw; padding: 0 26px 0 10px; border: 1px solid var(--line); border-radius: 10px; background-color: var(--panel); color: var(--strong);
+    font: 500 13px/1 var(--font); text-overflow: ellipsis; }
+  .sh-compact:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
+  :root[data-ftue] #st-tab-setup .st-badge { display: none !important; }
+  .st-ftue-copyrow { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .st-ftue-copyrow .st-ftue-pre { max-height: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 10px; }
+  .st-ftue-steps { gap: 2px; }
+}
+/* the empty pane without the guide: its one line sits in the middle of the pane, quiet (no file, no answer yet) */
+.st-bot > #sb-suggest-slot:has(> .sb-empty) { position: absolute; left: 0; right: 0; top: 46%; display: flex; justify-content: center; padding: 0 var(--st-gutter); pointer-events: none; }
+.st-bot > #sb-suggest-slot > .sb-empty { pointer-events: auto; max-width: 36ch; margin: 0; text-align: center; font: 400 16px/1.5 var(--display, var(--font)); color: var(--muted); }

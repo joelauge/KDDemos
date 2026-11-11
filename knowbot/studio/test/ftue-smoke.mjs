@@ -119,7 +119,10 @@ try {
     check(cell, 'step 1 offers samples (primary), upload, website and a note', /Try sample files/.test(acts[0]) && acts.some((t) => /Upload files/.test(t)) && acts.some((t) => /Add your website/.test(t)) && acts.some((t) => /Write a note/.test(t)), acts.join(' | '));
     check(cell, 'one filled action in the guide', await page.locator('#st-ftue .btn-primary').count() === 1);
     await quietCheck('step 1');
-    check(cell, 'step 1: the empty bot pane is one calm line (no example answer)', await page.evaluate(() => /Ask your bot anything/.test(getComputedStyle(document.getElementById('sb-thread-slot'), '::before').content)));
+    check(cell, 'step 1: the centred line says "Add what your bot should know."', await page.evaluate(() => /Add what your bot should know\./.test(getComputedStyle(document.getElementById('sb-thread-slot'), '::before').content)));
+    check(cell, 'step 1: no "SampleBot" in the header', !/SampleBot/.test(await page.locator('#st-header').innerText()));
+    check(cell, 'step 1: the Builder\'s first turn shows no chips and no "More ways" while the guide speaks', await page.evaluate(() => [...document.querySelectorAll('#st-log .st-chip, #st-log .st-more-ways')].every((b) => b.offsetParent === null)));
+    if (cell.mobile) check(cell, 'phones: no unread badge on the Builder tab while the guide is on', await page.evaluate(() => [...document.querySelectorAll('#st-tab-setup .st-badge')].every((b) => b.offsetParent === null || getComputedStyle(b).display === 'none')));
     if (cell.mobile) await actionInView('.st-ftue-go', 'step 1');
     if (cell.shots) await shot('1-start');
     if (!cell.mobile && cell.motion === 'full') await axe(page, cell, 'step 1');
@@ -132,25 +135,18 @@ try {
     check(cell, 'the dismissal is saved', await page.evaluate(() => JSON.parse(localStorage.getItem('kb-ftue') || '{}').status === 'dismissed'));
     check(cell, 'dismissed: the page flag is gone and the Builder chips are back', await page.evaluate(() => !document.documentElement.hasAttribute('data-ftue')
       && [...document.querySelectorAll('#st-log .st-chip[data-chip="use_samples"]')].some((b) => b.offsetParent !== null)));
-    // the empty state's note link (desktop: the bot pane shows the empty state once the guide is away)
-    if (!cell.mobile) {
-      const note = page.locator('.sb-empty [data-note-link]');
-      await note.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-      const line = await page.locator('.sb-empty').first().innerText().catch(() => '');
-      check(cell, 'empty state: "… Or add your website. Or write a note."', /Add a file/.test(line) && /add your website/i.test(line) && /Or write a note\./.test(line), line);
-      await note.click();
-      const dlg = page.locator('dialog.sb-miss-dlg[open]');
-      const opened = await dlg.waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
-      check(cell, 'it opens the note form, titled "Add a note"', opened && (await page.locator('#sb-miss-h').textContent()) === 'Add a note');
-      check(cell, 'the note field has focus', await page.evaluate(() => document.activeElement?.id === 'sb-miss-a'));
-      check(cell, 'tags wait behind "More options"', await page.evaluate(() => document.getElementById('sb-miss-more')?.hidden === true && document.querySelector('.sb-miss-moreopts')?.getAttribute('aria-expanded') === 'false'));
-      if (cell.shots) await shot('12-empty-note');
-      await page.locator('.sb-miss-moreopts').click();
-      check(cell, '"More options" shows the tags', await page.evaluate(() => document.getElementById('sb-miss-more')?.hidden === false && document.activeElement?.id === 'sb-miss-t'));
-      await page.keyboard.press('Escape');
-      await page.waitForTimeout(200);
-      check(cell, 'Escape closes it and focus returns to the link', await page.evaluate(() => !document.querySelector('dialog.sb-miss-dlg') && document.activeElement?.dataset?.noteLink === '1'));
-    }
+    // dismissed: a calm empty state (one line, one link, one Builder chip; no example answer, no placeholder name)
+    const calm = await page.evaluate(() => {
+      const vis = (el) => !!el && el.offsetParent !== null && getComputedStyle(el).display !== 'none';
+      const empty = [...document.querySelectorAll('.sb-empty')].filter(vis);
+      return { line: empty.map((e) => e.textContent.replace(/\s+/g, ' ').trim()).join(' | '), links: empty.flatMap((e) => [...e.querySelectorAll('button, a')]).filter(vis).map((b) => b.textContent.trim()),
+        chips: [...document.querySelectorAll('#st-log .st-chip')].filter(vis).map((b) => b.textContent.trim()), more: [...document.querySelectorAll('#st-log .st-more-ways')].some(vis),
+        ghost: [...document.querySelectorAll('.sb-ghost, .st-ghostpeek, .st-next')].some(vis), head: document.getElementById('st-header').innerText };
+    });
+    check(cell, 'dismissed: the empty pane is one line with one "Add files" link', calm.line === 'Add what your bot should know to get started. Add files' && calm.links.join('|') === 'Add files', JSON.stringify(calm.line) + ' ' + calm.links.join('|'));
+    check(cell, 'dismissed: one Builder chip, the rest behind "More ways to start"', calm.chips.length === 1 && /Use sample files/.test(calm.chips[0]) && calm.more, calm.chips.join(' | '));
+    check(cell, 'dismissed: no example answer, no checklist, no "SampleBot"', !calm.ghost && !/SampleBot/.test(calm.head));
+    if (cell.shots) await shot('12-dismissed');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.__studio?.store?.getState?.().trial?.status === 'ready', null, { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(800);
@@ -159,6 +155,18 @@ try {
     await page.locator('#st-more').click();
     await page.locator('[role="menuitem"]', { hasText: 'Show the guide' }).click();
     check(cell, '⋯ → Show the guide brings it back at step 1', await waitStep('add', 5000));
+    // the note form from the guide: "Add a note", tags behind "More options", Escape returns to the guide
+    await page.locator('#st-ftue button', { hasText: 'Write a note' }).click();
+    const dlg = page.locator('dialog.sb-miss-dlg[open]');
+    const opened = await dlg.waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
+    check(cell, '"Write a note" opens the note form, titled "Add a note"', opened && (await page.locator('#sb-miss-h').textContent()) === 'Add a note');
+    check(cell, 'the note field has focus; tags wait behind "More options"', await page.evaluate(() => document.activeElement?.id === 'sb-miss-a'
+      && document.getElementById('sb-miss-more')?.hidden === true && document.querySelector('.sb-miss-moreopts')?.getAttribute('aria-expanded') === 'false'));
+    await page.locator('.sb-miss-moreopts').click();
+    check(cell, '"More options" shows the tags', await page.evaluate(() => document.getElementById('sb-miss-more')?.hidden === false && document.activeElement?.id === 'sb-miss-t'));
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    check(cell, 'Escape closes it', await page.evaluate(() => !document.querySelector('dialog.sb-miss-dlg')));
     // × hides it too, then back again
     await page.locator('#st-ftue .st-ftue-x').click();
     check(cell, '× hides the guide', (await step()) === null);
@@ -177,6 +185,7 @@ try {
       check(cell, 'step 2 explains the wait plainly', /Usually under a minute/.test(await page.locator('#st-ftue').innerText()));
       check(cell, 'step 2: one progress indicator (the Sources tracker and its buttons wait)', await page.evaluate(() => [...document.querySelectorAll('#in-intake-slot :is(.in-eta, .in-rm-samples, .in-btn-add)')].every((el) => el.offsetParent === null)));
       await quietCheck('step 2');
+      check(cell, 'step 2: the centred line says "Reading your files…"', await page.evaluate(() => /Reading your files/.test(getComputedStyle(document.getElementById('sb-thread-slot'), '::before').content)));
       if (cell.shots) { await page.waitForTimeout(400); await shot('2-reading'); }
     }
     // ---- 2 → 3 on firstReady
@@ -196,6 +205,10 @@ try {
     const tripText = await page.locator('#st-ftue').innerText();
     check(cell, 'step 4 is "Try to trip it up", with no test jargon', /Try to trip it up/.test(tripText) && !/Proof Run|full test|before going live/i.test(tripText), tripText.replace(/\s+/g, ' ').slice(0, 160));
     await page.waitForTimeout(1500);   // the Builder's reply to the first answer lands
+    check(cell, 'step 3 → 4: the Builder keeps quiet (no per-file "is ready" turn, no "Keep this bot" card yet)', await page.evaluate(() => {
+      const t = document.getElementById('st-log').innerText;
+      return !/\.(md|txt|html)\s+is ready/.test(t) && ![...document.querySelectorAll('#st-log [data-card="email-capture"], #st-log .st-email')].some((e) => e.offsetParent !== null);
+    }));
     await quietCheck('step 4');
     if (cell.shots) await shot('4-trip');
     // ---- 4 → 5 on firstRefusal, only once the refusal has fully rendered
@@ -226,6 +239,13 @@ try {
       check(cell, 'the burst is over in about a second', !!gone && gone - fw < 1500, `${gone - fw} ms`);
     }
     // view A
+    const builderQuiet = await page.evaluate(() => ({
+      chips: [...document.querySelectorAll('#st-log .st-chip')].filter((b) => b.offsetParent !== null).map((b) => b.textContent.trim()).filter((t) => /trip it up|trick question|off-topic/i.test(t)),
+      email: [...document.querySelectorAll('#st-log [data-card="email-capture"], #st-log .st-email')].some((e) => e.offsetParent !== null),
+      leads: document.getElementById('st-leads')?.offsetParent !== null }));
+    check(cell, 'step 5: no chip for a step already done, no "Keep this bot" card, no Stats & Leads yet', !builderQuiet.chips.length && !builderQuiet.email && !builderQuiet.leads, JSON.stringify(builderQuiet));
+    check(cell, 'the refusal is the new canonical sentence', await page.evaluate(() => /The answer to that doesn't seem to be in my files\./.test(document.getElementById('sb-thread-slot').innerText)));
+    check(cell, '"Why?" is a plain text link (no border)', await page.evaluate(() => { const b = [...document.querySelectorAll('.pf-why-btn')].pop(); return !!b && getComputedStyle(b).borderTopWidth === '0px'; }));
     const viewA = await page.locator('#st-ftue').innerText();
     check(cell, 'view A: "Your bot is ready" + "Where should it answer?"', /Step 5 of 5/.test(await eyebrow()) && /Your bot is ready/.test(viewA) && /Where should it answer\?/.test(viewA));
     check(cell, 'step 5 sets data-ftue="done" (suggestions come back)', await page.evaluate(() => document.documentElement.getAttribute('data-ftue') === 'done'));
@@ -243,37 +263,57 @@ try {
     // view B: one recommended path
     const viewB = await page.locator('#st-ftue').innerText();
     check(cell, 'view B: "Put it on your site", three steps with the CMS hint', /Put it on your site/.test(viewB) && (await page.locator('#st-ftue .st-ftue-steps li').count()) === 3 && /Custom code|Footer scripts/.test(viewB));
+    check(cell, 'view B: the line and Copy are step 1 (never "Copy the line." twice), and the sub-line says what comes next',
+      await page.locator('#st-ftue .st-ftue-steps li:first-child .st-ftue-copy').count() === 1 && !/Copy the line\./.test(viewB)
+      && /Copy the line, paste it on your site, then press Launch at the top\./.test(viewB));
+    const anchored = await page.evaluate(() => {
+      const t = document.getElementById('sb-thread-slot'); const a = [...t.querySelectorAll('.sb-answer')].pop();
+      if (!a) return false; const tr = t.getBoundingClientRect(), ar = a.getBoundingClientRect();
+      return ar.bottom <= tr.bottom + 2 && (ar.top >= tr.top - 2 || ar.height > tr.height);
+    });
+    check(cell, 'view A → B keeps the refusal in view', anchored);
     const shownLine = await page.locator('#st-ftue .st-ftue-pre').textContent().catch(() => '');
     const realLine = await page.locator('#st-ftue .st-ftue-copy').getAttribute('data-copy').catch(() => '');
     check(cell, 'the real line: bot id and api', shownLine.includes(`data-bot="${trialId}"`) && /data-api="http:\/\/127\.0\.0\.1:\d+"/.test(shownLine), shownLine.slice(0, 160));
     check(cell, 'the key: masked on screen, the real trial key on Copy (never invented)', /data-key="kb_trial_[^"]*•+/.test(shownLine) && /data-key="kb_trial_[A-Za-z0-9_.-]+"/.test(realLine || ''), (realLine || '').match(/data-key="[^"]*"/)?.[0]);
     check(cell, 'Copy is the one primary; no Launch, no "Change where it answers", no stats footnote in the card',
-      await page.locator('#st-ftue .btn-primary').count() === 1 && /Copy the line/.test(await page.locator('#st-ftue .btn-primary').textContent()) && !/Launch\b|Change where it answers|Check your stats/.test(viewB.replace(/once you launch/g, '')));
+      await page.locator('#st-ftue .btn-primary').count() === 1 && /Copy the line/.test(await page.locator('#st-ftue .btn-primary').textContent()) && !/Launch\b|Change where it answers|Check your stats/.test(viewB.replace(/once you launch|press Launch at the top/g, '')));
     check(cell, 'the other ways wait behind a quiet "Other ways"', await page.evaluate(() => document.getElementById('st-ftue-other')?.hidden === true && document.querySelector('#st-ftue .st-ftue-more')?.getAttribute('aria-expanded') === 'false'));
     check(cell, 'no vendor names in the guide', !/twilio|stripe|shopify|gemini|resend|postmark|claude code|cursor/i.test(viewB));
     if (cell.mobile) await actionInView('.st-ftue-copy', 'view B');
-    if (cell.shots) { await cardTop(); await shot('7-whatsnext-agent'); }
+    if (cell.mobile) { await actionInView('.st-ftue-more', 'view B "Other ways"'); await actionInView('.st-ftue-finish', 'view B "Done"'); }
+    if (cell.shots) { await cardTop(); await shot('7-viewB'); }
     if (!cell.mobile && cell.motion === 'full') await axe(page, cell, 'view B');
     await page.locator('#st-ftue .st-ftue-more').click();
     const agent = await page.locator('#st-ftue .st-ftue-copy-agent').getAttribute('data-copy').catch(() => '');
     check(cell, 'Other ways: an AI-agent prompt (before </body>, the real line, how to check it)', /before the closing <\/body>/.test(agent) && agent.includes(`data-bot="${trialId}"`) && /confirm a chat bubble/.test(agent));
     const mail = await page.locator('#st-ftue .st-ftue-mail').getAttribute('href').catch(() => '');
     check(cell, 'Other ways: a developer e-mail (mailto) with the line and the steps', /^mailto:\?subject=/.test(mail || '') && decodeURIComponent(mail || '').includes('lib/embed.js') && /before <\/body>/.test(decodeURIComponent(mail || '')));
-    if (cell.shots) { await page.locator('#st-ftue .st-ftue-more').scrollIntoViewIfNeeded(); await shot('8-whatsnext-dev'); }
+    if (cell.shots) { await page.locator('#st-ftue .st-ftue-more').scrollIntoViewIfNeeded(); await shot('8-otherways'); }
     await cardTop();
     await page.locator('#st-ftue .st-ftue-copy').click();
     check(cell, 'Copy confirms in words', await page.waitForFunction(() => /Copied|Select and copy/.test(document.querySelector('#st-ftue .st-ftue-copy')?.textContent || ''), null, { timeout: 3000 }).then(() => true).catch(() => false));
-    if (cell.shots) { await cardTop(); await shot('9-whatsnext-diy'); }
+    if (cell.shots) { await cardTop(); await shot('9-copied'); }
     if (cell.name === 'desktop-dark') { await page.locator('#st-ftue .st-ftue-more').click(); await page.waitForTimeout(300); await cardTop(); await page.screenshot({ path: path.join(SHOTS, '10-dark.png') }); }
     if (cell.name === 'mobile-light') { await page.locator('#st-ftue .st-ftue-more').click(); await page.waitForTimeout(300); await cardTop(); await page.screenshot({ path: path.join(SHOTS, '11-mobile.png') }); }
     const hscroll = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
     check(cell, 'no horizontal scroll', !hscroll);
-    if (cell.mobile) check(cell, 'phones: the header says "Launch", not the price', /^\s*Launch\s*$/.test(await page.locator('#st-price').innerText().catch(() => '')));
+    if (cell.mobile) check(cell, 'phones: one row of chrome in the bot pane (a compact "see it as" dropdown beside Bot / Proof / Set up)', await page.evaluate(() => {
+      const sel = document.querySelector('#sb-shape-bar .sh-compact'); const tools = document.querySelector('#sb-shape-bar .sh-sel');
+      const head = document.getElementById('st-bot-header'); if (!sel || !head) return false;
+      const sr = sel.getBoundingClientRect(), hr = head.getBoundingClientRect();
+      const seg = [...head.querySelectorAll('button')].filter((b) => b.offsetParent !== null).map((b) => b.getBoundingClientRect().left);
+      return sel.offsetParent !== null && (!tools || tools.offsetParent === null) && sr.top >= hr.top - 1 && sr.bottom <= hr.bottom + 1 && (!seg.length || sr.right <= Math.min(...seg));
+    }));
+    if (cell.mobile) check(cell, 'phones: the header says "Launch", not the price',/^\s*Launch\s*$/.test(await page.locator('#st-price').innerText().catch(() => '')));
 
+    // Done: the guide is finished and stays finished
+    await page.locator('#st-ftue .st-ftue-finish').click();
+    check(cell, 'after the guide: the held "Keep this bot" offer arrives', await page.waitForFunction(() => [...document.querySelectorAll('#st-log [data-card="email-capture"], #st-log .st-email')].some((e) => e.offsetParent !== null || e.isConnected), null, { timeout: 8000 }).then(() => true).catch(() => false));
+    if (!cell.mobile) check(cell, 'after the guide: Stats & Leads appears, with one gentle pulse', await page.waitForFunction(() => { const b = document.getElementById('st-leads'); return b && b.offsetParent !== null && b.classList.contains('is-guide-pulse'); }, null, { timeout: 4000 }).then(() => true).catch(() => false));
+    check(cell, '"Done" hides the guide and remembers', (await step()) === null && await page.evaluate(() => JSON.parse(localStorage.getItem('kb-ftue') || '{}').status === 'done' && !document.documentElement.hasAttribute('data-ftue')));
     // ---- Stats & Leads
     if (!cell.mobile) {
-      const pulsed = await page.waitForFunction(() => document.getElementById('st-leads')?.classList.contains('is-guide-pulse'), null, { timeout: 4000 }).then(() => true).catch(() => false);
-      check(cell, 'the guide points at Stats & Leads (a gentle pulse)', pulsed);
       const btn = page.locator('#st-leads');
       check(cell, 'Stats & Leads sits in the header, left of Launch, with no border', await btn.isVisible() && (await btn.textContent()) === 'Stats & Leads'
         && await page.evaluate(() => document.getElementById('st-leads').getBoundingClientRect().right <= document.getElementById('st-price').getBoundingClientRect().left
@@ -293,9 +333,6 @@ try {
       check(cell, 'phones: it opens the report', await page.locator('dialog.kb-leads[open]').waitFor({ timeout: 10000 }).then(() => true).catch(() => false));
       await page.keyboard.press('Escape');
     }
-    // Done: the guide is finished and stays finished
-    await page.locator('#st-ftue .st-ftue-finish').click();
-    check(cell, '"Done" hides the guide and remembers', (await step()) === null && await page.evaluate(() => JSON.parse(localStorage.getItem('kb-ftue') || '{}').status === 'done' && !document.documentElement.hasAttribute('data-ftue')));
     check(cell, 'no page errors', errors.length === 0, errors.slice(0, 3).join(' || '));
     await context.close();
   }

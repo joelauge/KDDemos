@@ -154,7 +154,13 @@ export function mountFtue(ctx, hooks = {}) {
   function keepLatestInView() {
     const t = document.getElementById('sb-thread-slot');
     if (!t || card.parentElement !== document.getElementById('st-bot')) return;
-    const down = () => { t.scrollTop = t.scrollHeight; };
+    const down = () => {
+      const a = [...t.querySelectorAll('.sb-answer')].pop();
+      if (!a) { t.scrollTop = t.scrollHeight; return; }
+      const tr = t.getBoundingClientRect(), ar = a.getBoundingClientRect();
+      const top = t.scrollTop + (ar.top - tr.top), bottom = top + ar.height;
+      t.scrollTop = ar.height + 12 > t.clientHeight ? Math.max(0, top - 8) : Math.max(0, bottom + 12 - t.clientHeight);
+    };
     requestAnimationFrame(down);
     setTimeout(down, 320);   // again once the card's entrance (and any late layout) has settled
   }
@@ -162,7 +168,7 @@ export function mountFtue(ctx, hooks = {}) {
   function render(force = false) {
     raf = 0;
     const root = document.documentElement;
-    if (!visible()) { if (!card.hidden) card.hidden = true; if (root.hasAttribute('data-ftue')) root.removeAttribute('data-ftue'); return; }
+    if (!visible()) { if (!card.hidden) card.hidden = true; if (root.hasAttribute('data-ftue')) { root.removeAttribute('data-ftue'); root.removeAttribute('data-ftue-step'); } return; }
     place();
     let step = ftueStep(getState());
     if (step === 'done' && !saved.celebrated && !doneReady()) step = shownStep && shownStep !== 'done' ? shownStep : 'trip';
@@ -170,6 +176,7 @@ export function mountFtue(ctx, hooks = {}) {
     if (card.hidden) card.hidden = false;
     const flag = step === 'done' ? 'done' : 'on';
     if (root.getAttribute('data-ftue') !== flag) root.setAttribute('data-ftue', flag);
+    if (root.getAttribute('data-ftue-step') !== step) root.setAttribute('data-ftue-step', step);
     card.dataset.step = step;
     if (step === 'reading' && shownStep === 'reading' && !force) { paintReading(); return; }
     if (step === 'ask' && shownStep === 'ask' && !force) { paintAsk(); return; }
@@ -190,7 +197,6 @@ export function mountFtue(ctx, hooks = {}) {
       keepLatestInView();
     }
     if (step === 'done' && !saved.celebrated) { save({ celebrated: true }); celebrate(); }
-    if (step === 'done' && phase === 'next') pulseStats();
   }
   const schedule = () => { if (!raf) raf = requestAnimationFrame(() => render(false)); };
 
@@ -324,7 +330,7 @@ export function mountFtue(ctx, hooks = {}) {
     const holder = h('div', { class: 'st-ftue-next' }, h('p', { class: 'st-ftue-p', role: 'status' }, 'Getting your line…'));
     const parts = frame('done', {
       title: 'Put it on your site',
-      body: liveNow ? 'Paste one line into your site and visitors can ask it right away.' : 'Paste one line into your site. It starts answering visitors once you launch.',
+      body: liveNow ? 'Copy the line and paste it on your site. Visitors can ask it right away.' : 'Copy the line, paste it on your site, then press Launch at the top.',
       extra: holder,
     });
     snippet().then((line) => {
@@ -353,13 +359,14 @@ export function mountFtue(ctx, hooks = {}) {
     const more = h('button', { type: 'button', class: 'st-ftue-link is-inline st-ftue-more', 'aria-expanded': 'false', 'aria-controls': otherId,
       onclick: () => { const open = other.hidden; other.hidden = !open; more.setAttribute('aria-expanded', String(open)); } },
     h('span', null, 'Other ways'), h('span', { class: 'st-ftue-chev', 'aria-hidden': 'true' }));
+    // step 1 IS the line and its Copy button (never "1. Copy the line." said twice); phones show the line truncated
     return [
-      h('pre', { class: 'st-ftue-pre', tabindex: '0', 'aria-label': 'Your website line' }, h('code', null, shown)),
-      h('div', { class: 'st-ftue-acts' }, copyLine, status),
       h('ol', { class: 'st-ftue-steps' },
-        h('li', null, 'Copy the line.'),
+        h('li', { class: 'st-ftue-step1' },
+          h('div', { class: 'st-ftue-copyrow' },
+            h('pre', { class: 'st-ftue-pre', tabindex: '0', 'aria-label': 'Your website line' }, h('code', null, shown)), copyLine), status),
         h('li', null, 'In your site’s editor, find where you add code to every page. It’s often called “Custom code”, “Footer scripts” or “Code injection”.'),
-        h('li', null, 'Paste it just before </body> and save. Open your site to see the chat bubble.')),
+        h('li', null, 'Paste it just before </body> and save.')),
       h('div', { class: 'st-ftue-acts st-ftue-foot' }, more, done),
       other,
     ];
@@ -508,7 +515,9 @@ export function mountFtue(ctx, hooks = {}) {
     shownStep = null;
     announce?.('Guide hidden. Bring it back from the More options menu: Show the guide.');
     hooks.onDismiss?.(via);
+    hooks.onEnd?.('dismissed');
     if (hadFocus) focusAfterHide();
+    setTimeout(pulseStats, 300);
   }
   function finishGuide() {
     const hadFocus = card.contains(document.activeElement);
@@ -516,7 +525,9 @@ export function mountFtue(ctx, hooks = {}) {
     render();
     shownStep = null;
     announce?.('Guide finished. It is in the More options menu if you want it again.');
+    hooks.onEnd?.('done');
     if (hadFocus) focusAfterHide();
+    setTimeout(pulseStats, 300);
   }
   function show() {
     save({ status: 'active' });
@@ -528,6 +539,10 @@ export function mountFtue(ctx, hooks = {}) {
   // a live (launched) bot never starts the guide on its own
   if (active() && hooks.isLive?.() && !saved.phase) save({ status: 'done' });
 
+  if (typeof ResizeObserver === 'function') {
+    let lastH = 0;
+    new ResizeObserver(() => { const hh = card.offsetHeight; if (Math.abs(hh - lastH) > 4 && card.dataset.step === 'done') keepLatestInView(); lastH = hh; }).observe(card);
+  }
   on('state', schedule);
   on('milestone', schedule);
   on('change:spec', () => { snippetP = null; });

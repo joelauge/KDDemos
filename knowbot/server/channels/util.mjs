@@ -2,7 +2,7 @@
 // grounded answer (the same answer object every channel gets from devapi.mjs's ask()).
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-export const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+export const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 
 // ------------------------------------------------------------------ http
 export class ChannelError extends Error {

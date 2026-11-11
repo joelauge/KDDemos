@@ -54,7 +54,7 @@ describe('studio/kb docs', () => {
   });
   test('the refusal sentence is quoted byte-exact', () => {
     const proof = docs.find((d) => d.name === 'proof-and-citations.md');
-    assert.ok(proof.text.includes("I can't seem to find an answer to that in any of my current data sources."));
+    assert.ok(proof.text.includes("The answer to that doesn't seem to be in my files."));
   });
   test('training: only the owner\'s exact no-training statement, in privacy-and-data.md', () => {
     const SENTENCE = "KnowBot does not train AI models on your files or on your customers' questions.";

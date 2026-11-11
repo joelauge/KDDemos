@@ -119,7 +119,11 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
     const ids = SHAPE_TOOLS.find((t) => t.id === TOOL_OF_SHAPE[st.shape]).shapes.map(([id]) => id);
     arrows(ids, () => st.shape, (id) => { set(id, { user: true }); btns.get(id).focus(); })(e);
   });
-  const wrap = h('div', { class: 'sh-bar' }, label, group, views);
+  // phones: the same choice as one compact dropdown, so the pane keeps one row of chrome (studio.css shows it < 900 px)
+  const compact = h('select', { class: 'sh-compact', 'aria-label': 'See your bot as' },
+    SHAPE_TOOLS.map((t) => h('optgroup', { label: t.label }, t.shapes.map(([id, name]) => h('option', { value: id }, name)))));
+  compact.addEventListener('change', () => set(compact.value, { user: true }));
+  const wrap = h('div', { class: 'sh-bar' }, label, group, views, compact);
   selectorHost.append(wrap);
 
   function paintSelector() {
@@ -134,6 +138,7 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
       b.classList.toggle('is-mine', has);
       b.title = has ? `${t.label} · switched on for your bot` : t.label;
     }
+    if (compact.value !== st.shape) compact.value = st.shape;
     const tShapes = SHAPE_TOOLS.find((x) => x.id === tool).shapes;
     views.hidden = tShapes.length < 2;
     for (const [id, b] of btns) {

@@ -26,7 +26,7 @@ import { mountNumbers, numberCache } from './numbers.js?v=8bb7c43';
 import { siteSettings } from './sitebrand.js?v=8bb7c43';
 import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel } from './surfaces.js?v=8bb7c43';
 
-const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
 
 let cssPromise = null;
@@ -1673,7 +1673,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           const spoken = callTwiml ? '' : says[0] || '';
           if (spoken) {
             const src = /^According to ([^,]{2,80}),/.exec(spoken);
-            const refused = /can't seem to find an answer/i.test(spoken);
+            const refused = /doesn't seem to be in my files/i.test(spoken);
             paintReq({ method: 'POST', path: pub((j.request && j.request.path) || `/v1/channels/${botId()}/voice`), status: rs.status, ms: j.ms ?? Math.round(performance.now() - t0), note: `${j.signed ? 'signed ' : ''}call → call instructions` });
             paintTwiml(body);
             return { r: { text: spoken, refused, citations: [], srcNote: refused ? null : src ? `Named on the call: ${src[1]}` : null }, audio: null };

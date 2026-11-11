@@ -5,7 +5,7 @@ export const VERSION = '1.0.0';
 export const CANONICAL = { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
 /** The one answer for anything the knowDrive doesn't cover. */
 // The only reply a bot gives when it cannot cite a source for an answer (owner's wording).
-export const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+export const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 /** Select mode: the model only names lines, so it needs a handful of tokens. */
 export const SELECT_SETTINGS = { temperature: 0, top_p: 1, max_tokens: 24, seed: 7 };
 export const WEBLLM_URL = 'https://esm.run/@mlc-ai/web-llm@0.2.79';

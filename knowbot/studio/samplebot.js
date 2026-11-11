@@ -79,7 +79,7 @@
 
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=8bb7c43';
 
-const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
+const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const STEP_ORDER = ['embed', 'search', 'rank', 'select', 'quote'];
 const PERSONAS = [
   { id: 'customer', label: 'Customer' },
@@ -426,8 +426,11 @@ export function mount(ctx) {
   // compact (caption first, one quoted line) so it fits above the empty state without being clipped.
   let ghostEl = null;
   function ghostAllowed() { return !answers.size && !restoredN && !readiness().total && !(getState().thread || []).length; }
+  // r10: the example answer is retired: an empty bot pane is one calm line (renderSuggestions' empty state), so the
+  // ghost is never drawn (ghostEl stays null and every caller below is a no-op).
+  const GHOST_RETIRED = true;
   function renderGhost() {
-    if (ghostEl || !ghostAllowed()) return;
+    if (GHOST_RETIRED || ghostEl || !ghostAllowed()) return;
     const line = (t) => h('span', { class: 'sb-ghost-t', 'data-t': t });
     ghostEl = h('div', { class: 'sb-ghost' },
       h('p', { class: 'sb-ghost-cap' }, h('span', { class: 'sb-ghost-cap-ico' }, ico('shieldCheck', 15)),
@@ -3016,17 +3019,9 @@ export function mount(ctx) {
     const fresh = new Set(prevQs.size ? starters.filter((q) => !prevQs.has(q)) : []);
     el.innerHTML = '';
     if (!r.total) {
-      // No files yet (states catalogue): one sentence plus the two ways forward
-      // One slim line with text links: the Builder's "Use sample files" chip stays the only primary on screen, and
-      // the example answer above keeps its full height.
-      // r4: a live (converted / launched) bot has no sample files to offer: the plain sentence, never "Add a file or ."
-      const addLink = h('button', { type: 'button', class: 'sb-link', onclick: () => builderAction({ type: 'request_upload' }) }, 'Add a file');
-      el.append(samplesOffered()
-        ? h('p', { class: 'empty-state sb-empty' },
-          h('span', null, 'Your bot answers only from what you add. '), addLink, h('span', null, ' or '),
-          h('button', { type: 'button', class: 'sb-link', onclick: () => builderAction({ type: 'attach_samples', set: 'lumen-bikes' }) }, 'try the sample files'),
-          h('span', null, '.'))
-        : h('p', { class: 'empty-state sb-empty' }, h('span', null, 'Your bot answers only from what you add. '), addLink, h('span', null, ' and it starts answering.')));
+      // No files yet: one calm line and one quiet way forward (the Builder carries the other ways to start)
+      el.append(h('p', { class: 'empty-state sb-empty' }, h('span', null, 'Add what your bot should know to get started. '),
+        h('button', { type: 'button', class: 'sb-link', onclick: () => builderAction({ type: 'request_upload' }) }, 'Add files')));
       requestAnimationFrame(fitGhost);
       return;
     }
