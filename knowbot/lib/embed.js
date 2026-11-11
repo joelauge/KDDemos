@@ -33,19 +33,24 @@ const instanceConfig = async () => {
   if (!instance) return null;
   try { return (await (await fetch(`${apiBase}/api/config?instance=${encodeURIComponent(instance)}`)).json()).instance || null; } catch { return null; }
 };
-// data-mode="voice": the web voice assistant (lib/voice-widget.js) instead of the text widget. data-bot (or
-// data-instance) names the bot, data-key a trial key when the bot is a Studio trial, data-talk="hold" for push-to-talk.
+// data-mode="voice": the web voice assistant: a round button in the bot's orb colour that opens voice mode (the
+// audio-reactive orb, lib/voice-launcher.js). data-bot (or data-instance) names the bot, data-key a trial key when the bot
+// is a Studio trial, data-orb a colour (else the bot's own choice from the Studio), data-target to place it inline,
+// data-position="left". data-legacy="on": the older mic widget (lib/voice-widget.js).
 const startVoice = async () => {
   const inst = await instanceConfig();
-  const { mountVoice } = await import('./voice-widget.js?v=e3d6fc1');
-  window.knowbotVoice = mountVoice(d.target || null, {
-    apiBase, endpoint: d.endpoint || undefined, bot: d.bot || instance || '', key: d.key || undefined,
-    name: d.name || inst?.botName || inst?.name || 'KnowBot', talk: d.talk === 'hold' ? 'hold' : 'toggle', position: d.position,
-    open: d.open === 'true', lang: d.lang || undefined, engine: d.engine === 'text' ? 'text' : 'auto',
-  });
+  const common = { apiBase, endpoint: d.endpoint || undefined, bot: d.bot || instance || '', key: d.key || undefined,
+    name: d.name || inst?.botName || inst?.name || 'KnowBot', position: d.position, open: d.open === 'true' };
+  if (d.legacy === 'on') {
+    const { mountVoice } = await import('./voice-widget.js?v=e3d6fc1');
+    window.knowbotVoice = mountVoice(d.target || null, { ...common, talk: d.talk === 'hold' ? 'hold' : 'toggle', lang: d.lang || undefined, engine: d.engine === 'text' ? 'text' : 'auto' });
+    return;
+  }
+  const { mountVoiceLauncher } = await import('./voice-launcher.js?v=e3d6fc1');
+  window.knowbotVoice = mountVoiceLauncher(d.target || null, { ...common, orb: d.orb || undefined });
 };
 // data-voice="on" (with data-bot, or data-instance): a mic button in the chat that opens voice mode (lib/voice-mode.js);
-// data-key for a trial bot, data-orb="ocean|violet|sunset|mint" (else the bot's own choice from the Studio).
+// data-key for a trial bot, data-orb="ocean|violet|sunset|mint|ruby|midnight|silver" (else the bot's own choice from the Studio).
 const voice = d.voice === 'on' || d.voice === 'true' ? { apiBase, bot: d.bot || instance || '', key: d.key || undefined, orb: d.orb || undefined } : null;
 const start = async () => {
   if (d.mode === 'voice') return startVoice();

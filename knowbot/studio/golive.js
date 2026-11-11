@@ -451,10 +451,10 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       // live voice engine as the phone. Customer-facing copy never names the voice provider (owner rule).
       { id: 'voice', name: 'Web voice assistant', blurb: 'Visitors talk to your bot from a mic button on your site and hear the answer, with its sources on screen as it speaks.', provider: 'Live voice · on your website', hue: 5, url: webVoiceUrl(), status: 'Try it now', tryLabel: 'Talk to your bot',
         needs: ['Nothing: paste one line on your site (KnowBot runs the voice for you)'],
-        steps: ['Paste the embed below on your site: a mic button that opens the voice assistant (tap to talk, or hold to talk).', 'It talks with the visitor in real time, the same live voice as your phone line, and speaks the answer from your sources, naming each one; the sources show as links while it speaks.'],
+        steps: ['Paste the embed below on your site: a round button in your orb colour that opens voice mode (the orb moves with the visitor\'s voice).', 'It talks with the visitor in real time, the same live voice as your phone line, and speaks just the answer from your sources; the sources show as links while it speaks.', 'Pick the orb colour below. It applies to voice mode everywhere: this assistant, web chat and homepage search.'],
         configs: [
           // a trial bot needs its trial key in the embed (masked on screen, real on Copy); a launched bot's voice socket is public
-          { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-talk="hold" for push-to-talk; data-target="#id" to place it inline -->` },
+          { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-target="#id" to place it inline; data-position="left"; data-orb="silver" to override the colour -->` },
           { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
         ] },
       // Homepage search (server/site.mjs, ../site/overlay.js): a simple search box that hovers over the homepage
@@ -1145,12 +1145,19 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(note, host);
     let widget = null, stopped = false;
     voices.push({ stop() { stopped = true; try { widget && widget.destroy(); } catch { /* ignore */ } widget = null; } });
-    loadDev().then(() => import(`${siteBase}lib/voice-widget.js?v=484b978`)).then(({ mountVoice }) => {
+    loadDev().then(() => import(`${siteBase}lib/voice-launcher.js?v=e3d6fc1`)).then(({ mountVoiceLauncher }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.textContent = 'The voice assistant needs your trial key; it is not available right now. The clip endpoint below still works.'; return; }
       note.textContent = liveVoice() ? 'Live voice, the same as your phone line: speak and it answers out loud, with the sources as links while it speaks.' : 'Live voice is unavailable right now, so your browser listens and speaks instead. Same sources, same citations.';
-      widget = mountVoice(host, { endpoint: webVoiceUrl(), bot: botId(), key: d.key, name: botName() });
+      // voice mode with the orb, in the bot's colour; the picker below changes it (and saves it for every voice surface)
+      widget = mountVoiceLauncher(host, { apiBase, endpoint: webVoiceUrl(), bot: botId(), key: d.key, name: botName() });
+      api.getSite?.().then((view) => {
+        if (stopped || closing || !host.isConnected) return;
+        const pick = h('div', { class: 'gl-wv-orb' });
+        pick.append(siteSettings({ view, compact: true, orbOnly: true, onSaved: (v) => { try { widget?.setOrb?.(v?.site?.orb); } catch { /* ignore */ } } }));
+        host.after(pick);
+      }).catch(() => {});
     }).catch(() => { if (!stopped) note.textContent = "The voice assistant couldn't load here. The clip endpoint below still works."; });
   }
 

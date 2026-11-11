@@ -24,7 +24,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SHOTS = process.env.VOICE_SHOTS || path.join(__dirname, 'screens', 'voice');
-const PRESETS = ['ocean', 'violet', 'sunset', 'mint'];
+const PRESETS = ['ocean', 'violet', 'sunset', 'mint', 'ruby', 'midnight', 'silver'];
 let failed = 0;
 const check = (cell, name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${cell} ${name}${detail ? ` · ${String(detail).slice(0, 300)}` : ''}`); return ok; };
 
@@ -167,7 +167,7 @@ try {
     await page.click('.gl-chcard[data-ch="site"]');
     await page.waitForSelector('.gl-sp .ss-orbs', { timeout: 20000 });
     const opts = await page.$$eval('.gl-sp .ss-orb-in', (rs) => rs.map((r) => ({ v: r.value, on: r.checked, label: r.closest('label').textContent.trim() })));
-    check('studio', 'the picker: four colours, named, the saved one chosen', opts.length === 4 && opts.map((o) => o.label).join(',') === 'Ocean,Violet,Sunset,Mint' && opts.find((o) => o.on)?.v === 'ocean', JSON.stringify(opts));
+    check('studio', 'the picker: seven colours, named, the saved one chosen', opts.length === 7 && opts.map((o) => o.label).join(',') === 'Ocean,Violet,Sunset,Mint,Ruby,Midnight,Silver' && opts.find((o) => o.on)?.v === 'ocean', JSON.stringify(opts));
     const pv = await page.$eval('.gl-sp .ss-orb-canvas', (c) => c.kbOrb && { r: c.kbOrb.renderer, p: c.kbOrb.preset });
     check('studio', 'a live preview orb', pv && pv.r !== 'none' && pv.p === 'ocean', JSON.stringify(pv));
     await page.locator('.gl-sp .ss-orb-opt[for$="-orb-sunset"]').click();

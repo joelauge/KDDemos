@@ -23,6 +23,10 @@ export const ORB_PRESETS = Object.freeze({
   violet: Object.freeze({ label: 'Violet', colors: ['#a855f7', '#5b21b6', '#f5d0fe'] }),
   sunset: Object.freeze({ label: 'Sunset', colors: ['#fb923c', '#be123c', '#fde68a'] }),
   mint: Object.freeze({ label: 'Mint', colors: ['#34d399', '#0f766e', '#d9f99d'] }),
+  ruby: Object.freeze({ label: 'Ruby', colors: ['#ef4444', '#7f1d1d', '#fecaca'] }),
+  midnight: Object.freeze({ label: 'Midnight', colors: ['#2546c4', '#0a1238', '#7d9bff'] }),
+  // monochrome: silver particles over near-black depth, a white highlight
+  silver: Object.freeze({ label: 'Silver', colors: ['#c3c7d0', '#16171b', '#ffffff'] }),
 });
 export const ORB_IDS = Object.freeze(Object.keys(ORB_PRESETS));
 export const ORB_DEFAULT = 'ocean';

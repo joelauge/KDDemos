@@ -265,11 +265,12 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
     host.append(mount, note);
     let widget = null, stopped = false;
     st.live = { stop() { stopped = true; try { widget?.destroy?.(); } catch { /* ignore */ } } };
-    Promise.all([loadDev(), import('../lib/voice-widget.js?v=e3d6fc1')]).then(([d, m]) => {
+    Promise.all([loadDev(), import('../lib/voice-launcher.js?v=e3d6fc1')]).then(([d, m]) => {
       if (stopped) return;
       if (!d) { note.textContent = 'Your bot is still getting ready. Try again in a moment.'; return; }
       const ws = d.channels?.webVoice?.socket || `${apiRoot(d).replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(d.botId)}/voice/live`;
-      widget = m.mountVoice(mount, { endpoint: ws, bot: d.botId, key: d.key, name: botName() });
+      // voice mode with the orb, in the bot's colour (Set up → Web voice assistant, or Homepage search)
+      widget = m.mountVoiceLauncher(mount, { apiBase: apiRoot(d), endpoint: ws, bot: d.botId, key: d.key, name: botName(), orb: d.channels?.webVoice?.orb || undefined });
       note.textContent = 'This is the voice button visitors get on your website: they talk, it answers out loud and shows its sources.';
     }).catch(() => { note.textContent = "The voice assistant couldn't load here."; });
     return host;

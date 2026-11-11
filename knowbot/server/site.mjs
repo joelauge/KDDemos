@@ -181,7 +181,7 @@ export const SHOW_ON = Object.freeze(['until-dismissed', 'every-visit']);
 /** 'first-visit' was the earlier name of 'until-dismissed' (saved edits and old clients still send it). */
 export const showOnOf = (v) => (v === 'every-visit' ? 'every-visit' : 'until-dismissed');
 /** Voice mode's orb colours (lib/voice-orb.js ORB_PRESETS): one choice per bot, for the Homepage search and web chat. */
-export const SITE_ORBS = Object.freeze(['ocean', 'violet', 'sunset', 'mint']);
+export const SITE_ORBS = Object.freeze(['ocean', 'violet', 'sunset', 'mint', 'ruby', 'midnight', 'silver']);
 export const orbOf = (v) => (SITE_ORBS.includes(v) ? v : SITE_ORBS[0]);
 export const LOGO_MAX_BYTES = 150 * 1024;
 const LOGO_TYPES = { 'image/png': (b) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
