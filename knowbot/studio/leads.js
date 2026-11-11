@@ -66,7 +66,7 @@ export async function openLeads() {
   if (open) { open.dialog.focus(); return; }
   if (!getState().trial?.id) return;
   await ensureCss();
-  const invoker = document.activeElement;
+  const invoker = document.activeElement && document.activeElement !== document.body ? document.activeElement : document.getElementById('st-more');
   let days = 30;
   let data = null;
   let busy = false;
@@ -99,6 +99,7 @@ export async function openLeads() {
     dialog.remove();
     open = null;
     if (invoker && invoker.isConnected) invoker.focus();
+    else document.getElementById('st-more')?.focus();   // opened from the ⋯ menu (gone by now): back to ⋯
   });
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); }); // the backdrop
   document.body.append(dialog);

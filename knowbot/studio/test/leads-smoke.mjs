@@ -92,9 +92,13 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
-    const btn = page.locator('#st-leads');
-    await btn.waitFor({ state: 'visible', timeout: 20000 });
-    check(`${theme}: the header has a Leads button`, await btn.isVisible());
+    // simple view: Leads lives in the header's ⋯ menu
+    const more = page.locator('#st-more');
+    await more.waitFor({ state: 'visible', timeout: 20000 });
+    await more.click();
+    const btn = page.locator('[role="menuitem"]', { hasText: 'Leads' });
+    await btn.waitFor({ state: 'visible', timeout: 5000 });
+    check(`${theme}: the ⋯ menu has Leads`, await btn.isVisible());
     await btn.click();
     const dlg = page.locator('dialog.kb-leads[open]');
     await dlg.waitFor({ timeout: 10000 });
@@ -140,7 +144,7 @@ try {
       } else console.log('  (axe skipped: CDN unreachable)');
       await page.keyboard.press('Escape');
       await page.waitForSelector('dialog.kb-leads', { state: 'detached', timeout: 5000 });
-      check('Escape closes it and focus returns to the Leads button', await page.evaluate(() => document.activeElement?.id === 'st-leads'));
+      check('Escape closes it and focus returns to the ⋯ menu button', await page.evaluate(() => document.activeElement?.id === 'st-more'));
       // mobile: the ⋯ menu has it, the panel fills the screen
       await page.setViewportSize({ width: 390, height: 844 });
       await page.locator('#st-more').click();
