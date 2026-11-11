@@ -1548,3 +1548,23 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 :root:not([data-details="on"]) .in-chip :is(.in-chip-dots, .in-chip-m) { display: none !important; }
 :root:not([data-details="on"]) .in-chip { border-color: transparent !important; background: transparent !important; box-shadow: none !important; }
 :root:not([data-details="on"]) .st-diff-row.is-fixed { display: none !important; }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Simple view, round 3: reading is one quiet progress line; the composer carries only the field; answers are plain
+   paragraphs (no quote rules); one tinted suggestion per Builder message. */
+:root:not([data-details="on"]) #in-map-slot { display: none !important; }
+:root:not([data-details="on"]) .in-eta-time { display: none !important; }
+:root:not([data-details="on"]) .in-row.st-working, :root:not([data-details="on"]) .in-row[data-reading] { outline: 0 !important; }
+:root:not([data-details="on"]) .sb-comp-meta .sb-more { display: none !important; }
+/* "Didn't get the answer you needed?" appears once there is an answer to be unhappy with */
+:root:not([data-details="on"]) .st-bot:not(:has(.sb-answer)) .sb-miss { display: none !important; }
+:root:not([data-details="on"]) .sb-comp-meta { justify-content: flex-end; }
+:root:not([data-details="on"]) #st-bot .sb-answer .sb-line[data-run] { border-left: 0 !important; padding-left: 0 !important; margin-block: 4px !important; }
+:root:not([data-details="on"]) .st-chips > .st-chip:not(:first-child) { background: transparent !important; color: var(--muted) !important; border: 1px solid var(--line) !important; }
+:root:not([data-details="on"]) .st-chips { flex-wrap: wrap; flex-direction: row; }
+:root:not([data-details="on"]) .in-row.st-working { border-color: transparent !important; border-bottom-color: var(--line) !important; }
+:root:not([data-details="on"]) .in-row.st-working::after { display: none; }
+/* a plain canvas (no dot grid), and an empty chat that reads like Claude's: one quiet invitation in the middle */
+:root:not([data-details="on"]) .st-bot { background: var(--st-panel-bot); }
+:root:not([data-details="on"]) #sb-thread-slot[data-prompt="1"] { place-items: center; }
+:root:not([data-details="on"]) #sb-thread-slot[data-prompt="1"]::before { content: 'Ask your bot anything. It answers only from your files.'; display: block; border: 0; background: none; box-shadow: none; color: var(--muted); font: 400 17px/1.4 var(--display, var(--font)); padding: 0; }

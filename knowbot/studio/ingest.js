@@ -2713,7 +2713,7 @@ export function mount(ctx) {
     // thread with no input (mobile CLS 0.155) and leave the pane empty. It folds inside the ask's input window instead
     // (answer:start), or on a reload that already has answers.
     const hasAnswers = (getState().thread || []).some((a) => a && a.by !== 'proof' && a.final);
-    const wantCollapsed = collapsedByUser.auto ? ((allReady && hasAnswers) || (askedCollapse && files.length > 0)) : collapsedByUser.value;
+    const wantCollapsed = collapsedByUser.auto ? ((allReady && (hasAnswers || document.documentElement.getAttribute('data-details') !== 'on')) || (askedCollapse && files.length > 0)) : collapsedByUser.value;
     applyCollapsed(wantCollapsed && all.length > 0 && !skel, files, atoms);
   }
   let isCollapsed = false;

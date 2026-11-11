@@ -2519,14 +2519,14 @@ function openMoreMenu(anchor) {
   const item = (ico, label, fn, extra = {}) => h('li', { role: 'none' }, h('button', { type: 'button', role: 'menuitem', class: 'st-menu-item', onclick: () => { closeMenu(); fn(); }, ...extra },
     h('span', { html: icon(ico, 16) }), h('span', { class: 'st-menu-main' }, label)));
   const list = h('ul', { class: 'st-menu-list', role: 'menu', 'aria-label': 'More options' },
-    item('edit', 'Open bot spec', () => openSpec()),
+    item('edit', 'Bot settings', () => openSpec()),
     t.id ? item('users', 'Leads', () => openLeads()) : null,
     item(dark ? 'sun' : 'moon', dark ? 'Light theme' : 'Dark theme', toggleTheme),
     item('motion', motion.reduced() ? 'Full motion' : 'Reduce motion', toggleMotion),
     item('command', 'Command palette', () => openPalette()),
     item('table', detailsOn() ? 'Hide details' : 'Show details', toggleDetails),
     t.converted ? null : item('refresh', 'Start over', () => confirmStartOver()),
-    t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, h('span', { html: icon('checkCircle', 14) }), ` Saved until ${new Date(t.expiresAt).toLocaleDateString()}`) : null);
+    t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, h('span', { html: icon('checkCircle', 14) }), ` Saved until ${new Date(t.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`) : null);
   openMenu(anchor, list);
 }
 
