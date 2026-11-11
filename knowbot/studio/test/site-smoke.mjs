@@ -362,7 +362,7 @@ try {
     // without the Homepage search (web chat still on), only voice mode's orb colour stays: it applies to web chat too
     await page.waitForSelector('#st-spec-site .ss-orbs', { timeout: 15000 });
     check('spec', 'without the Homepage search, the block is only “Voice mode” (the orb colour for web chat)', await page.isHidden('#st-spec-site input[name="kb-site-name"]').catch(() => true)
-      && (await page.locator('#st-spec-site input[name="kb-site-name"]').count()) === 0 && /Voice mode/.test(await page.textContent('#st-spec-site .st-label')) && (await page.locator('#st-spec-site .ss-orb-in').count()) === 4);
+      && (await page.locator('#st-spec-site input[name="kb-site-name"]').count()) === 0 && /Voice mode/.test(await page.textContent('#st-spec-site .st-label')) && (await page.locator('#st-spec-site .ss-orb-in').count()) === 7);
     await page.click('label[for="st-surf-site"]');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(400);

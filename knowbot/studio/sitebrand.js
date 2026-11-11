@@ -129,7 +129,17 @@ export function siteSettings({ view, onSaved = () => {}, compact = false, orbOnl
   const orbCanvas = h('canvas', { class: 'ss-orb-canvas', 'aria-hidden': 'true' });
   const orbOpt = (oid) => {
     const r = h('input', { type: 'radio', name: `${id}-orb`, id: `${id}-orb-${oid}`, value: oid, class: 'ss-orb-in' });
-    r.addEventListener('change', () => { if (!r.checked) return; preview?.setPreset(oid); save({ orb: oid }, `Saved: the ${ORB_PRESETS[oid].label} orb, in voice mode on your homepage search, web chat and web voice assistant.`); });
+    r.addEventListener('change', async () => {
+      if (!r.checked) return;
+      preview?.setPreset(oid);
+      const ok = await save({ orb: oid }, `Saved: the ${ORB_PRESETS[oid].label} orb, in voice mode on your homepage search, web chat and web voice assistant.`);
+      if (!ok) {
+        // not saved: show the colour that is really saved, never a choice the server didn't keep
+        const cur = orbId(v.site?.orb);
+        for (const x of orbRadios) x.checked = x.value === cur;
+        preview?.setPreset(cur);
+      }
+    });
     orbRadios.push(r);
     return h('label', { class: 'ss-orb-opt', for: r.id }, r, h('span', { class: 'ss-orb-sw', style: `background:${orbSwatch(oid)}`, 'aria-hidden': 'true' }), h('span', { class: 'ss-orb-name' }, ORB_PRESETS[oid].label));
   };
