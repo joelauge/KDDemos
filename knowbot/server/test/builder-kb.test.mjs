@@ -32,15 +32,15 @@ describe('studio/kb docs', () => {
     const pricing = docs.find((d) => d.name === 'pricing-and-trial.md');
     assert.ok(pricing);
     assert.match(pricing.text, /free and needs no account/);
-    assert.match(pricing.text, /\$249 per month/);
-    assert.match(pricing.text, /\$2,499 per year/);
+    assert.match(pricing.text, /\$549 per month/);
+    assert.match(pricing.text, /\$5,490 per year/);
     assert.match(pricing.text, /first 30 days are free/);
     assert.match(pricing.text, /credit card is required at signup/);
     assert.match(pricing.text, /cancel anytime/);
     assert.match(pricing.text, /up to 100 MB/);
     assert.match(pricing.text, /enterprise[^.]*sales@recoursellm\.com/i);
-    // owner allow-list: $249 is only ever monthly, $2,499 only ever yearly; any other amount fails
-    const allowed = { '$249': /^\$249 per month/, '$2,499': /^\$2,499 per year/ };
+    // owner allow-list: $549 is only ever monthly, $5,490 only ever yearly; any other amount fails
+    const allowed = { '$549': /^\$549 per month/, '$5,490': /^\$5,490 per year/ };
     for (const d of docs) {
       for (const m of d.text.matchAll(/[$€£]\s?\d[\d,.]*/g)) {
         const amt = m[0].replace(/[.,]$/, '');
@@ -217,7 +217,7 @@ describe('createBuilderKb.search', () => {
     assert.ok(r.sources.length > 0, 'found something');
     // the FAQ repeats the owner's price line, so either doc may rank first
     assert.ok(['pricing-and-trial.md', 'faq.md'].includes(r.sources[0].name), r.sources[0].name);
-    const price = r.sources.slice(0, 3).find((s) => /\$249 per month/.test(s.text));
+    const price = r.sources.slice(0, 3).find((s) => /\$549 per month/.test(s.text));
     assert.ok(price, 'an atom quoting the owner price line is in the top 3');
     assert.equal(price.page, '/studio/');
     if (price.name === 'pricing-and-trial.md') {
@@ -227,7 +227,7 @@ describe('createBuilderKb.search', () => {
       assert.equal(price.name, 'faq.md');
       assert.equal(price.title, 'Frequently asked questions');
     }
-    assert.ok(r.sources.slice(0, 6).some((s) => s.name === 'pricing-and-trial.md' && /\$249 per month/.test(s.text)), 'the pricing doc price line is still cited');
+    assert.ok(r.sources.slice(0, 6).some((s) => s.name === 'pricing-and-trial.md' && /\$549 per month/.test(s.text)), 'the pricing doc price line is still cited');
     assert.deepEqual(r.sources.map((s) => s.n), r.sources.map((_, i) => i + 1));
     for (const s of r.sources) {
       assert.ok(s.path.startsWith(KB_PREFIX), s.path);

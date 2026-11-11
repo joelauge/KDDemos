@@ -10,6 +10,7 @@
     "studio:smoke": "node studio/test/smoke.mjs",
     "site:smoke": "node studio/test/site-smoke.mjs",
     "voice:smoke": "node studio/test/voice-smoke.mjs",
+    "tools:smoke": "node studio/test/tools-shots.mjs",
     "builder:eval": "node scripts/builder-eval.mjs"
   },
   "dependencies": {

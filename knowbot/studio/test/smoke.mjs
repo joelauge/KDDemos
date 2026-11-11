@@ -277,7 +277,7 @@ async function journey(browser, dev, cell) {
     const replied = await page.waitForFunction(() => {
       const msgs = [...document.querySelectorAll('#st-log .st-msg')];
       const i = msgs.findIndex((m) => m.classList.contains('st-msg-u') && /cost to go live/.test(m.textContent));
-      return i >= 0 && msgs.slice(i + 1).some((m) => m.classList.contains('st-msg-a') && /\$249/.test(m.textContent));
+      return i >= 0 && msgs.slice(i + 1).some((m) => m.classList.contains('st-msg-a') && /\$549/.test(m.textContent));
     }, null, { timeout: 8000 }).then(() => true).catch(() => false);
     check('03-ingest', 'free text during ingest gets a reply (with the price)', replied);
     const dupLearning = await page.evaluate(() => [...document.querySelectorAll('#st-log .st-msg-a .st-msg-text')].filter((t) => /^Ready: .* files done\.$/.test(t.textContent.trim())).length);
@@ -531,9 +531,9 @@ async function journey(browser, dev, cell) {
     // with the receipt stage open the Builder summary folds to a pointer: the price lives in the stage (r4, D8)
     const cards = [...document.querySelectorAll('#st-log [data-card="launch"], .co-launch.is-stage')];
     const text = cards.map((c) => c.innerText).join('\n');
-    return /\$249/.test(text) && /For comparison/i.test(text);
+    return /\$549/.test(text) && /For comparison/i.test(text);
   }, null, { timeout: 20000 }).then(() => true).catch(() => false);
-  check('12-make-it-yours', 'LaunchCard with $249 and the anchor line', launchCard);
+  check('12-make-it-yours', 'LaunchCard with $549 and the anchor line', launchCard);
   await page.waitForTimeout(900);
   await shot(page, cell, '12-make-it-yours');
 
@@ -542,10 +542,10 @@ async function journey(browser, dev, cell) {
   // and the stage's CTA is the one to press.
   const stageOpen = await page.evaluate(() => document.documentElement.getAttribute('data-co-cta') === 'receipt');
   const cta = stageOpen
-    ? page.locator('.co-launch.is-stage button.co-cta, .co-stage button.co-cta').filter({ hasText: /Launch .*\$249/ }).last()
-    : page.locator('#st-log [data-card="launch"] button', { hasText: /Launch .*\$249/ }).last();
+    ? page.locator('.co-launch.is-stage button.co-cta, .co-stage button.co-cta').filter({ hasText: /Launch .*\$549/ }).last()
+    : page.locator('#st-log [data-card="launch"] button', { hasText: /Launch .*\$549/ }).last();
   if (stageOpen) {
-    const ctas = await page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.offsetParent && /Launch.*\$249/.test(b.textContent.replace(/\s+/g, ' ')) && getComputedStyle(b).visibility !== 'hidden').length);   // r7: the price sits in an sr-only span (E), so textContent
+    const ctas = await page.evaluate(() => [...document.querySelectorAll('button')].filter((b) => b.offsetParent && /Launch.*\$549/.test(b.textContent.replace(/\s+/g, ' ')) && getComputedStyle(b).visibility !== 'hidden').length);   // r7: the price sits in an sr-only span (E), so textContent
     check('13-checkout', 'one visible Launch CTA while the receipt is open', ctas === 1, { soft: true, detail: `${ctas} visible` });
   }
   if (await cta.count()) await press(cta, 'Launch CTA');

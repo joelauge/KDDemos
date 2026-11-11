@@ -677,7 +677,8 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.equal(u.searchParams.get('trial'), t.trialId);
     assert.equal(u.searchParams.get('bot'), 'Lumen Help');
     assert.equal(u.searchParams.get('email'), 'ana@example.com');
-    assert.equal(u.searchParams.get('price'), '249');
+    assert.equal(u.searchParams.get('price'), '549', 'the one plan price');
+    assert.equal(u.searchParams.get('total'), '549', 'one plan line: total = price');
     assert.equal(u.searchParams.get('return'), `http://127.0.0.1:9999/studio/?t=${t.trialId}&launched=1`);
     assert.match(u.search, /bot=Lumen\+Help/);
     assert.ok(S.kd.calls.some((x) => x.ingest?.path === `knowbot/trials/${t.trialId}/_spec.json`), 'the spec doc is flushed on checkout');
@@ -1355,7 +1356,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
   // ---------------------------------------------------------------------------------------------- misc routes
   test('config, files list, atoms window, delete, 404/405, samples removal', async () => {
     const cfg = await (await S.api('/api/studio/config')).json();
-    assert.equal(cfg.price.amount, 249);
+    assert.equal(cfg.price.amount, 549);
     assert.equal(cfg.price.answersIncluded, null);
     assert.equal(cfg.floor, 0.7);
     assert.equal(cfg.builder.engine, 'scripted');
@@ -1433,7 +1434,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const dev = await turn('how do I use this from my own app?');
     assert.match(dev.reply, /chat API/);
     assert.match(dev.reply, /OpenAI-compatible/);
-    assert.deepEqual(dev.chips.map((x) => x.label).slice(0, 2), ['Developers', 'Channels']);
+    assert.deepEqual(dev.chips.map((x) => x.label).slice(0, 2), ['Developers', 'Set up']);
     assert.deepEqual(dev.chips[0].emit, { type: 'golive:open', detail: { tab: 'developers' } });
     assert.ok(dev.chips.some((x) => x.action?.type === 'show_launch'));
     assert.ok(!dev.actions.some((a) => a.type === 'ask_samplebot'));

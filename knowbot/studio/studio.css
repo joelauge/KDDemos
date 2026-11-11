@@ -712,6 +712,10 @@ textarea.st-text { resize: vertical; }
 .st-field > .st-btn-ghost { justify-self: start; }
 .st-starter { display: flex; gap: 6px; align-items: center; }
 .st-sources { display: grid; gap: 4px; }
+.st-tools { display: grid; gap: 10px; }
+.st-tool { display: grid; gap: 4px; }
+.st-tool-h { margin: 0; font-size: 13px; color: var(--strong); }
+.st-tool-sub { color: var(--dim); font-weight: 400; }
 .st-src { position: relative; display: flex; }
 .st-check { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .st-src label { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 10px 6px 34px; border-radius: 10px; border: 1px solid var(--line); cursor: pointer; font-size: 13.5px; position: relative; transition: border-color var(--dur-1), opacity var(--dur-2); }

@@ -141,7 +141,7 @@
 .kl-alt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 999px; }
 
 /* ---- answer surfaces: "Where should it answer?" (multi-select toggle buttons, aria-pressed; website chat by default).
-   No price here: per-surface pricing is shown only at launch, after the visitor has tested (owner rule). */
+   No price here: the one plan price is shown only at launch, after the visitor has tested (owner rule). */
 .kl-surf { position: relative; z-index: 1; width: 100%; max-width: 760px; margin: 34px auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; }
 .kl-surf-h { margin: 0 0 12px; font: 700 clamp(17px, 1.4vw, 19px)/1.3 var(--display); letter-spacing: -.01em; color: var(--strong); }
 .kl-surf-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }

@@ -15,7 +15,7 @@ export const TONES = ['friendly', 'neutral', 'formal'];
 export const LENGTHS = ['short', 'normal'];
 export const AUDIENCES = ['customers', 'employees', 'students'];
 export const CHANNELS = ['sms', 'telephone', 'whatsapp', 'email', 'text', 'voice', 'site'];
-// answer surfaces (spec.surfaces; studio/surfaces.js): where the launched bot answers, each its own plan line at launch
+// answer surfaces (spec.surfaces; studio/surfaces.js): the features of the plan's three tools, all included in the one plan
 export const SURFACES = ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice', 'site'];
 /** The client actions (studio/app.js dispatchAction) a tool may return. Anything else is dropped. */
 export const CLIENT_ACTIONS = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples', 'import_store']);
@@ -132,13 +132,13 @@ export const TOOL_DEFS = [
       greeting: { type: 'string', description: 'First message the bot shows, up to 160 characters.' },
       length: { type: 'string', enum: LENGTHS },
       scope_files: { type: 'array', items: { type: 'string' }, description: 'File names (or ids) the bot may answer from; every other file is switched off.' },
-      surfaces: { type: 'array', items: { type: 'string', enum: SURFACES }, description: 'The complete list of answer surfaces the bot will answer on after launch (webchat = website chat, webvoice = web voice assistant, site = homepage search: a simple search box built from the files that hovers over the homepage, added with one line of code). Send the full new list: "add WhatsApp" = current list + whatsapp.' },
+      surfaces: { type: 'array', items: { type: 'string', enum: SURFACES }, description: 'The complete list of features switched on, across the three tools of the plan: Website (one embed line: webchat = chat bubble, webvoice = voice, site = homepage search, a simple search box built from the files that hovers over the homepage), KnowBot number (one phone number: sms = texts, phone = calls, whatsapp) and Email (one inbox address: email). Every feature is included in the one plan, so switching never changes the price. Send the full new list: "add WhatsApp" = current list + whatsapp.' },
     }, additionalProperties: false } },
   { name: 'ask_bot', description: "Ask the visitor's bot a test question, as if the visitor typed it on the right. run=true asks it now; run=false only offers it as a button. Needs at least one ready file.",
     input_schema: { type: 'object', properties: { question: { type: 'string' }, run: { type: 'boolean' } }, required: ['question'], additionalProperties: false } },
   { name: 'run_proof', description: 'Start the Proof Run: test questions written from the files, plus questions the bot must refuse. Needs at least one ready file.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false } },
-  { name: 'open_channels', description: 'Offer a button that opens the Channels sheet (SMS, telephone, WhatsApp, email, text chatbot, voice chatbot, homepage search), optionally at one channel.',
+  { name: 'open_channels', description: 'Offer a button that opens Set up: the three tools (Website: chat bubble, voice, homepage search · KnowBot number: texts, calls, WhatsApp · Email), optionally at one feature.',
     input_schema: { type: 'object', properties: { channel: { type: 'string', enum: CHANNELS } }, additionalProperties: false } },
   { name: 'open_developers', description: 'Offer a button that opens the Developers sheet (chat API, keys, code snippets).',
     input_schema: { type: 'object', properties: {}, additionalProperties: false } },
@@ -176,7 +176,7 @@ export function checkInput(name, input) {
  */
 export function createBuilderTools(o = {}) {
   const floorMin = Number(o.floorMin) || 0.7;
-  const price = Number(o.price) || 249;
+  const price = Number(o.price) || 549;
   const kb = o.kb || null;
   function validate(patch, spec) {
     if (typeof o.validatePatch === 'function') {
@@ -245,7 +245,7 @@ export function createBuilderTools(o = {}) {
     },
     open_channels(input) {
       const detail = { tab: 'channels', ...(input.channel ? { channel: input.channel } : {}) };
-      const label = input.channel ? `Open ${({ sms: 'SMS', telephone: 'Telephone', whatsapp: 'WhatsApp', email: 'Email', text: 'Text chatbot', voice: 'Voice chatbot', site: 'Homepage search' })[input.channel]} setup` : 'Open Channels';
+      const label = input.channel ? `Open ${({ sms: 'Texts', telephone: 'Calls', whatsapp: 'WhatsApp', email: 'Email', text: 'Chat bubble', voice: 'Voice', site: 'Homepage search' })[input.channel]} setup` : 'Open Set up';
       return { ok: true, offered: true, chips: [chip('golive-channels', label, { kind: 'primary', emit: { type: 'golive:open', detail } })] };
     },
     open_developers() {

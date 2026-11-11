@@ -10,9 +10,9 @@ Building and testing a bot in KnowBot Studio is free and needs no account. Uploa
 
 Source: /studio/
 
-To launch your KnowBot, you start a KnowDrive account at $249 per month, or $2,499 per year. The first 30 days are free. A credit card is required at signup. You can cancel anytime.
+To launch your KnowBot, you start a KnowDrive account at $549 per month, or $5,490 per year. The first 30 days are free. A credit card is required at signup. You can cancel anytime.
 
-A plan covers one answer surface (such as the website chat) and a deployment of up to 100 MB of files. Each extra answer surface adds $249 per month, or $2,499 per year; see Answer surfaces below.
+There is one plan. It includes all three tools, Website, KnowBot number and Email, with every feature, and a deployment of up to 100 MB of files. Switching a feature on or off never changes the price; see The three tools below.
 
 ## How launching works
 
@@ -24,26 +24,30 @@ When your bot is ready, the Builder shows a Launch card with a receipt of what y
 
 Source: /studio/
 
-The Launch card lists what comes with launching: your KnowBot hosted with a share link, an embed widget for any site, storage for your files, citations on every answer and the refusal sentence, question insights, and the chat API with channel templates (SMS, phone, WhatsApp, email and voice). Your files carry over, so nothing is uploaded again. If the bot only has sample files, they are removed at launch.
+The Launch card lists what comes with launching: your KnowBot hosted with a share link, the three tools (Website, KnowBot number and Email), storage for your files, citations on every answer and the refusal sentence, question insights, and the chat API. Your files carry over, so nothing is uploaded again. If the bot only has sample files, they are removed at launch.
 
 ## Plans
 
 Source: /studio/
 
-KnowBot has two ways to pay for each answer surface, each covering a deployment of up to 100 MB of files:
+KnowBot has one plan, with two ways to pay, each covering a deployment of up to 100 MB of files:
 
-- Monthly: $249 per month.
-- Yearly: $2,499 per year.
+- Monthly: $549 per month.
+- Yearly: $5,490 per year.
 
 Both start with 30 days free, and a credit card is required at signup. There are no other plans, discounts or coupons to quote.
 
-## Answer surfaces
+## The three tools
 
 Source: /studio/
 
-An answer surface is a place where your bot answers people. There are seven: website chat, SMS, WhatsApp, email, phone, the web voice assistant, and the homepage search. All of them answer from the same sources you built the bot with, with the same citations and the same refusal sentence.
+The plan includes three tools, and you switch their features on and off in Set up or in the bot spec:
 
-Each answer surface is $249 per month, or $2,499 per year. Every surface you launch is its own line on the plan, and each one starts with the first 30 days free. You choose your surfaces when you launch, and you can remove a surface at checkout before you pay. Building and testing on any surface is free.
+- Website: one line of embed code on your site. Its features are the chat bubble, voice (visitors talk to your bot and hear the answer) and the homepage search.
+- KnowBot number: one phone number. Its features are texts (SMS), calls (live voice) and WhatsApp.
+- Email: one inbox address. Email comes in and a cited answer goes out.
+
+All of them answer from the same sources you built the bot with, with the same citations and the same refusal sentence. Every feature is included in the plan, so switching one on or off never changes the price. The KnowBot number's own usage is billed separately, and Set up shows its cost before you get a number. Building and testing every feature is free.
 
 ## More than 100 MB, or larger deployments
 

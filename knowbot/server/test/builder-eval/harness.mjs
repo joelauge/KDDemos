@@ -39,7 +39,7 @@ export const CHIP_SENDS = {
 /** What the setup route puts on screen for a chip id (label, send text, client action). CONTRACT-GAP: mirrors trials.mjs. */
 const CHIP_SCREEN = {
   samples: ['Use sample files', { type: 'attach_samples' }], upload: ['Upload my files', { type: 'request_upload' }], 'add-files': ['Add more files', { type: 'request_upload' }],
-  'add-own': ['Add my own files', { type: 'request_upload' }], proof: ['Run the Proof Run', { type: 'run_proof', mini: false }], launch: ['Launch · $249/mo', { type: 'show_launch' }],
+  'add-own': ['Add my own files', { type: 'request_upload' }], proof: ['Run the Proof Run', { type: 'run_proof', mini: false }], launch: ['Launch · $549/mo', { type: 'show_launch' }],
   'launch-anyway': ['Launch with samples anyway', { type: 'show_launch', force: true }],
 };
 export function chipOnScreen(id) {
@@ -205,14 +205,14 @@ const fmt = (v) => JSON.stringify(v);
 export const KB_DIR = path.resolve(__dirname, '..', '..', '..', 'studio', 'kb');
 let PRICE_CACHE = null;
 /**
- * The money amounts the KnowBot knowledge base states (studio/kb/*.md), plus $249. Owner rule 2: the Builder never
+ * The money amounts the KnowBot knowledge base states (studio/kb/*.md), plus $549 (the plan). Owner rule 2: the Builder never
  * states any other figure. The set follows the KB, so a price the owner adds there is allowed without editing this.
  */
 export function kbPrices(dir = KB_DIR) {
   if (PRICE_CACHE && dir === KB_DIR) return PRICE_CACHE;
-  const set = new Set([249]);
+  const set = new Set([549]);
   let names = [];
-  try { names = readdirSync(dir).filter((n) => n.endsWith('.md')); } catch { /* no KB: $249 only */ }
+  try { names = readdirSync(dir).filter((n) => n.endsWith('.md')); } catch { /* no KB: $549 only */ }
   for (const n of names) {
     let t = '';
     try { t = readFileSync(path.join(dir, n), 'utf8'); } catch { continue; }
@@ -227,7 +227,7 @@ const matchVal = (want, got) => (typeof want === 'string' && /^\/.*\/[a-z]*$/.te
 export function invariants(c, o) {
   const f = [];
   const msg = typeof c.input?.message === 'string' ? c.input.message.trim() : null;
-  // pricing truth: the only price is $249/month, the only free period is 30 days
+  // pricing truth: the only prices are the one plan's ($549/month, $5,490/year), the only free period is 30 days
   const prices = kbPrices();
   for (const m of o.reply.matchAll(MONEY)) { const n = Number(String(m[1] || m[2]).replace(/,/g, '')); if (!prices.has(n)) f.push(`invariant: price ${m[0].trim()} is not a KnowBot price (KB: ${[...prices].map((x) => `$${x}`).join(', ')})`); }
   for (const re of TRIAL_DAYS) for (const m of o.reply.matchAll(re)) if (Number(m[1]) !== 30) f.push(`invariant: free period "${m[0]}" (only the first 30 days)`);

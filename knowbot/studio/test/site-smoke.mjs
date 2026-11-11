@@ -297,9 +297,23 @@ try {
     // Set up → the card
     await page.click('.sh-opt[data-shape="webchat"]');
     await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
-    await page.waitForSelector('.gl-chcard[data-ch="site"]', { timeout: 20000 });
-    check('studio', 'Set up lists the site among the bot’s own surfaces', await page.$eval('.gl-chcard[data-ch="site"]', (b) => !!b.querySelector('.gl-mine')));
-    await page.click('.gl-chcard[data-ch="site"]');
+    await page.waitForSelector('.gl-feat-open[data-ch="site"]', { timeout: 20000 });
+    check('studio', 'Set up: the Website tool card has Homepage search switched on (one of the bot’s features)', await page.$eval('.gl-tool[data-tool="website"] .gl-feat[data-surface="site"] input[role="switch"]', (i) => i.checked));
+    await page.click('.gl-feat-open[data-ch="site"]');
+    await page.waitForSelector('.gl-sp-pub', { timeout: 20000 });
+    // the Website tool: ONE embed line that follows the switches; switching Voice on saves spec.surfaces, never a price
+    const webLine = () => page.textContent('#gl-webline pre');
+    check('studio', 'Website: one embed line with chat and homepage search on, voice off', /lib\/embed\.js/.test(await webLine()) && /data-chat="on"/.test(await webLine())
+      && /data-homepage="on"/.test(await webLine()) && /data-voice="off"/.test(await webLine()));
+    await page.click('.gl-tool[data-tool="website"] .gl-feat[data-surface="webvoice"] .gl-switch');
+    await page.waitForFunction(() => /data-voice="on"/.test(document.querySelector('#gl-webline pre')?.textContent || ''), null, { timeout: 10000 });
+    let saved0 = null;
+    for (let i = 0; i < 30; i++) { saved0 = (await (await api(`/api/studio/trials/${t.trialId}`, { headers: H() })).json()).spec?.surfaces; if (saved0?.includes('webvoice')) break; await page.waitForTimeout(200); }
+    check('studio', 'Website: switching Voice on saves it and the line follows', JSON.stringify(saved0) === JSON.stringify(['webchat', 'webvoice', 'site']), JSON.stringify(saved0));
+    await page.screenshot({ path: path.join(SHOTS, 'studio-setup-tools.png') });
+    await page.click('.gl-tool[data-tool="website"] .gl-feat[data-surface="webvoice"] .gl-switch');
+    await page.waitForFunction(() => /data-voice="off"/.test(document.querySelector('#gl-webline pre')?.textContent || ''), null, { timeout: 10000 });
+    await page.click('.gl-ftab[data-ch="site"]');
     await page.waitForSelector('.gl-sp-pub', { timeout: 20000 });
     const card = await page.textContent('.gl-sp');
     check('studio', 'card: Add to your homepage, the one line with Copy, options, publish, hosted link, how-to', /Add to your homepage/.test(card) && /overlay\.js" data-bot="/.test(await page.textContent('.gl-sp-snip pre'))
