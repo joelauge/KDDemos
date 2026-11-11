@@ -1524,7 +1524,7 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 /* one band: the channel picker sits in the preview header, left of Bot / Proof / Set up (wide screens) */
 @media (min-width: 1100px) {
   :root:not([data-details="on"]) .st-bot { position: relative; }
-  :root:not([data-details="on"]) .st-bot > div:has(> .sh-bar) { position: absolute; top: 0; left: 0; right: 270px; height: 56px; z-index: 4; display: flex; align-items: center; padding: 0 0 0 var(--st-gutter); border: 0; background: transparent; pointer-events: none; overflow: hidden; }
+  :root:not([data-details="on"]) .st-bot > div:has(> .sh-bar) { position: absolute; top: 0; left: 0; right: 320px; height: 56px; z-index: 4; display: flex; align-items: center; padding: 0 0 0 var(--st-gutter); border: 0; background: transparent; pointer-events: none; overflow: hidden; }
   :root:not([data-details="on"]) .st-bot > div:has(> .sh-bar) > .sh-bar { pointer-events: auto; padding: 0; margin: 0; border: 0; background: transparent; min-height: 0; }
 }
 :root:not([data-details="on"]) .sh-bar :is(.sh-sel, .sh-views) { border-color: transparent; background: transparent; box-shadow: none; }
@@ -1665,3 +1665,10 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 .is-guide-pulse { animation: st-guide-pulse 1300ms var(--ease-out) 3; }
 @keyframes st-guide-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
 :root[data-motion="reduce"] .is-guide-pulse { animation: none; box-shadow: 0 0 0 2px var(--accent); }
+
+/* a status banner in the preview header (e.g. "Partial: 4 of 5 files ready…" while a file is read) takes the header
+   row: the channel picker steps back down to its own row until the banner goes, so the two never overlap */
+@media (min-width: 1100px) {
+  :root:not([data-details="on"]) .st-bot:has(#st-bot-banner:not([hidden])) > div:has(> .sh-bar) { position: static; height: auto; padding: 6px var(--st-gutter) 0; overflow: visible; }
+}
+:root:not([data-details="on"]) .st-bothead-right { flex: none; white-space: nowrap; }
