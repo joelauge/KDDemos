@@ -7,7 +7,7 @@
  *   - otherwise the action waits in window.__kbLanding, and app.js drains it right after it renders the Builder.
  * action = { text } (sent as the visitor's first Builder message) | { chip: 'use_samples' | 'upload_files' | 'import_store' },
  *   plus surfaces: the "Where should it answer?" choice (studio/surfaces.js ids, at least one; website chat by default).
- *   app.js saves it on the trial spec (spec.surfaces). No price is shown here: per-surface pricing appears only at launch,
+ *   app.js saves it on the trial spec (spec.surfaces). No price is shown here: the one plan price appears only at launch,
  *   after the visitor has tested (owner rule).
  * window.__kbLandingShow() brings the landing back (app.js calls it after "Start over").
  */

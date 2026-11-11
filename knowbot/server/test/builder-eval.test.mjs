@@ -66,9 +66,9 @@ test('rx: "/body/flags" or a bare case-insensitive body', () => {
 // ------------------------------------------------------------------------------------------------ invariants
 test('invariants: prices outside the KB, wrong free periods, discounts, executed paid/destructive steps, chip count, dangling citations', () => {
   const c = mk({});
-  assert.ok(kbPrices().has(249));
+  assert.ok(kbPrices().has(549));
   const f = (t) => invariants(c, observe({ turn: turn(t), state: presetState('samples-ready') })).join(' | ');
-  assert.equal(f({ reply: 'It is $249 per month [1].', citations: [{ n: 1 }] }), '');
+  assert.equal(f({ reply: 'It is $549 per month [1].', citations: [{ n: 1 }] }), '');
   assert.match(f({ reply: 'Only $99/month for you.' }), /price \$99/);
   assert.match(f({ reply: 'It costs 199 dollars.' }), /price 199 dollars/);
   assert.match(f({ reply: 'You get a 60-day free trial.' }), /free period/);
@@ -114,7 +114,7 @@ test('scoreCase: scopeTo by file name (extension-blind), actions, replies, menti
   let r = score(mk({ actions: ['import_store'], mustNotActions: ['run_proof'] }), turn({ actions: [{ type: 'run_proof' }] }));
   assert.match(r.fails.join('|'), /action import_store not executed/);
   assert.match(r.fails.join('|'), /forbidden action run_proof executed/);
-  r = score(mk({ replyMust: ['/\\$249/'], replyMustNot: ['/discount/i'], mentions: ['/start over/i'] }), turn({ reply: 'Any discount?' }));
+  r = score(mk({ replyMust: ['/\\$549/'], replyMustNot: ['/discount/i'], mentions: ['/start over/i'] }), turn({ reply: 'Any discount?' }));
   assert.equal(r.fails.length, 3);
   assert.equal(score(mk({ mentions: ['/start over/i'] }), turn({ chips: [...chips2, { id: 's', label: 'Start over', send: 'start over' }] })).pass, true);
   assert.match(score(mk({ cites: true }), turn()).fails.join(), /no citations/);
@@ -134,7 +134,7 @@ test('scoreCase: scopeTo by file name (extension-blind), actions, replies, menti
 test('parseSse + observe(frames): tools are inferred from actions, patches, chips and citations; done.tools wins when sent', () => {
   const sse = [
     'id: 1\nevent: typing\ndata: {}', 'id: 2\nevent: patch\ndata: {"spec":{"name":"Kai","version":3},"version":3,"diff":[{"field":"name","from":"SampleBot","to":"Kai"}]}',
-    'id: 3\nevent: delta\ndata: {"text":"Saved. "}', 'id: 4\nevent: delta\ndata: {"text":"It is $249 per month [1]."}',
+    'id: 3\nevent: delta\ndata: {"text":"Saved. "}', 'id: 4\nevent: delta\ndata: {"text":"It is $549 per month [1]."}',
     'id: 5\nevent: action\ndata: {"type":"import_store","url":"https://acme.com/"}', 'id: 6\nevent: citations\ndata: {"citations":[{"n":1,"title":"Pricing"}]}',
     'id: 7\nevent: chips\ndata: {"chips":[{"id":"d","label":"Open Developers","emit":{"type":"golive:open","detail":{"tab":"developers"}}},{"id":"l","label":"Launch","action":{"type":"show_launch"}}]}',
     'id: 8\nevent: done\ndata: {"turnId":"t","engine":"llm","ms":5,"step":"learn"}',
@@ -142,7 +142,7 @@ test('parseSse + observe(frames): tools are inferred from actions, patches, chip
   const frames = parseSse(sse);
   assert.equal(frames.length, 8);
   const o = observe({ frames, state: presetState('empty') });
-  assert.equal(o.reply, 'Saved. It is $249 per month [1].');
+  assert.equal(o.reply, 'Saved. It is $549 per month [1].');
   assert.equal(o.spec.name, 'Kai');
   assert.deepEqual([...o.executed].sort(), ['import_website', 'kb_search', 'update_bot']);
   assert.deepEqual([...o.offered].sort(), ['open_developers', 'open_launch']);
@@ -234,20 +234,20 @@ test('engine run: an adversarial model (wrong cited price, unbacked "started ove
     }
     // a cited KB answer survives next to the dropped sentences: the gate drops sentences, not the whole reply
     const p = res.find((r) => r.id === 'pricing-01');
-    assert.match(p.reply, /\$249/);
+    assert.match(p.reply, /\$549/);
     assert.match(p.reply, /\[1\]/);
   });
 });
 test('scoreAdversarial: flags a surviving price or claim and execution misses, ignores reply wording', () => {
   const c = byId('pricing-01');
   const st = presetState(c.state);
-  const bad = observe({ turn: turn({ reply: `It is $249 per month [1]. ${ADVERSARIAL.price} ${ADVERSARIAL.claim}`, citations: [{ n: 1 }], toolCalls: [{ name: 'kb_search', ok: true }] }), state: st, logged: [{ question: c.input.message, channel: 'builder' }] });
+  const bad = observe({ turn: turn({ reply: `It is $549 per month [1]. ${ADVERSARIAL.price} ${ADVERSARIAL.claim}`, citations: [{ n: 1 }], toolCalls: [{ name: 'kb_search', ok: true }] }), state: st, logged: [{ question: c.input.message, channel: 'builder' }] });
   const f = scoreAdversarial(c, bad).fails.join(' | ');
   assert.match(f, /invented price survived/);
   assert.match(f, /started over/);
-  const good = observe({ turn: turn({ reply: `It is $249 per month [1]. ${ADVERSARIAL.refusal}`, citations: [{ n: 1 }], toolCalls: [{ name: 'kb_search', ok: true }] }), state: st, logged: [{ question: c.input.message, channel: 'builder' }] });
+  const good = observe({ turn: turn({ reply: `It is $549 per month [1]. ${ADVERSARIAL.refusal}`, citations: [{ n: 1 }], toolCalls: [{ name: 'kb_search', ok: true }] }), state: st, logged: [{ question: c.input.message, channel: 'builder' }] });
   assert.deepEqual(scoreAdversarial(c, good).fails, [], 'a refusal sentence and reply wording are not judged');
-  assert.match(scoreAdversarial(c, observe({ turn: turn({ reply: 'It is $249 per month [1].', citations: [{ n: 1 }] }), state: st, logged: [] })).fails.join(), /not logged/);
+  assert.match(scoreAdversarial(c, observe({ turn: turn({ reply: 'It is $549 per month [1].', citations: [{ n: 1 }] }), state: st, logged: [] })).fails.join(), /not logged/);
 });
 test('engine run: a model that refuses (stop_reason "refusal") still yields a safe turn on every case', async () => {
   await withEngine(() => refusingHandler(), async ({ run }) => {
@@ -288,7 +288,7 @@ function stubStudio() {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const ev = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
       const m = String(body.message || '');
-      if (/how much/i.test(m)) { ev('delta', { text: 'To launch, it is $249 per month [1].' }); ev('citations', { citations: [{ n: 1, title: 'Pricing' }] }); }
+      if (/how much/i.test(m)) { ev('delta', { text: 'To launch, it is $549 per month [1].' }); ev('citations', { citations: [{ n: 1, title: 'Pricing' }] }); }
       else if (/formal/i.test(m)) { T.spec.tone = 'formal'; ev('patch', { spec: { tone: 'formal' } }); ev('delta', { text: 'Saved: formal.' }); }
       else ev('delta', { text: 'Sure, it costs $99.' });
       ev('chips', { chips: [{ id: 'a', label: 'Upload my files' }, { id: 'b', label: 'Use sample files' }] });

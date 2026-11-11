@@ -1,7 +1,7 @@
 // KnowBot Studio: Launch, checkout and go-live (owner E). SPEC 1.4 B9–B11, 2.7 (Launch), 6.4, 11.1–11.3.
 //
 // What lives here
-//   - `launch` card (variant 'launch' = the LaunchCard receipt + $249/mo plan, variant 'make-it-yours')
+//   - `launch` card (variant 'launch' = the LaunchCard receipt + $549/mo plan, variant 'make-it-yours')
 //   - `activating` and `success` cards (return from checkout, B11) + the Live burst
 //   - the CheckoutSheet (co-modal-slot, role=dialog, focus trap, inert background, view transition from the card)
 //   - the Go-live sheet (Channels gallery + Developers tab) is lazily imported from ./golive.js
@@ -11,7 +11,7 @@
 // SampleBot composer to focus it for "Keep testing" (the same affordance B uses).
 
 const NBSP = ' ';
-import { SURFACES, normalizeSurfaces, planTotals } from './surfaces.js?v=abbc025';
+import { normalizeSurfaces, planTotals, toolSwitches, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=abbc025';
 const DEFAULT_ANCHORS = { asOf: '2026-11', items: ['CustomGPT Premium $499/mo', 'Chatbase Business $500/mo (40 MB cap)', 'Botpress Team $939/mo', 'Intercom Fin $0.99 per resolution'] };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -123,12 +123,13 @@ export function mount(ctx) {
   // ---------------------------------------------------------------- derived state
 
   const cfg = () => getState().config || {};
-  // Owner pricing: one plan line per answer surface (spec.surfaces), $249/month or $2,499/year each; the visitor picks
-  // monthly or yearly here and can remove surfaces. Shown only at launch/checkout, which comes after testing.
+  // Owner pricing: ONE plan, $549/month or $5,490/year, with all three tools (Website, KnowBot number, Email) and every
+  // feature; the visitor picks monthly or yearly here. The features switched on (spec.surfaces) never change the price.
+  // Shown only at launch/checkout, which comes after testing.
   let planInterval = 'month';
   const price = () => {
     const p = cfg().price || {};
-    const plan = planTotals(getState().spec?.surfaces, planInterval, { month: Number(p.amount) || 249, year: Number(p.yearAmount) || 2499 });
+    const plan = planTotals(getState().spec?.surfaces, planInterval, { month: Number(p.amount) || PRICE_MONTH, year: Number(p.yearAmount) || PRICE_YEAR });
     const cur = (p.currency || 'USD').toUpperCase();
     const sym = cur === 'USD' ? '$' : cur === 'EUR' ? '€' : cur === 'GBP' ? '£' : `${cur} `;
     const fmt = (n) => `${sym}${Number(n).toLocaleString('en-US')}`;
@@ -140,7 +141,7 @@ export function mount(ctx) {
   const PRICE_KINDS = {
     amt: (pr) => pr.amt, per: (pr) => `/${pr.perLong}`, cta: (pr) => `, ${pr.text}`, submit: (pr) => `Continue to secure checkout · ${pr.text}`,
     today: (pr) => `Today: ${pr.today} · first 30 days free, then ${pr.long} · cancel anytime. `,
-    count: (pr) => `${pr.plan.count === 1 ? '1 answer surface' : `${pr.plan.count} answer surfaces`} · ${pr.perLong === 'year' ? 'billed yearly' : 'billed monthly'}`,
+    count: (pr) => `One plan · all three tools · ${pr.perLong === 'year' ? 'billed yearly' : 'billed monthly'}`,
   };
   const pspan = (kind, cls, tag = 'span') => h(tag, { class: cls, dataset: { coPrice: kind } }, PRICE_KINDS[kind](price()));
   const planBlocks = new Set();
@@ -149,53 +150,39 @@ export function mount(ctx) {
     for (const n of document.querySelectorAll('[data-co-price]')) { const f = PRICE_KINDS[n.dataset.coPrice]; if (f && !n.closest('.is-busy')) n.textContent = f(pr); }
     for (const b of [...planBlocks]) { if (b.isConnected) b.paint(); else planBlocks.delete(b); }
   }
-  function setSurfaces(next) {
-    const surfaces = normalizeSurfaces(next, { fallback: false });
-    if (!surfaces.length) return;
-    // optimistic: the plan and every price update now; the server (PATCH spec) confirms through spec:changed
-    setState({ spec: { ...getState().spec, surfaces } }, 'spec:plan');
-    repaintPrices();
-    emit('spec:request', { patch: { surfaces }, by: 'user', quiet: true });
-  }
-  /** The plan: monthly | yearly, one line per answer surface (removable, at least one), the live total and the terms. */
+  /** The plan: monthly | yearly, ONE line (the KnowBot plan), what it includes (the three tools, with the features that
+   *  are switched on now) and the terms. Features are switched in Set up; they never change the price. */
   function planBlock() {
     const ivGroup = h('div', { class: 'co-iv', role: 'group', 'aria-label': 'Billing period' });
     const ivBtn = (iv, label) => {
       const b = h('button', { type: 'button', class: 'co-iv-btn', 'aria-pressed': String(planInterval === iv) }, label);
-      b.addEventListener('click', () => { if (planInterval === iv) return; planInterval = iv; repaintPrices(); announce(`${iv === 'year' ? 'Yearly' : 'Monthly'}: ${price().long} in total.`, 'polite'); });
+      b.addEventListener('click', () => { if (planInterval === iv) return; planInterval = iv; repaintPrices(); announce(`${iv === 'year' ? 'Yearly' : 'Monthly'}: ${price().long}.`, 'polite'); });
       return b;
     };
     const mBtn = ivBtn('month', 'Monthly'), yBtn = ivBtn('year', 'Yearly');
     ivGroup.append(mBtn, yBtn);
-    const list = h('ul', { class: 'co-surf-lines', 'aria-label': 'Answer surfaces on this plan' });
-    const add = h('div', { class: 'co-surf-add' });
+    const list = h('ul', { class: 'co-surf-lines', 'aria-label': 'Your plan' });
+    const tools = h('ul', { class: 'co-tools', 'aria-label': 'Included tools' });
     const total = h('p', { class: 'co-surf-total' });
     const terms = h('p', { class: 'co-surf-terms' });
-    const el = h('section', { class: 'co-surf', 'aria-label': 'Your plan' }, ivGroup, list, add, total, terms);
+    const el = h('section', { class: 'co-surf', 'aria-label': 'Your plan' }, ivGroup, list, tools, total, terms);
     el.paint = () => {
       const pr = price();
       mBtn.setAttribute('aria-pressed', String(pr.plan.interval === 'month'));
       yBtn.setAttribute('aria-pressed', String(pr.plan.interval === 'year'));
-      const had = list.contains(document.activeElement) || add.contains(document.activeElement);
       list.innerHTML = '';
       for (const line of pr.plan.lines) {
-        const rm = h('button', { type: 'button', class: 'co-surf-rm', 'aria-label': `Remove ${line.label}`, title: pr.plan.count === 1 ? 'Your bot needs at least one answer surface' : `Remove ${line.label}`, html: icon('x', 13) });
-        if (pr.plan.count === 1) rm.disabled = true;
-        rm.addEventListener('click', () => { setSurfaces(pr.plan.lines.map((l) => l.id).filter((id) => id !== line.id)); announce(`${line.label} removed. ${price().long} in total.`, 'polite'); });
-        list.append(h('li', { class: 'co-surf-line' }, h('span', { class: 'co-surf-name' }, line.label), h('span', { class: 'co-surf-amt' }, `${pr.fmt(line.amount)}/${pr.per}`), rm));
+        list.append(h('li', { class: 'co-surf-line' }, h('span', { class: 'co-surf-name' }, 'KnowBot plan'), h('span', { class: 'co-surf-amt' }, `${pr.fmt(line.amount)}/${pr.per}`)));
       }
-      add.innerHTML = '';
-      const off = SURFACES.filter((x) => !pr.plan.lines.some((l) => l.id === x.id));
-      if (off.length) {
-        add.append(h('span', { class: 'co-surf-add-l' }, 'Add:'), ...off.map((x) => {
-          const b = h('button', { type: 'button', class: 'co-link co-surf-addbtn', 'aria-label': `Add ${x.label}` }, `+ ${x.label}`);
-          b.addEventListener('click', () => { setSurfaces([...pr.plan.lines.map((l) => l.id), x.id]); announce(`${x.label} added. ${price().long} in total.`, 'polite'); });
-          return b;
-        }));
+      tools.innerHTML = '';
+      for (const t of toolSwitches(getState().spec?.surfaces)) {
+        const onF = t.features.filter((f) => f.on).map((f) => f.label);
+        const state = t.features.length === 1 ? (onF.length ? 'on' : 'off') : onF.length ? `${onF.join(', ')} on` : 'all off';
+        tools.append(h('li', { class: `co-tool${t.on ? ' is-on' : ''}` }, h('span', { class: 'co-incl-ico', html: icon(t.on ? 'check' : 'plus', 12) }),
+          h('span', null, h('b', null, t.label), ` · ${t.sub} · `, h('span', { class: 'co-tool-state' }, state))));
       }
-      total.textContent = `Total: ${pr.long} for ${pr.plan.count === 1 ? '1 answer surface' : `${pr.plan.count} answer surfaces`}`;
-      terms.textContent = `Each answer surface is ${pr.fmt(pr.p.amount || 249)}/month or ${pr.fmt(pr.p.yearAmount || 2499)}/year · first 30 days free · card required · up to 100 MB per deployment · more than 100 MB is enterprise: ${pr.p.enterpriseEmail || 'sales@recoursellm.com'}`;
-      if (had) { const f = list.querySelector('.co-surf-rm:not([disabled])') || ivGroup.querySelector('button'); if (f) f.focus(); }
+      total.textContent = `Total: ${pr.long}, whatever features you switch on`;
+      terms.textContent = `One plan: ${pr.fmt(pr.p.amount || PRICE_MONTH)}/month or ${pr.fmt(pr.p.yearAmount || PRICE_YEAR)}/year · every feature included · switch features on and off in Set up · first 30 days free · card required · up to 100 MB per deployment · KnowBot number usage billed separately · more than 100 MB is enterprise: ${pr.p.enterpriseEmail || 'sales@recoursellm.com'}`;
     };
     el.paint();
     planBlocks.add(el);
@@ -254,7 +241,7 @@ export function mount(ctx) {
   const contactHref = () => { const c = cfg().contact || 'mailto:hello@knowdrive.ai'; return /^(mailto:|https?:)/i.test(c) ? c : `mailto:${c}`; };
   const isMobile = () => matchMedia('(max-width: 899px)').matches;
   // fixer r6 (D8/D9): the CTA shows "Launch <bot>" (the price is the hero beside it); the price rides in a visually
-  // hidden suffix so the accessible name stays "Launch <bot>, $249/mo" (it starts with the visible label).
+  // hidden suffix so the accessible name stays "Launch <bot>, $549/mo" (it starts with the visible label).
   const ctaPrice = () => pspan('cta', 'co-sr co-cta-price');
   const testsName = (t) => (t && t.full ? 'Proof Run' : 'Quick check');
   const FULL_PROOF_N = 11;   // 8 in-scope questions + 3 out-of-scope probes (SPEC 1.4 B8)
@@ -349,7 +336,7 @@ export function mount(ctx) {
 
   /**
    * The Builder column is ~400 px wide (and a phone is 390), too narrow for the two-column receipt + plan (fixer r1, D8).
-   * The chat always gets a compact LaunchSummary: bot, stats, the cited answer, $249 and the CTA in one view. The full
+   * The chat always gets a compact LaunchSummary: bot, stats, the cited answer, $549 and the CTA in one view. The full
    * card lives in the LaunchStage: at 1100 px and wider it is docked over the SampleBot pane and opens by itself
    * (morphing out of the summary), so receipt, embed preview, price and CTA are visible together above the fold;
    * narrower, "Receipt & plan" opens it as a full-screen dialog.
@@ -402,12 +389,13 @@ export function mount(ctx) {
     const p = pr.p;
     const incl = [
       ['Your KnowBot, hosted with a share link', 'link'],
-      ['Embed widget for any site', 'code'],
+      ['One embed line for any site', 'code'],
       ['100 MB of KnowDrive storage: PDF, DOCX, PPTX, XLSX, HTML, MD, TXT, images, audio', 'layers'],
       sampleOnly() ? ['Sample files are removed at launch: add your own docs after, your settings and tests stay', 'refresh'] : ['Your files carry over, nothing gets re-uploaded', 'refresh'],
       ['Citations on every answer, canonical refusals', 'shieldCheck'],
       ['Question insights: every question your customers ask is captured so you can see gaps', 'trending'],
-      ['Chat API (OpenAI-compatible) and channel templates: SMS, phone, WhatsApp, email, voice', 'chat'],
+      ['Three tools: Website (chat bubble, voice, homepage search), KnowBot number (texts, calls, WhatsApp) and Email', 'chat'],
+      ['Chat API (OpenAI-compatible)', 'code'],
       p.answersIncluded ? [String(p.answersIncluded), 'bolt'] : null,
       ['Cancel anytime', 'checkCircle'],
     ].filter(Boolean);
@@ -416,14 +404,14 @@ export function mount(ctx) {
     cta.addEventListener('click', () => openSheet({ source: 'card', from: receipt, invoker: cta }));
     const channelsStrip = h('button', { type: 'button', class: 'co-chstrip' },
       h('span', { class: 'co-chstrip-icons', 'aria-hidden': 'true' }, ...['chat', 'phone', 'mail', 'mic', 'code'].map((n, i) => h('i', { style: { '--i': i }, html: icon(n, 13) }))),
-      h('span', { class: 'co-chstrip-text' }, 'Web, SMS, phone, WhatsApp, email, voice and API'),
+      h('span', { class: 'co-chstrip-text' }, 'Website, KnowBot number, Email and API'),
       h('span', { class: 'co-chstrip-go' }, 'Explore', h('span', { html: icon('chevronRight', 14) })));
     channelsStrip.addEventListener('click', () => openGoLive({ tab: 'channels', invoker: channelsStrip }));
     // Order: price → CTA → reassurance first, inclusions after, so the CTA is above the fold at every size (fixer r1).
     const plan = h('section', { class: 'co-plan', 'aria-labelledby': titleId },
       h('div', { class: 'co-plan-brand' }, h('span', { class: 'co-plan-logo', 'aria-hidden': 'true', html: KD_LOGO }), 'KnowDrive'),
       h('h3', { class: 'co-price', id: titleId }, pspan('amt', 'co-price-amt'), pspan('per', 'co-price-per')),
-      h('p', { class: 'co-tagline' }, 'One price per answer surface, all answering from the same sources. No per-answer fees.'),
+      h('p', { class: 'co-tagline' }, 'One plan with all three tools: Website, KnowBot number and Email. Every feature included, no per-answer fees.'),
       planBlock(),
       where === 'chat' ? cta : null,   // inline: the card's own CTA is the only one; stage: the sticky bar is (fixer r4, D8)
       // fixer r5 (D8): on the stage the escape hatch lives directly under the sticky CTA bar (openStage), not up here
@@ -559,18 +547,18 @@ export function mount(ctx) {
     const headId = `co-sum-h-${Math.random().toString(36).slice(2, 8)}`;
     const heading = h('h3', { class: 'co-sum-h', id: headId }, nameEl, edit);
     const fullLink = h('button', { type: 'button', class: 'co-link co-sum-full', hidden: true, onclick: () => runFullProof(() => closeStage({ focus: false })) }, `Run the full Proof Run (${FULL_PROOF_N})`);
-    const chBtn = h('button', { type: 'button', class: 'co-link co-sum-channels' }, 'See channels & API');
+    const chBtn = h('button', { type: 'button', class: 'co-link co-sum-channels' }, 'See the tools & API');
     chBtn.addEventListener('click', () => openGoLive({ tab: 'channels', invoker: chBtn }));
     const incl = h('ul', { class: 'co-sum-incl', 'aria-label': 'Included in the plan' },
-      h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, 'Hosted share link + embed widget for any site')),
-      h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, '6 channels (SMS, phone, WhatsApp, email, voice, web) + chat API · ', chBtn)),
+      h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, 'Hosted share link + one embed line for any site')),
+      h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, 'Website, KnowBot number and Email, every feature included, + chat API · ', chBtn)),
       h('li', null, h('span', { class: 'co-incl-ico', html: icon('check', 13) }), h('span', null, 'Question insights: see what customers ask and where the gaps are')));
     const thumb = h('div', { class: 'co-thumb-hold' });
     // fixer r4 (D8): while the receipt panel is open over the bot pane, this card folds to a one-line stub (name ·
     // checks · price · "Receipt open"), with no CTA, no anchors and no repeated inclusions: one solid CTA, in the panel.
     // fixer r5 (D9 label-in-name, D7/D8 price clarity): the stub has no aria-label; its accessible name IS its visible
     // text (name · checks · price, Receipt open) and the extra hint rides on aria-describedby. Only the bot name may
-    // ellipsize; the checks and the price sit in non-shrinking spans so "$249/mo" never truncates.
+    // ellipsize; the checks and the price sit in non-shrinking spans so "$549/mo" never truncates.
     // fixer r6 (D7/D8): two lines, so the name never truncates beside its stats: the name on top, the checks under it.
     // The price is not repeated here (it is the hero in the receipt panel / checkout).
     const stubName = h('span', { class: 'co-stub-name' });
@@ -815,12 +803,12 @@ export function mount(ctx) {
     const head = h('div', { class: 'co-stage-head' }, headEl, closeBtn);
     const holder = h('div', { class: 'co-stage-card' });
     // Phones: the plan sits below the receipt, so a sticky footer keeps the price and the CTA in reach while scrolling.
-    // fixer r6 (D8): the price is the hero once, here in the sticky bar ($249/month); the CTA names the bot only and the
+    // fixer r6 (D8): the price is the hero once, here in the sticky bar ($549/month); the CTA names the bot only and the
     // plan column's own price is hidden on the stage (checkout.css)
     const footCta = h('button', { type: 'button', class: 'co-cta' }, h('span', { class: 'co-cta-label' }, `Launch ${botName()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
     const pr0 = price();
     const foot = h('div', { class: 'co-stage-foot' },
-      h('div', { class: 'co-stage-foot-bar' }, h('p', { class: 'co-stage-foot-price' }, h('span', null, pspan('amt', '', 'b'), pspan('per', 'co-stage-foot-per')), h('small', null, `${pr0.plan.count > 1 ? `${pr0.plan.count} surfaces · ` : ''}cancel anytime`)), footCta),
+      h('div', { class: 'co-stage-foot-bar' }, h('p', { class: 'co-stage-foot-price' }, h('span', null, pspan('amt', '', 'b'), pspan('per', 'co-stage-foot-per')), h('small', null, 'all three tools · cancel anytime')), footCta),
       sublinks({ stage: true }));
     // fixer r7 (D9): a non-modal side panel (role=region, named "Launch <bot>"): the Builder beside it stays live, the
     // covered SampleBot is inert and shown un-dimmed behind a click-to-close veil (no modal scrim)
@@ -1219,7 +1207,7 @@ export function mount(ctx) {
       h('p', { class: 'co-sheet-desc', id: 'co-sheet-desc' }, h('b', null, 'KnowDrive · ', pspan('amt', ''), pspan('per', '')), '. You finish on KnowDrive\'s secure checkout, then come straight back here.'),
       planBlock(),
       form,
-      h('p', { class: 'co-foot co-foot-incl' }, h('span', { html: icon('check', 13) }), `Includes hosting + embed, 6 channels + the chat API, ${stats().quotaMB} MB of storage, question insights.`),
+      h('p', { class: 'co-foot co-foot-incl' }, h('span', { html: icon('check', 13) }), `Includes hosting, Website, KnowBot number and Email + the chat API, ${stats().quotaMB} MB of storage, question insights.`),
       h('p', { class: 'co-foot' }, pspan('today', ''), samples
         ? 'Your settings, tone and tests carry over; sample files are removed, so add your own docs after launch.'
         : 'Your bot, files and tests carry over. Nothing gets rebuilt.'),

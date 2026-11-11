@@ -1187,6 +1187,11 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
           // voice mode's orb colour (the owner's choice in the Homepage search settings; it applies to web chat too)
           orb: orbOf(target?.spec?.site?.orb) },
       },
+      // the Website tool's switches (spec.surfaces: webchat, webvoice, site): lib/embed.js follows them when the one-line
+      // snippet leaves a feature attribute out. Public booleans only; null when the bot has no saved switches.
+      website: Array.isArray(target?.spec?.surfaces)
+        ? { chat: target.spec.surfaces.includes('webchat'), voice: target.spec.surfaces.includes('webvoice'), homepage: target.spec.surfaces.includes('site') }
+        : null,
       // "send me this": which media a visitor can ask to be sent this bot's answers by (both false: never offered)
       sendInfo: sendInfo.media(botFromNumber(target)),
     };

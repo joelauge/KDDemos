@@ -90,7 +90,7 @@ test('preparse: URL -> import_website, multi-field -> update_bot, chip text -> c
   assert.equal(p3.chip.synthetic, true);
   const offered = [{ id: 'golive-developers', label: 'Open Developers', emit: { type: 'golive:open', detail: { tab: 'developers' } } }];
   assert.equal(preparse('open developers', stateWith({ lastChips: offered })).chip.id, 'golive-developers');
-  assert.equal(chipFor('Launch · $249/mo', [{ id: 'launch', label: 'Launch · $249/mo', action: { type: 'show_launch' } }]).id, 'launch');
+  assert.equal(chipFor('Launch · $549/mo', [{ id: 'launch', label: 'Launch · $549/mo', action: { type: 'show_launch' } }]).id, 'launch');
   const p4 = preparse('How much does it cost to launch?', stateWith());
   assert.equal(p4.productQuestion, true);
   assert.equal(p4.toolCalls.at(-1).name, 'kb_search');
@@ -330,15 +330,15 @@ test('engine: the model can never cause show_launch or remove_samples as an acti
 });
 test('engine: product facts keep valid citations; uncited or invented ones are dropped; questions are logged', async () => {
   const logged = [];
-  const complete = fakeComplete([text('Launching is $249 per month and the first 30 days are free [1]. A credit card is required at signup [1]. We also have a 50% discount for nonprofits. It costs $199 on the annual plan [1].')]);
+  const complete = fakeComplete([text('Launching is $549 per month and the first 30 days are free [1]. A credit card is required at signup [1]. We also have a 50% discount for nonprofits. It costs $199 on the annual plan [1].')]);
   const e = createBuilderEngine({ complete, kb: KB, logQuestion: (q) => { logged.push(q); return Promise.resolve(); } });
   const out = await e.turn(readyState(), { message: 'How much does it cost to launch?' });
   assert.equal(out.engine, 'agent');
-  assert.match(out.reply, /\$249 per month and the first 30 days are free \[1\]/);
+  assert.match(out.reply, /\$549 per month and the first 30 days are free \[1\]/);
   assert.match(out.reply, /credit card is required/);
   assert.doesNotMatch(out.reply, /discount|\$199|annual/);
   assert.equal(out.citations.length, 1);
-  assert.match(out.citations[0].text, /\$249 per month/);
+  assert.match(out.citations[0].text, /\$549 per month/);
   assert.equal(logged.length, 1);
   assert.equal(logged[0].channel, 'builder');
   assert.equal(logged[0].outcome, 'answered');
@@ -440,19 +440,19 @@ test('engine: an offer-only action from a chip runs only when that chip was real
 
 // ------------------------------------------------------------------------------------------------ gating units
 test('gateReply: claims need ok tools; cited numbers must be in the cited passage', () => {
-  const cited = new Map([[1, { text: 'To launch, you start a KnowDrive account at $249 per month. The first 30 days are free.' }]]);
+  const cited = new Map([[1, { text: 'To launch, you start a KnowDrive account at $549 per month. The first 30 days are free.' }]]);
   const g = gateReply('I loaded the sample files. The first 30 days are free [1]. It is $299 per month [1]. Your 2 files are ready.', { cited, okTools: new Set(), stateText: '{"ready_files":2}' });
   assert.equal(g.text, 'The first 30 days are free [1]. Your 2 files are ready.');
   assert.equal(g.dropped.length, 2);
   assert.equal(gateReply('I loaded the sample files.', { okTools: new Set(['attach_samples']) }).text, 'I loaded the sample files.');
-  assert.deepEqual(sentencesOf('Free to try. [1] Then $249/month [2].'), ['Free to try [1].', 'Then $249/month [2].']);
+  assert.deepEqual(sentencesOf('Free to try. [1] Then $549/month [2].'), ['Free to try [1].', 'Then $549/month [2].']);
   // the visitor's own content is not a product claim; KnowBot pricing without a citation is
   assert.equal(gateReply('Your files cover warranties and service plans, including prices.').text, 'Your files cover warranties and service plans, including prices.');
   assert.equal(gateReply('Launching KnowBot is free for a month.').text, '');
   assert.equal(gateReply('Feel free to add more files.').text, 'Feel free to add more files.');
 });
 test('gateReply: money is matched as a unit; uncited sentences never carry money', () => {
-  const pricing = 'To launch your KnowBot, you start a KnowDrive account at $249 per month, or $2,499 per year. The first 30 days are free. A credit card is required at signup. A plan covers a deployment of up to 100 MB of files.';
+  const pricing = 'To launch your KnowBot, you start a KnowDrive account at $549 per month, or $5,490 per year. The first 30 days are free. A credit card is required at signup. A plan covers a deployment of up to 100 MB of files.';
   const cited = new Map([[1, { text: pricing }], [2, { text: 'Deployments above 100 MB are handled as an enterprise plan. Contact enterprise sales at sales@recoursellm.com to discuss it.' }]]);
   const stateText = JSON.stringify({ space: { used_mb: 0.2, total_mb: 100 }, files: [{ atoms: 612 }], ready_files: 2 });
   // invented prices: a bare number that happens to be in the passage ("30 days", "100 MB") is not a price
@@ -461,11 +461,11 @@ test('gateReply: money is matched as a unit; uncited sentences never carry money
   assert.equal(gateReply('The price is $10 per month.', { cited, stateText }).text, '');
   assert.equal(gateReply('Plans start at $61 a month.', { cited, stateText }).text, '');
   // the right currency, number and period survive; a wrong period does not
-  assert.equal(gateReply('Launching is $249 per month [1].', { cited, stateText }).text, 'Launching is $249 per month [1].');
-  assert.equal(gateReply('The yearly plan is $2,499 per year [1].', { cited, stateText }).text, 'The yearly plan is $2,499 per year [1].');
-  assert.equal(gateReply('It is $249/mo or $2,499/yr [1].', { cited, stateText }).text, 'It is $249/mo or $2,499/yr [1].');
-  assert.equal(gateReply('It is $249 per year [1].', { cited, stateText }).text, '');
-  assert.equal(gateReply('It is €249 per month [1].', { cited, stateText }).text, '');
+  assert.equal(gateReply('Launching is $549 per month [1].', { cited, stateText }).text, 'Launching is $549 per month [1].');
+  assert.equal(gateReply('The yearly plan is $5,490 per year [1].', { cited, stateText }).text, 'The yearly plan is $5,490 per year [1].');
+  assert.equal(gateReply('It is $549/mo or $5,490/yr [1].', { cited, stateText }).text, 'It is $549/mo or $5,490/yr [1].');
+  assert.equal(gateReply('It is $549 per year [1].', { cited, stateText }).text, '');
+  assert.equal(gateReply('It is €549 per month [1].', { cited, stateText }).text, '');
   assert.equal(gateReply('Deployments above 100 MB are handled as an enterprise plan [2].', { cited, stateText }).text, 'Deployments above 100 MB are handled as an enterprise plan [1].');
   assert.equal(gateReply('There is also an enterprise plan.', { cited, stateText }).text, '');
   assert.equal(gateReply('The annual plan saves money.', { cited, stateText }).text, '');
@@ -491,19 +491,19 @@ test('local KB: studio/kb loads, and pricing is always answerable', async () => 
   const kb = createLocalKb({ sections });
   const r = await kb.search('how much does it cost per month');
   assert.ok(r.sources.length >= 1);
-  assert.match(r.sources.map((x) => x.text).join(' '), /\$249 per month/);
+  assert.match(r.sources.map((x) => x.text).join(' '), /\$549 per month/);
 });
 
 // ------------------------------------------------------------------------------------------------ the real SDK against the fake
 test('real @anthropic-ai/sdk against fake-anthropic: wire shape, tool_result loop, latency fallback', async () => {
   const fake = await startFakeAnthropic();
   try {
-    fake.push(toolUse('kb_search', { query: 'price to launch' }), text('Launching is $249 per month, and the first 30 days are free [1].'));
+    fake.push(toolUse('kb_search', { query: 'price to launch' }), text('Launching is $549 per month, and the first 30 days are free [1].'));
     const complete = createAnthropicComplete({ apiKey: 'sk-ant-test-fake', baseURL: fake.url });
     const e = createBuilderEngine({ complete, kb: createLocalKb({ sections: [] }), timeoutMs: 5000 });
     const out = await e.turn(readyState(), { message: 'What does launching cost?' });
     assert.equal(out.engine, 'agent', out.fallbackReason);
-    assert.match(out.reply, /\$249 per month/);
+    assert.match(out.reply, /\$549 per month/);
     assert.equal(fake.requests.length, 2);
     const [r1, r2] = fake.requests;
     // SDK 1.3.0 sends the key as x-api-key or Authorization depending on version; either way it is the operator's key

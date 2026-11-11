@@ -163,8 +163,8 @@ try {
     await page.waitForSelector('.sh-opt[data-shape="webchat"]', { timeout: 30000 });
     await page.click('.sh-opt[data-shape="webchat"]');
     await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
-    await page.waitForSelector('.gl-chcard[data-ch="site"]', { timeout: 20000 });
-    await page.click('.gl-chcard[data-ch="site"]');
+    await page.waitForSelector('.gl-feat-open[data-ch="site"]', { timeout: 20000 });
+    await page.click('.gl-feat-open[data-ch="site"]');
     await page.waitForSelector('.gl-sp .ss-orbs', { timeout: 20000 });
     const opts = await page.$$eval('.gl-sp .ss-orb-in', (rs) => rs.map((r) => ({ v: r.value, on: r.checked, label: r.closest('label').textContent.trim() })));
     check('studio', 'the picker: seven colours, named, the saved one chosen', opts.length === 7 && opts.map((o) => o.label).join(',') === 'Ocean,Violet,Sunset,Mint,Ruby,Midnight,Silver' && opts.find((o) => o.on)?.v === 'ocean', JSON.stringify(opts));

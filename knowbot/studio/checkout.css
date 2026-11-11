@@ -661,8 +661,8 @@
   .co-foot .co-link, .co-addfirst .co-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0; margin: -13px 0; vertical-align: middle; }
 }
 
-/* fixer M r1 (D8): one solid $249 CTA at a time. While the receipt or the checkout sheet is open the stage/sheet CTA is
-   the only Launch on screen; the header "Launch · $249/mo" pill steps out of view (it keeps its box: no shift). */
+/* fixer M r1 (D8): one solid $549 CTA at a time. While the receipt or the checkout sheet is open the stage/sheet CTA is
+   the only Launch on screen; the header "Launch · $549/mo" pill steps out of view (it keeps its box: no shift). */
 :root[data-co-cta="receipt"] #st-pricewrap, :root[data-co-cta="receipt"] #st-price,
 :root[data-co-cta="sheet"] #st-pricewrap, :root[data-co-cta="sheet"] #st-price { visibility: hidden !important; pointer-events: none; }
 
@@ -689,3 +689,8 @@
 .co-surf-addbtn { min-height: 28px; font-size: 13px; }
 .co-surf-total { margin: 2px 0 0; font: 700 14.5px/1.35 var(--font); color: var(--strong); font-variant-numeric: tabular-nums; }
 .co-surf-terms { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+.co-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.co-tool { display: flex; align-items: flex-start; gap: 8px; line-height: 1.4; }
+.co-tool b { color: var(--strong); font-weight: 600; }
+.co-tool .co-incl-ico { flex: none; margin-top: 2px; }
+.co-tool-state { color: var(--text); }

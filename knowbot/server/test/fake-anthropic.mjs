@@ -3,7 +3,7 @@
 //
 //   const fake = await startFakeAnthropic({ latencyMs: 0 });
 //   fake.push(toolUse('kb_search', { query: 'price' }));          // next response: stop_reason tool_use
-//   fake.push(text('It is $249 per month [1].'));                   // then: stop_reason end_turn
+//   fake.push(text('It is $549 per month [1].'));                   // then: stop_reason end_turn
 //   fake.push({ status: 500, error: 'boom' });                      // an API error
 //   fake.push((body, i) => text(`saw ${body.messages.length}`));    // computed from the request
 //   fake.setHandler((body, i) => …)                                  // used when the queue is empty

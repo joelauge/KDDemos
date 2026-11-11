@@ -10,13 +10,13 @@ No. You can build and test a KnowBot in KnowBot Studio without an account. An ac
 
 Source: /studio/
 
-Yes, in two ways. Building and testing a bot in KnowBot Studio is free and needs no account. When you launch, your KnowDrive account ($249 per month or $2,499 per year, for up to 100 MB) starts with the first 30 days free. For more than 100 MB, contact enterprise sales at sales@recoursellm.com.
+Yes, in two ways. Building and testing a bot in KnowBot Studio is free and needs no account. When you launch, your KnowDrive account ($549 per month or $5,490 per year, for up to 100 MB) starts with the first 30 days free. For more than 100 MB, contact enterprise sales at sales@recoursellm.com.
 
 ## Do SMS, WhatsApp, email, phone or voice cost extra?
 
 Source: /studio/
 
-Yes. Each answer surface is $249 per month, or $2,499 per year: website chat, SMS, WhatsApp, email, phone, the web voice assistant and the homepage search are separate answer surfaces, all answering from the same sources. Each surface starts with the first 30 days free, and building and testing are free.
+No. One plan, $549 per month or $5,490 per year, includes all three tools with every feature: the Website (chat bubble, voice and homepage search), the KnowBot number (texts, calls and WhatsApp) and Email. Switching a feature on or off never changes the price, and all of them answer from the same sources. The KnowBot number's own usage is billed separately, and Set up shows its cost before you get a number. The first 30 days are free, and building and testing are free.
 
 ## Do I need a credit card?
 

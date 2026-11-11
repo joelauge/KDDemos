@@ -27,7 +27,7 @@ import * as store from './store.js?v=abbc025';
 import * as api from './api.js?v=abbc025';
 import * as motion from './motion.js?v=abbc025';
 import * as icons from './icons.js?v=abbc025';
-import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=abbc025';
+import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=abbc025';
 import { mountShapes } from './shapes.js?v=abbc025';
 import { mountBuilderPane } from './builderpane.js?v=abbc025';
 import { siteSettings } from './sitebrand.js?v=abbc025';
@@ -45,7 +45,7 @@ const STEPS = [
   { key: 'prove', label: 'Prove' }, { key: 'launch', label: 'Launch' },
 ];
 const DEFAULT_CONFIG = {
-  price: { amount: 249, currency: 'USD', interval: 'month', answersIncluded: null, annualLine: 'or $2,499/year · up to 100 MB · first 30 days free, card required', guaranteeLine: null, enterpriseEmail: 'sales@recoursellm.com' },
+  price: { amount: PRICE_MONTH, yearAmount: PRICE_YEAR, currency: 'USD', interval: 'month', answersIncluded: null, annualLine: 'or $5,490/year · up to 100 MB · first 30 days free, card required', guaranteeLine: null, enterpriseEmail: 'sales@recoursellm.com' },
   quota: { bytes: 104857600, fileBytes: 99614720, ttlDays: 7 },
   types: [], builder: { engine: 'scripted', provider: null },
   samples: [{ id: 'lumen-bikes', title: 'Lumen Bikes (sample shop)', files: 4, bytes: 31744 }],
@@ -325,11 +325,12 @@ function morphIdentity(update) {
   }, clear);
 }
 
+/** The one plan's monthly price ("$549/mo"): the same whatever features are switched on. */
 function priceText() {
-  const amt = getState().config?.price?.amount ?? 249;
+  const amt = getState().config?.price?.amount ?? PRICE_MONTH;
   return `${money(planTotals(getState().spec?.surfaces, 'month', { month: amt }).total)}/mo`;
 }
-/** Owner rule: the price (one plan line per answer surface) is shown only once the visitor has tested the bot. */
+/** Owner rule: the price (one plan, every feature included) is shown only once the visitor has tested the bot. */
 function testedBot() {
   const m = getState().milestones;
   return !!(m.firstCited || m.proofRun || launchIntent || launchOnTable() || isLive());
@@ -779,10 +780,8 @@ function priceIntent(text, label) {
   addUserMessage(label || text, { keepDecision: !!miy });
   if (miy) {
     // r8 (D2/D8): the open card already holds the paragraph; the reply is the delta (the price) plus one short line.
-    // The price is the sum over the chosen answer surfaces (one plan line each), the same total checkout shows.
-    const surf = normalizeSurfaces(getState().spec?.surfaces);
-    const lines = surf.length > 1 ? ` (per answer surface, so ${surf.length} plan lines for ${surfacesText(surf)})` : '';
-    localSay(`Going live is **${priceText()}**${lines}; building and testing stay free, no card. ${miyRepeatLine(miy)}`, { reply: true, chips: [] })
+    // One plan, the same total checkout shows, whatever features are switched on.
+    localSay(`Going live is **${priceText()}** for one plan with all three tools (Website, KnowBot number and Email), every feature included; building and testing stay free, no card. ${miyRepeatLine(miy)}`, { reply: true, chips: [] })
       .then(() => surfaceDecision(miy));
     return;
   }
@@ -794,12 +793,11 @@ function priceIntent(text, label) {
     return;
   }
   const c = getState().config || {};
-  const amt = c.price?.amount ?? 249;
+  const amt = c.price?.amount ?? PRICE_MONTH;
+  const yr = c.price?.yearAmount ?? PRICE_YEAR;
   const name = botName();
   const m = getState().milestones;
-  const surf = normalizeSurfaces(getState().spec?.surfaces);
-  const many = surf.length > 1 ? ` ${name} is set to answer on ${surfacesText(surf)}, so that is ${surf.length} plan lines; you can remove any at checkout.` : '';
-  localSay(`Building and testing is free, no card. Going live is **$${amt}/mo** (or $2,499/year) per answer surface (website chat, SMS, WhatsApp, email, phone, web voice or homepage search), for up to 100 MB, with the first 30 days free and a card required at signup.${many} ${name} gets a hosted link, the embed snippet and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { reply: true, chips: [
+  localSay(`Building and testing is free, no card. Going live is one plan: **${money(amt)}/mo** (or ${money(yr)}/year) with all three tools, the Website (chat bubble, voice, homepage search), the KnowBot number (texts, calls, WhatsApp) and Email, every feature included, for up to 100 MB, with the first 30 days free and a card required at signup. Switching features on or off never changes the price. ${name} gets a hosted link, one embed line and the chat API, with every answer cited.${c.price?.answersIncluded ? ` ${Number(c.price.answersIncluded).toLocaleString()} answers a month are included.` : ''} You only pay when you launch.`, { reply: true, chips: [
     { id: 'launch', label: `Launch · ${priceText()}`, kind: m.firstCited ? 'primary' : 'default', action: { type: 'show_launch' }, local: true },
     { id: 'what-get', label: 'What do I get?', send: 'What do I get?' },
     m.firstCited ? { id: 'run_proof', label: 'Run the Proof Run', action: { type: 'run_proof' }, local: true }
@@ -815,13 +813,13 @@ function priceIntent(text, label) {
 }
 
 const CHANNEL_HINTS = [
-  { id: 'whatsapp', re: /\bwhats ?app\b/i, name: 'WhatsApp', need: 'WhatsApp needs a WhatsApp Business number (through Meta); your webhook is ready to paste.' },
-  { id: 'sms', re: /\b(sms|text messag\w*|texts?)\b/i, name: 'SMS', need: 'SMS needs a KnowBot number; point its messaging webhook at the URL I prefilled and replies come back with [1] citations.' },
-  { id: 'phone', re: /\b(telephone|phone( calls?| line| number)?|calls?|call in)\b/i, name: 'Telephone', need: 'Phone calls need a KnowBot number; callers ask out loud and it answers by voice, naming the source. Try the call simulator now.' },
-  { id: 'email', re: /\b(e-?mails?|inbox|support@)\b/i, name: 'Email', need: 'Email needs an inbound-parse webhook (SendGrid, Postmark or Mailgun); replies carry footnoted citations and a source list.' },
-  { id: 'voice', re: /\bvoice ?(bot|chat\w*|assistant|agent|channel)?\b|\bspeak|\btalk to\b/i, name: 'Voice chatbot', need: 'The voice chatbot runs in the browser, no account needed. Press Try it and talk to your bot.' },
+  { id: 'whatsapp', re: /\bwhats ?app\b/i, name: 'WhatsApp', need: 'WhatsApp is a feature of your KnowBot number; it needs a WhatsApp Business account, and your webhook is ready to paste.' },
+  { id: 'sms', re: /\b(sms|text messag\w*|texts?)\b/i, name: 'Texts', need: 'Texts are a feature of your KnowBot number; replies come back with [1] citations and a proof link.' },
+  { id: 'phone', re: /\b(telephone|phone( calls?| line| number)?|calls?|call in)\b/i, name: 'Calls', need: 'Calls are a feature of your KnowBot number; callers ask out loud and it answers by voice, naming the source. Try the call simulator now.' },
+  { id: 'email', re: /\b(e-?mails?|inbox|support@)\b/i, name: 'Email', need: 'Email is one inbox address: forward support@ to it and every email gets a reply with footnoted citations and a source list.' },
+  { id: 'voice', re: /\bvoice ?(bot|chat\w*|assistant|agent|channel)?\b|\bspeak|\btalk to\b/i, name: 'Voice', need: 'Voice is a feature of the Website tool and runs in the browser, no account needed. Press Try it and talk to your bot.' },
   { id: 'site', re: /\b(home ?page|landing page|search page|front ?page|(?:single|one)[- ]page (?:web)?site)\b/i, name: 'Homepage search', need: 'The homepage search is a simple search box that hovers over your homepage. Answers quote your pages and link to them. Visitors close it with ×. You add it with one line of code.' },
-  { id: 'text', re: /\b(widget|embed\w*|website|my site|chat ?bubble|full-?page)\b/i, name: 'Text chatbot', need: 'The chat widget is one line of embed code; you can try it right here before you launch.' },
+  { id: 'text', re: /\b(widget|embed\w*|website|my site|chat ?bubble|full-?page)\b/i, name: 'Chat bubble', need: 'The chat bubble comes with the Website tool\'s one embed line; you can try it right here before you launch.' },
 ];
 function channelOf(text) { const hit = CHANNEL_HINTS.find((c) => c.re.test(text)); return hit || null; }
 
@@ -833,9 +831,9 @@ function channelsIntent(text, label) {
   const line = dev
     ? `${name} has a chat API. It's OpenAI-compatible: point any OpenAI SDK at it by changing the base URL. Every reply carries its citations, or the exact refusal. Opening the Developers tab with your trial key and live-tested snippets.`
     : ch ? `Yes: ${name} can answer on ${ch.name} with the same cited answers. ${ch.need} Opening the ${ch.name} card.`
-      : `${name} can answer on 7 channels: SMS, phone calls, WhatsApp, email, a chat widget, a voice chatbot and homepage search, all with the same cited answers. Each one has its webhook ready to copy, and most have a Try it. Opening Channels.`;
+      : `${name} answers through three tools, all in one plan: the Website (one embed line for the chat bubble, voice and homepage search), the KnowBot number (texts, calls and WhatsApp) and Email (one inbox address), all with the same cited answers. Switch features on and off in Set up, and most have a Try it. Opening Set up.`;
   localSay(line, { reply: true, chips: [
-    { id: 'open_channels', label: ch ? `${ch.name} setup` : 'Channels', kind: dev ? 'default' : 'primary', local: true, run: () => openGoLive('channels', ch?.id) },
+    { id: 'open_channels', label: ch ? `${ch.name} setup` : 'Set up', kind: dev ? 'default' : 'primary', local: true, run: () => openGoLive('channels', ch?.id) },
     { id: 'open_api', label: 'Developer API', kind: dev ? 'primary' : 'default', local: true, run: () => openGoLive('developers') },
     { id: 'launch', label: launchChipLabel(), action: { type: 'show_launch' }, local: true },
   ] }).then(() => openGoLive(dev ? 'developers' : 'channels', ch?.id));
@@ -2656,10 +2654,12 @@ function buildSpecForm() {
       h('ul', { class: 'st-starters-auto', id: 'st-spec-auto', 'aria-label': 'Suggested by your bot (auto)' }), addStarter),
     h('div', { class: 'st-field' }, h('span', { class: 'flabel st-label' }, 'Sources'), sources),
     h('fieldset', { class: 'st-field st-fieldset' }, h('legend', { class: 'flabel st-label' }, 'Answers on'),
-      h('div', { class: 'st-sources st-surfaces' }, SURFACES.map((x) => h('div', { class: 'st-src' },
-        h('input', { type: 'checkbox', id: `st-surf-${x.id}`, class: 'st-check', name: 'surface', value: x.id }),
-        h('label', { for: `st-surf-${x.id}` }, h('span', { class: 'st-src-name' }, x.label))))),
-      h('p', { class: 'st-field-hint' }, 'Where it answers after launch. Every one answers from the same sources. Pick at least one.')),
+      h('div', { class: 'st-tools' }, TOOLS.map((t) => h('div', { class: 'st-tool', role: 'group', 'aria-labelledby': `st-tool-${t.id}` },
+        h('p', { class: 'st-tool-h', id: `st-tool-${t.id}` }, h('b', null, t.label), h('span', { class: 'st-tool-sub' }, ` · ${t.sub}`)),
+        h('div', { class: 'st-sources st-surfaces' }, t.features.map((id) => h('div', { class: 'st-src' },
+          h('input', { type: 'checkbox', id: `st-surf-${id}`, class: 'st-check', name: 'surface', value: id }),
+          h('label', { for: `st-surf-${id}` }, h('span', { class: 'st-src-name' }, featureLabel(id))))))))),
+      h('p', { class: 'st-field-hint' }, 'Three tools, all in your plan: switching a feature never changes the price. Every feature answers from the same sources. Keep at least one on.')),
     // the Homepage search's name, logo and timing (sitebrand.js; the same block as Channels → Homepage search)
     h('div', { class: 'st-field st-spec-site', id: 'st-spec-site', hidden: true },
       h('span', { class: 'flabel st-label' }, 'Homepage search'), h('div', { class: 'st-spec-site-body' })),
@@ -2769,7 +2769,7 @@ function onSpecInput(e) {
     case 'floor': if (t.checked) queueSpec({ floor: Number(t.value) }, 0); break;
     case 'surface': {
       const on = $$('input[name="surface"]', specEl).filter((c) => c.checked).map((c) => c.value);
-      if (!on.length) { t.checked = true; toast({ kind: 'warn', text: 'Your bot needs at least one place to answer.' }); break; }
+      if (!on.length) { t.checked = true; toast({ kind: 'warn', text: 'Your bot needs at least one feature switched on.' }); break; }
       queueSpec({ surfaces: normalizeSurfaces(on) }, 0);
       syncSpecSite();
       break;
@@ -2878,7 +2878,7 @@ function paletteCommands() {
     { id: 'view', label: getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Toggle Proof view', ico: 'shieldCheck', run: () => setView(getState().ui.view === 'proof' ? 'bot' : 'proof', 'toggle') },
     { id: 'spec', label: 'Open bot spec', ico: 'edit', run: () => openSpec() },
     { id: 'launch', label: launchChipLabel(), ico: 'rocket', run: () => launchOpen('palette') },
-    { id: 'channels', label: 'Test it before going live (SMS, phone, WhatsApp, email, voice)', ico: 'phone', run: () => openGoLive('channels') },
+    { id: 'channels', label: 'Set up: Website, KnowBot number, Email', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
     { id: 'leads', label: 'Leads report · contacts, links sent, clicks, CSV download', ico: 'users', run: () => openLeads() },
     ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),

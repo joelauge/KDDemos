@@ -87,8 +87,9 @@ export function insightKey(q) {
   for (const [re, to] of INSIGHT_SYNONYMS) t = t.replace(re, to);
   return t.split(' ').map((w) => (w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w)).filter((w) => !/^(?:the|a|an|your|you|do|does|can|i|we|please)$/.test(w)).join(' ');
 }
-const PRICE = 249;
-const PRICE_YEAR = 2499;   // per answer surface, like PRICE (studio/surfaces.js)
+// the one plan (studio/surfaces.js PRICE_MONTH / PRICE_YEAR): Website, KnowBot number and Email, every feature included
+const PRICE = 549;
+const PRICE_YEAR = 5490;
 const REPLAY_TARGET_MS = 25000; // the sample demo promises ~30 s
 /**
  * fixer r8 (D4): every trial replays the recorded timeline scaled so its last file is ready at the configured duration
@@ -409,10 +410,11 @@ const isDerivedLine = (t) => /;\s/.test(t) && (String(t).match(/[^;:]{1,60}:\s[^
 // ------------------------------------------------------------------------------------------- spec
 const TONES = ['friendly', 'neutral', 'formal'], LENGTHS = ['short', 'normal'], AUDIENCES = ['customers', 'employees', 'students'];
 const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces']);
-// answer surfaces: where the bot answers (studio/surfaces.js SURFACE_IDS, same order). Not material: the answers and the
-// bot version never change with them; each one is its own plan line at launch (shown only after testing).
+// answer surfaces: where the bot answers (studio/surfaces.js SURFACE_IDS, same order): the features of the plan's three tools
+// (Website: webchat, webvoice, site · KnowBot number: sms, phone, whatsapp · Email: email). Not material: the answers and
+// the bot version never change with them, and neither does the price (one plan, every feature included).
 export const SURFACE_IDS = ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice', 'site'];
-const SURFACE_LABEL = { webchat: 'Website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', phone: 'Phone', webvoice: 'Web voice assistant', site: 'Homepage search' };
+const SURFACE_LABEL = { webchat: 'Website chat', sms: 'SMS', whatsapp: 'WhatsApp', email: 'Email', phone: 'Phone calls', webvoice: 'Website voice', site: 'Homepage search' };
 // site: the Homepage search's owner edits (name, tagline, chips, published) are saved through POST /trials/:id/site
 const READ_ONLY_KEYS = new Set(['instructions', 'version', 'sampleSet', 'site']);
 const MATERIAL = ['tone', 'length', 'sources', 'floor', 'purpose', 'audience', 'name'];
@@ -3291,10 +3293,9 @@ export function createStudio(o = {}) {
     return 'purpose';
   }
   const C = (id, label, extra = {}) => ({ id, label, kind: 'default', ...extra });
-  /** owner rule: the price (one plan line per answer surface) shows only once the visitor has tested the bot. */
+  /** owner rule: the price (one plan, whatever features are on) shows only once the visitor has tested the bot. */
   const testedBot = (T) => !!(T.grounded > 0 || T.proofDone || T.flags?.launchShown || T.converted);
-  const surfaceCount = (T) => (Array.isArray(T.spec?.surfaces) && T.spec.surfaces.length ? T.spec.surfaces.length : 1);
-  const launchLabel = (T) => (testedBot(T) ? `Launch · $${(PRICE * surfaceCount(T)).toLocaleString('en-US')}/mo` : 'Launch');
+  const launchLabel = (T) => (testedBot(T) ? `Launch · $${PRICE.toLocaleString('en-US')}/mo` : 'Launch');
   function stepChips(T, files) {
     const step = stepOf(T, files);
     const ready = files.filter((f) => f.stage === 'ready');
@@ -3453,7 +3454,7 @@ export function createStudio(o = {}) {
       chips: ready.length ? [C('ask-starter', 'Ask a question', { kind: 'primary', action: { type: 'ask_samplebot', question: ready.length ? (T.questionsCache?.value?.starters?.[0]?.q || null) : null } }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] : [C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
     if (has('explain_types')) return { reply: 'PDF, Word (DOCX), PowerPoint (PPTX), Excel (XLSX), HTML, Markdown, plain text and CSV, images (PNG, JPG, WEBP, GIF) and audio (MP3, WAV, M4A, OGG). Up to 95 MB per file and 100 MB in total.',
       chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
-    if (has('explain_plan')) return { reply: `An answer surface is a place where your bot answers people. For example:\n• a chat box on your website\n• text messages (SMS)\n• WhatsApp\n• email\n• phone calls\n• a button on your website that people talk to\n\nEvery surface uses the same files, so your bot gives the same answers everywhere, and it always shows where it found them.\n\nEach surface costs $${PRICE} a month, or $2,499 for a whole year. You can store up to 100 MB of files. The first 30 days are free, but you need a credit card to start. You can cancel anytime, and you won't have to upload your files again.${surfaceCount(T) > 1 ? `\n\n${name} is set to answer on ${surfacesWords(T.spec.surfaces)}, so that's ${surfaceCount(T)} surfaces. You can remove any of them at checkout.` : ''}\n\nNeed more than 100 MB? Email sales@recoursellm.com.`,
+    if (has('explain_plan')) return { reply: `One plan, $${PRICE} a month or $${PRICE_YEAR.toLocaleString('en-US')} for a whole year, includes three tools you switch features on and off in:\n• Website: one line on your site for the chat bubble, voice and homepage search\n• KnowBot number: one phone number for texts, calls and WhatsApp\n• Email: one inbox address that answers with citations\n\nEvery feature is included, so switching one on or off never changes the price. They all use the same files, so your bot gives the same answers everywhere, and it always shows where it found them. The number's own usage is billed separately.\n\nYou can store up to 100 MB of files. The first 30 days are free, but you need a credit card to start. You can cancel anytime, and you won't have to upload your files again.\n\nNeed more than 100 MB? Email sales@recoursellm.com.`,
       chips: [C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
     if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
     if (has('import_store')) {
@@ -3615,10 +3616,10 @@ export function createStudio(o = {}) {
     // CONTRACT-GAP: studio/app.js dispatchAction (owner B) has no 'open_golive' action, so the Builder can't open the
     // Go live sheet by itself yet; these chips carry {emit:{type:'golive:open'}} (handled by onChip) and the reply asks
     // for one tap. When B adds `case 'open_golive': openGoLive(a.tab, a.channel)`, return actions:[{type:'open_golive', tab}].
-    if (site) return { reply: `On your own site, ${name} is one line of embed code: a chat bubble or a full page, with the same cited answers. The snippet is ready in Channels → Text chatbot, and you can try the widget before you launch.`,
-      chips: [golive('channels', 'Channels', 'primary'), golive('developers', 'Developers'), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
+    if (site) return { reply: `On your own site, ${name} is one line of embed code, the Website tool: the chat bubble, voice and homepage search, switched on and off in Set up, with the same cited answers. The line is ready in Set up → Website, and you can try the chat bubble before you launch.`,
+      chips: [golive('channels', 'Set up', 'primary'), golive('developers', 'Developers'), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
     return { reply: `${name} has a chat API for your own app: POST a question, get back the answer with its citations, or the exact refusal. It's OpenAI-compatible, so any OpenAI SDK works by changing the base URL. Your trial key and copy-paste snippets (curl, JavaScript, Python) are in Developers.`,
-      chips: [golive('developers', 'Developers', 'primary'), golive('channels', 'Channels'), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
+      chips: [golive('developers', 'Developers', 'primary'), golive('channels', 'Set up'), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
   }
   /** The same numbers the insights card shows, without the Builder's own probes. */
   function insightsData(T) {
@@ -4634,7 +4635,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (a === 'config' && !id) {
       allow('GET');
       return sendJson(res, 200, {
-        price: { amount: PRICE, yearAmount: PRICE_YEAR, perSurface: true, currency: 'USD', interval: 'month', answersIncluded: env.KNOWBOT_STUDIO_ANSWERS_INCLUDED || null, annualLine: env.KNOWBOT_STUDIO_ANNUAL_LINE || 'or $2,499/year · up to 100 MB · first 30 days free, card required', guaranteeLine: env.KNOWBOT_STUDIO_GUARANTEE_LINE || null, enterpriseEmail: env.KNOWBOT_ENTERPRISE_EMAIL || 'sales@recoursellm.com' },
+        price: { amount: PRICE, yearAmount: PRICE_YEAR, perSurface: false, plan: 'knowbot', currency: 'USD', interval: 'month', answersIncluded: env.KNOWBOT_STUDIO_ANSWERS_INCLUDED || null, annualLine: env.KNOWBOT_STUDIO_ANNUAL_LINE || 'or $5,490/year · up to 100 MB · first 30 days free, card required', guaranteeLine: env.KNOWBOT_STUDIO_GUARANTEE_LINE || null, enterpriseEmail: env.KNOWBOT_ENTERPRISE_EMAIL || 'sales@recoursellm.com' },
         quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES, ttlDays }, types: TYPES,
         builder: { engine: builderEngine(), provider: studioProvider && builderEngine() === 'llm' ? studioProvider : null },
         samples: sampleSets().map(({ names, ...s }) => s), sampleMode, anchors: ANCHORS, contact, floor: floorDefault,
@@ -4997,7 +4998,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const email = String(body.email ?? T.email ?? '').trim();
       if (email && (email.length > 254 || !EMAIL_RE.test(email))) fail(400, 'bad_request', "That email address doesn't look right.", { field: 'email' });
       if (email) T.email = email;
-      // answer surfaces: the visitor may have removed some on the checkout sheet; each one is its own plan line
+      // features (spec.surfaces): saved if sent, but they never change the price (one plan, every feature included)
       if (body.surfaces != null) {
         const r = validatePatch({ surfaces: body.surfaces }, T.spec, { floorMin: floorDefault });
         if (r.diff.length) { T.spec = r.next; saveSpecSoon(T); }
@@ -5009,10 +5010,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       u.searchParams.set('trial', T.id);
       u.searchParams.set('bot', botName(T));
       if (email) u.searchParams.set('email', email);
-      // price is the per-surface amount for the chosen interval; total = price x surfaces. The URL passes through the
-      // browser, so these are display hints signed with sig = HMAC(trial|surfaces|interval|price|total); KnowDrive must
-      // recompute the amount from surfaces x interval and never charge from total.
-      const total = each * surfaces.length;
+      // one plan line: price = total = the plan price for the chosen interval; surfaces lists the features switched on
+      // (information only). The URL passes through the browser, so these are display hints signed with
+      // sig = HMAC(trial|surfaces|interval|price|total); KnowDrive must recompute the amount from plan x interval and
+      // never charge from total.
+      const total = each;
+      u.searchParams.set('plan', 'knowbot');
       u.searchParams.set('price', String(each));
       u.searchParams.set('surfaces', surfaces.join(','));
       u.searchParams.set('interval', interval);

@@ -4,25 +4,37 @@
 
 Source: /studio/
 
-A launched KnowBot can answer on seven channels: a website chat widget, SMS, telephone (phone calls), WhatsApp, email, a voice chatbot in the browser, and homepage search. Every channel uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. The Channels gallery in KnowBot Studio shows each channel's webhook address and copyable setup.
+A launched KnowBot answers through three tools, and you switch their features on and off:
 
-## Website chat widget
+- Website: one line of embed code on your site, with the chat bubble, voice and the homepage search.
+- KnowBot number: one phone number, with texts (SMS), calls (live voice) and WhatsApp.
+- Email: one inbox address. Email comes in and a cited answer goes out.
+
+Every feature uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. Set up in KnowBot Studio shows the three tools, each with its feature switches, its setup and a way to try it.
+
+## Website: one embed line
 
 Source: /studio/
 
-The text chatbot goes on your website with one line of embed code. It can be a floating widget, an inline panel or a full-page chat. You can try the widget in KnowBot Studio before launch; on your own site it goes live after launch.
+The Website tool is one line of embed code, pasted once before the closing body tag. The line turns on the features switched on in Set up: the chat bubble, voice and the homepage search. You can also turn each one on or off in the line itself with data-chat, data-voice and data-homepage set to on or off.
+
+## Website chat bubble
+
+Source: /studio/
+
+The chat bubble is the text chatbot on your website. It can be a floating bubble, an inline panel or a full-page chat. You can try it in KnowBot Studio before launch; on your own site it goes live after launch.
 
 ## SMS
 
 Source: /studio/
 
-The SMS channel works with a KnowBot number. The number's messaging webhook points at the bot's SMS webhook address. Replies are at most 320 characters, with citation numbers and a short link to the full proof of the answer.
+Texts (SMS) are a feature of the KnowBot number. The number's messaging webhook points at the bot's SMS webhook address. Replies are at most 320 characters, with citation numbers and a short link to the full proof of the answer.
 
 ## Telephone
 
 Source: /studio/
 
-The telephone (Phone) channel works with a KnowBot number and works for any KnowBot, a trial bot in KnowBot Studio or a launched bot. Callers ask out loud and hear the answer from the bot's own files only. To keep calls short, the bot gives just the answer without reading out where it came from; it names the source if the caller asks. When email or text sending is set up, the greeting says the sources can be sent at the end, and before the call ends the bot offers, in its own words, to send the transcript of the conversation and the sources for everything it shared, by email or text. When the answer is not in the files, the caller hears the same refusal sentence as on every other channel. It needs a KnowBot number, with the number's voice webhook pointed at the bot's telephone webhook address.
+Calls are a feature of the KnowBot number, and they work for any KnowBot, a trial bot in KnowBot Studio or a launched bot. Callers ask out loud and hear the answer from the bot's own files only. To keep calls short, the bot gives just the answer without reading out where it came from; it names the source if the caller asks. When email or text sending is set up, the greeting says the sources can be sent at the end, and before the call ends the bot offers, in its own words, to send the transcript of the conversation and the sources for everything it shared, by email or text. When the answer is not in the files, the caller hears the same refusal sentence as on every other channel. It needs a KnowBot number, with the number's voice webhook pointed at the bot's telephone webhook address.
 
 ## Telephone voice engine
 
@@ -46,25 +58,25 @@ On every channel, a visitor can ask the bot to send them the information, for ex
 
 Source: /studio/
 
-The WhatsApp channel works with the Meta WhatsApp Business Cloud API. The Meta route needs a verify token, an app secret, an access token and a phone number ID from Meta. Replies carry citation numbers, numbered source footnotes and the proof link.
+WhatsApp is a feature of the KnowBot number. It needs a WhatsApp Business account for the number; Set up shows the callback address and the values to connect it. Replies carry citation numbers, numbered source footnotes and the proof link.
 
 ## Email
 
 Source: /studio/
 
-The email channel answers messages received through an inbound-parse webhook from SendGrid, Postmark or Mailgun. Replies include footnoted citations, the quoted lines and a list of sources. Auto-replies are ignored so no mail loops start.
+The Email tool is one inbox address. You forward the address customers write to, for example support@, to your bot's inbox address, and every email gets a reply with footnoted citations, the quoted lines and a list of sources. Auto-replies are ignored so no mail loops start.
 
-## Voice chatbot in the browser
+## Website voice
 
 Source: /studio/
 
-The voice chatbot lets a visitor talk to the bot in their browser and hear the answer. In KnowBot Studio, "Try it" works with no account. It uses the same live voice as phone calls: the visitor talks naturally, and the bot answers out loud from the bot's files while the sources show on screen as links.
+Voice, a feature of the Website tool, lets a visitor talk to the bot in their browser and hear the answer. In KnowBot Studio, "Try it" works with no account. It uses the same live voice as phone calls: the visitor talks naturally, and the bot answers out loud from the bot's files while the sources show on screen as links.
 
 ## Homepage search
 
 Source: /studio/
 
-The homepage search is a simple search box that sits on top of your homepage as an overlay. It hovers over your homepage instead of replacing it: your site shows faintly behind it. It is built from the bot's own files and is kept very simple: a waving hand, the business name, one big search box with an "Ask" button, and one quiet line that says answers come only from your own pages. Visitors ask a question and get the same cited answers as the website chat, with a Sources list that links each answer to the page it came from on your website, or to the proof page for an uploaded file. When the answer is not in the files, it says the same refusal sentence as every other channel. Visitors close it with the × button in the top right corner and see your homepage as usual; a small "Ask" button stays in the bottom right corner to open it again. In KnowBot Studio (Channels, Homepage search, or the bot spec) you can change the business name and the line under the search box, upload a logo that shows under the waving hand in place of the name (suggested size 600 × 200 pixels, a PNG or SVG with a transparent background; larger images are fitted to that size), choose whether it shows until the visitor closes it (after that only the small "Ask" button shows) or on every visit, turn topic buttons under the search box on or off (they are off by default), and publish it.
+The homepage search is a simple search box that sits on top of your homepage as an overlay. It hovers over your homepage instead of replacing it: your site shows faintly behind it. It is built from the bot's own files and is kept very simple: a waving hand, the business name, one big search box with an "Ask" button, and one quiet line that says answers come only from your own pages. Visitors ask a question and get the same cited answers as the website chat, with a Sources list that links each answer to the page it came from on your website, or to the proof page for an uploaded file. When the answer is not in the files, it says the same refusal sentence as every other channel. Visitors close it with the × button in the top right corner and see your homepage as usual; a small "Ask" button stays in the bottom right corner to open it again. In KnowBot Studio (Set up, Website, Homepage search, or the bot spec) you can change the business name and the line under the search box, upload a logo that shows under the waving hand in place of the name (suggested size 600 × 200 pixels, a PNG or SVG with a transparent background; larger images are fitted to that size), choose whether it shows until the visitor closes it (after that only the small "Ask" button shows) or on every visit, turn topic buttons under the search box on or off (they are off by default), and publish it.
 
 ## Adding the homepage search to your homepage
 
@@ -76,4 +88,4 @@ To add it to your homepage, paste one line of code into your homepage, just befo
 
 Source: /studio/
 
-A channel that is missing its provider settings answers with a clear "channel not configured" message instead of failing silently. Provider messages are checked with a signature when the secret is set. TODO(owner): describe how a customer supplies their own WhatsApp or email credentials after launch.
+A channel that is missing its provider settings answers with a clear "channel not configured" message instead of failing silently. Provider messages are checked with a signature when the secret is set. 

@@ -13,13 +13,18 @@
 // Nothing here calls Twilio, Meta, Google or OpenAI directly. Only the KnowBot server is called.
 //
 // Two ways in: openGoLive(ctx, {...}) opens it as a sheet (launch, palette); openGoLive(ctx, {inline: el, surfaces})
-// renders the same Set up view inside the bot pane (no scrim, no focus trap), with the bot's chosen answer surfaces
-// listed first. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
+// renders the same Set up view inside the bot pane (no scrim, no focus trap).
+//
+// The Channels tab is the plan's three tools (studio/surfaces.js TOOLS): Website (one embed line: chat bubble, voice,
+// homepage search), KnowBot number (one phone number: texts, calls, WhatsApp) and Email (one inbox address). Each tool
+// card has a switch per feature (spec.surfaces through spec:request, never a price change) and opens that feature's
+// setup and Try it below; the Website tool also shows its one embed line, which follows the switches. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
 // engine and phone prompt as a real call.
 
 import { mountWidget } from './kdw.js?v=abbc025';
 import { mountNumbers, numberCache } from './numbers.js?v=abbc025';
 import { siteSettings } from './sitebrand.js?v=abbc025';
+import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel } from './surfaces.js?v=abbc025';
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -229,10 +234,15 @@ const devCache = { info: null, at: 0, promise: null };
  */
 // answer surface id (studio/surfaces.js) → channel card id
 const SURFACE_CH = { webchat: 'text', sms: 'sms', whatsapp: 'whatsapp', email: 'email', phone: 'phone', webvoice: 'voice', site: 'site' };
+const CH_SURFACE = Object.fromEntries(Object.entries(SURFACE_CH).map(([k, v]) => [v, k]));
+/** The tool a channel card belongs to ('website' | 'number' | 'email'). */
+const toolOfCh = (ch) => (TOOLS.find((t) => t.features.includes(CH_SURFACE[ch])) || TOOLS[0]);
+const TOOL_GLYPH = { website: 'text', number: 'phone', email: 'email' };
+const TOOL_HUE = { website: 0, number: 3, email: 2 };
 export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = null, helpers = {}, inline = null, surfaces = null } = {}) {
   if (current && !inline) { current.select(tab, channel); return current.close; }
   const { store, api, motion, icons, slots, announce } = ctx;
-  const { getState, setState, emit } = store;
+  const { getState, setState, emit, on } = store;
   const icon = (n, s = 16) => icons.icon(n, s);
   const modal = slots.modal || document.getElementById('co-modal-slot');
   const botName = helpers.botName || (() => getState().spec.name || 'Your bot');
@@ -286,7 +296,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     h('div', { class: 'gl-head-main' },
       h('p', { class: 'gl-eyebrow' }, h('span', { html: icon('rocket', 13) }), inline ? 'Set up' : 'Go live'),
       h('h2', { class: 'gl-title', id: titleId }, inline ? `Set up ${botName()}` : `Put ${botName()} everywhere`),
-      h('p', { class: 'gl-sub' }, inline ? 'Pick a place for your bot to answer. Each one has its setup steps and a way to try it right here. ' : 'Same files, same citations, same canonical refusal on every channel. ', idPill)),
+      h('p', { class: 'gl-sub' }, inline ? 'Three tools, all in your plan. Switch features on and off, set each one up, and try it right here. ' : 'Three tools, all in your plan: same files, same citations, same refusal everywhere. ', idPill)),
     xBtn);
   // the scroller: the tab strip (sticky at its top) and the panels render into it
   const body = h('div', { class: 'gl-body' });
@@ -324,7 +334,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     cleanups.push(() => document.removeEventListener('keydown', onKey, true));
   }
 
-  const cur = { tab: null, channel: channel || 'sms' };
+  const cur = { tab: null, channel: channel || 'text' };
   const built = { channels: false, developers: false };
 
   function select(id, ch = null) {
@@ -407,13 +417,13 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const embed = `<script type="module" src="${siteBase}lib/embed.js" data-instance="${id}" data-api="${apiBase}"></script>`;
     return mineFirst(phoneByEngine([
       // Owner rule: customer-facing copy never names the phone vendor; it is "your KnowBot number" / "your phone number provider".
-      { id: 'sms', name: 'SMS', blurb: 'Customers text a number, your bot texts back with [1] citations and a proof link.', provider: 'KnowBot Messaging', hue: 1, url: ch('sms'), status: 'Needs a KnowBot number', tryLabel: 'Preview an SMS reply',
+      { id: 'sms', name: 'Texts', blurb: 'Customers text your KnowBot number, your bot texts back with [1] citations and a proof link.', provider: 'KnowBot Messaging', hue: 1, url: ch('sms'), status: 'Needs a KnowBot number', tryLabel: 'Preview an SMS reply',
         needs: ['A KnowBot number that can send and receive texts (or a number from your own phone provider)'],
         steps: ['In your phone number settings, open your number’s messaging setup.', 'Set incoming messages to Webhook, HTTP POST, and paste the URL below.', 'Every request is signature-checked, so only your number can reach your bot.'],
         configs: [
           { label: 'Number settings', lang: 'text', code: `Your number → Messaging\n  A message comes in:  Webhook\n  URL:                 ${ch('sms')}\n  HTTP:                POST` },
         ] },
-      { id: 'phone', name: 'Telephone', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Your KnowBot number · live voice', hue: 3, url: ch('voice'), status: 'Needs a KnowBot number', tryLabel: 'Call simulator',
+      { id: 'phone', name: 'Calls', blurb: 'Callers talk naturally. It answers by voice and names the source: “According to your returns policy…”.', provider: 'Your KnowBot number · live voice', hue: 3, url: ch('voice'), status: 'Needs a KnowBot number', tryLabel: 'Call simulator',
         needs: ['A KnowBot number that can take calls (KnowBot runs the voice for you)'],
         steps: ['In your phone number settings, set incoming calls to Webhook, HTTP POST, with the URL below.',
           'KnowBot picks up and talks with the caller in real time, looking up every answer in your files and naming the source.',
@@ -422,26 +432,23 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Number settings', lang: 'text', code: `Your number → Voice\n  A call comes in:  Webhook\n  URL:              ${ch('voice')}\n  HTTP:             POST` },
         ] },
       { id: 'whatsapp', name: 'WhatsApp', blurb: 'Answers in WhatsApp with numbered footnotes.', provider: 'WhatsApp Business', hue: 4, url: ch('whatsapp'), status: 'Needs WhatsApp Business', tryLabel: 'Preview a WhatsApp reply',
-        needs: ['A Meta app with WhatsApp Business', 'The app secret (verifies X-Hub-Signature-256) and an access token to reply'],
-        steps: ['In Meta for Developers → your app → WhatsApp → Configuration, paste the callback URL below.', 'Use the verify token below for the handshake and subscribe to the messages field.', 'Add the four values to your KnowBot environment.'],
+        needs: ['A WhatsApp Business account for your number', 'Its app secret (verifies every message) and an access token to reply'],
+        steps: ['In your WhatsApp Business app settings → WhatsApp → Configuration, paste the callback URL below.', 'Use the verify token below for the handshake and subscribe to the messages field.', 'Add the four values to your KnowBot environment.'],
         configs: [
-          { label: 'Meta webhook', lang: 'text', code: `WhatsApp → Configuration → Webhook\n  Callback URL:    ${ch('whatsapp')}\n  Verify token:    ${verifyToken}\n  Webhook fields:  messages ✓` },
+          { label: 'WhatsApp webhook', lang: 'text', code: `WhatsApp → Configuration → Webhook\n  Callback URL:    ${ch('whatsapp')}\n  Verify token:    ${verifyToken}\n  Webhook fields:  messages ✓` },
           { label: 'Environment', lang: 'sh', code: `WHATSAPP_VERIFY_TOKEN=${verifyToken}\nWHATSAPP_APP_SECRET=your_meta_app_secret        # verifies X-Hub-Signature-256\nWHATSAPP_ACCESS_TOKEN=your_meta_access_token     # sends the reply\nWHATSAPP_PHONE_NUMBER_ID=your_phone_number_id` },
         ] },
-      // The inbound webhook is authenticated (server/channels/email.mjs): SendGrid/Postmark carry EMAIL_WEBHOOK_SECRET as
-      // ?key=… on the URL; Mailgun is verified with its signing key instead. Without either the server answers 403.
-      { id: 'email', name: 'Email', blurb: 'Forward support@ to your bot. It replies with footnoted citations and a source list.', provider: 'SendGrid · Postmark · Mailgun', hue: 2, url: `${ch('email')}?key=YOUR_EMAIL_WEBHOOK_SECRET`, status: 'Needs inbound email', tryLabel: 'Preview an email reply',
-        needs: ['An inbound-parse service: SendGrid, Postmark or Mailgun', 'An address customers write to, for example support@yourdomain.com', 'EMAIL_WEBHOOK_SECRET on your KnowBot server: SendGrid and Postmark send it as ?key= on the URL (Mailgun uses MAILGUN_SIGNING_KEY instead)'],
-        steps: ['Pick a long random secret and set EMAIL_WEBHOOK_SECRET on your KnowBot server (Mailgun: set MAILGUN_SIGNING_KEY).', 'Point your provider\'s inbound webhook at the URL below, with your secret in place of YOUR_EMAIL_WEBHOOK_SECRET.', 'Route the address you want answered (for example support@) to it. Replies quote the source lines.'],
+      // The inbound webhook is authenticated (server/channels/email.mjs: ?key=… or the mail service's signature). Owner rule:
+      // customer copy never names the mail service; it is "your bot's inbox address" and "your mail service".
+      { id: 'email', name: 'Email', blurb: 'Email comes in, a cited answer goes out: footnoted citations, the quoted lines and a source list.', provider: 'One inbox address', hue: 2, url: `${ch('email')}?key=YOUR_INBOX_KEY`, status: 'Inbox address at launch', tryLabel: 'Preview an email reply',
+        needs: ['An address customers already write to, for example support@yourdomain.com', 'A way to forward that address (your mail service or your domain\'s mail settings)'],
+        steps: ['Your bot gets its own inbox address when it launches.', 'Forward support@ (or any address) to that inbox. Every email gets a reply that quotes its sources.', 'Already have a mail service with inbound webhooks? Point it at the URL above instead; replies are the same.'],
         configs: [
-          { label: 'SendGrid', lang: 'text', code: `Settings → Inbound Parse → Add Host & URL\n  Receiving domain:  support.yourdomain.com\n  Destination URL:   ${ch('email')}?key=YOUR_EMAIL_WEBHOOK_SECRET\n  POST the raw, full MIME message:  off` },
-          { label: 'Postmark', lang: 'text', code: `Servers → (your server) → Default Inbound Stream → Settings\n  Webhook:  ${ch('email')}?key=YOUR_EMAIL_WEBHOOK_SECRET\n  Include raw email content in JSON payload:  off` },
-          { label: 'Mailgun', lang: 'sh', code: `# Verified with your Mailgun webhook signing key (MAILGUN_SIGNING_KEY): no secret in this URL\ncurl -s --user 'api:YOUR_MAILGUN_API_KEY' https://api.mailgun.net/v3/routes \\\n  -F priority=0 \\\n  -F expression='match_recipient("support@yourdomain.com")' \\\n  -F action='forward("${ch('email')}")' \\\n  -F action='stop()'` },
-          { label: 'Environment', lang: 'sh', code: 'EMAIL_WEBHOOK_SECRET=a_long_random_secret      # SendGrid / Postmark: ?key= on the webhook URL\nMAILGUN_SIGNING_KEY=your_mailgun_signing_key  # Mailgun: verifies the request signature\n# to send the reply, one of:\nSENDGRID_API_KEY=your_sendgrid_api_key\nPOSTMARK_SERVER_TOKEN=your_postmark_server_token\nEMAIL_FROM=support@yourdomain.com' },
+          { label: 'Inbound webhook', lang: 'text', code: `Your mail service → Inbound → Webhook\n  URL:     ${ch('email')}?key=YOUR_INBOX_KEY\n  Method:  POST\n  Raw MIME message:  off` },
         ] },
-      { id: 'text', name: 'Text chatbot', blurb: 'A floating widget or a full-page chat on your site. Paste one line; it goes live after launch. Try it here now.', provider: 'Embed snippet', hue: 0, url: null, status: 'Try it now', tryLabel: 'Try the widget',
+      { id: 'text', name: 'Chat bubble', blurb: 'A floating chat bubble, an inline panel or a full-page chat on your site. It comes with your one website line; it goes live after launch. Try it here now.', provider: 'On your website', hue: 0, url: null, status: 'Try it now', tryLabel: 'Try the chat bubble',
         needs: ['Access to your site\'s HTML (or your CMS\'s custom code box)'],
-        steps: ['Paste the snippet before </body> on any page.', 'Want it inline? Add data-mode="inline" and data-target="#help".', 'The widget answers with [n] citations and the canonical refusal, like here.'],
+        steps: ['Switch Chat bubble on above and paste your one website line before </body>.', 'Want it inline instead? Use the Inline panel line below (data-mode="inline" and data-target="#help").', 'It answers with [n] citations and the canonical refusal, like here.'],
         configs: [
           { label: 'Widget', lang: 'html', code: embed },
           { label: 'Inline panel', lang: 'html', code: `<div id="help"></div>\n${embed.replace('<script ', '<script data-mode="inline" data-target="#help" ')}` },
@@ -449,9 +456,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         ] },
       // Web voice assistant (lib/voice-widget.js over GET /v1/bots/:id/voice/live, server/channels/webvoice.mjs): the same
       // live voice engine as the phone. Customer-facing copy never names the voice provider (owner rule).
-      { id: 'voice', name: 'Web voice assistant', blurb: 'Visitors talk to your bot from a mic button on your site and hear the answer, with its sources on screen as it speaks.', provider: 'Live voice · on your website', hue: 5, url: webVoiceUrl(), status: 'Try it now', tryLabel: 'Talk to your bot',
+      { id: 'voice', name: 'Voice', blurb: 'Visitors talk to your bot from a mic button on your site and hear the answer, with its sources on screen as it speaks.', provider: 'Live voice · on your website', hue: 5, url: webVoiceUrl(), status: 'Try it now', tryLabel: 'Talk to your bot',
         needs: ['Nothing: paste one line on your site (KnowBot runs the voice for you)'],
-        steps: ['Paste the embed below on your site: a round button in your orb colour that opens voice mode (the orb moves with the visitor\'s voice).', 'It talks with the visitor in real time, the same live voice as your phone line, and speaks just the answer from your sources; the sources show as links while it speaks.', 'Pick the orb colour below. It applies to voice mode everywhere: this assistant, web chat and homepage search.'],
+        steps: ['Switch Voice on above: your one website line adds it (a mic in the chat bubble, or a round button in your orb colour when the chat bubble is off). The orb moves with the visitor\'s voice.', 'It talks with the visitor in real time, the same live voice as your phone line, and speaks just the answer from your sources; the sources show as links while it speaks.', 'Pick the orb colour below. It applies to voice mode everywhere: this assistant, web chat and homepage search.'],
         configs: [
           // a trial bot needs its trial key in the embed (masked on screen, real on Copy); a launched bot's voice socket is public
           { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-target="#id" to place it inline; data-position="left"; data-orb="silver" to override the colour -->` },
@@ -462,7 +469,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         needs: ['Nothing to connect: it is built from your files', 'Access to your homepage\'s HTML, or your website builder\'s custom code box'],
         steps: ['Check the preview on the right: the search box over your homepage. Press × to see your homepage underneath.',
           'Pick when it shows (first visit or every visit), then press Publish.',
-          'Copy the one line under “Add to your homepage” and paste it into your homepage, just before </body>. Save your site.',
+          'Switch Homepage search on above: your one website line adds it. Or copy the homepage-only line under “Add to your homepage” and paste it just before </body>. Save your site.',
           'While your bot is a trial, search engines are asked not to list the hosted link.'],
         configs: [
           { label: 'Homepage line', lang: 'html', code: overlayLine() },
@@ -489,28 +496,85 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
 
   let chGrid = null, chDetail = null;
+  const liveSurfaces = () => normalizeSurfaces(getState().spec?.surfaces);
+  /** A feature switch: spec.surfaces through the spec patch path (optimistic, quiet). Never changes the price. */
+  function flipFeature(surface, onNow, input) {
+    const next = setFeature(liveSurfaces(), surface, onNow);
+    if (!next) {
+      if (input) input.checked = true;
+      announce('Your bot needs at least one feature switched on.', 'assertive');
+      paintSwitches();
+      return;
+    }
+    setState({ spec: { ...getState().spec, surfaces: next } }, 'spec:plan');
+    emit('spec:request', { patch: { surfaces: next }, by: 'user', quiet: true });
+    paintSwitches();
+    if (cur.tab === 'channels' && toolOfCh(cur.channel).id === 'website') paintWebsiteLine();
+    announce(`${featureLabel(surface)} ${onNow ? 'on' : 'off'}. Your plan price stays the same.`, 'polite');
+  }
   function buildChannels(panel) {
     panel.innerHTML = '';
     const intro = h('div', { class: 'gl-intro' },
-      inline
-        ? h('p', null, h('b', null, 'Your bot can answer in 7 places.'), ' Pick one to see how to set it up, and try it right here. Every place uses the same files and shows its sources.')
-        : h('p', null, h('b', null, '7 channel templates.'), ' Webhook URLs are prefilled with your bot id. Connect the accounts when you\'re ready; every channel logs to your question insights.'));
-    chGrid = h('div', { class: 'gl-chgrid', role: 'list', 'aria-label': 'Channels' });
+      h('p', null, h('b', null, 'Three tools, one plan.'), ' Every feature is included: switching one on or off never changes your price. Pick a feature to set it up and try it right here. Everything answers from the same files and shows its sources.'));
+    chGrid = h('div', { class: 'gl-toolgrid', role: 'list', 'aria-label': 'Tools' });
     chDetail = h('section', { class: 'card gl-chdetail', id: 'gl-chdetail', 'aria-live': 'polite' });
-    const list = CH();
-    list.forEach((c, i) => {
-      const card = h('button', { type: 'button', class: 'card gl-chcard', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: c.id }, style: { '--gl-hue': `var(--f${c.hue})`, '--i': i } },
-        h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: GLYPH[c.id] }),
-        h('span', { class: 'gl-chcard-text' }, h('b', null, c.name, c.mine ? h('span', { class: 'chip violet is-label no-dot gl-mine' }, 'Yours') : null), h('small', null, c.provider)),
-        h('span', { class: 'chip gray is-label gl-chcard-status' }, c.status));
-      card.addEventListener('click', () => selectChannel(c.id, { user: true }));
-      chGrid.append(h('div', { role: 'listitem', class: 'gl-chitem' }, card));
+    const chans = CH();
+    TOOLS.forEach((t, i) => {
+      const feats = h('ul', { class: 'gl-feats', 'aria-label': `${t.label} features` });
+      for (const sid of t.features) {
+        const chId = SURFACE_CH[sid];
+        const c = chans.find((x) => x.id === chId) || { name: featureLabel(sid) };
+        const swId = `gl-sw-${sid}-${rid(4)}`;
+        const input = h('input', { type: 'checkbox', role: 'switch', class: 'gl-switch-in', id: swId, dataset: { surface: sid } });
+        input.addEventListener('change', () => flipFeature(sid, input.checked, input));
+        feats.append(h('li', { class: 'gl-feat', dataset: { ch: chId, surface: sid } },
+          h('label', { class: 'gl-switch', for: swId }, input, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), h('span', { class: 'gl-feat-name' }, featureLabel(sid))),
+          h('button', { type: 'button', class: 'gl-feat-open', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: chId }, onclick: () => selectChannel(chId, { user: true }) },
+            h('span', { class: 'gl-feat-status' }, c.status || ''), h('span', { class: 'gl-feat-go' }, 'Set up', h('span', { class: 'gl-sr' }, ` ${featureLabel(sid)}`)))));
+      }
+      const card = h('article', { class: 'card gl-tool', dataset: { tool: t.id }, style: { '--gl-hue': `var(--f${TOOL_HUE[t.id]})`, '--i': i }, 'aria-labelledby': `gl-tool-${t.id}-t` },
+        h('div', { class: 'gl-tool-head' },
+          h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: GLYPH[TOOL_GLYPH[t.id]] }),
+          h('span', { class: 'gl-tool-text' }, h('b', { id: `gl-tool-${t.id}-t` }, t.label), h('small', null, t.sub)),
+          h('span', { class: 'chip gray is-label gl-tool-count' })),
+        h('p', { class: 'gl-tool-blurb' }, t.blurb),
+        feats);
+      chGrid.append(h('div', { role: 'listitem', class: 'gl-toolitem' }, card));
     });
-    panel.append(intro, chGrid, chDetail);
-    motion.stagger($$('.gl-chcard', chGrid), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring', fill: 'backwards' }, 45);
+    panel.append(intro, chGrid, h('p', { class: 'gl-plan-note' }, 'All three tools and every feature are in your one plan. Your KnowBot number\'s own usage is billed separately.'), chDetail);
+    motion.stagger($$('.gl-tool', chGrid), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring', fill: 'backwards' }, 60);
+    paintSwitches();
     paintCardStatus();
     selectChannel(cur.channel, { first: true });
+    const off = on('spec:changed', (d) => { if (d?.patch && 'surfaces' in d.patch && !closing) { paintSwitches(); if (toolOfCh(cur.channel).id === 'website') paintWebsiteLine(); } });
+    cleanups.push(off);
     loadDev().then(() => { if (!closing && cur.tab === 'channels') { idPill.querySelector('code').textContent = botId(); paintCardStatus({ animate: true }); renderDetail(cur.channel, { quiet: true }); } });
+  }
+  /** Every switch shows the saved (or optimistic) spec.surfaces; the last feature on can't be switched off. */
+  function paintSwitches() {
+    if (!chGrid) return;
+    const tools = toolSwitches(liveSurfaces());
+    const onCount = tools.reduce((n, t) => n + t.features.filter((f) => f.on).length, 0);
+    for (const t of tools) {
+      const card = $(`.gl-tool[data-tool="${t.id}"]`, chGrid);
+      if (!card) continue;
+      const n = t.features.filter((f) => f.on).length;
+      card.classList.toggle('is-active', n > 0);
+      const cnt = $('.gl-tool-count', card);
+      if (cnt) {
+        cnt.textContent = t.features.length === 1 ? (n ? 'On' : 'Off') : `${n} of ${t.features.length} on`;
+        cnt.className = `chip ${n ? 'green' : 'gray'} is-label gl-tool-count`;
+      }
+      for (const f of t.features) {
+        const row = $(`.gl-feat[data-surface="${f.id}"]`, card);
+        const input = row && $('input', row);
+        if (!input) continue;
+        input.checked = f.on;
+        row.classList.toggle('is-on', f.on);
+        input.disabled = f.on && onCount === 1;
+        input.title = input.disabled ? 'Your bot needs at least one feature switched on' : '';
+      }
+    }
   }
 
   // fixer r4 (D11): each card's status comes from the server (GET …/devkey → channels[ch]): configured with nothing
@@ -530,6 +594,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     if (!info) return { tone: /Try|Live/.test(c.status) ? 'go' : 'off', label: c.status, needs: null, known: false };
     // KnowBot's own voice settings are never the customer's to set, and the provider is never named on screen
     const needs = Array.isArray(info.needs) ? info.needs.filter((n) => n && !/GEMINI|GOOGLE/i.test(String(n))) : [];
+    if (c.id === 'email' && !(info.configured && !needs.length)) return { tone: 'off', label: c.status, needs: [], known: true, info };
     if (!info.configured && !needs.length) return { tone: 'off', label: 'Coming soon on this server', needs, known: true, info };
     if (info.configured && !needs.length) return { tone: 'go', label: TESTABLE[c.id] ? 'Ready · send a test' : 'Ready · try it now', needs, known: true, info };
     if (info.configured) return { tone: 'warn', label: `Receives · needs ${needs.length === 1 ? '1 setting' : `${needs.length} settings`}`, needs, known: true, info };
@@ -538,18 +603,14 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function paintCardStatus({ animate = false } = {}) {
     if (!chGrid) return;
     const list = CH();
-    for (const b of $$('.gl-chcard', chGrid)) {
-      const c = list.find((x) => x.id === b.dataset.ch);
-      const el = $('.gl-chcard-status', b);
+    for (const row of $$('.gl-feat', chGrid)) {
+      const c = list.find((x) => x.id === row.dataset.ch);
+      const el = $('.gl-feat-status', row);
       if (!c || !el) continue;
       const st = chStatus(c);
-      const prov = $('.gl-chcard-text small', b);
-      if (prov && prov.textContent !== c.provider) prov.textContent = c.provider; // the phone engine arrives with the dev key
       const was = el.textContent;
       el.textContent = st.label;
-      el.className = `chip ${st.tone === 'go' ? 'green' : st.tone === 'warn' ? 'amber' : 'gray'} is-label gl-chcard-status is-${st.tone}`;   // KnowDrive .chip
-      // fixer r5 (D9, WCAG 2.5.3): no aria-label; the accessible name is the visible name, provider and status.
-      b.removeAttribute('aria-label');
+      el.className = `gl-feat-status is-${st.tone}`;
       if (animate && was !== st.label && !motion.reduced()) motion.animate(el, [{ opacity: 0, transform: 'scale(.92)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'spring' });
     }
   }
@@ -558,11 +619,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     if (!chGrid) return;
     const prev = cur.channel;
     cur.channel = id;
-    for (const b of $$('.gl-chcard', chGrid)) {
-      const on = b.dataset.ch === id;
-      b.setAttribute('aria-pressed', String(on));
-      b.classList.toggle('is-on', on);
-    }
+    const tool = toolOfCh(id).id;
+    for (const b of $$('.gl-feat-open', chGrid)) b.setAttribute('aria-pressed', String(b.dataset.ch === id));
+    for (const t of $$('.gl-tool', chGrid)) t.classList.toggle('is-sel', t.dataset.tool === tool);
     if (prev !== id || first || !chDetail.firstChild) renderDetail(id, { animate: !first });
     if (user) revealDetail();
   }
@@ -600,6 +659,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     if (!keep) for (const v of voices.splice(0)) v.stop();
     chDetail.innerHTML = '';
     chDetail.style.setProperty('--gl-hue', `var(--f${c.hue})`);
+    chDetail.append(toolBar(c.id));
     const head = h('div', { class: 'gl-cd-head' },
       h('span', { class: 'gl-chcard-ico is-lg', html: GLYPH[c.id] }),
       h('div', null, h('h3', { class: 'gl-cd-title', tabindex: '-1' }, c.name), h('p', { class: 'gl-cd-blurb' }, c.blurb)));
@@ -615,6 +675,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           // SMS and Telephone run on a KnowBot number: never show the phone provider's setting names to a customer
           (c.id === 'sms' || c.id === 'phone') && st.tone !== 'go'
             ? h('span', { class: 'gl-cd-needs' }, 'Get your KnowBot number below and texts and calls go live on it.')
+            // the inbox runs on KnowBot's mail service: never its setting names either
+            : c.id === 'email' && st.tone !== 'go'
+            ? h('span', { class: 'gl-cd-needs' }, 'Your bot\'s inbox address is set up when it launches. Until then, preview a reply on the right.')
             : st.needs && st.needs.length
             ? h('span', { class: 'gl-cd-needs' }, st.tone === 'warn' ? 'To reply, set ' : 'Set ', st.needs.map((n, i) => [i ? (i === st.needs.length - 1 ? ' and ' : ', ') : '', h('code', { class: 'gl-mono' }, n)]), ' in your KnowBot environment.')
             : h('span', { class: 'gl-cd-needs' }, TESTABLE[c.id] ? 'Signatures are checked on every request. Send a signed test event below.' : 'Nothing to connect: it works today.'))));
@@ -630,8 +693,39 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const right = keep || h('div', { class: 'gl-try' });
     if (!keep) buildTry(c, right);
     chDetail.append(head, h('div', { class: 'gl-cd-grid' }, left, right));
+    if (toolOfCh(c.id).id === 'website') paintWebsiteLine();
     if (animate) motion.animate(chDetail, [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'out' });
     if (!quiet && animate) announce(`${c.name} selected.`, 'polite');
+  }
+
+  /** The selected tool above its feature's setup: the tool's name, a tab per feature, and the Website's one line. */
+  function toolBar(chId) {
+    const t = toolOfCh(chId);
+    const bar = h('div', { class: 'gl-toolbar' },
+      h('p', { class: 'gl-toolbar-k' }, h('span', { 'aria-hidden': 'true', html: GLYPH[TOOL_GLYPH[t.id]] }), h('b', null, t.label), h('span', null, ` · ${t.sub}`)));
+    if (t.features.length > 1) {
+      bar.append(h('div', { class: 'gl-ftabs', role: 'group', 'aria-label': `${t.label} features` }, t.features.map((sid) => h('button', {
+        type: 'button', class: 'gl-ftab', 'aria-pressed': String(SURFACE_CH[sid] === chId), dataset: { ch: SURFACE_CH[sid] },
+        onclick: () => selectChannel(SURFACE_CH[sid], { user: true }) }, featureLabel(sid)))));
+    }
+    if (t.id === 'website') bar.append(h('div', { class: 'gl-webline', id: 'gl-webline' }));
+    return bar;
+  }
+  /** Website: ONE embed line (lib/embed.js) that turns on the features switched on above. */
+  function websiteLine(mode) {
+    const on = new Set(liveSurfaces());
+    const yes = (x) => (on.has(x) ? 'on' : 'off');
+    const voiceKey = on.has('webvoice') && !getState().trial?.converted ? `\n        data-key="${keyFor(mode)}"` : '';
+    return `<script type="module" src="${siteBase}lib/embed.js" data-api="${apiBase}" data-bot="${botId()}"\n        data-chat="${yes('webchat')}" data-voice="${yes('webvoice')}" data-homepage="${yes('site')}"${voiceKey}></script>`;
+  }
+  function paintWebsiteLine() {
+    const box = chDetail && $('#gl-webline', chDetail);
+    if (!box) return;
+    box.innerHTML = '';
+    const on = liveSurfaces().filter((x) => ['webchat', 'webvoice', 'site'].includes(x)).map(featureLabel);
+    box.append(h('h4', { class: 'gl-h4' }, 'Your one website line'),
+      h('p', { class: 'gl-tw-hint' }, on.length ? `Paste it once, just before </body>. It turns on ${on.length === 1 ? on[0] : `${on.slice(0, -1).join(', ')} and ${on[on.length - 1]}`}; switch features above and the line follows.` : 'Switch a Website feature on above to use this line.'),
+      codeTabs([{ label: 'Website line', lang: 'html', secret: true, code: (mode) => websiteLine(mode) }], 'gl-webline-code'));
   }
 
   /** fixer r6 (D10): a horizontally scrollable <pre> shows an edge fade where more code is hidden (right, and left once
@@ -703,7 +797,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const label = h('span', null, 'Send test webhook');
     const btn = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small gl-tw-btn' }, h('span', { class: 'gl-tw-ico', html: icon('play', 13) }), label);
     const q = () => (exampleExchange()?.question || starterQs()[0] || validatedQ || '');
-    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming call (the reply connects it to live voice)' : ch === 'email' ? 'An inbound e-mail (Postmark shape)' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS', ch === 'voice' ? '.' : ', asking your first starter question.');
+    const hint = h('small', { class: 'gl-tw-hint' }, ch === 'voice' ? 'A signed incoming call (the reply connects it to live voice)' : ch === 'email' ? 'An inbound e-mail, as your mail service sends it' : ch === 'whatsapp' ? 'A signed incoming WhatsApp message' : 'A signed incoming SMS', ch === 'voice' ? '.' : ', asking your first starter question.');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       btn.disabled = true; btn.classList.add('is-busy'); label.textContent = 'Sending…';
@@ -1992,7 +2086,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
 
   // ------------------------------------------------------------ go
-  select(tab === 'developers' ? 'developers' : 'channels', channel || (mine.size ? CH()[0].id : null));
+  // no channel asked for: the first feature switched on, in tool order (Website first)
+  const firstOn = TOOLS.flatMap((t) => t.features).find((x) => normalizeSurfaces(getState().spec?.surfaces || surfaces).includes(x));
+  select(tab === 'developers' ? 'developers' : 'channels', channel || (firstOn ? SURFACE_CH[firstOn] : null));
   // the sheet opens with focus on the selected tab (the strip renders in a frame or two, once React has loaded)
   if (!inline) tabs.ready.then(() => { let n = 0; const go = () => { const t = body.querySelector('[role="tab"][aria-selected="true"]'); if (t) t.focus(); else if (++n < 30 && !closing) requestAnimationFrame(go); }; requestAnimationFrame(go); }).catch(() => {});
   if (inline) return { close: doClose, select };

@@ -1,5 +1,6 @@
-// Answer surfaces (spec.surfaces) and per-surface pricing: validation, the Builder's plain-words acknowledgment, the
-// landing hand-off markup, checkout totals and params, and the owner rule that no price shows before testing.
+// Answer surfaces (spec.surfaces) as the features of the plan's three tools (Website, KnowBot number, Email) and the one
+// plan price ($549/month or $5,490/year): validation, the tools mapping (no data loss), the Builder's plain-words
+// acknowledgment, the landing hand-off markup, checkout params, and the owner rule that no price shows before testing.
 // Fakes only (127.0.0.1): never touches knowDrive, Twilio or a real model.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { validatePatch, defaultSpec, parseIntent, surfacesIntentOf, SURFACE_IDS as SERVER_IDS } from '../trials.mjs';
 import { SURFACES as TOOL_IDS } from '../builder/tools.mjs';
-import { SURFACES, SURFACE_IDS, normalizeSurfaces, planTotals, surfacesText, money } from '../../studio/surfaces.js';
+import { SURFACES, SURFACE_IDS, TOOLS, normalizeSurfaces, planTotals, surfacesText, money, toolSwitches, setFeature, toolsText, featureLabel } from '../../studio/surfaces.js';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +25,7 @@ describe('answer surfaces: shared ids and plan math (studio/surfaces.js)', () =>
     assert.deepEqual(SURFACE_IDS, ['webchat', 'sms', 'whatsapp', 'email', 'phone', 'webvoice', 'site']);
     assert.deepEqual(SERVER_IDS, SURFACE_IDS, 'server/trials.mjs SURFACE_IDS matches studio/surfaces.js');
     assert.deepEqual(TOOL_IDS, SURFACE_IDS, 'server/builder/tools.mjs SURFACES matches studio/surfaces.js');
-    assert.deepEqual(SURFACES.map((s) => s.label), ['Website chat', 'SMS', 'WhatsApp', 'Email', 'Phone', 'Web voice assistant', 'Homepage search']);
+    assert.deepEqual(SURFACES.map((s) => s.label), ['Website chat', 'SMS', 'WhatsApp', 'Email', 'Phone calls', 'Website voice', 'Homepage search']);
   });
   test('normalize: known ids only, deduped, canonical order, website chat when empty', () => {
     assert.deepEqual(normalizeSurfaces(['sms', 'webchat', 'sms', 'nope', 'WhatsApp']), ['webchat', 'sms', 'whatsapp']);
@@ -33,17 +34,44 @@ describe('answer surfaces: shared ids and plan math (studio/surfaces.js)', () =>
     assert.deepEqual(normalizeSurfaces(['nope'], { fallback: false }), []);
     assert.equal(surfacesText(['whatsapp', 'webchat', 'sms']), 'Website chat, SMS and WhatsApp');
   });
-  test('totals: each surface $249/month or $2,499/year (3 surfaces = $747/month or $7,497/year)', () => {
+  test('one plan: $549/month or $5,490/year, whatever features are on', () => {
     const m = planTotals(['webchat', 'sms', 'whatsapp'], 'month');
-    assert.equal(m.count, 3); assert.equal(m.each, 249); assert.equal(m.total, 747); assert.equal(m.per, 'mo');
-    assert.deepEqual(m.lines.map((l) => [l.id, l.amount]), [['webchat', 249], ['sms', 249], ['whatsapp', 249]]);
+    assert.equal(m.count, 3); assert.equal(m.each, 549); assert.equal(m.total, 549); assert.equal(m.per, 'mo');
+    assert.equal(m.lines.length, 1, 'one plan line');
+    assert.deepEqual(m.lines.map((l) => [l.id, l.amount]), [['knowbot', 549]]);
     const y = planTotals(['webchat', 'sms', 'whatsapp'], 'year');
-    assert.equal(y.total, 7497); assert.equal(y.per, 'yr'); assert.equal(money(y.total), '$7,497');
-    assert.equal(planTotals(SURFACE_IDS, 'month').total, 1743);
-    assert.equal(planTotals(SURFACE_IDS, 'year').total, 17493);
-    assert.equal(planTotals([], 'month').total, 249, 'no surfaces = the default website chat line');
+    assert.equal(y.total, 5490); assert.equal(y.per, 'yr'); assert.equal(money(y.total), '$5,490');
+    assert.equal(planTotals(SURFACE_IDS, 'month').total, 549, 'every feature on: the same price');
+    assert.equal(planTotals(SURFACE_IDS, 'year').total, 5490);
+    assert.equal(planTotals([], 'month').total, 549);
     assert.equal(planTotals(['sms'], 'bogus').interval, 'month');
-    assert.equal(planTotals(['sms', 'email'], 'month', { month: 300 }).total, 600, 'the configured price wins');
+    assert.equal(planTotals(['sms', 'email'], 'month', { month: 600 }).total, 600, 'the configured price wins');
+  });
+});
+
+describe('the three tools (studio/surfaces.js TOOLS): stored surfaces map to switches with no data loss', () => {
+  test('Website, KnowBot number, Email; every surface id is a feature of exactly one tool', () => {
+    assert.deepEqual(TOOLS.map((t) => t.id), ['website', 'number', 'email']);
+    assert.deepEqual(TOOLS.map((t) => t.features), [['webchat', 'webvoice', 'site'], ['sms', 'phone', 'whatsapp'], ['email']]);
+    assert.deepEqual(TOOLS.flatMap((t) => t.features).sort(), [...SURFACE_IDS].sort());
+    assert.deepEqual(TOOLS.map((t) => t.features.map(featureLabel)), [['Chat bubble', 'Voice', 'Homepage search'], ['Texts', 'Calls', 'WhatsApp'], ['Inbox']]);
+  });
+  test('every stored list round-trips through the switches', () => {
+    for (const list of [['webchat'], ['sms', 'whatsapp'], ['email', 'site'], SURFACE_IDS, ['phone', 'webvoice']]) {
+      const sw = toolSwitches(list);
+      const back = sw.flatMap((t) => t.features.filter((f) => f.on).map((f) => f.id));
+      assert.deepEqual(normalizeSurfaces(back), normalizeSurfaces(list), JSON.stringify(list));
+    }
+    const sw = toolSwitches(['webchat', 'sms']);
+    assert.deepEqual(sw.map((t) => t.on), [true, true, false]);
+    assert.deepEqual(toolSwitches(undefined)[0].features.map((f) => f.on), [true, false, false], 'an old trial = the chat bubble');
+  });
+  test('switching a feature: on, off, and never the last one off', () => {
+    assert.deepEqual(setFeature(['webchat'], 'phone', true), ['webchat', 'phone']);
+    assert.deepEqual(setFeature(['webchat', 'phone'], 'webchat', false), ['phone']);
+    assert.equal(setFeature(['phone'], 'phone', false), null);
+    assert.deepEqual(setFeature(['webchat'], 'nope', true), ['webchat']);
+    assert.equal(toolsText(['webchat', 'site', 'sms', 'email']), 'Website (Chat bubble, Homepage search), KnowBot number (Texts) and Email');
   });
 });
 
@@ -100,7 +128,7 @@ describe('the Builder reads surface changes in plain words (parseIntent)', () =>
 describe('landing: "Where should it answer?" (studio/index.html, landing.js) never shows a price', () => {
   const html = read('studio/index.html');
   const land = html.slice(html.indexOf('<div id="kl-landing"'), html.indexOf('<!-- end landing -->') > 0 ? html.indexOf('<!-- end landing -->') : html.indexOf('id="st-app"'));
-  test('seven toggle buttons with visible names, website chat pressed by default', () => {
+  test('a toggle per feature with visible names, website chat pressed by default', () => {
     const btns = [...land.matchAll(/<button type="button" class="kl-ch"[^>]*data-surface="(\w+)" aria-pressed="(true|false)">[\s\S]*?<span class="kl-ch-t">([^<]+)<\/span>/g)];
     assert.deepEqual(btns.map((m) => m[1]), SURFACE_IDS);
     assert.deepEqual(btns.map((m) => m[3]), SURFACES.map((s) => s.label), 'the accessible name is the visible text');
@@ -111,28 +139,46 @@ describe('landing: "Where should it answer?" (studio/index.html, landing.js) nev
   test('no price on the landing (markup or script); the hand-off carries the surfaces', () => {
     assert.doesNotMatch(land.replace(/<svg[\s\S]*?<\/svg>/g, ''), /\$\s?\d|\/mo\b|per month|per year/i);
     const js = read('studio/landing.js');
-    assert.doesNotMatch(js.replace(/\/\*[\s\S]*?\*\//g, ''), /\$\s?\d|249|2,?499/);
+    assert.doesNotMatch(js.replace(/\/\*[\s\S]*?\*\//g, ''), /\$\s?\d|549|5,?490|249|2,?499/);
     assert.match(js, /action\.surfaces = selectedSurfaces\(\)/);
     assert.match(js, /aria-pressed/);
     const app = read('studio/app.js');
     assert.match(app, /if \(Array\.isArray\(a\.surfaces\)\) landingSurfaces\(a\.surfaces\)/, 'app.js landingAction saves the hand-off');
   });
-  test('studio price lines: multi-surface total everywhere, and no price on the palette before testing', () => {
+  test('studio price lines: the one plan price everywhere, and no price on the palette before testing', () => {
     const app = read('studio/app.js');
-    // priceText() sums one plan line per chosen surface: 3 surfaces + "how much" in Make it yours = $747/mo
     assert.match(app, /function priceText\(\) \{[\s\S]{0,200}planTotals\(getState\(\)\.spec\?\.surfaces, 'month'/);
-    assert.equal(`${money(planTotals(['webchat', 'sms', 'phone'], 'month', { month: 249 }).total)}/mo`, '$747/mo');
+    assert.equal(`${money(planTotals(['webchat', 'sms', 'phone'], 'month', { month: 549 }).total)}/mo`, '$549/mo', 'three features, one price');
     const pi = app.slice(app.indexOf('function priceIntent('), app.indexOf('if (isLive())', app.indexOf('function priceIntent(')));
-    assert.match(pi, /if \(miy\) \{[\s\S]*Going live is \*\*\$\{priceText\(\)\}\*\*/, 'the Make it yours price line uses the surface total');
-    assert.match(pi, /plan lines/, 'and says it is per answer surface');
-    assert.doesNotMatch(app, /Going live is \*\*\$\$\{amt\}\/mo\*\*;/, 'no single-surface price in the Make it yours branch');
+    assert.match(pi, /if \(miy\) \{[\s\S]*Going live is \*\*\$\{priceText\(\)\}\*\*/, 'the Make it yours price line uses the plan price');
+    assert.match(pi, /all three tools/);
+    assert.doesNotMatch(app, /per answer surface|plan lines|7 channels/, 'no per-surface copy left');
     assert.match(app, /\{ id: 'launch', label: launchChipLabel\(\), ico: 'rocket', run: \(\) => launchOpen\('palette'\) \}/, 'the palette hides the price until tested');
   });
-  test('the Builder knowledge base states the per-surface price truthfully (asked directly, cited)', () => {
+  test('the spec drawer shows "Answers on" as the three tools with their feature checkboxes', () => {
+    const app = read('studio/app.js');
+    const form = app.slice(app.indexOf('function buildSpecForm('), app.indexOf('function syncSpecForm(') > 0 ? app.indexOf('function syncSpecForm(') : undefined);
+    assert.match(form, /'Answers on'[\s\S]{0,200}TOOLS\.map\(\(t\) =>/);
+    assert.match(form, /t\.features\.map\(\(id\) =>[\s\S]{0,160}name: 'surface', value: id/);
+  });
+  test('Set up: three tool cards with feature switches; no vendor names in customer copy', () => {
+    const gl = read('studio/golive.js');
+    assert.match(gl, /TOOLS\.forEach\(\(t, i\) =>/);
+    assert.match(gl, /role: 'switch'/);
+    assert.match(gl, /emit\('spec:request', \{ patch: \{ surfaces: next \}, by: 'user', quiet: true \}\)/);
+    const copy = gl.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.doesNotMatch(copy, /SendGrid|Postmark|Mailgun|Twilio|Gemini|Stripe|EMAIL_WEBHOOK_SECRET|MAILGUN_SIGNING_KEY/);
+    const co = read('studio/checkout.js').replace(/^\s*\/\/.*$/gm, '');
+    assert.doesNotMatch(co, /answer surfaces?\b|Remove \$\{line\.label\}/, 'checkout has no per-surface lines');
+  });
+  test('the Builder knowledge base states the one plan truthfully (asked directly, cited)', () => {
     const kb = read('studio/kb/pricing-and-trial.md');
-    assert.match(kb, /Each answer surface is \$249 per month, or \$2,499 per year/);
-    assert.match(kb, /website chat, SMS, WhatsApp, email, phone, the web voice assistant, and the homepage search/);
-    assert.match(read('studio/kb/faq.md'), /Each answer surface is \$249 per month, or \$2,499 per year/);
+    assert.match(kb, /\$549 per month, or \$5,490 per year/);
+    assert.match(kb, /There is one plan\. It includes all three tools, Website, KnowBot number and Email, with every feature/);
+    assert.match(kb, /Switching a feature on or off never changes the price/);
+    assert.doesNotMatch(kb, /\$249|\$2,499|answer surface/);
+    assert.match(read('studio/kb/faq.md'), /No\. One plan, \$549 per month or \$5,490 per year, includes all three tools with every feature/);
+    for (const f of ['pricing-and-trial.md', 'faq.md', 'channels.md']) assert.doesNotMatch(read(`studio/kb/${f}`), /SendGrid|Postmark|Mailgun|Twilio|Gemini|Stripe/, f);
   });
 });
 
@@ -201,7 +247,7 @@ describe('answer surfaces over HTTP (spec route, Builder turn, checkout)', () =>
     assert.deepEqual((await (await t.call('')).json()).spec.surfaces, ['webchat']);
   });
 
-  test('checkout: surfaces and interval in the URL with the live total; the visitor can remove surfaces there', async () => {
+  test('checkout: one plan line (plan, price = total) for the interval; the features ride along and never change it', async () => {
     const t = await trial();
     await t.call('', 'PATCH', { surfaces: ['webchat', 'sms', 'whatsapp'] });
     const go = async (body) => {
@@ -211,34 +257,45 @@ describe('answer surfaces over HTTP (spec route, Builder turn, checkout)', () =>
     let { status, j } = await go({ email: 'ana@example.com' });
     assert.equal(status, 200);
     let u = new URL(j.url);
+    assert.equal(u.searchParams.get('plan'), 'knowbot');
     assert.equal(u.searchParams.get('surfaces'), 'webchat,sms,whatsapp');
     assert.equal(u.searchParams.get('interval'), 'month');
-    assert.equal(u.searchParams.get('total'), '747');
-    assert.equal(u.searchParams.get('price'), '249', 'the per-surface price param is kept');
+    assert.equal(u.searchParams.get('price'), '549');
+    assert.equal(u.searchParams.get('total'), '549', 'three features, one plan price');
     ({ j } = await go({ email: 'ana@example.com', interval: 'year' }));
     u = new URL(j.url);
     assert.equal(u.searchParams.get('interval'), 'year');
-    assert.equal(u.searchParams.get('total'), '7497', 'yearly x 3 = $7,497');
-    assert.equal(u.searchParams.get('price'), '2499', 'the per-surface price follows the interval');
+    assert.equal(u.searchParams.get('price'), '5490');
+    assert.equal(u.searchParams.get('total'), '5490');
     const yearSig = u.searchParams.get('sig');
     assert.match(String(yearSig), /^[A-Za-z0-9_-]{20,}$/, 'the plan params are signed');
     ({ j } = await go({ email: 'ana@example.com', interval: 'month' }));
     assert.notEqual(new URL(j.url).searchParams.get('sig'), yearSig, 'the signature covers interval and total');
-    ({ j } = await go({ email: 'ana@example.com', surfaces: ['whatsapp', 'webchat'], interval: 'month' }));
+    ({ j } = await go({ email: 'ana@example.com', surfaces: SURFACE_IDS, interval: 'month' }));
     u = new URL(j.url);
-    assert.equal(u.searchParams.get('surfaces'), 'webchat,whatsapp', 'removed at checkout');
-    assert.equal(u.searchParams.get('total'), '498');
-    assert.deepEqual((await (await t.call('')).json()).spec.surfaces, ['webchat', 'whatsapp'], 'and saved on the spec');
+    assert.equal(u.searchParams.get('surfaces'), SURFACE_IDS.join(','));
+    assert.equal(u.searchParams.get('total'), '549', 'every feature on: still one price');
+    assert.deepEqual((await (await t.call('')).json()).spec.surfaces, SURFACE_IDS, 'and saved on the spec');
     assert.equal((await go({ email: 'ana@example.com', interval: 'weekly' })).status, 400);
     assert.equal((await go({ email: 'ana@example.com', surfaces: [] })).status, 400);
   });
 
-  test('config: the per-surface price (month and year) for the checkout plan', async () => {
+  test('config: the one plan price (month and year) for the checkout', async () => {
     const r = await fetch(`${S.base}/api/studio/config`);
     assert.equal(r.status, 200);
     const cfg = await r.json();
-    assert.equal(cfg.price.amount, 249);
-    assert.equal(cfg.price.yearAmount, 2499);
-    assert.equal(cfg.price.perSurface, true);
+    assert.equal(cfg.price.amount, 549);
+    assert.equal(cfg.price.yearAmount, 5490);
+    assert.equal(cfg.price.perSurface, false);
+    assert.equal(cfg.price.plan, 'knowbot');
+    assert.match(cfg.price.annualLine, /\$5,490\/year/);
+  });
+
+  test('GET /v1/channels/:bot exposes the Website switches for the one-line embed (lib/embed.js)', async () => {
+    const t = await trial();
+    await t.call('', 'PATCH', { surfaces: ['webchat', 'site', 'sms'] });
+    const r = await fetch(`${S.base}/api/v1/channels/${t.trialId}`);
+    assert.equal(r.status, 200);
+    assert.deepEqual((await r.json()).website, { chat: true, voice: false, homepage: true });
   });
 });
