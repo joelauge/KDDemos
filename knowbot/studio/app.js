@@ -23,15 +23,15 @@
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
 
-import * as store from './store.js?v=228872e';
-import * as api from './api.js?v=228872e';
-import * as motion from './motion.js?v=228872e';
-import * as icons from './icons.js?v=228872e';
-import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=228872e';
-import { mountShapes } from './shapes.js?v=228872e';
-import { mountBuilderPane } from './builderpane.js?v=228872e';
-import { siteSettings } from './sitebrand.js?v=228872e';
-import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=228872e';
+import * as store from './store.js?v=75ddc38';
+import * as api from './api.js?v=75ddc38';
+import * as motion from './motion.js?v=75ddc38';
+import * as icons from './icons.js?v=75ddc38';
+import { SURFACES, normalizeSurfaces, surfacesText, planTotals, money } from './surfaces.js?v=75ddc38';
+import { mountShapes } from './shapes.js?v=75ddc38';
+import { mountBuilderPane } from './builderpane.js?v=75ddc38';
+import { siteSettings } from './sitebrand.js?v=75ddc38';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=75ddc38';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
