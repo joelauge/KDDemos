@@ -992,3 +992,35 @@ details.pf-dspan > span { display: block; margin-top: 4px; }
   .sb-miss-dlg { width: 100vw; max-width: none; margin: auto 0 0; border-radius: 16px 16px 0 0; }
   .sb-miss-actions .btn { flex: 1 1 auto; min-height: 44px; }
 }
+
+/* ------------------------------------------------------------------ product cards (final.products, bot view and proof view)
+   A calm row under the answer: small rounded cards, hairline border, no shadow; one row that scrolls sideways (snapping)
+   when it holds more than fits. The whole card is the link. */
+.sb-products {
+  list-style: none; display: flex; gap: 10px; margin: 12px -2px 2px; padding: 2px 2px 6px; overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity; scrollbar-width: thin; -webkit-overflow-scrolling: touch;
+}
+.sb-prod-li { flex: 0 0 144px; width: 144px; min-width: 0; margin: 0; padding: 0; scroll-snap-align: start; }
+.sb-prod {
+  height: 100%; display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); text-decoration: none; overflow: hidden;
+  transition: border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+.sb-prod:hover { border-color: var(--line-2); background: var(--panel-2); }
+.sb-prod:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sb-prod-media { display: grid; place-items: center; width: 100%; aspect-ratio: 4 / 3; background: var(--panel-2); color: var(--dim); border-bottom: 1px solid var(--line); }
+.sb-prod-media img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sb-prod-body { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 10px; min-width: 0; }
+.sb-prod-t {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  color: var(--strong); font: 500 13px/1.35 var(--font); overflow-wrap: anywhere;
+}
+.sb-prod-p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font: 400 12.5px/1.35 var(--font); font-variant-numeric: tabular-nums; }
+.sb-prod-p b { color: var(--text); font-weight: 600; }
+.sb-prod-p s { color: var(--muted); }
+.sb-prod-chip {
+  align-self: flex-start; margin-top: 2px; padding: 1px 7px; border-radius: 999px; background: var(--raise); color: var(--muted);
+  font: 500 11px/1.5 var(--font);
+}
+.sb-prod.is-out .sb-prod-media img { opacity: .72; }
+@media (max-width: 599px) { .sb-prod-li { flex-basis: 132px; width: 132px; } }

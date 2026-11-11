@@ -47,6 +47,7 @@ import { createEvidenceSelector, createResolver, selectForRetriever, isRefusal, 
 import { createSendInfo } from './sendinfo.mjs';
 import { orbOf } from './site.mjs';
 import { campaignOf, contactOf, newClickId, LINK_ID_RE, trackAnswer } from './leads.mjs';
+import { storePageHead } from './trials.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
 export const KEY_RE = /^kb_(live|trial)_[A-Za-z0-9_.-]{20,600}$/;
@@ -413,6 +414,7 @@ export function createDevApi(o = {}) {
       seen.add(k);
       const filename = String(d.filename || '').split('/').pop();
       hits.push({ file_id: d.file_id, filename, title: docTitle(d.attributes?.breadcrumb ? String(d.attributes.breadcrumb).split(' > ')[0] : '', filename), url: null, score: round4(simOf(d)), similarity: round4(simOf(d)), text,
+        ...(d.attributes?.breadcrumb ? { crumb: String(d.attributes.breadcrumb) } : {}),
         ...(rw && d.content_hash ? { content_hash: d.content_hash } : {}) });
     }
     if (rw) Object.defineProperty(hits, 'receipt', { value: rw.digest, enumerable: false });
@@ -441,7 +443,7 @@ export function createDevApi(o = {}) {
   /**
    * @returns {Promise<{ id, bot, botName, question, answer, refused, grounded, citations, proof, latencyMs, guard? }>}
    */
-  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval } = {}) {
+  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval, cards = false } = {}) {
     const t0 = performance.now();
     const lib = await o.loadLib();
     const q = String(question || '').replace(/\s+/g, ' ').trim().slice(0, MAX_Q);
@@ -555,6 +557,18 @@ export function createDevApi(o = {}) {
         similarity: round4(sims.get(c.filename) ?? null) };
     });
     const hits = (refused ? candidates : results).slice(0, 6).map(hitView);
+    // product cards (web surfaces only: the web chat and the Homepage search ask with cards; SMS, voice and phone never)
+    let products = [];
+    if (cards && !refused && (fin.citations || []).length) {
+      const pageUrlOf = (r) => (r ? r.url || storePageHead(r.crumb || r.title, r.text)?.url || null : null);
+      const resultOf = (fid) => results.find((r) => r.file_id === fid);
+      const cites = fin.citations.map((c) => ({ n: c.n, url: c.url || pageUrlOf(resultOf(c.file_id)), fileId: c.file_id }));
+      try {
+        products = target.kind === 'trial'
+          ? (await studio?.productsFor?.(target.id, { text, cites })) || []
+          : typeof lib.productCards === 'function' ? lib.productCards({ text, citations: cites, sources: results.map((r) => ({ url: pageUrlOf(r), text: r.text })) }) : [];
+      } catch (e) { log(`[devapi] product cards failed: ${e.message}`); products = []; }
+    }
     const latencyMs = Math.round(performance.now() - t0);
     // usage: exact when every model call reported it; else estimated from the full prompt actually sent (or, when no
     // model ran, from the question, history and retrieved context the answer was built from)
@@ -566,6 +580,7 @@ export function createDevApi(o = {}) {
       : { prompt: meter.calls ? meter.prompt : Math.ceil((q.length + histChars + ctxChars) / 4) + 8, completion: Math.max(meter.completion, approxTokens(text)), estimated: true, modelCalls: meter.calls };
     const out = {
       id: `ans_${rid(16)}`, bot: target.id, botName: target.name, question: q, answer: text, refused, grounded: !refused && citations.length > 0, citations,
+      ...(products.length ? { products } : {}),
       proof: { hits, quoted, floor: { min: floor, top: round4(top) }, ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : resolvedReceipt ? { receipt: { digest: resolvedReceipt } } : {}) }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
     };
     logAnswer(target, out, channel, callerKey);
@@ -842,7 +857,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   const publicAnswer = (a, req, format = 'prose') => ({
     id: a.id, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: a.bot, question: a.question, answer: answerText(a, format), format: a.refused ? 'text' : format, citations: a.citations.map(({ similarity, ...c }) => c),
     refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
-    ...(a.guard ? { guard: a.guard } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
+    ...(a.guard ? { guard: a.guard } : {}), ...(!a.refused && a.products?.length ? { products: a.products } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
   });
   const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title}${c.page ? `, page ${c.page}` : ''}${c.section ? `, “${c.section}”` : ''} — ` : ''}${c.file}${c.url ? ` <${c.url}>` : ''}`).join('\n')}`.trim());
 
@@ -909,7 +924,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       let n = 0;
       const emit = (event, data) => { try { res.write(`id: ${++n}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {} };
       try {
-        const a = await answer(target, question, { history, channel, callerKey, onRetrieval: (r) => emit('retrieval', r) });
+        const a = await answer(target, question, { history, channel, callerKey, cards: true, onRetrieval: (r) => emit('retrieval', r) });
         a.proofId = a.refused ? null : saveProof(a, channel);
         rememberAnswer(siKey, a, req);
         for (const piece of answerPieces(a, format)) emit('delta', { text: piece.text ?? piece.raw, n: piece.n, raw: piece.raw });
@@ -921,7 +936,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       }
       return res.end();
     }
-    const a = await answer(target, question, { history, channel, callerKey });
+    const a = await answer(target, question, { history, channel, callerKey, cards: true });
     a.proofId = a.refused ? null : saveProof(a, channel);
     rememberAnswer(siKey, a, req);
     return send(res, 200, publicAnswer(a, req, format));

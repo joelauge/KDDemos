@@ -771,6 +771,27 @@ async function storeJourney(browser, dev, cell) {
     const r = await fetch(`${dev.url}/api/studio/trials/${tid}/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: 'Can I return a bike?' }) });
     const fin = (await r.text()).split('\n\n').map((fr) => (/^event: final$/m.test(fr) ? JSON.parse(/^data: (.*)$/m.exec(fr)[1]) : null)).find(Boolean);
     check('18-store', 'librarian answer links the store page it quotes', !!fin && fin.status === 'grounded' && fin.text.includes(`${dev.shopUrl}/policies/refund-policy`), { detail: fin?.text });
+    // product cards: an answer about a product shows its card (photo, title, price) linking the product page in a new tab
+    {
+      await pane(page, cell, 'bot');
+      // every imported page has learned (the product pages arrive after the policies and the FAQ)
+      await waitState(page, (s) => s.fileOrder.length >= 5 && s.fileOrder.every((id) => s.files[id]?.phase === 'ready'), { timeout: 60000 }).catch(() => null);
+      const ta = page.locator('#sb-composer-slot textarea').first();
+      if (await ta.count()) { await ta.fill('How much is the Commuter Lite?'); await ta.press('Enter'); }
+      const card = await page.waitForFunction(() => {
+        const a = [...document.querySelectorAll('.sb-answer')].pop();
+        const c = a?.querySelector('.sb-products .sb-prod');
+        const img = c?.querySelector('img');
+        return c && img && img.complete && img.naturalWidth > 0 ? { href: c.href, target: c.target, rel: c.rel, title: c.querySelector('.sb-prod-t')?.textContent, price: c.querySelector('.sb-prod-p')?.textContent, alt: img.alt, lazy: img.loading, w: img.getAttribute('width') } : null;
+      }, null, { timeout: 25000 }).then((x) => x.jsonValue()).catch(() => null);
+      check('19-cards', 'a product answer shows its card: photo (lazy, sized, alt = title), title, price with the compare-at price, new-tab link',
+        !!card && card.href === `${dev.shopUrl}/products/commuter-lite` && card.target === '_blank' && /noopener/.test(card.rel) && card.title === 'Commuter Lite' && card.alt === 'Commuter Lite' && card.lazy === 'lazy' && card.w && /799/.test(card.price) && /899/.test(card.price),
+        { detail: JSON.stringify(card) });
+      await page.locator('.sb-answer').last().scrollIntoViewIfNeeded().catch(() => {});
+      await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime)), null, { timeout: 4000 }).catch(() => null);
+      await shot(page, cell, '19-cards');
+      check('19-cards', 'no horizontal scroll with cards', await noHScroll(page));
+    }
     // a bad address: store error copy with both ways forward
     await pane(page, cell, 'setup');
     if (planned) {

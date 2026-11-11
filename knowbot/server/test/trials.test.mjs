@@ -1745,11 +1745,12 @@ describe('shared sample mode (KNOWBOT_STUDIO_SAMPLE_MODE=shared): one copy, repl
 /** A tiny Shopify-shaped store on 127.0.0.1 (products.json, a refund policy, an FAQ page). slow: n extra product pages, each slow. */
 async function fakeShop({ slow = 0, slowMs = 120 } = {}) {
   const page = (title, body) => `<!doctype html><html><head><title>${title}</title></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
-  let price = '1299.00';
+  let price = '1299.00', ogPage = false;
   const routes = {
     '/': () => [200, 'text/html', page('Lumen Test Shop', '<p>Bikes.</p>').replace('</head>', '<link href="https://cdn.shopify.com/s/theme.css"><script>Shopify.currency={"active":"USD"};</script><meta property="og:site_name" content="Lumen Test Shop"></head>')],
-    '/products.json': (u) => [200, 'application/json', JSON.stringify({ products: Number(u.searchParams.get('page') || 1) > 1 ? [] : [
-      { id: 1, title: 'Trail Pro', handle: 'trail-pro', vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: '<p>A carbon trail bike with a lifetime frame warranty.</p>', variants: [{ title: 'Default Title', price, sku: 'TP-1', available: true }] },
+    '/products.json': (u, base) => [200, 'application/json', JSON.stringify({ products: Number(u.searchParams.get('page') || 1) > 1 ? [] : [
+      { id: 1, title: 'Trail Pro', handle: 'trail-pro', vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: '<p>A carbon trail bike with a lifetime frame warranty.</p>', variants: [{ title: 'Default Title', price, sku: 'TP-1', available: true }],
+        images: [{ src: `${base}/cdn/trail-pro.jpg` }] },
       { id: 2, title: 'Commuter Lite', handle: 'commuter-lite', vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: '<p>An aluminium city bike with mudguards.</p>', variants: [{ title: 'Default Title', price: '799.00', sku: 'CL-1', available: true }] },
     ] })],
     '/policies/refund-policy': () => [200, 'text/html', page('Refund policy', '<p>Unridden bikes can be returned within 30 days of delivery for a full refund.</p>')],
@@ -1768,13 +1769,18 @@ async function fakeShop({ slow = 0, slowMs = 120 } = {}) {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(`<!doctype html><html><head><title>Slow ${n}</title><script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: `Slow Bike ${n}`, offers: { '@type': 'Offer', price: '100.00', priceCurrency: 'USD' } })}</script></head><body><main><h1>Slow Bike ${n}</h1><p>Slow bike number ${n} is a steel touring bike.</p></main></body></html>`);
     }
+    // the Commuter Lite page (with its og:image) exists only once ogPage is on: after the import, as for an older import
+    if (u.pathname === '/products/commuter-lite' && ogPage) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(page('Commuter Lite', '<p>An aluminium city bike.</p>').replace('</head>', '<meta property="og:image" content="/cdn/commuter-lite.jpg"></head>'));
+    }
     const r = routes[u.pathname];
     if (!r) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
     const [status, type, body] = r(u, `http://127.0.0.1:${s.address().port}`);
     res.writeHead(status, { 'content-type': type }); res.end(body);
   });
   await new Promise((r) => s.listen(0, '127.0.0.1', r));
-  return { base: `http://127.0.0.1:${s.address().port}`, hits, setPrice: (p) => { price = p; }, close: () => { s.closeAllConnections?.(); return new Promise((r) => s.close(r)); } };
+  return { base: `http://127.0.0.1:${s.address().port}`, hits, setPrice: (p) => { price = p; }, setOgPage: (on) => { ogPage = !!on; }, close: () => { s.closeAllConnections?.(); return new Promise((r) => s.close(r)); } };
 }
 
 describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
@@ -1784,7 +1790,7 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     slowShop = await fakeShop({ slow: 24, slowMs: 250 });
     // the importer's injectable net option lets this test reach 127.0.0.1; production (P below) never sets it.
     // knowDrive cuts Markdown like production here (heading-path prefixed atoms), so citations are tested on real atoms.
-    S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 }, storeRetryMs: 20 }, kdOpts: { chunker: 'production' } });
+    S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 }, storeRetryMs: 20, productImageMissMs: 0 }, kdOpts: { chunker: 'production' } });
     P = await boot();
     c = client(S);
   });
@@ -1835,6 +1841,54 @@ describe('Enter a Store URL: POST /trials/:id/store (SSE)', () => {
     assert.ok(prod.citations.length && prod.citations.every((x) => x.url === `${shop.base}/products/commuter-lite`), JSON.stringify(prod.citations));
     assert.equal(prod.proof.unsupported, 0);
     assert.ok(prod.proof.claims.length >= 1 && prod.proof.claims.every((x) => x.verified), JSON.stringify(prod.proof.claims));
+  });
+
+  test('product cards: an answer citing a product carries its card from the index (photo included); none for a policy; the web chat API too', async () => {
+    const t = await c.trial();
+    const done = (await c.stream(t, '/store', { url: shop.base, owner: true })).at(-1).data;
+    await c.waitReady(t, done.fileCount);
+    const idxRow = [...S.kd.files.values()].find((f) => f.filename === `knowbot/trials/${t.trialId}/_products.json`);
+    assert.ok(idxRow, 'the product index is stored beside the spec doc');
+    assert.ok(idxRow.tags.includes('kind:trial-spec') && idxRow.tags.includes(`trial:${t.trialId}`), idxRow.tags.join(','));
+    const fin = (await c.stream(t, '/ask', { question: 'How much is the Trail Pro?' })).find((e) => e.event === 'final').data;
+    assert.equal(fin.status, 'grounded', JSON.stringify(fin.why));
+    assert.deepEqual(fin.products, [{ url: `${shop.base}/products/trail-pro`, title: 'Trail Pro', price: 1299, compareAt: null, currency: 'USD', availability: 'in stock', image: `${shop.base}/cdn/trail-pro.jpg` }]);
+    assert.doesNotMatch(fin.text, /image:|\/cdn\//, 'the photo line is never quoted');
+    const pol = (await c.stream(t, '/ask', { question: 'Can I return a bike?' })).find((e) => e.event === 'final').data;
+    assert.equal(pol.status, 'grounded');
+    assert.equal(pol.products, undefined, 'no cards under a policy answer');
+    // the web chat / Homepage search API carries the same cards; channel replies (SMS) never do
+    const dk = await (await c.json(t, '/devkey')).json();
+    const k = dk.key || dk.apiKey || dk.token;
+    const v1 = await (await S.api(`/v1/bots/${t.trialId}/chat`, { method: 'POST', headers: { authorization: `Bearer ${k}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: 'How much is the Trail Pro?' }) })).json();
+    assert.equal(v1.refused, false, JSON.stringify(v1));
+    assert.deepEqual(v1.products?.map((p) => [p.title, p.price, p.image]), [['Trail Pro', 1299, `${shop.base}/cdn/trail-pro.jpg`]], JSON.stringify(v1.products));
+    const sms = await (await S.api(`/v1/bots/${t.trialId}/preview`, { method: 'POST', headers: { authorization: `Bearer ${k}`, 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'sms', question: 'How much is the Trail Pro?' }) })).json();
+    assert.equal(sms.products, undefined);
+    assert.doesNotMatch(sms.text || '', /cdn\/trail-pro/);
+  });
+
+  test('product cards without an index (an older import): read from the cited product file; a missing photo comes from the page og:image, then is kept', async () => {
+    const t = await c.trial();
+    const done = (await c.stream(t, '/store', { url: shop.base, owner: true })).at(-1).data;
+    await c.waitReady(t, done.fileCount);
+    // forget the index, as for a bot imported before product cards existed
+    const T = S.kb.studio.trials.get(t.trialId);
+    T.storeProducts = null; delete T.flags.storeProducts;
+    shop.setOgPage(true);
+    try {
+      const fin = (await c.stream(t, '/ask', { question: 'How much is the Commuter Lite?' })).find((e) => e.event === 'final').data;
+      assert.equal(fin.status, 'grounded', JSON.stringify(fin.why));
+      assert.deepEqual(fin.products, [{ url: `${shop.base}/products/commuter-lite`, title: 'Commuter Lite', price: 799, compareAt: null, currency: 'USD', availability: 'in stock', image: `${shop.base}/cdn/commuter-lite.jpg` }]);
+      const pageReads = shop.hits.get('/products/commuter-lite');
+      const again = (await c.stream(t, '/ask', { question: 'How much is the Commuter Lite?' })).find((e) => e.event === 'final').data;
+      assert.equal(again.products?.[0]?.image, `${shop.base}/cdn/commuter-lite.jpg`);
+      assert.equal(shop.hits.get('/products/commuter-lite'), pageReads, 'the photo is looked up once');
+      // the photo found later is kept in the bot's index
+      assert.equal(T.storeProducts.get(`127.0.0.1/products/commuter-lite`)?.image, `${shop.base}/cdn/commuter-lite.jpg`);
+      const tp = (await c.stream(t, '/ask', { question: 'How much is the Trail Pro?' })).find((e) => e.event === 'final').data;
+      assert.equal(tp.products?.[0]?.image, `${shop.base}/cdn/trail-pro.jpg`, 'the photo line of the file is read too');
+    } finally { shop.setOgPage(false); }
   });
 
   test('store files are named for people, the store names the bot (ConfigDiff), starters come from page titles', async () => {

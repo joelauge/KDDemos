@@ -67,14 +67,22 @@ export async function startFakeStore({ host = '127.0.0.1' } = {}) {
   const page = (title, body, head = '') => `<!doctype html><html><head><title>${title}</title>${head}</head><body><header><nav>Shop Help Cart</nav></header><main><h1>${title}</h1>${body}</main><footer>© Lumen Bikes</footer></body></html>`;
   const products = [
     ['Trail Pro', 'trail-pro', '1899.00', 'Full-suspension carbon trail bike. Frames carry a lifetime warranty for the original owner.', [['Small / Black', 'TP-S', true], ['Large / Black', 'TP-L', false]]],
-    ['Commuter Lite', 'commuter-lite', '799.00', 'Aluminium city bike with mudguards, a rack and dynamo lights.', []],
+    ['Commuter Lite', 'commuter-lite', '799.00', 'Aluminium city bike with mudguards, a rack and dynamo lights.', [], '899.00'],
     ['E-City 500', 'e-city-500', '2499.00', 'Electric city bike with a 500 Wh battery: about 90 km of range on the eco setting.', []],
-    ['Kids 20', 'kids-20', '349.00', 'A 20-inch bike for riders aged 6 to 9, with coaster brakes.', []],
-  ].map(([title, handle, price, desc, vs], i) => ({ id: i + 1, title, handle, vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: `<p>${desc}</p>`,
-    variants: vs.length ? vs.map(([t, sku, available]) => ({ title: t, price, sku, available })) : [{ title: 'Default Title', price, sku: handle.toUpperCase(), available: true }] }));
+    ['Kids 20', 'kids-20', '349.00', 'A 20-inch bike for riders aged 6 to 9, with coaster brakes.', [], '399.00'],
+    ['Gravel X', 'gravel-x', '1299.00', 'Steel gravel bike with wide tyre clearance and rack mounts.', [], null, false],
+  ].map(([title, handle, price, desc, vs, compareAt = null, available = true], i) => ({ id: i + 1, title, handle, vendor: 'Lumen', product_type: 'Bikes', tags: [], body_html: `<p>${desc}</p>`,
+    variants: vs.length ? vs.map(([t, sku, ok]) => ({ title: t, price, sku, available: ok, compare_at_price: compareAt })) : [{ title: 'Default Title', price, sku: handle.toUpperCase(), available, compare_at_price: compareAt }] }));
+  // product photos (a simple bike drawing per product, in its own colour), served by the shop like a store's CDN
+  const HUES = { 'trail-pro': ['#e8f1ee', '#0f766e'], 'commuter-lite': ['#eef0f7', '#3b4a8c'], 'e-city-500': ['#f6efe6', '#b45309'], 'kids-20': ['#f7ecf1', '#be185d'], 'gravel-x': ['#eceff1', '#475569'] };
+  const bikeSvg = (handle) => {
+    const [bg, fg] = HUES[handle] || ['#eee', '#333'];
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="480" height="480"><rect width="240" height="240" fill="${bg}"/><g fill="none" stroke="${fg}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><circle cx="70" cy="150" r="38"/><circle cx="170" cy="150" r="38"/><path d="M70 150 L104 96 L150 96 L170 150 M104 96 L124 150 L150 96 M124 150 L70 150 M96 82 L116 82 M150 96 L146 76 L162 72"/></g></svg>`;
+  };
+  const withImages = (base) => products.map((p) => ({ ...p, images: [{ src: `${base}/cdn/shop/files/${p.handle}.svg`, width: 480, height: 480 }] }));
   const routes = {
     '/': () => [200, 'text/html', page('Lumen Bikes', '<p>Bikes for trails and towns.</p>', '<link href="https://cdn.shopify.com/s/theme.css"><script>Shopify.currency={"active":"USD"};</script><meta property="og:site_name" content="Lumen Bikes"><meta name="theme-color" content="#0f766e">')],
-    '/products.json': (u) => [200, 'application/json', JSON.stringify({ products: Number(u.searchParams.get('page') || 1) > 1 ? [] : products })],
+    '/products.json': (u, base) => [200, 'application/json', JSON.stringify({ products: Number(u.searchParams.get('page') || 1) > 1 ? [] : withImages(base) })],
     '/policies/refund-policy': () => [200, 'text/html', page('Refund policy', '<p>Unridden bikes can be returned within 30 days of delivery for a full refund.</p><p>Ridden bikes can be exchanged within 14 days.</p>')],
     '/policies/shipping-policy': () => [200, 'text/html', page('Shipping policy', '<p>Orders ship within 2 business days. Shipping is free in the US on orders over $100.</p>')],
     '/pages/faq': () => [200, 'text/html', page('FAQ', '<details><summary>Do you ship to Canada?</summary><p>Yes, we ship to Canada for a flat $25 fee.</p></details><details><summary>Can I test ride a bike?</summary><p>Test rides last 30 minutes and need a photo ID.</p></details>')],
@@ -84,6 +92,8 @@ export async function startFakeStore({ host = '127.0.0.1' } = {}) {
   const srv = http.createServer(async (req, res) => {
     if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
     const u = new URL(req.url, 'http://x');
+    const img = /^\/cdn\/shop\/files\/([a-z0-9-]+)\.svg$/.exec(u.pathname);
+    if (img && HUES[img[1]]) { res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'max-age=3600' }); return res.end(bikeSvg(img[1])); }
     const r = routes[u.pathname];
     if (!r) { res.writeHead(404, { 'content-type': 'text/html' }); return res.end('<h1>Not found</h1>'); }
     const [status, type, body] = r(u, `http://${host}:${srv.address().port}`);

@@ -183,6 +183,20 @@ button { font: inherit; color: inherit; }
 .dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
 @keyframes kb-dot { 50% { opacity: 1; transform: translateY(-2px); } }
 .sources { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+/* product cards (final.products): a calm row of small cards; scrolls sideways when it holds more than fits */
+.prods { list-style: none; display: flex; gap: 10px; margin: 4px -2px 0; padding: 2px 2px 6px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: thin; }
+.prods > li { flex: 0 0 148px; width: 148px; min-width: 0; margin: 0; padding: 0; scroll-snap-align: start; }
+.prod { height: 100%; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); text-decoration: none; overflow: hidden; }
+.prod:hover { border-color: var(--acc); }
+.prod:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+.prod-media { display: grid; place-items: center; width: 100%; aspect-ratio: 4 / 3; background: var(--soft); color: var(--muted); border-bottom: 1px solid var(--line); }
+.prod-media img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.prod.out .prod-media img { opacity: .72; }
+.prod-body { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; min-width: 0; }
+.prod-t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.prod-p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.prod-p s { color: var(--muted); }
+.prod-chip { align-self: flex-start; margin-top: 2px; padding: 1px 8px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 12px; }
 .h3 { margin: 0 0 6px; color: var(--ink); font-size: 15px; }
 .srclist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .src { display: flex; gap: 10px; align-items: flex-start; padding: 6px; margin: 0 -6px; border-radius: 8px; }
@@ -486,7 +500,41 @@ button { font: inherit; color: inherit; }
           s.href ? h('a', { class: 'src-link', href: s.href, target: '_blank', rel: 'noopener' }, title, h('span', { class: 'sr' }, ' (opens in a new tab)')) : h('b', null, title),
           h('span', { class: 'src-where' }, [s.where, c.page ? `page ${c.page}` : null, c.section || null].filter(Boolean).join(' · ')))));
     }
+    const prods = productCards(final.products);
+    if (prods) a.append(prods);
     a.append(h('section', { class: 'sources', 'aria-label': 'Sources' }, h('h3', { class: 'h3' }, 'Sources'), list));
+  }
+  /** The products the answer links (final.products, at most 4): photo, two-line title, price (compare-at struck), "Out of stock" only when it is. */
+  const money = (v, cur) => {
+    const n = Number(v);
+    if (v == null || v === '' || !Number.isFinite(n)) return '';
+    const dp = Math.abs(n - Math.round(n)) < 0.005 ? 0 : 2;
+    try { if (cur) return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, minimumFractionDigits: dp, maximumFractionDigits: dp }).format(n); } catch { /* unknown code */ }
+    return n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: 2 });
+  };
+  const BAG = '<path d="M6 8h12l-1 12H7L6 8z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>';
+  const cleanHref = (u) => (safeUrl(u) && !/[\s"'<>`]/.test(u) ? u : null);
+  function productCards(list) {
+    const items = (Array.isArray(list) ? list : []).slice(0, 12).map((p) => {
+      const url = cleanHref(p?.url), title = String(p?.title ?? '').trim();
+      if (!url || !title) return null;
+      const price = money(p.price, p.currency), was = p.compareAt != null && Number(p.compareAt) > Number(p.price) ? money(p.compareAt, p.currency) : '';
+      const av = String(p.availability || '');
+      const out = /\b(?:out of stock|sold out|unavailable|discontinued|not available|no longer available)\b/i.test(av) && !/\bonly some\b/i.test(av);
+      const src = cleanHref(p.image);
+      const media = h('span', { class: 'prod-media' });
+      if (src) {
+        const img = h('img', { src, alt: title, width: '148', height: '111', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
+        img.addEventListener('error', () => img.replaceWith(svg(BAG, 22)), { once: true });
+        media.append(img);
+      } else media.append(svg(BAG, 22));
+      const name = [title, price && (was ? `${price}, was ${was}` : price), out && 'out of stock'].filter(Boolean).join(', ');
+      return h('li', null, h('a', { class: `prod${out ? ' out' : ''}`, href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': `${name} (opens in a new tab)` }, media,
+        h('span', { class: 'prod-body' }, h('span', { class: 'prod-t' }, title),
+          price ? h('span', { class: 'prod-p' }, h('b', null, price), was ? h('s', null, was) : null) : null,
+          out ? h('span', { class: 'prod-chip' }, 'Out of stock') : null)));
+    }).filter(Boolean).slice(0, 4);
+    return items.length ? h('ul', { class: 'prods', 'aria-label': items.length === 1 ? 'Product' : 'Products' }, items) : null;
   }
 
   // ------------------------------------------------------------------------------------------------ hosted link

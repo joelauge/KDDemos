@@ -1594,6 +1594,7 @@ export function mount(ctx) {
     // trace). Restored, fast-forwarded and Proof Run answers render all at once (nothing animates; the run reads them).
     morphPill(A);
     renderFoot(A);
+    renderProducts(A);
     const sync = A.fast || A.restored || A.by === 'proof' || reduced();
     const live = () => !destroyed && A.final === f && A.el.root.isConnected;   // a re-ask / retry supersedes a pending phase
     const phase2 = () => {
@@ -1721,6 +1722,55 @@ export function mount(ctx) {
     el.append(text.slice(0, best[0]), mk, text.slice(best[1]));
     if (A.fast || reduced()) mk.style.backgroundSize = '100% 100%';
     else setTimeout(() => motion.sweep(mk), 160);
+  }
+
+  // ---------------------------------------------------------------- product cards
+  // The products an answer links or cites (final.products, at most 4, from the bot's website import): a calm row of
+  // small cards under the answer (photo, two-line title, price with the compare-at price struck through, "Out of stock"
+  // only when it is). The whole card opens the product page in a new tab. Text from the store goes in as text, never
+  // HTML; only http(s) links and photos are used.
+  const httpOnly = (u) => { try { const x = new URL(String(u || '')); return x.protocol === 'http:' || x.protocol === 'https:' ? x.href : null; } catch { return null; } };
+  const SOLD_OUT = /\b(?:out of stock|sold out|unavailable|discontinued|not available|no longer available)\b/i;
+  function fmtMoney(v, cur) {
+    const n = Number(v);
+    if (v == null || v === '' || !Number.isFinite(n)) return '';
+    const whole = Math.abs(n - Math.round(n)) < 0.005;
+    try { if (cur) return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 }).format(n); } catch { /* an unknown currency code */ }
+    return n.toLocaleString(undefined, { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 });
+  }
+  const BAG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8h12l-1 12H7L6 8z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/></svg>';
+  function productCardEl(p) {
+    const url = httpOnly(p.url);
+    const title = String(p.title || '').trim();
+    if (!url || !title) return null;
+    const price = fmtMoney(p.price, p.currency), was = p.compareAt != null && Number(p.compareAt) > Number(p.price) ? fmtMoney(p.compareAt, p.currency) : '';
+    const out = SOLD_OUT.test(String(p.availability || '')) && !/\bonly some\b/i.test(String(p.availability || ''));
+    const ph = h('span', { class: 'sb-prod-ph', html: BAG });
+    const media = h('span', { class: 'sb-prod-media' });
+    const src = httpOnly(p.image);
+    if (src) {
+      const img = h('img', { src, alt: title, width: '144', height: '108', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
+      img.addEventListener('error', () => img.replaceWith(ph), { once: true });
+      media.append(img);
+    } else media.append(ph);
+    const name = [title, price && (was ? `${price}, was ${was}` : price), out && 'out of stock'].filter(Boolean).join(', ');
+    return h('a', { class: `sb-prod${out ? ' is-out' : ''}`, href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': `${name} (opens in a new tab)` },
+      media,
+      h('span', { class: 'sb-prod-body' },
+        h('span', { class: 'sb-prod-t', title }, title),
+        price ? h('span', { class: 'sb-prod-p' }, h('b', null, price), was ? h('s', null, was) : null) : null,
+        out ? h('span', { class: 'sb-prod-chip' }, 'Out of stock') : null));
+  }
+  function renderProducts(A) {
+    A.el.products?.remove();
+    A.el.products = null;
+    const list = Array.isArray(A.final?.products) ? A.final.products : [];
+    const cards = list.slice(0, 12).map(productCardEl).filter(Boolean).slice(0, 4);
+    if (!cards.length) return;
+    const row = h('ul', { class: 'sb-products', 'aria-label': cards.length === 1 ? 'Product' : 'Products' }, cards.map((c) => h('li', { class: 'sb-prod-li' }, c)));
+    A.el.body.after(row);
+    A.el.products = row;
+    if (!(A.fast || reduced())) anim(row, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], aOpts(A, { duration: 220, delay: 60, easing: 'out' }));
   }
 
   function renderFoot(A) {

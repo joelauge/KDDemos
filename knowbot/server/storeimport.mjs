@@ -700,6 +700,51 @@ const fmtMoney = (v, cur) => {
 const AVAIL = (a) => (a == null ? null : a === true ? 'in stock' : a === false ? 'out of stock'
   : String(a).replace(/^.*[/#]/, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase());
 const cleanTitle = (s) => clip(oneLine(s), 200).replace(/^#+\s*/, '');
+/**
+ * A product photo's URL from a feed or JSON-LD value: a string, an ImageObject ({url|contentUrl|src}), or a list of
+ * either (the first usable one). Relative URLs resolve against `base` (protocol-relative ones as https); http(s) only, no spaces
+ * or quotes, at most 1,000 characters. -> URL | null
+ */
+export function imageOf(v, base) {
+  for (const x of [].concat(v ?? []).slice(0, 5)) {
+    const raw = typeof x === 'string' ? x : x && typeof x === 'object' ? (x.url ?? x.contentUrl ?? x.src ?? null) : null;
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    let u;
+    // a protocol-relative CDN URL (//cdn…) is read as https: an http photo would be mixed content on an https page
+    try { const t = decodeEntities(raw.trim()); u = new URL(t.startsWith('//') ? `https:${t}` : t, base || undefined); } catch { continue; }
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username || u.password) continue;
+    if (u.href.length > 1000 || /[\s"'<>\\`]/.test(u.href)) continue;
+    return u.href;
+  }
+  return null;
+}
+/** The page's og:image (or twitter:image), resolved against the page URL; null when it has none. */
+export function ogImageOf(html, base) {
+  const h = String(html ?? '').slice(0, 512 * 1024);
+  for (const k of ['og:image:secure_url', 'og:image', 'og:image:url', 'twitter:image']) {
+    const m = new RegExp(`<meta\\b[^>]*(?:property|name)=["']${k}["'][^>]*content=["']([^"']+)["']`, 'i').exec(h)
+      || new RegExp(`<meta\\b[^>]*content=["']([^"']+)["'][^>]*(?:property|name)=["']${k}["']`, 'i').exec(h);
+    const u = m && imageOf(m[1], base);
+    if (u) return u;
+  }
+  return null;
+}
+/**
+ * The card a product record gives ({ url, title, price, compareAt, currency, availability, image }): what the Studio
+ * and every web surface show under an answer that links or cites the product. null without a URL or a title.
+ */
+export function productCardOf(p, url = p?.url) {
+  if (!p || !url) return null;
+  const title = cleanTitle(p.title);
+  if (!title) return null;
+  const n = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  const price = n(p.price), compareAt = n(p.compareAt);
+  const vs = (p.variants || []).filter((v) => v && v.title && !/^default( title)?$/i.test(v.title));
+  const vOut = (v) => v.available === false || /^(?:out ?of ?stock|sold ?out)$/i.test(String(v.available ?? '').trim());
+  const availability = vs.length && vs.every(vOut) ? 'out of stock' : p.availability ? clip(oneLine(p.availability), 80) : null;
+  return { url, title, price, compareAt: compareAt != null && price != null && compareAt > price ? compareAt : null,
+    currency: /^[A-Z]{3}$/.test(String(p.currency || '')) ? p.currency : null, availability, image: imageOf(p.image, url) };
+}
 
 /** Fact lines for a product record; every line names its product (a line is quoted on its own). */
 export function productFacts(p) {
@@ -735,6 +780,9 @@ export function productFacts(p) {
   if (p.options?.length) fact('options', p.options.map((o) => `${oneLine(o.name)} (${o.values.map(oneLine).join(', ')})`).join('; '));
   if (p.categories?.length) fact('categories', p.categories.map(oneLine).filter(Boolean).join(', '));
   if (p.tags?.length) fact('tags', p.tags.map(oneLine).filter(Boolean).join(', '));
+  // the product photo, for the product cards under answers (lib cleanSource drops this line: never quoted or prompted)
+  const image = imageOf(p.image, p.url);
+  if (image) fact('image', image);
   return escapeText(L.join('\n'));
 }
 /** A product record ({title, url, price, …, descriptionHtml}) as a document. */
@@ -747,6 +795,11 @@ export function productDoc(p) {
   if (desc) sections.push({ heading: 'Description', text: clip(desc, 12000) });
   return { kind: 'product', url: p.url, title, sections, pdfs: [...(p.pdfs || [])], record: p };
 }
+/** A product page's photo: its Product JSON-LD image, else its og:image (null when it has neither). */
+export function productImageOfHtml(html, pageUrl) {
+  const ldp = jsonLdBlocks(html).find((o) => (typeIs(o, 'Product') || typeIs(o, 'ProductGroup')) && o.image);
+  return (ldp && imageOf(ldp.image, pageUrl)) || ogImageOf(html, pageUrl);
+}
 function recordFromLd(o, pageUrl) {
   const offers = [].concat(o.offers || []).flatMap((x) => (typeIs(x, 'AggregateOffer') && x.offers ? [].concat(x.offers) : [x]));
   const first = offers[0] || {};
@@ -755,6 +808,7 @@ function recordFromLd(o, pageUrl) {
   return { title: o.name, url: pageUrl, sku: o.sku, brand: typeof o.brand === 'object' ? o.brand?.name : o.brand,
     price: agg?.lowPrice ?? first.price ?? first.priceSpecification?.price, priceMax: agg?.highPrice, currency: agg?.priceCurrency || first.priceCurrency || first.priceSpecification?.priceCurrency,
     availability: first.availability ? AVAIL(first.availability) : null, variants, categories: o.category ? [].concat(o.category).map(String) : [],
+    image: imageOf(o.image, pageUrl) || imageOf([].concat(o.hasVariant || []).map((v) => v?.image).filter(Boolean), pageUrl),
     descriptionHtml: o.description ? String(o.description) : '' };
 }
 const SECTION_NAMES = [
@@ -799,7 +853,9 @@ export function readProductHtml(html, pageUrl, rec = null, { requireLd = false }
   if (!rec && !ldp && requireLd) return null;
   const canonical = canonicalOf(html, pageUrl);
   const url = rec?.url || canonical || pageUrl;
-  const record = rec || (ldp ? recordFromLd(ldp, url) : { title: titleOfHtml(html) || url, url });
+  let record = rec || (ldp ? recordFromLd(ldp, url) : { title: titleOfHtml(html) || url, url });
+  // the photo: the feed's, else the page's Product JSON-LD image, else its og:image
+  if (!imageOf(record.image, url)) { const image = (ldp && imageOf(ldp.image, url)) || ogImageOf(html, url); if (image) record = { ...record, image }; }
   const doc = productDoc(record);
   doc.canonical = canonical;
   const descNorm = normPara((doc.sections.find((s) => s.heading === 'Description')?.text || ''));
@@ -963,6 +1019,8 @@ function createWriter({ maxTotalBytes, storeName, siteHost, onFiles, emit, batch
     stats.used += size + FILE_OVERHEAD; stats.files++; inc(stats.written, d.kind); inc(stats.bytesByKind, d.kind, size);
     const title = headText(d.title);
     const file = { path: rel, name: `${label} · ${displayPart(title) || 'Page'}.${ext}`, title, url: d.url, kind: d.kind, host, bytes, mime, size, docs: 1 };
+    // a product page's card (title, price, photo ...): the caller keeps these as the bot's product index
+    if (d.kind === 'product' && d.record) { const card = productCardOf(d.record, d.url); if (card) file.card = card; }
     if (!announced) { announced = true; emit('building', { files: [file.name], n: 1 }); }
     if (onFiles) {
       let b = batches.get(d.kind);
@@ -1101,6 +1159,7 @@ async function* shopifyFeed(ctx) {
         variants: vs.length > 1 ? vs.map((v) => ({ title: v.title, price: v.price, sku: v.sku, available: v.available })) : [],
         options: (p.options || []).filter((o) => o?.name && Array.isArray(o.values) && o.values.length > 1).map((o) => ({ name: o.name, values: o.values })),
         tags: Array.isArray(p.tags) ? p.tags : String(p.tags || '').split(',').map((t) => t.trim()).filter(Boolean), descriptionHtml: p.body_html || '',
+        image: imageOf(p.image || (Array.isArray(p.images) ? p.images : []), url),
         pdfs: pdfLinksOf(`<main>${p.body_html || ''}</main>`, url) };
     });
     if (list.length < size) return;
@@ -1129,12 +1188,13 @@ async function* wooFeed(ctx) {
         availability: p.stock_availability?.text ? oneLine(p.stock_availability.text).toLowerCase() : p.is_in_stock == null ? null : AVAIL(!!p.is_in_stock),
         options: (p.attributes || []).filter((a) => a.terms?.length).map((a) => ({ name: a.name, values: a.terms.map((t) => t.name) })),
         categories: (p.categories || []).map((c) => decodeEntities(c.name)), tags: (p.tags || []).map((t) => decodeEntities(t.name)),
+        image: imageOf((p.images || []).map((i) => i?.src || i?.thumbnail), p.permalink || ctx.base),
         descriptionHtml: html, pdfs: p.permalink ? pdfLinksOf(`<main>${html}</main>`, p.permalink) : [] };
     });
   }
 }
 const MAGENTO_Q_FULL = `query($page:Int!,$size:Int!){products(search:"",pageSize:$size,currentPage:$page){total_count page_info{current_page total_pages}
-items{__typename name sku url_key url_suffix stock_status categories{name}
+items{__typename name sku url_key url_suffix stock_status categories{name} small_image{url}
 price_range{minimum_price{regular_price{value currency} final_price{value currency}} maximum_price{final_price{value currency}}}
 short_description{html} description{html}
 ... on ConfigurableProduct{variants{attributes{label code} product{sku stock_status price_range{minimum_price{final_price{value currency}}}}}}}}}`;
@@ -1171,6 +1231,7 @@ async function* magentoFeed(ctx) {
         categories: (it.categories || []).map((c) => c?.name).filter(Boolean),
         variants: (it.variants || []).map((v) => ({ title: (v.attributes || []).map((a) => a.label).join(' / '), sku: v.product?.sku, price: v.product?.price_range?.minimum_price?.final_price?.value,
           available: v.product?.stock_status ? v.product.stock_status === 'IN_STOCK' : null })),
+        image: imageOf([it.small_image?.url].filter((x) => x && !/placeholder/i.test(x)), url),
         descriptionHtml: html, pdfs: pdfLinksOf(`<main>${html}</main>`, url) };
     });
   }
@@ -1186,7 +1247,8 @@ function squarespaceRecord(it, base) {
   return { title: it.title, url: `${base}${it.fullUrl || ''}`, currency: cur, price: prices.length ? Math.min(...prices) : null, priceMax: prices.length ? Math.max(...prices) : null,
     sku: vs.length === 1 ? vs[0].sku : null, availability: vs.length ? (vs.some((v) => avail(v) === true) ? 'in stock' : vs.every((v) => avail(v) === false) ? 'out of stock' : null) : null,
     variants: vs.length > 1 ? vs.map((v) => ({ title: vtitle(v), sku: v.sku, price: money(v), available: avail(v) })) : [],
-    tags: it.tags || [], categories: it.categories || [], descriptionHtml: it.body || it.excerpt || '' };
+    tags: it.tags || [], categories: it.categories || [], descriptionHtml: it.body || it.excerpt || '',
+    image: imageOf([it.assetUrl, ...(Array.isArray(it.items) ? it.items.map((x) => x?.assetUrl) : [])].filter(Boolean), base) };
 }
 async function* squarespaceFeed(ctx) {
   const colls = new Set();

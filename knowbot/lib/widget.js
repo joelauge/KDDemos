@@ -1,5 +1,5 @@
 // KnowBot UI: floating widget, inline panel, full-page chat. Plain ESM, imports the core library.
-import { KnowBot } from './knowbot.js?v=8edc9a1';
+import { KnowBot, safeHttpUrl, isSoldOut } from './knowbot.js?v=8edc9a1';
 
 const CSS_URL = new URL('./knowbot.css?v=8edc9a1', import.meta.url).href;
 let uid = 0;
@@ -71,6 +71,34 @@ const ICON = {
 ICON.down = ICON.up.replace('<svg ', '<svg style="transform:scaleY(-1)" ');
 
 const safeUrl = (u) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null);
+
+/* ---------- product cards ---------- */
+
+/** A price in the visitor's locale: "$1,899", "€24.50"; plain digits when the currency is unknown. */
+export function formatPrice(v, cur) {
+  const n = Number(v);
+  if (v == null || v === '' || !Number.isFinite(n)) return '';
+  const d = Math.abs(n - Math.round(n)) < 0.005 ? 0 : 2;
+  try { if (cur) return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, minimumFractionDigits: d, maximumFractionDigits: d }).format(n); } catch { /* unknown code */ }
+  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: 2 });
+}
+const BAG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8h12l-1 12H7L6 8z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/></svg>';
+/**
+ * The products an answer links (answer.products, at most 4) as a row of small cards: photo, two-line title, price with
+ * the compare-at price struck through, "Out of stock" only when it is. Every value is escaped; only http(s) URLs are used.
+ */
+export function productCardsHtml(products) {
+  const cards = (Array.isArray(products) ? products : []).slice(0, 12).map((p) => {
+    const url = safeHttpUrl(p?.url), title = String(p?.title ?? '').trim();
+    if (!url || !title) return '';
+    const price = formatPrice(p.price, p.currency), was = p.compareAt != null && Number(p.compareAt) > Number(p.price) ? formatPrice(p.compareAt, p.currency) : '';
+    const out = isSoldOut(p.availability), img = safeHttpUrl(p.image), t = escapeHtml(title);
+    const name = escapeHtml([title, price && (was ? `${price}, was ${was}` : price), out && 'out of stock'].filter(Boolean).join(', '));
+    const media = img ? `<img src="${escapeHtml(img)}" alt="${t}" width="144" height="108" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : BAG;
+    return `<li><a class="kb-prod${out ? ' kb-prod-out' : ''}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="${name} (opens in a new tab)"><span class="kb-prod-media">${media}</span><span class="kb-prod-body"><span class="kb-prod-t">${t}</span>${price ? `<span class="kb-prod-p"><b>${escapeHtml(price)}</b>${was ? `<s>${escapeHtml(was)}</s>` : ''}</span>` : ''}${out ? '<span class="kb-prod-chip">Out of stock</span>' : ''}</span></a></li>`;
+  }).filter(Boolean).slice(0, 4);
+  return cards.length ? `<ul class="kb-products" aria-label="${cards.length === 1 ? 'Product' : 'Products'}">${cards.join('')}</ul>` : '';
+}
 
 /* ---------- chat view (shared by all surfaces) ---------- */
 
@@ -249,6 +277,7 @@ class ChatView {
     const badge = a.refused ? '<div class="kb-badge">Not in the knowDrive</div>' : !a.grounded ? '<div class="kb-badge">No supporting source</div>'
       : a.fallback ? '<div class="kb-badge">Sources matched automatically</div>' : '';
     let html = `<div class="kb-bubble">${badge}<div class="kb-md">${renderMarkdown(a.text, cite)}</div></div>`;
+    if (!a.refused && a.products?.length) html += productCardsHtml(a.products);
     if (a.citations.length) {
       html += `<div class="kb-sources"><div class="kb-sources-h" id="${mid}-sh">Sources</div><ol aria-labelledby="${mid}-sh">${a.citations.map((c) => {
         const url = safeUrl(c.url), t = escapeHtml(c.title);
@@ -265,6 +294,8 @@ class ChatView {
     const secs = (a.latencyMs.total / 1000).toFixed(1);
     html += `<div class="kb-actions"><button type="button" class="kb-fb" data-r="up" aria-pressed="false" aria-label="Helpful">${ICON.up}</button><button type="button" class="kb-fb" data-r="down" aria-pressed="false" aria-label="Not helpful">${ICON.down}</button><span class="kb-meta">${secs}s · ${a.citations.length} source${a.citations.length === 1 ? '' : 's'}</span></div>`;
     msg.innerHTML = html;
+    // a photo that fails to load leaves the card's quiet placeholder, never a broken image
+    msg.querySelectorAll('.kb-prod-media img').forEach((img) => img.addEventListener('error', () => { img.outerHTML = BAG; }, { once: true }));
     msg.querySelectorAll('.kb-fb').forEach((b) => b.addEventListener('click', () => {
       msg.querySelectorAll('.kb-fb').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
       this.bot.feedback(a, b.dataset.r);

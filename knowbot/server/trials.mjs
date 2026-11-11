@@ -31,6 +31,7 @@ import { createResearchAgent } from './research.mjs';
 import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAnswerable } from './evidence.mjs';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
+import { createImageFinder, indexFromJson, indexToJson, indexAdd, within } from './products.mjs';
 import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS, createStoreFetcher, readPageHtml, renderMarkdown, slugOf, titleOfHtml } from './storeimport.mjs';
 import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
 import { createLocalKb } from './builder/local-kb.mjs';
@@ -1453,6 +1454,95 @@ export function createStudio(o = {}) {
     T.specTimer = setTimeout(() => { flushSpec(T); }, 2000);
     T.specTimer.unref?.();
   }
+
+  // ------------------------------------------------------------------------- product cards (server/products.mjs)
+  // The bot's product index (T.storeProducts: productKey → card) is filled by the website import (every product page's
+  // card) and stored beside the spec doc as _products.json (kind:trial-spec: never searched, deleted with the bot).
+  // T.flags.storeProducts {n, at} says it exists, so a bot without one never asks knowDrive for it.
+  const productsPath = (id) => `${rootOf(id)}_products.json`;
+  const imageFinder = createImageFinder({ net: o.storeNet || {}, timeoutMs: Math.max(200, Number(o.productImageTimeoutMs ?? 3000)),
+    ...(o.productImageMissMs != null ? { missTtlMs: Math.max(0, Number(o.productImageMissMs)) } : {}) });
+  const productImageWaitMs = Math.max(0, Number(o.productImageWaitMs ?? 1200));
+  async function loadProducts(T) {
+    if (T.storeProducts) return T.storeProducts;
+    if (!T.flags.storeProducts) return (T.storeProducts = new Map());
+    T.storeProductsLoading ||= (async () => {
+      try {
+        const res = await kdFetch(`/api/v1/vector_stores/${encodeURIComponent(store)}/path/content/${productsPath(T.id).split('/').map(encodeURIComponent).join('/')}`, { timeout: 10000 });
+        // a missing index is an empty one; a failed read is retried on the next answer
+        if (res.ok || res.status === 404) T.storeProducts ||= res.ok ? indexFromJson(await res.text()) : new Map();
+      } catch (e) { log(`[studio] product index read failed for ${T.id}: ${e.message}`); }
+      T.storeProductsLoading = null;
+      return T.storeProducts || new Map();
+    })();
+    return T.storeProductsLoading;
+  }
+  function saveProducts(T) {
+    clearTimeout(T.productsTimer); T.productsTimer = null;
+    const idx = T.storeProducts;
+    if (T.deleted || closed || !idx || !idx.size) return Promise.resolve();
+    T.flags.storeProducts = { n: idx.size, at: new Date(now()).toISOString() };
+    const write = async () => {
+      if (T.deleted || closed) return;
+      const tags = T.converted ? ['knowbot', 'kind:trial-spec', 'kind:trial-products'] : [...trialTags(T), 'kind:trial-spec', 'kind:trial-products'];
+      try { await ingest({ storePath: productsPath(T.id), tags, mime: 'application/json', bytes: Buffer.from(indexToJson(idx, now())) }); }
+      catch (e) { log(`[studio] product index write failed for ${T.id}: ${e.message}`); }
+    };
+    T.productsWrite = (T.productsWrite || Promise.resolve()).then(write, write);
+    return T.productsWrite;
+  }
+  function saveProductsSoon(T, ms = 3000) {
+    if (T.productsTimer || closed) return;
+    T.productsTimer = setTimeout(() => { T.productsTimer = null; saveProducts(T); }, ms);
+    T.productsTimer.unref?.();
+  }
+  /** Is this URL on the imported website (or a help desk it read)? Off-site links never become cards or fetches. */
+  function storeSiteCheck(T) {
+    const hosts = new Set((T.flags.storeLast?.hosts || []).map((x) => String(x).toLowerCase()));
+    try { if (T.flags.storeLast?.url) hosts.add(new URL(T.flags.storeLast.url).hostname.toLowerCase()); } catch {}
+    for (const c of T.storeProducts?.values() || []) { try { hosts.add(new URL(c.url).hostname.toLowerCase()); } catch {} break; }
+    const domains = new Set([...hosts].map((x) => registrableDomain(x)));
+    return (u) => {
+      let hn; try { const x = new URL(u); if (x.protocol !== 'http:' && x.protocol !== 'https:') return false; hn = x.hostname.toLowerCase(); } catch { return false; }
+      return hosts.has(hn) || domains.has(registrableDomain(hn));
+    };
+  }
+  /**
+   * The product cards for one answer (Studio chat, and the web surfaces through devapi): [{ url, title, price, compareAt,
+   * currency, availability, image }], at most 4, in the answer's own order (links in its text, then its citations).
+   * cites: [{ url, fileId }] (the answer's citations, with the page URL each one links). A product the index doesn't know
+   * is read from its cited file's atoms (title and price lines); a card without a photo waits at most `waitMs` for the
+   * page's og:image (found later, it is kept in the index for the next answer). [] for bots with no website import.
+   */
+  async function productsFor(T, { text = '', cites = [], waitMs = productImageWaitMs } = {}) {
+    const storeRow = (id) => (T.rows || []).find((r) => r.id === id && (r.tags || []).includes('src:store'));
+    if (!T.flags.storeLast && !T.flags.storeProducts && !(T.rows || []).some((r) => (r.tags || []).includes('src:store'))) return [];
+    const index = await loadProducts(T);
+    const onSite = storeSiteCheck(T);
+    const isProductRow = (r) => !!r && ((r.tags || []).includes('page:product') || /\/site\/[^/]+\/product\//.test(String(r.filename || '')));
+    const list = (cites || []).filter((c) => c && c.url && onSite(c.url)).slice(0, 8);
+    // fallback (an older import, or a page the index lacks): the cited product file's own text
+    const sources = [];
+    await Promise.all(list.filter((c) => !index.has(kbLib.productKey(c.url)) && isProductRow(storeRow(c.fileId))).slice(0, kbLib.PRODUCT_CARDS_MAX).map(async (c) => {
+      const atoms = await within(allAtoms(T, c.fileId), 2500);
+      if (atoms?.length) sources.push({ url: c.url, text: atoms.map((a) => a.text).join('\n') });
+    }));
+    const links = kbLib.linksIn(text).filter(onSite);
+    const cards = kbLib.productCards({ text: links.map((u) => `<${u}>`).join(' '), citations: list.map((c, i) => ({ n: i + 1, url: c.url })), sources,
+      lookup: (u, k) => index.get(k) || null });
+    // photos: the index's, else the page's og:image (looked up once, cached; the answer waits at most waitMs)
+    const missing = cards.filter((c) => !c.image && onSite(c.url));
+    if (missing.length) {
+      const found = await within(Promise.all(missing.map((c) => imageFinder.find(c.url).then((image) => {
+        if (!image) return;
+        c.image = image;
+        const cur = index.get(kbLib.productKey(c.url));
+        if (!cur?.image && indexAdd(index, { ...(cur || c), image })) saveProductsSoon(T);
+      }))), waitMs);
+      void found;
+    }
+    return cards.map((c) => ({ ...c }));
+  }
   // KnowBot numbers (server/numbers.mjs): a number for texts and calls, bought in the Studio after payment. Its state is
   // T.flags.number, saved in the spec doc like every other flag (survives restarts, kept when the trial converts).
   const numbers = createNumbers({ env, log, now, fail,
@@ -2493,6 +2583,8 @@ export function createStudio(o = {}) {
         const lv = lineView(line);
         quotes.push({ n: c.n, L, text: line.text, fileId: h.fileId, file: src.filename, atomId: h.atomId, seq: h.seq, offset: lv.offset, derived: lv.derived, hit: h, ...(h.contentHash ? { contentHash: h.contentHash } : {}) });
       }
+      // product cards: started now (the paced lines below give a photo lookup its time), awaited before the final
+      const productsP = productsFor(T, { text: fin.text, cites: fin.citations.map((c) => ({ url: c.url, fileId: c.file_id })) }).catch((e) => { log(`[studio] product cards failed: ${e.message}`); return []; });
       const outLines = String(fin.text).split('\n').filter((l) => l.trim());
       // proof claims: the cited lines only (a courtesy opener/closer is not a claim, and a "Here's what “X” says [1]:"
       // pointer line only names the place), each matched to its quote by marker and quoted text, never by position
@@ -2536,7 +2628,8 @@ export function createStudio(o = {}) {
       // should also fail the row when final.check.ok === false (reason in final.check.reason), so a grounded-but-wrong
       // answer can never earn a "passed" stamp.
       const check = answerCheck(question, quotes.map((q) => q.text), await expectedFor(T, files, question));
-      return finish({ ...base, text: fin.text, refused: false, status: 'grounded', citations, check,
+      const products = await productsP;
+      return finish({ ...base, text: fin.text, refused: false, status: 'grounded', citations, check, ...(products.length ? { products } : {}),
         proof: { quotedLines, claims, verified: { claims: claims.length, verified: claims.filter((c) => c.verified).length }, unsupported, candidates: lines.length, picked: fin0.selected || [], floor, ...(receipt ? { receipt } : {}) },
         why: null, guard: null, latencyMs: { retrieve: tRet, select: tSel, quote: tQ, total: ms() } });
     } catch (e) {
@@ -2863,10 +2956,14 @@ export function createStudio(o = {}) {
     const prevIds = new Set(previous.map((r) => r.id));
     const stamp = `${T.id}:store:${job.id}`;
     T.storeManifest ||= new Map();
+    // this import's product cards (a resumed job goes on with the index its earlier run saved); it becomes the bot's
+    // index once the import replaces the one before it
+    const productIdx = new Map(resume ? await loadProducts(T).catch(() => new Map()) : []);
     const rowsBytes = () => (T.rows || []).reduce((n, r) => n + (Number(r.bytes) || 0), 0);
     async function replacePrevious() {
       if (replaced) return;
       replaced = true;
+      T.storeProducts = productIdx;
       const list = [...previous];
       await Promise.all(Array.from({ length: Math.min(4, list.length) }, async () => {
         for (let row = list.shift(); row; row = list.shift()) {
@@ -2926,6 +3023,7 @@ export function createStudio(o = {}) {
           if (!id) continue;
           T.keys.set(id, key);
           T.storeManifest.set(id, { url: x.f.url, title: x.f.title, kind, name: x.f.name, path: x.rel });
+          if (x.f.card && indexAdd(productIdx, x.f.card)) saveProductsSoon(T);
           if (kind === 'pdf') { T.flags.storePdfUrls = { ...(T.flags.storePdfUrls || {}) }; if (Object.keys(T.flags.storePdfUrls).length < 300) T.flags.storePdfUrls[id] = x.f.url; }
           const row = { id, filename: path, bytes: x.bytes.length, mime_type: mime, status: g.status || 'in_progress', phase: g.phase || 'pending',
             atom_count: g.atom_count ?? 0, atoms_vectorized: g.atoms_vectorized ?? 0, chunk_count: g.chunk_count ?? 0, tags, created_at: g.created_at || Math.floor(now() / 1000) };
@@ -3009,6 +3107,7 @@ export function createStudio(o = {}) {
         found: r.report.found, written, leftOut: report.leftOut, timeUp: !!r.report.timeUp, ...(kinds ? { kinds } : {}) };
       const pj = pjOf();
       if (pj) Object.assign(pj, { state: 'done', finishedAt: now(), uploaded, done: written, activeMs: jobActiveMs(T, job) });
+      if (productIdx.size && T.storeProducts === productIdx) await saveProducts(T);
       await flushSpec(T);
       const all = await filesOf(T);
       job.state = 'done'; job.finishedAt = now(); T.storeBusy = false;
@@ -3024,6 +3123,7 @@ export function createStudio(o = {}) {
       if (rows.length) { kickPoller(T); T.flags.storeLast = { at: new Date(now()).toISOString(), url, hosts: job.hosts, files: uploaded, cancelled: code === 'aborted', error: code }; }
       const pj = pjOf();
       if (pj) Object.assign(pj, { state: code === 'aborted' ? 'cancelled' : 'error', ...(code === 'aborted' ? {} : { error: code }), finishedAt: pj.finishedAt || now(), uploaded, activeMs: jobActiveMs(T, job) });
+      if (productIdx.size && T.storeProducts === productIdx) await saveProducts(T);
       if (rows.length || pj) await flushSpec(T);
       job.state = code === 'aborted' ? 'cancelled' : 'error'; job.finishedAt = now(); T.storeBusy = false;
       send('error', { code, message });
@@ -5136,7 +5236,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     closed = true;
     clearInterval(sweepTimer); clearTimeout(firstSweep); clearInterval(winSweep);
     // a running website import is interrupted, not cancelled: its doc still says running, so the next server resumes it
-    for (const T of trials.values()) { clearTimeout(T.poller); T.poller = null; if (T.specDirty) clearTimeout(T.specTimer); clearTimeout(T.jobSaveTimer); if (T.storeJob?.state === 'running') { T.storeJob.shutdown = true; T.storeJob.ac.abort(); } }
+    for (const T of trials.values()) { clearTimeout(T.poller); T.poller = null; clearTimeout(T.productsTimer); if (T.specDirty) clearTimeout(T.specTimer); clearTimeout(T.jobSaveTimer); if (T.storeJob?.state === 'running') { T.storeJob.shutdown = true; T.storeJob.ac.abort(); } }
     clearTimeout(resumeTimer);
     for (const c of allClients) { try { c.drop?.(); c.res.end(); } catch {} }
     allClients.clear();
@@ -5158,7 +5258,15 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (T.asked.length > 500) T.asked.shift();
     pushEvent(T, 'asked', { channel: channel || null, outcome: outcome === 'refused' ? 'refused' : 'answered' });
   }
-  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, flush: async () => { for (const T of trials.values()) if (T.specDirty || T.jobSaveTimer) await flushSpec(T); }, get enabled() { return enabled; }, store,
+  /** Product cards for an answer of this trial's bot on a web surface (devapi: web chat, Homepage search, API). */
+  async function productsForTrial(trialId, args = {}) {
+    if (!enabled || !TRIAL_ID_RE.test(String(trialId || '')) || deletedTrials.has(trialId)) return [];
+    const T = trialFor(trialId);
+    await loadSpecDoc(T);
+    if (!T.rows) { try { await refreshRows(T); } catch { /* the index still answers */ } }
+    return productsFor(T, args);
+  }
+  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };

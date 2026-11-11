@@ -238,6 +238,7 @@ function cleanSource(t = '') {
   return unspoof(parseFrontmatter(String(t)).body)
     .replace(/<[^>]{0,200}>/g, ' ')            // html tags
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')      // images
+    .replace(/^[ \t]*[-*•][ \t]+[^\n]{1,240}?[ \t]image:[ \t]*https?:\/\/\S+[ \t]*$/gm, '') // a product photo's fact line (cards only, never quoted)
     .replace(MARKER_FORMS, (_, list) => `(${list})`) // citation look-alikes ([n], [Source n], 【n】, [^n]) can't spoof numbering
     .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').replace(/\n{2,}/g, '\n').trim();
 }
@@ -1559,6 +1560,100 @@ export class Telemetry {
   close() { try { this.bc?.close(); } catch {} }
 }
 
+/* ---------- product cards ---------- */
+// Website-import product pages (server/storeimport.mjs) read "# <Title> · <URL>", "Source: <URL>", then a
+// "## Price and availability" section of fact lines ("- <Name> price: 649.00 USD (was 799.00 USD)", "- <Name>
+// availability: in stock") and, when the store had one, "- <Name> image: <URL>" (cleanSource drops that line, so a
+// photo never reaches a prompt or a quoted line). These helpers read a card from that text, and pick the
+// products an answer links or cites: [{ url, title, price, compareAt, currency, availability, image }].
+export const PRODUCT_CARDS_MAX = 4;
+const PCARD_MONEY = '([0-9][0-9,]*(?:\\.[0-9]+)?)(?:\\s+([A-Z]{3}))?';
+const PRICE_LINE_RE = new RegExp(`^\\s*[-*•]\\s+.{1,240}?\\sprice:\\s*${PCARD_MONEY}(?:\\s+\\(was\\s+${PCARD_MONEY}\\))?`, 'm');
+const AVAIL_LINE_RE = /^\s*[-*•]\s+.{1,240}?\savailability:\s*([^\n]{1,120}?)\s*$/m;
+const HEAD_LINE_RE = /^(?:#\s+)?([^\n]{1,300}?) · (https?:\/\/[^\s<>"]+)\s*$/m;
+const IMAGE_MD_RE = /!\[[^\]\n]{0,300}\]\((https?:\/\/[^\s)<>"]+)\)/;
+const IMAGE_LINE_RE = /^\s*[-*•]\s+.{1,240}?\simage:\s*(https?:\/\/\S+)\s*$/m;
+const SOLD_OUT_RE = /\b(?:out of stock|sold out|unavailable|discontinued|not available|no longer available)\b/i;
+const num = (v) => { const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/,/g, '')); return v == null || v === '' || !Number.isFinite(n) || n < 0 ? null : n; };
+/** An http(s) URL that is safe in an attribute (no spaces, quotes or angle brackets), else null. */
+export function safeHttpUrl(u) {
+  const s = String(u ?? '').trim();
+  if (!/^https?:\/\//i.test(s) || s.length > 2000 || /[\s"'<>\\`]/.test(s)) return null;
+  try { const x = new URL(s); return x.protocol === 'http:' || x.protocol === 'https:' ? x.href : null; } catch { return null; }
+}
+/** The key two links to one product share: host + path, lower case, no trailing slash, query and hash dropped. */
+export function productKey(u) {
+  try { const x = new URL(String(u)); return `${x.hostname.toLowerCase().replace(/^www\./, '')}${decodeURIComponent(x.pathname).toLowerCase().replace(/\/+$/, '')}`; } catch { return null; }
+}
+/** True when an availability text means the product can't be bought now. */
+export const isSoldOut = (availability) => SOLD_OUT_RE.test(String(availability || '')) && !/\bonly some\b/i.test(String(availability || ''));
+/** A card from any record ({ url, title, price, compareAt, currency, availability, image }), cleaned; null without url and title. */
+export function productCard(p) {
+  if (!p || typeof p !== 'object') return null;
+  const url = safeHttpUrl(p.url);
+  const title = String(p.title ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!url || !title) return null;
+  const price = num(p.price);
+  let compareAt = num(p.compareAt);
+  if (price == null || compareAt == null || !(compareAt > price)) compareAt = null;
+  const currency = /^[A-Z]{3}$/.test(String(p.currency || '')) ? String(p.currency) : null;
+  const availability = p.availability == null ? null : String(p.availability).replace(/\s+/g, ' ').trim().slice(0, 80) || null;
+  return { url, title, price, compareAt, currency, availability, image: safeHttpUrl(p.image) };
+}
+/**
+ * A product read from page text (pure): the "# Title · URL" head (or `url`/`title` given), its price line (with the
+ * "(was …)" compare-at price), availability line and Markdown image. null when the text holds no price line and no
+ * image (not a product page), or no URL is known.
+ */
+export function productFromText(text, { url = null, title = null } = {}) {
+  const t = String(text ?? '');
+  const head = HEAD_LINE_RE.exec((t.split('\n').find((l) => / · https?:\/\//.test(l)) || '').split(' > ')[0].trim());
+  const price = PRICE_LINE_RE.exec(t);
+  const image = IMAGE_LINE_RE.exec(t)?.[1] || IMAGE_MD_RE.exec(t)?.[1] || null;
+  if (!price && !image) return null;
+  const avail = AVAIL_LINE_RE.exec(t)?.[1] || null;
+  return productCard({ url: url || head?.[2] || /^[ \t]*Source:[ \t]*(https?:\/\/\S+)/m.exec(t)?.[1], title: head?.[1]?.replace(/^#+\s*/, '') || title,
+    price: price?.[1], compareAt: price?.[3], currency: price?.[2] || price?.[4] || null, availability: avail, image });
+}
+/** http(s) links in an answer's text, in reading order: Markdown [text](url) and bare URLs. */
+export function linksIn(text) {
+  const out = [];
+  for (const m of String(text ?? '').matchAll(/\]\((https?:\/\/[^\s()<>"]+)\)|(https?:\/\/[^\s()<>"\]]+)/g)) {
+    const u = (m[1] || m[2] || '').replace(/[.,;:!?”’"')\]]+$/, '');
+    if (u) out.push(u);
+  }
+  return out;
+}
+/**
+ * The products an answer points to, best first (pure): links in its text, then its citations in [n] order; up to `max`,
+ * one card per product. `lookup(url, key)` → a record or null (the bot's product index); `sources` ([{url, text}]) are
+ * read with productFromText when the index doesn't know a URL. A URL becomes a card only when it is a known product
+ * (index) or its source text reads as one (price line or photo).
+ */
+export function productCards({ text = '', citations = [], sources = [], lookup = null, max = PRODUCT_CARDS_MAX } = {}) {
+  const urls = [...linksIn(text), ...[...(citations || [])].sort((a, b) => (a.n ?? 0) - (b.n ?? 0)).map((c) => c?.url)].filter(Boolean);
+  const byKey = new Map();
+  for (const s of sources || []) {
+    const k = s?.url ? productKey(s.url) : null;
+    if (k) byKey.set(k, [...(byKey.get(k) || []), s]);
+  }
+  const out = [], seen = new Set();
+  for (const u of urls) {
+    if (out.length >= max) break;
+    const url = safeHttpUrl(u), key = url && productKey(url);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    let card = lookup ? productCard(lookup(url, key)) : null;
+    if (!card) {
+      const texts = (byKey.get(key) || []);
+      const joined = texts.map((s) => String(s.text || '')).join('\n');
+      card = productFromText(joined, { url: texts[0]?.url || url, title: texts.find((s) => s.title)?.title || null });
+    }
+    if (card) out.push({ ...card, url: card.url || url });
+  }
+  return out;
+}
+
 /* ---------- KnowBot ---------- */
 
 export class KnowBot {
@@ -1609,8 +1704,13 @@ export class KnowBot {
         settings: this.opts.settings, onToken: o.onToken, onProgress: o.onProgress, signal: o.signal, coverage: results.length ? undefined : this.opts.coverage });
       fin = r.fin; t2 = now();
     }
+    // product cards: the products the answer links or cites, read from the cited sources' text (a server answer that
+    // already carries them keeps its own)
+    const products = fin.refused || !fin.grounded ? [] : Array.isArray(fin.products) ? fin.products
+      : productCards({ text: fin.text, citations: fin.citations, sources: results });
     const answer = {
       ...fin,
+      products,
       latencyMs: { retrieval: ms(t0, t1), generation: ms(t1, t2), total: ms(t0, now()) },
       engine: { type: this.engine.type, model: this.engine.model || null },
       surface: this.surface, sessionId: this.sessionId, turnId,
