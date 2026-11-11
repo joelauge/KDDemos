@@ -420,7 +420,10 @@ export function mount(ctx) {
   const etaTime = h('span', { class: 'in-eta-time', role: 'status' });
   const tracker = h('div', { class: 'in-eta', hidden: true }, h('div', { class: 'in-eta-row' }, etaCount, etaTime), etaBar);
   const body = h('div', { class: 'in-body' }, cap, rowsEl);
-  panel.append(head, tracker, body, empty, chip, chipDesc);
+  // Drag (or arrow-key) the bottom edge to give the file list more or less of the pane; double-click resets.
+  const SIZE_KEY = 'kb-studio-sources-h';
+  const sizer = h('div', { class: 'in-sizer', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal', 'aria-label': 'Resize sources', title: 'Drag to resize · double-click to reset' }, h('span', { class: 'in-sizer-grip', 'aria-hidden': 'true' }));
+  panel.append(head, tracker, body, sizer, empty, chip, chipDesc);
   intakeSlot.innerHTML = '';
   intakeSlot.append(panel);
 
@@ -444,6 +447,51 @@ export function mount(ctx) {
   dropSlot.append(dropOverlay);
 
   const collapsedByUser = { value: false, auto: true };
+
+  // ---- user-sized Sources (persisted per browser)
+  const paneOf = () => intakeSlot.closest('.st-bot') || intakeSlot.parentElement;
+  const sizeBounds = () => { const ph = paneOf()?.clientHeight || window.innerHeight; return [120, Math.max(160, ph - 220)]; };
+  function applySize(px, save) {
+    if (px == null) {
+      intakeSlot.style.removeProperty('--in-user-h'); delete intakeSlot.dataset.userh; sizer.removeAttribute('aria-valuenow');
+      if (save) { try { localStorage.removeItem(SIZE_KEY); } catch {} }
+      return;
+    }
+    const [lo, hi] = sizeBounds(); const v = Math.round(Math.min(hi, Math.max(lo, px)));
+    intakeSlot.style.setProperty('--in-user-h', v + 'px'); intakeSlot.dataset.userh = 'yes';
+    sizer.setAttribute('aria-valuemin', String(lo)); sizer.setAttribute('aria-valuemax', String(hi)); sizer.setAttribute('aria-valuenow', String(v));
+    if (save) { try { localStorage.setItem(SIZE_KEY, String(v)); } catch {} }
+  }
+  try { const v = Number(localStorage.getItem(SIZE_KEY)); if (v > 0) applySize(v, false); } catch {}
+  let lastTap = 0;
+  listen(sizer, 'pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const top = intakeSlot.getBoundingClientRect().top, y0 = e.clientY;
+    let moved = false;
+    sizer.setPointerCapture?.(e.pointerId); intakeSlot.dataset.sizing = 'yes';
+    const move = (ev) => { if (Math.abs(ev.clientY - y0) > 3) moved = true; if (moved) applySize(ev.clientY - top, false); };
+    const up = () => {
+      sizer.removeEventListener('pointermove', move); sizer.removeEventListener('pointerup', up); sizer.removeEventListener('pointercancel', up);
+      delete intakeSlot.dataset.sizing;
+      if (moved) { lastTap = 0; applySize(intakeSlot.getBoundingClientRect().height, true); return; }
+      // a double tap/click without dragging puts the automatic size back
+      const now = performance.now();
+      if (now - lastTap < 400) { lastTap = 0; applySize(null, true); } else lastTap = now;
+    };
+    sizer.addEventListener('pointermove', move); sizer.addEventListener('pointerup', up); sizer.addEventListener('pointercancel', up);
+  });
+  listen(sizer, 'keydown', (e) => {
+    const cur = intakeSlot.getBoundingClientRect().height;
+    const step = e.shiftKey ? 96 : 32;
+    if (e.key === 'ArrowDown') applySize(cur + step, true);
+    else if (e.key === 'ArrowUp') applySize(cur - step, true);
+    else if (e.key === 'Home') applySize(sizeBounds()[0], true);
+    else if (e.key === 'End') applySize(sizeBounds()[1], true);
+    else if (e.key === 'Escape' || e.key === 'Delete') applySize(null, true);
+    else return;
+    e.preventDefault();
+  });
 
   // ================================================================== DOM: map band
 

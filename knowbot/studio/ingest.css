@@ -196,6 +196,20 @@
 .in-panel[data-state="empty"] .in-head { display: none; }
 .in-panel[data-collapsed="yes"] .in-head, .in-panel[data-collapsed="yes"] .in-body { display: none; }
 
+/* user-resizable Sources: a grip on the panel's bottom edge sets the slot height (persisted); it beats every
+   automatic share above, but never squeezes the thread and composer (clamped in JS) */
+.in-sizer { position: relative; height: 12px; margin: 0 calc(-1 * var(--st-gutter)); cursor: row-resize; touch-action: none; display: flex; align-items: center; justify-content: center; flex: none; }
+.in-sizer-grip { width: 36px; height: 4px; border-radius: 2px; background: var(--line); transition: background var(--dur-2, .15s) var(--ease-out, ease), width var(--dur-2, .15s) var(--ease-out, ease); }
+.in-sizer:hover .in-sizer-grip, .in-sizer:focus-visible .in-sizer-grip, #in-intake-slot[data-sizing="yes"] .in-sizer-grip { background: var(--accent); width: 56px; }
+.in-sizer:focus-visible { outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 6px; }
+.in-panel[data-collapsed="yes"] .in-sizer, .in-panel[data-state="empty"] .in-sizer { display: none; }
+.st-bot > #in-intake-slot#in-intake-slot[data-userh="yes"]:not([data-pcollapsed="yes"]):not([data-pstate="empty"]) {
+  flex: none !important; height: var(--in-user-h) !important; max-height: none !important; min-height: 0 !important; overflow: hidden !important;
+}
+#in-intake-slot[data-userh="yes"]:not([data-pcollapsed="yes"]) > .in-panel { flex: 1 1 auto; }
+#in-intake-slot[data-userh="yes"]:not([data-pcollapsed="yes"]) .in-body { flex: 1 1 auto; max-height: none !important; }
+#in-intake-slot[data-sizing="yes"], #in-intake-slot[data-sizing="yes"] * { user-select: none; transition: none !important; }
+
 .in-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0 8px; }
 .in-head-l { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .in-title { margin: 0; font: 700 13.5px/1.2 var(--display); color: var(--strong); letter-spacing: -.1px; }
