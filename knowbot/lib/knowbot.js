@@ -1416,7 +1416,8 @@ export function verifySummary(summary, { quotedLines = [], picks = [], citeOf = 
   }
   const pool = quotedLines.join('\n');
   const low = pool.toLowerCase();
-  const nums = new Set((pool.match(/\d[\d,]*(?:\.\d+)?/g) || []).map(normNum));
+  // numbers the question itself states ("under $1,000") may be restated; every other number must be in the quotes
+  const nums = new Set([...(pool.match(/\d[\d,]*(?:\.\d+)?/g) || []), ...(String(question || '').match(/\d[\d,]*(?:\.\d+)?/g) || [])].map(normNum));
   // every sentence is cited, and only with lines that are quoted
   const sentences = s.split(/(?<=[.!?])\s+(?=\S)/).filter((x) => x.trim());
   if (sentences.length > 3) return { ok: false, reason: 'too long' };
@@ -1823,7 +1824,7 @@ export function tabularShare(texts = []) {
   const t = texts.map((x) => String(x || '').trim()).filter(Boolean);
   return t.length ? t.filter((x) => TAB_KV.test(x) || TAB_ROW.test(x) || TAB_CSV.test(x)).length / t.length : 0;
 }
-export const INTERPRET_SETTINGS = Object.freeze({ max_tokens: 160, temperature: 0 });
+export const INTERPRET_SETTINGS = Object.freeze({ max_tokens: 320, temperature: 0 });
 export function buildInterpretMessages(question, lines, persona = {}) {
   return [
     { role: 'system', content: `You are ${persona.name || 'a helpful assistant'}${persona.org ? ` for ${persona.org}` : ''}. The numbered lines are fields or rows from a table (a spreadsheet, CSV or JSON record). Answer the question in one or two short, plain sentences, the way a helpful person would explain it: pick the fields that answer the question and add useful context (for example what, how many, where). Do not list every field. Use ONLY values that appear in the lines, copied exactly (numbers, names, codes). End each sentence with the marker of a line it relies on, like [L12]. Reply with the sentences only.` },

@@ -858,3 +858,16 @@ test('table rows are interpreted in plain words (verified against the cells), ne
   assert.equal(called, false);
   assert.equal(m.tabularShare(['| SKU | Price |', '| A1 | 9.99 |']), 1);
 });
+
+test('table interpretation may restate a number from the question ("under $1,000"), never invent one', async () => {
+  const m = await import('../knowbot.js');
+  const src = [{ file_id: 'p', filename: 'price-list.md', title: 'Lumen Bikes Price List 2026' }];
+  const cells = ['Model: Lumen Commuter 1; Type: city; Price (USD): $649', 'Model: Lumen Kids 16; Type: kids; Price (USD): $349', 'Model: Lumen Balance 12; Type: kids; Price (USD): $159'];
+  const lines = cells.map((text, i) => ({ n: i + 1, source: 0, text }));
+  const fin = { text: cells.map((c) => `- “${c}” [1]`).join('\n') + '\nDid that answer your question?', citations: [{ n: 1, file_id: 'p' }], refused: false, selected: [1, 2, 3] };
+  const q = 'Which bikes cost under $1,000?';
+  const ok = await m.interpretTabular({ fin, lines, sources: src, question: q, complete: async () => 'Three bikes cost under $1,000: the Lumen Commuter 1 at $649, the Lumen Kids 16 at $349 and the Lumen Balance 12 at $159 [L1].' });
+  assert.equal(ok.tabular, true, ok.text);
+  const bad = await m.interpretTabular({ fin, lines, sources: src, question: q, complete: async () => 'Three bikes cost under $1,000, from $159 to $799 [L1].' });
+  assert.equal(bad.text, fin.text, 'a number in neither the cells nor the question is still refused');
+});
