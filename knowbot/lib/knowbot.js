@@ -982,7 +982,22 @@ export function finalizeSelection(raw, lines = [], sources = [], opts = {}) {
       else return { ...none, uncovered: cov.clauses.filter((c) => !c.covered).flatMap((c) => c.terms) };
     }
   }
-  const cap = (listy ? 10 : 5) + picks.filter((n) => lines[n - 1].lead).length; // headlines don't use a list slot
+  // A quote that points at a link it doesn't carry ("…from the weekly games page here", "see below") brings along the
+  // next nearby line of the same source that has the link (verbatim and cited like any quote), so the answer never says
+  // "here" without the address.
+  const URL_IN = /https?:\/\/\S/i;
+  const POINTS = /\b(?:here|below|link|page|website|site|online)\b[^.!?]{0,14}[.:!]?["”’)]*\s*$/i;
+  const linkFor = [];
+  picks = picks.flatMap((n) => {
+    const l = lines[n - 1];
+    if (!l || URL_IN.test(l.text) || !POINTS.test(l.text)) return [n];
+    const next = lines.find((m) => m.source === l.source && m.n > n && m.n <= n + 6 && URL_IN.test(m.text) && !picks.includes(m.n));
+    if (!next) return [n];
+    linkFor.push(next.n);
+    return [n, next.n];
+  });
+  picks = [...new Set(picks)];
+  const cap = (listy ? 10 : 5) + picks.filter((n) => lines[n - 1].lead).length + linkFor.length; // headlines and link lines don't use a list slot
   picks = picks.slice(0, cap);
   const citations = [], idx = new Map();
   // the citation points where the quoted line sits: its own heading inside the atom when it has one (never invented)

@@ -283,6 +283,21 @@ test('support check: claims whose numbers or wording are not in the cited source
   assert.equal(r.citations[0].file_id, 'f2', 'mis-cited claim is re-cited to the source that supports it');
 });
 
+test('select mode: a quote that points at a link ("…page here") brings the nearby line with the address', () => {
+  const note = "Yes! If you're interested in booking a game with Jason, you can access \"The Everlasting Rime\" weekly sessions from the weekly games page here. Drop-in slots are available when regular players have last-minute changes. Check out a table! The evening sessions are viewable here: https://theultimategamemaster.com/collections/the-endless-rime-monthly-subscription-copy";
+  const src = [S(1, { filename: 'notes/does-jason-dm-or-gm-remote-games.md', title: 'Does Jason DM or GM remote games?', text: `# Does Jason DM or GM remote games?\n${note}\nTopics: weekly-live-games` })];
+  const lines = candidateLines(src);
+  const here = lines.find((l) => /weekly games page here/.test(l.text));
+  const url = lines.find((l) => /https:\/\//.test(l.text));
+  assert.ok(here && url && url.n > here.n, JSON.stringify(lines.map((l) => l.text)));
+  const a = finalizeSelection(`L${here.n}`, lines, src, { question: 'Does Jason do live games?' });
+  assert.match(a.text, /weekly games page here/);
+  assert.match(a.text, /The evening sessions are viewable here: https:\/\/theultimategamemaster\.com\/collections\/the-endless-rime-monthly-subscription-copy/);
+  assert.deepEqual(a.selected, [here.n, url.n]);
+  // a line that already carries its link, or doesn't point anywhere, brings nothing extra
+  assert.deepEqual(finalizeSelection(`L${url.n}`, lines, src, { question: 'Where can I see the evening sessions?' }).selected, [url.n]);
+});
+
 test('select mode: the model only names lines; KnowBot quotes them with citations, or gives the fixed refusal', async () => {
   const src = [S(1, { filename: 'canonical/returns.md', title: 'Returns', text: '---\ntitle: Returns\n---\n# Returns\nReturns are accepted within 30 days of receipt.\n- After 30 days a return is not accepted.\n- Sale items and gift cards cannot be returned.\nWhere this comes from: policies/refund.md' }),
     S(2, { filename: 'catalog/products/screen.md', title: 'Screen', text: '# Screen\n| Variant | Price | Available |\n|---|---|---|\n| Red | $139.99 | no |\n| Brown | $139.99 | yes |' })];
