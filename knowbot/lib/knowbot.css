@@ -177,6 +177,10 @@ a.kb-src-title:hover { color: var(--kb-accent-text); text-decoration: underline;
 .kb-input:focus { outline: none; border-color: var(--kb-accent-text); box-shadow: 0 0 0 3px var(--kb-accent-soft); }
 .kb-send { flex: none; width: 42px; height: 42px; border-radius: 12px; border: 0; display: grid; place-items: center; background: var(--kb-accent); color: #fff; }
 .kb-send:hover { background: #4338ca; }
+.kb-mic { flex: none; width: 42px; height: 42px; border-radius: 12px; border: 0; display: grid; place-items: center; background: transparent; color: var(--kb-mute); cursor: pointer; }
+.kb-mic svg { width: 22px; height: 22px; }
+.kb-mic:hover { background: var(--kb-line); color: inherit; }
+.kb-voice { flex: 1; min-height: 0; overflow: auto; padding: 16px 12px; display: flex; flex-direction: column; justify-content: center; }
 .kb-send:disabled { opacity: 0.45; cursor: progress; }
 .kb-foot { padding: 0 12px 10px; background: var(--kb-bg); font: 10.5px/1.4 var(--kb-mono); color: var(--kb-mute); text-align: center; }
 

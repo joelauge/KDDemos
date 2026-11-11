@@ -425,6 +425,8 @@ export async function addNote(body) { return request('POST', trialPath('/notes')
 export async function getSite() { return request('GET', trialPath('/site')); }
 /** POST /site {name?, logo? (image data URL | null), showOn?, ...} -> the same view, saved. */
 export async function saveSite(body) { return request('POST', trialPath('/site'), { body }); }
+/** GET /api/studio/trials/:id/devkey: the trial's own key, bot id and channels (voice socket, voice mode's orb colour). */
+export async function devKey() { return request('GET', trialPath('/devkey')); }
 
 /** POST /email -> {sent, link}. */
 export async function sendEmail(email) { return request('POST', trialPath('/email'), { body: { email } }); }

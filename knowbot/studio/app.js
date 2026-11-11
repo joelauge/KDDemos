@@ -2578,13 +2578,17 @@ function openSpec(focusField) {
 function syncSpecSite() {
   const box = specEl && $('#st-spec-site', specEl);
   if (!box) return;
-  const on = $$('input[name="surface"]', specEl).some((c) => c.value === 'site' && c.checked);
-  box.hidden = !on;
+  const checked = new Set($$('input[name="surface"]', specEl).filter((c) => c.checked).map((c) => c.value));
+  // the Homepage search's whole block; for web chat (or web voice) without it, only voice mode's orb colour
+  const mode = checked.has('site') ? 'site' : checked.has('webchat') || checked.has('webvoice') ? 'orb' : '';
+  box.hidden = !mode;
   const body = $('.st-spec-site-body', box);
-  if (!on || box.dataset.loaded === '1') return;
-  box.dataset.loaded = '1';
+  const label = $('.st-label', box);
+  if (label) label.textContent = mode === 'orb' ? 'Voice mode' : 'Homepage search';
+  if (!mode || box.dataset.loaded === mode) return;
+  box.dataset.loaded = mode;
   body.replaceChildren(h('p', { class: 'st-field-hint' }, 'Loading…'));
-  api.getSite().then((view) => { if (body.isConnected) body.replaceChildren(siteSettings({ view, compact: true })); })
+  api.getSite().then((view) => { if (body.isConnected && box.dataset.loaded === mode) body.replaceChildren(siteSettings({ view, compact: true, orbOnly: mode === 'orb' })); })
     .catch(() => { box.dataset.loaded = ''; body.replaceChildren(h('p', { class: 'st-field-hint' }, "Couldn't load the Homepage search settings. Close and open the bot spec to try again.")); });
 }
 

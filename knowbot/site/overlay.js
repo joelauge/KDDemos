@@ -15,11 +15,15 @@
  * the visitor closes it with ×; then only the "Ask" pill, in that browser) | 'every-visit', an uploaded logo (shown under the
  * wave in place of the name),
  * showChips (topic buttons under the box, default off). The Studio's preview passes the owner's trial key as #k=…
- * (hosted link only), which also opens a site that is not published yet. */
+ * (hosted link only), which also opens a site that is not published yet.
+ * Voice mode: the mic button in the search box opens ../lib/voice-mode.js (loaded from this script's own origin only when
+ * pressed) in place of the search: an orb in the owner's colour (site.orb) that follows the visitor's voice and the
+ * answer's, with captions, a transcript and the sources. It asks through the bot's voice session with the same key. */
 (() => {
   'use strict';
   const me = document.currentScript;
   if (!me || document.querySelector('knowbot-overlay')) return;
+  const SRC = (() => { try { return me.src ? new URL(me.src, location.href).href : null; } catch { return null; } })();
   const d = me.dataset || {};
   const HOSTED = d.hosted != null;
   const params = new URLSearchParams(HOSTED ? location.search : '');
@@ -148,6 +152,13 @@ button { font: inherit; color: inherit; }
   font-weight: 700; cursor: pointer;
 }
 .go:hover { filter: brightness(1.08); }
+.mic {
+  flex: none; display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 999px; background: transparent; color: var(--muted);
+  cursor: pointer;
+}
+.mic:hover { background: var(--soft); color: var(--ink); }
+.voice { flex: 1; width: 100%; max-width: 640px; margin: 0 auto; --kbvm-accent: var(--acc); --kbvm-accent-dark: var(--acc); --kbvm-on-accent: var(--on-acc); --kbvm-on-accent-dark: var(--on-acc); }
+.voice-load { margin: 40px 0; text-align: center; color: var(--muted); }
 .go:disabled { opacity: .6; cursor: default; }
 .quiet { margin: 14px 0 0; color: var(--muted); font-size: 14px; }
 .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 18px 0 0; }
@@ -245,24 +256,28 @@ button { font: inherit; color: inherit; }
       ? h('img', { class: 'brandlogo', src: `${API}${s.logo.path}`, alt: name, referrerpolicy: 'no-referrer', decoding: 'async' }) : null;
     const input = h('input', { id: 'kb-q', class: 'q', type: 'search', name: 'q', autocomplete: 'off', maxlength: '500', placeholder: innerWidth < 480 ? 'Ask anything' : `Ask anything about ${name}`, enterkeyhint: 'search' });
     const go = h('button', { class: 'go', type: 'submit' }, 'Ask');
+    // voice mode: only where the script knows its own address (the module is loaded from there when pressed)
+    const mic = SRC ? h('button', { class: 'mic', type: 'button', 'aria-label': 'Ask by voice', title: 'Ask by voice', onclick: () => enterVoice() },
+      svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>', 22)) : null;
     const form = h('form', { class: 'form', role: 'search', 'aria-label': `Ask ${name}` },
       h('label', { class: 'sr', for: 'kb-q' }, `Ask anything about ${name}`),
-      h('div', { class: 'box' }, svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'), input, go));
+      h('div', { class: 'box' }, svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'), input, mic, go));
     form.addEventListener('submit', (e) => { e.preventDefault(); ask(input.value); });
     const chips = s.showChips && (s.chips || []).length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Topics' },
       s.chips.map((x) => h('button', { type: 'button', class: 'chip', title: x.q, onclick: () => ask(x.q) }, x.label))) : null;
     const hand = h('span', { class: 'hand' }, '👋');
     const answer = h('section', { class: 'answer', 'aria-label': 'Answer', hidden: true });
     const close = h('button', { class: 'x', type: 'button', 'aria-label': 'Close', title: 'Close', onclick: () => closeIt() }, svg('<path d="M6 6l12 12M18 6 6 18"/>', 22));
-    const panel = h('div', { class: 'panel' },
-      s.preview ? h('p', { class: 'preview' }, 'Preview · not published yet') : null,
-      close,
-      h('div', { class: 'col' },
+    const voiceBox = h('div', { class: 'voice', hidden: true });
+    const col = h('div', { class: 'col' },
         h('div', { class: 'wave', 'aria-hidden': 'true' }, hand),
         brandLogo ? h('h1', { id: 'kb-h', class: 'name has-logo' }, brandLogo) : h('h1', { id: 'kb-h', class: 'name' }, logo, h('span', null, name)),
         form,
         h('p', { class: 'quiet' }, typeof s.subline === 'string' && s.subline.trim() ? s.subline.trim().slice(0, 140) : `Answers come only from ${name}'s own pages.`),
-        chips, status, answer),
+        chips, status, answer);
+    const panel = h('div', { class: 'panel' },
+      s.preview ? h('p', { class: 'preview' }, 'Preview · not published yet') : null,
+      close, col, voiceBox,
       h('div', { class: 'foot' }, h('a', { class: 'built', href: 'https://knowbot.knowdrive.ai/', target: '_blank', rel: 'noopener' }, 'Built with KnowBot', h('span', { class: 'sr' }, ' (opens in a new tab)'))));
     const dialog = h('div', { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'kb-h', hidden: true }, panel);
     // a click on the scrim around the panel closes it too
@@ -271,14 +286,15 @@ button { font: inherit; color: inherit; }
     const pill = h('button', { class: 'pill', type: 'button', hidden: true, 'aria-haspopup': 'dialog', onclick: () => openIt(pill) },
       h('span', { class: 'pill-h', 'aria-hidden': 'true' }, '👋'), h('span', { class: 'pill-t' }, `Ask ${name}`));
     root.replaceChildren(scrim, dialog, pill);
-    return { input, go, answer, dialog, scrim, pill, hand, panel };
+    return { input, go, mic, answer, dialog, scrim, pill, hand, panel, col, voiceBox };
   }
 
   // ------------------------------------------------------------------------------------------------ open / close
-  const focusables = () => [...ui.dialog.querySelectorAll('a[href], button:not([disabled]), input:not([disabled])')].filter((el) => el.getClientRects().length);
+  const focusables = () => [...ui.dialog.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), summary')].filter((el) => el.getClientRects().length);
   function onKey(e) {
     if (!isOpen) return;
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeIt(); return; }
+    // Esc ends voice mode first (back to the search box), then closes the overlay
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (voice || voiceLoading) exitVoice(); else closeIt(); return; }
     if (e.key !== 'Tab') return;
     const list = focusables();
     if (!list.length) return;
@@ -288,7 +304,7 @@ button { font: inherit; color: inherit; }
     else if (!e.shiftKey && (i === -1 || i === list.length - 1)) { e.preventDefault(); list[0].focus(); }
   }
   // focus that lands on the page behind (a script, a click through) comes back into the dialog
-  function onFocusIn(e) { if (isOpen && e.target !== host) ui.input.focus({ preventScroll: true }); }
+  function onFocusIn(e) { if (isOpen && e.target !== host) { if (voice) voice.focus(); else ui.input.focus({ preventScroll: true }); } }
 
   function openIt(from) {
     if (isOpen || !ui) return;
@@ -305,6 +321,7 @@ button { font: inherit; color: inherit; }
   }
   function closeIt() {
     if (!isOpen) return;
+    exitVoice({ focus: false });
     isOpen = false;
     ui.scrim.hidden = true; ui.dialog.hidden = true; ui.pill.hidden = false;
     document.documentElement.style.overflow = prevOverflow || '';
@@ -315,6 +332,48 @@ button { font: inherit; color: inherit; }
     const back = prevFocus && prevFocus.isConnected && prevFocus !== ui.pill ? prevFocus : ui.pill;
     try { back.focus({ preventScroll: true }); } catch { ui.pill.focus(); }
     status.textContent = '';
+  }
+
+  // ------------------------------------------------------------------------------------------------ voice mode
+  let voice = null, voiceLoading = false, voiceSeq = 0;
+  async function enterVoice() {
+    if (voice || voiceLoading || !ui || !SRC) return;
+    voiceLoading = true;
+    const seq = ++voiceSeq;
+    ui.col.hidden = true;
+    ui.voiceBox.hidden = false;
+    ui.voiceBox.replaceChildren(h('p', { class: 'voice-load', role: 'status' }, 'Starting voice mode…'));
+    status.textContent = '';
+    try {
+      const [{ openVoiceMode }] = await Promise.all([
+        import(new URL('../lib/voice-mode.js?v=228872e', SRC).href),
+        // a fresh key when this one is about to run out (it lives a few hours)
+        !ownerKey && Date.parse(site.keyExpiresAt || '') < Date.now() + 120000 ? loadSite().then((x) => { site = { ...site, ...x }; }).catch(() => {}) : null,
+      ]);
+      if (seq !== voiceSeq || !isOpen) return;
+      const ep = typeof site.endpoints?.voice === 'string' && /^wss?:\/\//.test(site.endpoints.voice) ? site.endpoints.voice : `${API.replace(/^http/, 'ws')}/api/v1/bots/${encodeURIComponent(BOT)}/voice/live`;
+      ui.voiceBox.replaceChildren();
+      voice = openVoiceMode(ui.voiceBox, {
+        endpoint: ep, key: ownerKey || site.key, name: String(site.name || 'Our help centre'), orb: site.orb,
+        theme: root.classList.contains('dark') ? 'dark' : 'light', size: 'min(240px, 56vw, 34vh)',
+        onTurn: (t) => { if (!t.question || !t.answer) return; hist.push({ role: 'user', content: t.question }, { role: 'assistant', content: t.answer }); while (hist.length > 8) hist.shift(); },
+        onClose: () => { voice = null; exitVoice(); },
+      });
+      voice.focus();
+    } catch {
+      if (seq !== voiceSeq) return;
+      ui.voiceBox.replaceChildren(h('p', { class: 'voice-load', role: 'alert' }, "Voice mode couldn't start here. Press Esc and type your question instead."));
+    } finally { if (seq === voiceSeq) voiceLoading = false; }
+  }
+  function exitVoice({ focus = true } = {}) {
+    if (!ui || (ui.voiceBox.hidden && !voice)) return;
+    voiceSeq++; voiceLoading = false;
+    const v = voice; voice = null;
+    ui.voiceBox.hidden = true;
+    ui.col.hidden = false;
+    if (v) v.stop(); // its onClose comes back here with nothing left to do
+    ui.voiceBox.replaceChildren();
+    if (focus && isOpen) (ui.mic || ui.input).focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------------------------------------------ asking

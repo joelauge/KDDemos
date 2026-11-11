@@ -1,9 +1,11 @@
 // The Homepage search's look and behaviour, shared by Channels → Homepage search (golive.js siteTry) and the bot spec
 // drawer (app.js): the business name, an uploaded logo (shown under the waving hand in place of the name) and when the
-// search shows (until the visitor closes it, or on every visit). Every change saves at once (POST /site) and calls
-// onSaved(view) so the caller can refresh its preview.
+// search shows (until the visitor closes it, or on every visit), and voice mode's orb colour (one choice per bot: the
+// Homepage search and web chat both use it). Every change saves at once (POST /site) and calls onSaved(view) so the
+// caller can refresh its preview.
 
 import * as api from './api.js?v=75ddc38';
+import { ORB_PRESETS, ORB_IDS, orbId, orbSwatch, createOrb } from '../lib/voice-orb.js?v=75ddc38';
 
 export const LOGO_BOX = { w: 600, h: 200 };          // the suggested size; uploads are fitted inside it
 const LOGO_MAX = 150 * 1024;                          // matches server/site.mjs LOGO_MAX_BYTES
@@ -54,9 +56,10 @@ export async function fitLogo(file) {
 
 /**
  * The settings block. view: the GET/POST /site response. Returns the element; it saves on its own.
- * @param {{view: object, onSaved?: (view: object) => void, compact?: boolean}} o
+ * orbOnly: only voice mode's orb colour (the bot spec drawer, for a bot with web chat but no Homepage search).
+ * @param {{view: object, onSaved?: (view: object) => void, compact?: boolean, orbOnly?: boolean}} o
  */
-export function siteSettings({ view, onSaved = () => {}, compact = false }) {
+export function siteSettings({ view, onSaved = () => {}, compact = false, orbOnly = false }) {
   const id = `ss${++seq}`;
   let v = view;
   const status = h('p', { class: 'ss-status', role: 'status', 'aria-live': 'polite' });
@@ -98,6 +101,8 @@ export function siteSettings({ view, onSaved = () => {}, compact = false }) {
     sub.placeholder = defLine();
     if (document.activeElement !== sub && sub.value.trim() !== (v.site?.subline || '')) { sub.value = v.site?.subline || ''; lastSub = sub.value; }
     for (const r of radios) r.checked = r.value === (v.site?.showOn === 'every-visit' ? 'every-visit' : 'until-dismissed');
+    for (const r of orbRadios) r.checked = r.value === orbId(v.site?.orb);
+    preview?.setPreset(orbId(v.site?.orb));
   }
   file.addEventListener('change', async () => {
     const f = file.files?.[0]; file.value = '';
@@ -119,6 +124,33 @@ export function siteSettings({ view, onSaved = () => {}, compact = false }) {
     return h('label', { class: 'ss-opt', for: r.id }, r, h('span', null, h('b', null, label), h('small', null, sub)));
   };
 
+  // voice mode's orb: four colours, with a live orb that breathes and "listens" in the chosen one
+  const orbRadios = [];
+  const orbCanvas = h('canvas', { class: 'ss-orb-canvas', 'aria-hidden': 'true' });
+  const orbOpt = (oid) => {
+    const r = h('input', { type: 'radio', name: `${id}-orb`, id: `${id}-orb-${oid}`, value: oid, class: 'ss-orb-in' });
+    r.addEventListener('change', () => { if (!r.checked) return; preview?.setPreset(oid); save({ orb: oid }, `Saved: the ${ORB_PRESETS[oid].label} orb, in voice mode on your homepage search and web chat.`); });
+    orbRadios.push(r);
+    return h('label', { class: 'ss-orb-opt', for: r.id }, r, h('span', { class: 'ss-orb-sw', style: `background:${orbSwatch(oid)}`, 'aria-hidden': 'true' }), h('span', { class: 'ss-orb-name' }, ORB_PRESETS[oid].label));
+  };
+  const orbField = h('fieldset', { class: 'ss-field ss-set ss-orbs' }, h('legend', { class: 'ss-l' }, 'Voice mode colour'),
+    h('div', { class: 'ss-orb-row' }, h('div', { class: 'ss-orb-preview' }, orbCanvas), h('div', { class: 'ss-orb-opts' }, ORB_IDS.map(orbOpt))),
+    h('p', { class: 'ss-hint' }, 'Visitors who press the mic see this orb. It moves with their voice while it listens, and with the answer while it speaks.'));
+  let preview = null;
+  try {
+    preview = createOrb(orbCanvas, { preset: orbId(v.site?.orb), maxPixels: 256 });
+    preview.setState('listening');
+    // a calm, speech-like level so the preview shows how it reacts
+    const t0 = performance.now();
+    preview.setLevelSource(() => { const t = (performance.now() - t0) / 1000; return Math.max(0, 0.25 + 0.3 * Math.sin(t * 2.1) * Math.sin(t * 5.3)); });
+    // (it draws only while on screen: a closed drawer or a removed block costs nothing)
+  } catch { preview = null; }
+
+  if (orbOnly) {
+    const one = h('div', { class: `ss${compact ? ' ss-compact' : ''}` }, orbField, status);
+    paintLogo();
+    return one;
+  }
   const el = h('div', { class: `ss${compact ? ' ss-compact' : ''}` },
     h('div', { class: 'ss-field' }, h('label', { class: 'ss-l', for: name.id }, 'Business name'), name,
       h('p', { class: 'ss-hint' }, 'Used for the search box and the "Ask" button. A logo replaces it under the wave.')),
@@ -130,6 +162,7 @@ export function siteSettings({ view, onSaved = () => {}, compact = false }) {
     h('fieldset', { class: 'ss-field ss-set' }, h('legend', { class: 'ss-l' }, 'When it shows'),
       opt('until-dismissed', 'Until the visitor closes it', 'Opens on each visit until they close it with ×. After that, only the small "Ask" button shows.'),
       opt('every-visit', 'On every visit', 'Opens every time someone visits your homepage, even if they closed it before.')),
+    orbField,
     status);
   paintLogo();
   return el;

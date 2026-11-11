@@ -180,6 +180,9 @@ export function buildSite({ spec = {}, files = [], questions = {}, atomsByFile =
 export const SHOW_ON = Object.freeze(['until-dismissed', 'every-visit']);
 /** 'first-visit' was the earlier name of 'until-dismissed' (saved edits and old clients still send it). */
 export const showOnOf = (v) => (v === 'every-visit' ? 'every-visit' : 'until-dismissed');
+/** Voice mode's orb colours (lib/voice-orb.js ORB_PRESETS): one choice per bot, for the Homepage search and web chat. */
+export const SITE_ORBS = Object.freeze(['ocean', 'violet', 'sunset', 'mint']);
+export const orbOf = (v) => (SITE_ORBS.includes(v) ? v : SITE_ORBS[0]);
 export const LOGO_MAX_BYTES = 150 * 1024;
 const LOGO_TYPES = { 'image/png': (b) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
   'image/jpeg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
@@ -214,17 +217,18 @@ export function editsView(edits = {}) {
   return logo ? { ...rest, logo: { type: logo.type, v: logo.v } } : rest;
 }
 /**
- * Owner edits from POST /site: { name?, tagline?, subline?, logo?, chips?, showOn?, showChips?, published? } → validated, or
+ * Owner edits from POST /site: { name?, tagline?, subline?, logo?, chips?, showOn?, showChips?, orb?, published? } → validated, or
  * throws { status:400, field }. showOn: 'until-dismissed' (default: it opens on each visit until the visitor closes it
  * with ×; after that only the small "Ask" button shows, in that browser) or 'every-visit' (it opens on every visit).
  * logo: an image data URL, or null to remove it (the business name shows instead). showChips: topic buttons under the search box (default off).
+ * orb: voice mode's orb colour, one of SITE_ORBS (null: the default); the same choice applies to the bot's web chat.
  */
 export function validateSiteEdit(body, current = {}) {
   const bad = (field, message) => { const e = new Error(`${field}: ${message}`); e.status = 400; e.code = 'bad_request'; e.field = field; throw e; };
   if (!body || typeof body !== 'object' || Array.isArray(body)) bad('body', 'must be a JSON object');
   const next = { ...current };
   for (const k of Object.keys(body)) {
-    if (!['name', 'tagline', 'subline', 'logo', 'chips', 'showOn', 'showChips', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
+    if (!['name', 'tagline', 'subline', 'logo', 'chips', 'showOn', 'showChips', 'orb', 'published', 'regenerate'].includes(k)) bad(k, 'unknown field');
   }
   if (body.name !== undefined) {
     if (body.name === null || body.name === '') delete next.name;
@@ -266,6 +270,10 @@ export function validateSiteEdit(body, current = {}) {
     if (typeof body.showChips !== 'boolean') bad('showChips', 'must be true or false');
     next.showChips = body.showChips;
   }
+  if (body.orb !== undefined) {
+    if (body.orb === null || body.orb === '') delete next.orb;
+    else { if (!SITE_ORBS.includes(body.orb)) bad('orb', `must be ${SITE_ORBS.join(', ')}`); next.orb = body.orb; }
+  }
   if (body.published !== undefined) {
     if (typeof body.published !== 'boolean') bad('published', 'must be true or false');
     next.published = body.published;
@@ -282,7 +290,7 @@ export function publicSite(gen, edits = {}, { botId, trial = true, expiresAt = n
     links: g.links || { byId: {}, byName: {} }, brand: g.brand || brandColors(null), homeUrl: g.homeUrl || null, homeFrame: g.homeFrame || null, initials: g.initials || 'KB',
     subline: edits.subline || null,
     logo: edits.logo?.v && botId ? { path: `/api/site/${encodeURIComponent(botId)}/logo?v=${edits.logo.v}` } : null,
-    showOn: showOnOf(edits.showOn), showChips: edits.showChips === true,
+    showOn: showOnOf(edits.showOn), showChips: edits.showChips === true, orb: orbOf(edits.orb),
     published: !!edits.published, trial: !!trial, noindex: !!trial, expiresAt, generatedAt: g.generatedAt || null,
   };
 }

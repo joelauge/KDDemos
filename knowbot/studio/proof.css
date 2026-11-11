@@ -549,6 +549,15 @@
   transition: background-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out), opacity var(--dur-1);
 }
 .sb-send:hover { background: var(--btn-hover); }
+.sb-mic { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; flex: none; background: transparent; color: var(--dim); cursor: pointer; }
+.sb-mic:hover { background: var(--raise); color: var(--strong); }
+/* voice mode over the bot pane (lib/voice-mode.js inside) */
+.sb-voice { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--panel); overflow: auto; overscroll-behavior: contain; }
+.sb-voice-head { display: flex; align-items: baseline; gap: 10px; padding: 14px var(--st-gutter, 16px) 0; }
+.sb-voice-t { font: 600 15px/1.3 var(--font); color: var(--strong); }
+.sb-voice-sub { font: 400 13px/1.3 var(--font); color: var(--dim); }
+.sb-voice-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 12px var(--st-gutter, 16px) 20px; align-items: center; }
+.sb-voice-load { color: var(--dim); }
 .sb-send:active { transform: scale(.94); }
 .sb-composer[data-ready="false"] .sb-send { opacity: .5; }
 .sb-composer[data-ready="false"] .sb-comp-box { background: var(--panel-2); }
@@ -816,7 +825,7 @@ li[data-state="queued"] .pf-sc-q { color: var(--muted); }
   .sb-sugg { padding-top: 6px; }
   .sb-composer { padding: 6px var(--st-gutter) calc(10px + var(--kb-inset, 0px)); }
   .sb-input { font-size: 16px; min-height: 44px; padding: 11px 0; }   /* 16px: no iOS zoom on focus */
-  .sb-send { width: 44px; height: 44px; border-radius: 12px; }
+  .sb-send, .sb-mic { width: 44px; height: 44px; border-radius: 12px; }
   .sb-scope { height: 44px; padding: 0 12px; }
   .sb-more { width: 44px; height: 44px; }
   .sb-hint { display: none; }
