@@ -65,6 +65,7 @@ const ICON = {
   chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.6 3.8c-.5.4-1.4.1-1.4-.6z" fill="currentColor"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-2.5-6.5z" fill="currentColor"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11v9H4v-9zm2 9h8.3a2 2 0 0 0 2-1.6l1.2-6A2 2 0 0 0 18.5 10H14l.7-3.6A1.8 1.8 0 0 0 11.4 5L9 10.5z" fill="currentColor"/></svg>',
 };
 ICON.down = ICON.up.replace('<svg ', '<svg style="transform:scaleY(-1)" ');
@@ -94,6 +95,7 @@ class ChatView {
       <form class="kb-form" autocomplete="off">
         <label class="kb-sr" for="${this.id}-in">Ask ${escapeHtml(title)} a question</label>
         <textarea id="${this.id}-in" class="kb-input" rows="1" maxlength="2000" placeholder="${escapeHtml(o.placeholder || 'Ask a question…')}"></textarea>
+        ${o.voice?.bot ? `<button class="kb-mic" type="button" aria-label="Talk instead (voice mode)" title="Voice mode">${ICON.mic}</button>` : ''}
         <button class="kb-send" type="submit" aria-label="Send">${ICON.send}</button>
       </form>
       <div class="kb-foot">Grounded answers from the knowDrive · <span class="kb-engine"></span></div>`;
@@ -108,12 +110,52 @@ class ChatView {
     });
     this.input.addEventListener('input', () => this.autosize());
     this.log.addEventListener('click', (e) => this.onCite(e));
+    this.micBtn = $('.kb-mic');
+    this.micBtn?.addEventListener('click', () => this.openVoice());
     if (o.greeting !== false) this.addBot(o.greeting || `Hi! I'm ${title}. Ask me anything about ${persona.org} — every answer cites the files it came from.`, 'kb-greet');
     for (const q of o.starters || []) {
       this.starters.appendChild(h('button', { type: 'button', class: 'kb-starter', onclick: () => this.ask(q) })).textContent = q;
     }
     this.starters.hidden = !(o.starters || []).length;
     if (o.preload && this.bot.engine.type === 'webllm') this.loadModel().catch(() => {});
+  }
+
+  /** Voice mode (./voice-mode.js) in place of the conversation: an orb, captions, sources; End or Esc comes back. */
+  async openVoice() {
+    if (this.voiceBox) return;
+    const v = this.o.voice || {};
+    const box = h('div', { class: 'kb-voice' });
+    const hide = [this.log, this.starters, this.form, this.prog];
+    const wasHidden = hide.map((x) => x.hidden);
+    hide.forEach((x) => { x.hidden = true; });
+    this.head.after(box);
+    this.voiceBox = box;
+    const done = () => {
+      if (this.voiceBox !== box) return;
+      this.voiceBox = null; this.voice = null;
+      box.remove();
+      hide.forEach((x, i) => { x.hidden = wasHidden[i]; });
+      this.micBtn?.focus();
+    };
+    box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (!this.voice) done(); } });
+    box.textContent = 'Starting voice mode…';
+    const api = String(v.apiBase || location.origin).replace(/\/+$/, '');
+    const bot = encodeURIComponent(v.bot);
+    try {
+      const [{ openVoiceMode }, orb] = await Promise.all([
+        import('./voice-mode.js?v=228872e'),
+        v.orb ? v.orb : fetch(`${api}/v1/channels/${bot}`, { credentials: 'omit' }).then((r) => (r.ok ? r.json() : null)).then((j) => j?.channels?.webVoice?.orb).catch(() => null),
+      ]);
+      if (this.voiceBox !== box) return;
+      box.textContent = '';
+      this.voice = openVoiceMode(box, {
+        endpoint: v.endpoint || `${api.replace(/^http/, 'ws')}/v1/bots/${bot}/voice/live`, key: v.key || undefined,
+        name: this.o.title || this.bot.persona.name, orb, size: 'min(200px, 40vh, 60vw)', theme: v.theme || 'auto', onClose: done,
+      });
+      this.voice.focus();
+    } catch {
+      if (this.voiceBox === box) { box.textContent = "Voice mode couldn't start. Press Esc to go back to the chat."; box.tabIndex = -1; box.focus(); }
+    }
   }
 
   autosize() { this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 140) + 'px'; }

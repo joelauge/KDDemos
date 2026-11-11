@@ -45,6 +45,7 @@ import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
 import { createResearchAgent } from './research.mjs';
 import { createEvidenceSelector, createResolver, selectForRetriever, isRefusal, isAnswerable, hashFor } from './evidence.mjs';
 import { createSendInfo } from './sendinfo.mjs';
+import { orbOf } from './site.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
 export const KEY_RE = /^kb_(live|trial)_[A-Za-z0-9_.-]{20,600}$/;
@@ -1038,10 +1039,18 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       try { target = await resolveTarget(botId); } catch { return rejectUpgrade(socket, 404, 'No such bot.'); }
       const ws = acceptWebSocket(req, socket, head, { maxMessage: 512 * 1024 });
       if (!ws) return;
+      // the Homepage search's key (scope "site", GET /api/site/:id) opens voice mode too, and only asks questions: no
+      // "send me this" (no email or text goes out on it), and each visitor keeps their own caller key (their address)
+      let siteOnly = false;
+      const media = sendInfo.media(botFromNumber(target));
       handleWebVoice(ws, {
         env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, callerKey: `ip:${ip}`, ip,
         authorize: async (key) => {
-          if (key) return authKey({ headers: { authorization: `Bearer ${key}` } }, target.id);
+          if (key) {
+            const who = await authKey({ headers: { authorization: `Bearer ${key}` } }, target.id, { site: true });
+            if (who.scope === 'site') { siteOnly = true; return { keyId: null }; }
+            return who;
+          }
           if (target.kind === 'live') return { keyId: null };
           throw new ApiError(401, 'missing_api_key', 'A trial bot needs its trial key (kb_trial_…) in the start message.');
         },
@@ -1053,9 +1062,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
           return a;
         },
         // "send me this": typed turns (text engine) and the send_info tool (live engine; the visitor confirms out loud)
-        sendInfoMedia: sendInfo.media(botFromNumber(target)),
-        maybeSendInfo: (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }),
-        sendInfo: ({ via, to, answer: ans, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice') }),
+        get sendInfoMedia() { return siteOnly ? null : media; },
+        get maybeSendInfo() { return siteOnly ? null : (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }); },
+        get sendInfo() { return siteOnly ? null : ({ via, to, answer: ans, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice') }); },
         onEnd: ({ sid, engine, questions }) => log(`[webvoice] ${sid} ended (${engine || 'not started'}, ${questions} questions)`),
       });
     })().catch((e) => { log(`[webvoice] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
@@ -1128,7 +1137,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         chat: { configured: true, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/chat`, embed: `${publicBase(req, env)}/lib/embed.js` },
         voiceBot: { ...st.voiceBot, endpoint: `${base}/v1/bots/${encodeURIComponent(botId)}/voice` },
         webVoice: { configured: true, engine: webVoiceEngine(env), live: webVoiceEngine(env) === 'gemini', socket: `${base.replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(botId)}/voice/live`,
-          embed: `${publicBase(req, env)}/lib/embed.js`, widget: `${publicBase(req, env)}/lib/voice-widget.js` },
+          embed: `${publicBase(req, env)}/lib/embed.js`, widget: `${publicBase(req, env)}/lib/voice-widget.js`,
+          // voice mode's orb colour (the owner's choice in the Homepage search settings; it applies to web chat too)
+          orb: orbOf(target?.spec?.site?.orb) },
       },
       // "send me this": which media a visitor can ask to be sent this bot's answers by (both false: never offered)
       sendInfo: sendInfo.media(botFromNumber(target)),
@@ -1336,7 +1347,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       const exp = Math.min(Number(s.expiresAt) || now() + limits.siteKeyMs, now() + limits.siteKeyMs);
       res.setHeader('cache-control', 'no-store');
       return send(res, 200, { ...s.site, preview: !s.published, key: trialKey(id, exp, 'site'), keyExpiresAt: new Date(exp).toISOString(),
-        endpoints: { chat: `${apiBase(req)}/v1/bots/${id}/chat` } });
+        endpoints: { chat: `${apiBase(req)}/v1/bots/${id}/chat`, voice: `${apiBase(req).replace(/^http/, 'ws')}/v1/bots/${id}/voice/live` } });
     }
     // proof pages
     if ((mt = /^\/(?:v1\/)?p\/([A-Za-z0-9_-]+)$/.exec(p))) {

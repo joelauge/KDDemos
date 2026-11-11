@@ -44,11 +44,15 @@ const startVoice = async () => {
     open: d.open === 'true', lang: d.lang || undefined, engine: d.engine === 'text' ? 'text' : 'auto',
   });
 };
+// data-voice="on" (with data-bot, or data-instance): a mic button in the chat that opens voice mode (lib/voice-mode.js);
+// data-key for a trial bot, data-orb="ocean|violet|sunset|mint" (else the bot's own choice from the Studio).
+const voice = d.voice === 'on' || d.voice === 'true' ? { apiBase, bot: d.bot || instance || '', key: d.key || undefined, orb: d.orb || undefined } : null;
 const start = async () => {
   if (d.mode === 'voice') return startVoice();
   const inst = await instanceConfig();
   window.knowbot = mount(d.mode || 'widget', d.target || null, {
     apiBase,
+    voice: voice && voice.bot ? voice : undefined,
     engine,
     instance,
     guards: inst?.guards,

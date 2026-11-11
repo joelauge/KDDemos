@@ -3236,11 +3236,13 @@ export function mount(ctx) {
   const hintId = 'sb-hint';
   const ta = h('textarea', { id: inputId, class: 'sb-input', rows: '1', 'aria-describedby': hintId, autocomplete: 'off', spellcheck: 'true', enterkeyhint: 'send' });
   const send = h('button', { type: 'submit', class: 'sb-send', 'aria-label': 'Ask' }, ico('arrowUp', 18));
+  // voice mode (../lib/voice-mode.js): the same orb, captions and sources visitors get in web chat
+  const micBtn = h('button', { type: 'button', class: 'sb-mic', 'aria-label': 'Talk to your bot (voice mode)', title: 'Voice mode', onclick: () => openVoice() }, ico('mic', 18));
   const scopeBtn = h('button', { type: 'button', class: 'sb-scope', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, ico('search', 13), h('span', { class: 'sb-scope-l' }, 'Searching: 0 files'), h('span', { class: 'sb-scope-s sb-num' }, '0'), h('span', { class: 'sb-scope-x' }, ' files searched'), ico('chevronDown', 12));
   const personaPill = h('span', { class: 'sb-persona', hidden: true });
   const hint = h('span', { class: 'sb-hint', id: hintId });
   const moreBtn = h('button', { type: 'button', class: 'sb-more', 'aria-label': 'More options', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, ico('more', 16));
-  const compBox = h('div', { class: 'input sb-comp-box' }, h('label', { class: 'st-sr', for: inputId }, 'Ask your bot'), ta, send);
+  const compBox = h('div', { class: 'input sb-comp-box' }, h('label', { class: 'st-sr', for: inputId }, 'Ask your bot'), ta, micBtn, send);
   const compMeta = h('div', { class: 'sb-comp-meta' }, scopeBtn, personaPill, hint, moreBtn);
   const form = h('form', { class: 'sb-composer', novalidate: true }, compBox, compMeta);
   // "Didn't get the answer you needed?": write the missing answer, tag it, and it joins your bot's sources
@@ -3259,6 +3261,47 @@ export function mount(ctx) {
     compMeta.hidden = m && personaPill.hidden;
   }
   placeComposerBits();
+
+  // ------------------------------------------------------------------ voice mode (over the bot pane)
+  let voice = null, voiceLayer = null;
+  function closeVoice({ focus = true } = {}) {
+    const v = voice, layer = voiceLayer;
+    voice = null; voiceLayer = null;
+    try { v?.stop(); } catch { /* ignore */ }
+    layer?.remove();
+    if (focus && micBtn.isConnected) micBtn.focus({ preventScroll: true });
+  }
+  async function openVoice() {
+    if (voiceLayer) return;
+    const host = dom.bot || dom.composer;
+    const name = getState().spec?.name || 'Your bot';
+    const body = h('div', { class: 'sb-voice-body' }, h('p', { class: 'sb-voice-load', role: 'status' }, 'Starting voice mode…'));
+    const layer = h('div', { class: 'sb-voice', 'data-surface': 'webchat' },
+      h('div', { class: 'sb-voice-head' }, h('span', { class: 'sb-voice-t' }, 'Voice mode'), h('span', { class: 'sb-voice-sub' }, `${name} · web chat`)), body);
+    // Esc on the loading layer ends it too (voice mode handles its own Esc once it is open)
+    layer.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !voice) { e.preventDefault(); closeVoice(); } });
+    voiceLayer = layer;
+    host.append(layer);
+    try {
+      const [m, d] = await Promise.all([import('../lib/voice-mode.js?v=228872e'), api.devKey()]);
+      if (voiceLayer !== layer) return;
+      const wv = d?.channels?.webVoice || {};
+      const endpoint = typeof wv.socket === 'string' && /^wss?:\/\//.test(wv.socket) ? wv.socket : null;
+      if (!d?.key || !endpoint) throw new Error('no key');
+      body.replaceChildren();
+      voice = m.openVoiceMode(body, {
+        endpoint, key: d.key, name, orb: wv.orb, size: 'min(220px, 44vh, 60vw)',
+        theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
+        onClose: () => { if (voiceLayer === layer) { voice = null; closeVoice(); } },
+      });
+      voice.focus();
+    } catch {
+      if (voiceLayer !== layer) return;
+      body.replaceChildren(h('p', { class: 'sb-voice-load', role: 'alert' }, "Voice mode couldn't start right now. Try again in a moment."),
+        h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => closeVoice() }, 'Back to chat'));
+      body.querySelector('button')?.focus();
+    }
+  }
 
   /** The last question your bot could not answer (or the last one asked): what the form starts from. */
   function lastMissed() {
@@ -3596,6 +3639,7 @@ export function mount(ctx) {
     window.removeEventListener('online', onOnline);
     if (ghostRO) ghostRO.disconnect();
     for (const A of answers.values()) if (A.stripRO) A.stripRO.disconnect();
+    closeVoice({ focus: false });
     dom.thread.innerHTML = ''; dom.suggest.innerHTML = ''; dom.composer.innerHTML = ''; if (dom.banner) dom.banner.innerHTML = '';
   }
 

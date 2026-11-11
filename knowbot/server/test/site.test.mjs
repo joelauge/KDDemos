@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
-import { buildSite, factsFrom, brandColors, contrast, validateSiteEdit, publicSite, siteHtml, siteNameOf, fileLabel, overlaySnippet, siteLogo, editsView } from '../site.mjs';
+import { buildSite, factsFrom, brandColors, contrast, validateSiteEdit, publicSite, siteHtml, siteNameOf, fileLabel, overlaySnippet, siteLogo, editsView, SITE_ORBS } from '../site.mjs';
+import { ORB_IDS } from '../../lib/voice-orb.js';
 import { brandOfHtml, frameableOf } from '../storeimport.mjs';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -120,6 +121,16 @@ describe('site generator (pure)', () => {
     assert.deepEqual(validateSiteEdit({ showOn: null }, { showOn: 'every-visit' }), {}, 'null goes back to the default');
     assert.deepEqual(validateSiteEdit({ showOn: 'first-visit' }), { showOn: 'until-dismissed' }, 'the earlier name still works');
     assert.equal(publicSite(g, { showOn: 'first-visit' }, { botId: 'acme' }).showOn, 'until-dismissed', 'saved under the earlier name');
+  });
+  test('orb: voice mode’s colour, one of the presets (default ocean); null resets; junk is a 400', () => {
+    assert.deepEqual([...SITE_ORBS], [...ORB_IDS], 'the server knows the same presets as lib/voice-orb.js');
+    assert.equal(publicSite(g, {}, { botId: 'acme' }).orb, 'ocean');
+    const e = validateSiteEdit({ orb: 'sunset' });
+    assert.deepEqual(e, { orb: 'sunset' });
+    assert.equal(publicSite(g, e, { botId: 'acme' }).orb, 'sunset');
+    assert.deepEqual(validateSiteEdit({ orb: null }, e), {}, 'null goes back to the default');
+    assert.equal(publicSite(g, { orb: 'neon' }, { botId: 'acme' }).orb, 'ocean', 'an unknown saved value shows the default');
+    for (const bad of ['neon', 7, true, 'Ocean']) assert.throws(() => validateSiteEdit({ orb: bad }), (err) => err.status === 400 && err.field === 'orb', String(bad));
   });
   test('subline: the line under the search box, owner-set or the default (null)', () => {
     const e = validateSiteEdit({ subline: '  Ask about rules, campaigns   and dice. ' });
@@ -346,6 +357,38 @@ describe('Homepage search over HTTP', () => {
       if (!logged.length) await new Promise((r2) => setTimeout(r2, 100));
     }
     assert.ok(logged.length >= 1, 'channel:site question logged');
+  });
+
+  test('voice mode: the site key opens the bot’s voice session and asks (never "send me this"); the orb colour is the owner’s', async () => {
+    assert.equal((await (await site('POST', { orb: 'violet' })).json()).site.orb, 'violet');
+    const pub = await (await fetch(`${S.base}/api/site/${t.trialId}`)).json();
+    assert.equal(pub.orb, 'violet');
+    assert.equal(pub.endpoints.voice, `${S.base.replace(/^http/, 'ws')}/api/v1/bots/${t.trialId}/voice/live`);
+    const dk = await (await fetch(`${S.base}/api/studio/trials/${t.trialId}/devkey`, { headers: tok() })).json();
+    assert.equal(dk.channels.webVoice.orb, 'violet', 'web chat reads the same choice');
+    const session = (key) => new Promise((resolve, reject) => {
+      const ws = new WebSocket(pub.endpoints.voice);
+      const got = [];
+      const timer = setTimeout(() => { ws.close(); reject(new Error(`timed out: ${JSON.stringify(got)}`)); }, 20000);
+      ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'start', key })));
+      ws.addEventListener('message', (ev) => {
+        const m = JSON.parse(String(ev.data));
+        got.push(m);
+        if (m.type === 'ready') ws.send(JSON.stringify({ type: 'text', text: 'Can you email me how many days I have to return an unused item?' }));
+        if (m.type === 'answer' || m.type === 'error') { clearTimeout(timer); ws.close(); resolve(got); }
+      });
+      ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('socket failed')); });
+    });
+    const got = await session(pub.key);
+    assert.equal(got[0].type, 'ready', JSON.stringify(got[0]));
+    const a = got.find((m) => m.type === 'answer');
+    assert.ok(a, JSON.stringify(got.slice(-1)));
+    assert.equal(a.sendInfo, undefined, 'the site key never offers to send anything');
+    assert.match(a.text, /30 days/);
+    assert.ok(a.citations.length >= 1);
+    // a key for another bot is still refused
+    const other = await session(pub.key.replace(/^kb_trial_[A-Za-z0-9_-]+/, 'kb_trial_x'));
+    assert.equal(other.find((m) => m.type === 'error')?.code, 'unauthorized');
   });
 
   test('a question that is not in the files gets the refusal sentence, no sources', async () => {
