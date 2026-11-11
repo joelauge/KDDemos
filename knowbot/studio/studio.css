@@ -1559,7 +1559,7 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 /* "Didn't get the answer you needed?" appears once there is an answer to be unhappy with */
 :root:not([data-details="on"]) .st-bot:not(:has(.sb-answer)) .sb-miss { display: none !important; }
 :root:not([data-details="on"]) .sb-comp-meta { justify-content: flex-end; }
-:root:not([data-details="on"]) #st-bot .sb-answer .sb-line[data-run] { border-left: 0 !important; padding-left: 0 !important; margin-block: 4px !important; }
+:root:not([data-details="on"]) #st-bot .sb-answer .sb-line[data-run] { border-left: 0 !important; padding: 0 !important; margin: 2px 0 2px 20px !important; display: list-item; list-style: disc; }
 :root:not([data-details="on"]) .st-chips > .st-chip:not(:first-child) { background: transparent !important; color: var(--muted) !important; border: 1px solid var(--line) !important; }
 :root:not([data-details="on"]) .st-chips { flex-wrap: wrap; flex-direction: row; }
 :root:not([data-details="on"]) .in-row.st-working { border-color: transparent !important; border-bottom-color: var(--line) !important; }
