@@ -11,7 +11,17 @@
 .sh-opt:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 1px; }
 .sh-ico { display: inline-grid; place-items: center; }
 .sh-opt.is-mine .sh-mine { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-purple, var(--accent)); }
-@media (max-width: 899px) { .sh-sel-label { display: none; } .sh-txt { display: none; } .sh-opt { padding: 0 10px; } .sh-bar { padding: 6px 10px; justify-content: center; } }
+/* the selected tool's views (Website: Chat · Voice · Homepage search; Number: Texts · WhatsApp · Calls) */
+.sh-views { display: inline-flex; gap: 4px; align-items: center; padding-left: 4px; border-left: 1px solid var(--border-base, var(--line)); }
+.sh-views[hidden] { display: none; }
+.sh-view { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid transparent; border-radius: 999px; background: transparent;
+  color: var(--text-body, var(--muted)); font: 500 12.5px/1 var(--font); cursor: pointer; white-space: nowrap; }
+.sh-view[hidden] { display: none; }
+.sh-view:hover { color: var(--text-heading, var(--strong)); background: var(--surface-hover, rgba(0,0,0,.04)); }
+.sh-view[aria-checked="true"] { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text-heading, var(--strong)); }
+.sh-view:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 1px; }
+.sh-view.is-mine .sh-mine { position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-purple, var(--accent)); }
+@media (max-width: 899px) { .sh-sel-label { display: none; } .sh-tool .sh-txt { display: none; } .sh-opt { padding: 0 10px; } .sh-bar { padding: 6px 10px; justify-content: center; } .sh-view { padding: 0 8px; } }
 
 .sh-frames { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 18px 16px 24px; display: flex; justify-content: center; background: var(--bg-base, transparent); }
 .sh-frames[hidden] { display: none; }

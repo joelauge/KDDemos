@@ -80,7 +80,7 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${dev.studioUrl}?t=${t.trialId}&k=${encodeURIComponent(t.restoreKey)}`, { waitUntil: 'load' });
-  await page.waitForSelector('.sh-opt[data-shape="webchat"]', { timeout: 30000 });
+  await page.waitForSelector('.sh-tool[data-tool="website"]', { timeout: 30000 });
   await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
   await page.waitForSelector('.gl-tool[data-tool="website"]', { timeout: 20000 });
   check('Set up: three tool cards', (await page.locator('.gl-tool').count()) === 3);

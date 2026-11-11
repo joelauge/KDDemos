@@ -69,34 +69,38 @@
   // ------------------------------------------------------------ "Where should it answer?" (toggle buttons, multi-select)
   var surfEl = document.getElementById('kl-surf');
   var surfLive = document.getElementById('kl-surf-live');
-  var surfBtns = surfEl ? [].slice.call(surfEl.querySelectorAll('[data-surface]')) : [];
-  var nameOf = function (b) { var t = b.querySelector('.kl-ch-t'); return (t ? t.textContent : b.textContent || '').trim(); };
+  // three tools (Website, KnowBot number, Email); each turns on all of its features (one plan includes them all)
+  var surfBtns = surfEl ? [].slice.call(surfEl.querySelectorAll('[data-tool]')) : [];
+  var nameOf = function (b) { var t = b.querySelector('.kl-ch-t'); return (t ? (t.firstChild && t.firstChild.textContent) || t.textContent : b.textContent || '').trim(); };
+  var featuresOf = function (b) { return String(b.getAttribute('data-surfaces') || '').split(',').filter(Boolean); };
+  var pressedBtns = function () { return surfBtns.filter(function (b) { return b.getAttribute('aria-pressed') === 'true'; }); };
   function selectedSurfaces() {
-    var on = surfBtns.filter(function (b) { return b.getAttribute('aria-pressed') === 'true'; }).map(function (b) { return b.getAttribute('data-surface'); });
+    var on = [];
+    pressedBtns().forEach(function (b) { featuresOf(b).forEach(function (f) { if (on.indexOf(f) < 0) on.push(f); }); });
     return on.length ? on : ['webchat'];
   }
   function sayList(list) {
-    var names = surfBtns.filter(function (b) { return list.indexOf(b.getAttribute('data-surface')) >= 0; }).map(nameOf);
+    var names = list.map(nameOf);
     return names.length <= 1 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
   }
   function resetSurfaces() {
-    surfBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-surface') === 'webchat' ? 'true' : 'false'); });
+    surfBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-tool') === 'website' ? 'true' : 'false'); });
     if (surfEl) surfEl.classList.remove('is-nudge');
     if (surfLive) surfLive.textContent = '';
   }
   if (surfEl) surfEl.addEventListener('click', function (e) {
-    var b = e.target && e.target.closest && e.target.closest('[data-surface]');
+    var b = e.target && e.target.closest && e.target.closest('[data-tool]');
     if (!b) return;
     var on = b.getAttribute('aria-pressed') === 'true';
-    if (on && selectedSurfaces().length === 1 && surfBtns.filter(function (x) { return x.getAttribute('aria-pressed') === 'true'; }).length === 1) {
-      // at least one place to answer: the last one stays on, and the visitor is told why
+    if (on && pressedBtns().length === 1) {
+      // at least one tool: the last one stays on, and the visitor is told why
       surfEl.classList.add('is-nudge');
-      if (surfLive) surfLive.textContent = nameOf(b) + ' stays on: pick another place first. Your bot needs at least one.';
+      if (surfLive) surfLive.textContent = nameOf(b) + ' stays on: pick another first. Your bot needs at least one.';
       return;
     }
     b.setAttribute('aria-pressed', on ? 'false' : 'true');
     surfEl.classList.remove('is-nudge');
-    if (surfLive) surfLive.textContent = nameOf(b) + (on ? ' removed. ' : ' added. ') + 'It will answer on ' + sayList(selectedSurfaces()) + '.';
+    if (surfLive) surfLive.textContent = nameOf(b) + (on ? ' removed. ' : ' added. ') + 'It will answer on ' + sayList(pressedBtns()) + '.';
   });
 
   // ------------------------------------------------------------ hand-off into the Studio

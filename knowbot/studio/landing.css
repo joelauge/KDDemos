@@ -161,6 +161,12 @@
 .kl-ch[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: color-mix(in srgb, var(--accent) 9%, var(--panel)); color: var(--strong); font-weight: 600; }
 .kl-ch[aria-pressed="true"] .kl-ch-ico { background: var(--accent-2); color: var(--panel); }
 .kl-ch[aria-pressed="true"] .kl-ch-tick { background: var(--accent-2); border-color: var(--accent-2); color: var(--panel); }
+/* the three tools: name + a quiet line of what's in it */
+.kl-tool { min-height: 56px; padding-right: 16px; border-radius: 18px; text-align: left; }
+.kl-tool .kl-ch-t { display: flex; flex-direction: column; gap: 3px; line-height: 1.15; }
+.kl-ch-sub { font: 400 12.5px/1.2 var(--font); color: var(--muted); }
+.kl-ch[aria-pressed="true"] .kl-ch-sub { color: var(--text); }
+@media (max-width: 599px) { .kl-tool { grid-column: 1 / -1; } }
 .kl-surf-note { margin: 12px 0 0; font-size: 14px; line-height: 1.45; color: var(--muted); max-width: 46ch; }
 .kl-surf.is-nudge .kl-surf-note { color: var(--strong); }
 

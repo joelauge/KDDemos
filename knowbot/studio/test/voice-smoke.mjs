@@ -160,8 +160,8 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(`${dev.studioUrl}?t=${t.trialId}&k=${encodeURIComponent(t.restoreKey)}`, { waitUntil: 'load' });
-    await page.waitForSelector('.sh-opt[data-shape="webchat"]', { timeout: 30000 });
-    await page.click('.sh-opt[data-shape="webchat"]');
+    await page.waitForSelector('.sh-tool[data-tool="website"]', { timeout: 30000 });
+    await page.click('.sh-tool[data-tool="website"]'); await page.click('.sh-view[data-shape="webchat"]');
     await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
     await page.waitForSelector('.gl-feat-open[data-ch="site"]', { timeout: 20000 });
     await page.click('.gl-feat-open[data-ch="site"]');

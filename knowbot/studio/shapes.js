@@ -24,6 +24,13 @@ export const SHAPES = [
   { id: 'site', label: 'Site', short: 'Site', surface: 'site' },
 ];
 const SHAPE_OF_SURFACE = Object.fromEntries(SHAPES.map((s) => [s.surface, s.id]));
+// the three tools of the one plan, each with its views (studio/surfaces.js TOOLS)
+const SHAPE_TOOLS = [
+  { id: 'website', label: 'Website', icon: 'webchat', shapes: [['webchat', 'Chat'], ['voice', 'Voice'], ['site', 'Homepage search']] },
+  { id: 'number', label: 'Number', icon: 'phone', shapes: [['sms', 'Texts'], ['whatsapp', 'WhatsApp'], ['phone', 'Calls']] },
+  { id: 'email', label: 'Email', icon: 'email', shapes: [['email', 'Email']] },
+];
+const TOOL_OF_SHAPE = Object.fromEntries(SHAPE_TOOLS.flatMap((t) => t.shapes.map(([id]) => [id, t.id])));
 
 const ICON = {
   webchat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -79,35 +86,62 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
   const chosen = () => new Set((getState().spec?.surfaces || []).map((x) => SHAPE_OF_SURFACE[x]).filter(Boolean));
   const st = { shape: 'webchat', dev: null, devP: null, live: null, destroyed: false };
 
-  // ---------------------------------------------------------------- the selector
+  // ---------------------------------------------------------------- the selector: three tools, then the selected tool's views
   const group = h('div', { class: 'sh-sel', role: 'radiogroup', 'aria-label': 'See your bot as' });
   const label = h('span', { class: 'sh-sel-label', 'aria-hidden': 'true' }, 'See it as');
-  const btns = new Map();
-  for (const s of SHAPES) {
-    const b = h('button', { type: 'button', class: 'sh-opt', role: 'radio', 'aria-checked': 'false', 'data-shape': s.id, title: s.label, tabindex: '-1',
-      onclick: () => set(s.id, { user: true }) },
-    h('span', { class: 'sh-ico', html: svg(s.id) }), h('span', { class: 'sh-txt' }, s.label), h('span', { class: 'sh-mine', 'aria-hidden': 'true' }));
-    btns.set(s.id, b); group.append(b);
+  const tbtns = new Map();          // tool id → button
+  const btns = new Map();           // shape id → button (in the views row)
+  const lastOf = { website: 'webchat', number: 'sms', email: 'email' };
+  for (const t of SHAPE_TOOLS) {
+    const b = h('button', { type: 'button', class: 'sh-opt sh-tool', role: 'radio', 'aria-checked': 'false', 'data-tool': t.id, title: t.label, tabindex: '-1',
+      onclick: () => set(lastOf[t.id], { user: true }) },
+    h('span', { class: 'sh-ico', html: svg(t.icon) }), h('span', { class: 'sh-txt' }, t.label), h('span', { class: 'sh-mine', 'aria-hidden': 'true' }));
+    tbtns.set(t.id, b); group.append(b);
   }
-  group.addEventListener('keydown', (e) => {
-    const ids = SHAPES.map((s) => s.id);
-    const i = ids.indexOf(st.shape);
+  const views = h('div', { class: 'sh-views', role: 'radiogroup', 'aria-label': 'View' });
+  for (const t of SHAPE_TOOLS) for (const [id, name] of t.shapes) {
+    const s0 = SHAPES.find((x) => x.id === id);
+    const b = h('button', { type: 'button', class: 'sh-view', role: 'radio', 'aria-checked': 'false', 'data-shape': id, 'data-tool': t.id, title: s0.label, tabindex: '-1',
+      onclick: () => set(id, { user: true }) },
+    h('span', { class: 'sh-ico', html: svg(id, 14) }), h('span', { class: 'sh-txt' }, name), h('span', { class: 'sh-mine', 'aria-hidden': 'true' }));
+    btns.set(id, b); views.append(b);
+  }
+  const arrows = (list, cur, go) => (e) => {
+    const i = list.indexOf(cur());
     let n = null;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') n = ids[(i + 1) % ids.length];
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') n = ids[(i - 1 + ids.length) % ids.length];
-    else if (e.key === 'Home') n = ids[0]; else if (e.key === 'End') n = ids[ids.length - 1];
-    if (n) { e.preventDefault(); set(n, { user: true }); btns.get(n).focus(); }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') n = list[(i + 1) % list.length];
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') n = list[(i - 1 + list.length) % list.length];
+    else if (e.key === 'Home') n = list[0]; else if (e.key === 'End') n = list[list.length - 1];
+    if (n) { e.preventDefault(); go(n); }
+  };
+  group.addEventListener('keydown', arrows(SHAPE_TOOLS.map((t) => t.id), () => TOOL_OF_SHAPE[st.shape], (tid) => { set(lastOf[tid], { user: true }); tbtns.get(tid).focus(); }));
+  views.addEventListener('keydown', (e) => {
+    const ids = SHAPE_TOOLS.find((t) => t.id === TOOL_OF_SHAPE[st.shape]).shapes.map(([id]) => id);
+    arrows(ids, () => st.shape, (id) => { set(id, { user: true }); btns.get(id).focus(); })(e);
   });
-  const wrap = h('div', { class: 'sh-bar' }, label, group);
+  const wrap = h('div', { class: 'sh-bar' }, label, group, views);
   selectorHost.append(wrap);
 
   function paintSelector() {
     const mine = chosen();
+    const tool = TOOL_OF_SHAPE[st.shape];
+    lastOf[tool] = st.shape;
+    for (const [tid, b] of tbtns) {
+      const on = tid === tool;
+      const t = SHAPE_TOOLS.find((x) => x.id === tid);
+      const has = t.shapes.some(([id]) => mine.has(id));
+      b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1;
+      b.classList.toggle('is-mine', has);
+      b.title = has ? `${t.label} · switched on for your bot` : t.label;
+    }
+    const tShapes = SHAPE_TOOLS.find((x) => x.id === tool).shapes;
+    views.hidden = tShapes.length < 2;
     for (const [id, b] of btns) {
       const on = id === st.shape;
+      b.hidden = TOOL_OF_SHAPE[id] !== tool;
       b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1;
       b.classList.toggle('is-mine', mine.has(id));
-      b.title = mine.has(id) ? `${SHAPES.find((s) => s.id === id).label} · one of your answer surfaces` : SHAPES.find((s) => s.id === id).label;
+      b.title = mine.has(id) ? `${SHAPES.find((s) => s.id === id).label} · switched on for your bot` : SHAPES.find((s) => s.id === id).label;
     }
   }
 

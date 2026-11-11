@@ -282,9 +282,9 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(`${dev.studioUrl}?t=${t.trialId}&k=${encodeURIComponent(t.restoreKey)}`, { waitUntil: 'load' });
-    await page.waitForSelector('.sh-opt[data-shape="site"]', { timeout: 30000 });
-    check('studio', 'See it as offers Site, marked as one of the bot’s surfaces', await page.$eval('.sh-opt[data-shape="site"]', (b) => b.classList.contains('is-mine')));
-    await page.click('.sh-opt[data-shape="site"]');
+    await page.waitForSelector('.sh-tool[data-tool="website"]', { timeout: 30000 });
+    check('studio', 'See it as offers Site, marked as one of the bot’s surfaces', await page.$eval('.sh-view[data-shape="site"]', (b) => b.classList.contains('is-mine')));
+    await page.click('.sh-tool[data-tool="website"]'); await page.click('.sh-view[data-shape="site"]');
     await page.waitForSelector('.sh-site-frame', { timeout: 20000 });
     const frame = page.frameLocator('.sh-site-frame');
     await frame.locator('knowbot-overlay #kb-h').waitFor({ timeout: 20000 });
@@ -295,7 +295,7 @@ try {
     check('studio', '× in the preview shows the homepage and the reopen button', await frame.locator('knowbot-overlay .pill').isVisible());
     await page.screenshot({ path: path.join(SHOTS, 'studio-see-it-as-site-closed.png') });
     // Set up → the card
-    await page.click('.sh-opt[data-shape="webchat"]');
+    await page.click('.sh-tool[data-tool="website"]'); await page.click('.sh-view[data-shape="webchat"]');
     await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
     await page.waitForSelector('.gl-feat-open[data-ch="site"]', { timeout: 20000 });
     check('studio', 'Set up: the Website tool card has Homepage search switched on (one of the bot’s features)', await page.$eval('.gl-tool[data-tool="website"] .gl-feat[data-surface="site"] input[role="switch"]', (i) => i.checked));

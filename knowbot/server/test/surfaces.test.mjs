@@ -128,11 +128,12 @@ describe('the Builder reads surface changes in plain words (parseIntent)', () =>
 describe('landing: "Where should it answer?" (studio/index.html, landing.js) never shows a price', () => {
   const html = read('studio/index.html');
   const land = html.slice(html.indexOf('<div id="kl-landing"'), html.indexOf('<!-- end landing -->') > 0 ? html.indexOf('<!-- end landing -->') : html.indexOf('id="st-app"'));
-  test('a toggle per feature with visible names, website chat pressed by default', () => {
-    const btns = [...land.matchAll(/<button type="button" class="kl-ch"[^>]*data-surface="(\w+)" aria-pressed="(true|false)">[\s\S]*?<span class="kl-ch-t">([^<]+)<\/span>/g)];
-    assert.deepEqual(btns.map((m) => m[1]), SURFACE_IDS);
-    assert.deepEqual(btns.map((m) => m[3]), SURFACES.map((s) => s.label), 'the accessible name is the visible text');
-    assert.deepEqual(btns.filter((m) => m[2] === 'true').map((m) => m[1]), ['webchat']);
+  test('a toggle per tool (Website, KnowBot number, Email) covering every feature, website pressed by default', () => {
+    const btns = [...land.matchAll(/<button type="button" class="kl-ch kl-tool"[^>]*data-tool="(\w+)" data-surfaces="([\w,]+)" aria-pressed="(true|false)">[\s\S]*?<span class="kl-ch-t">([^<]+)<span/g)];
+    assert.deepEqual(btns.map((m) => m[1]), ['website', 'number', 'email']);
+    assert.deepEqual(btns.map((m) => m[4].trim()), ['Website', 'KnowBot number', 'Email'], 'the accessible name starts with the visible text');
+    assert.deepEqual(btns.flatMap((m) => m[2].split(',')).sort(), [...SURFACE_IDS].sort(), 'every feature belongs to exactly one tool');
+    assert.deepEqual(btns.filter((m) => m[3] === 'true').map((m) => m[1]), ['website']);
     assert.match(land, /role="group" aria-labelledby="kl-surf-h"/);
     assert.match(land, /id="kl-surf-h"[^>]*>Where should it answer\?</);
   });
