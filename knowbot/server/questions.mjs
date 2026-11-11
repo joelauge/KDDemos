@@ -876,9 +876,13 @@ export class InsightsScopeError extends Error {
 export function questionFromChat(messages) {
   if (!Array.isArray(messages) || !messages.length) return null;
   const sys = messages.filter((m) => m?.role === 'system').map((m) => String(m.content || '')).join('\n');
-  if (/^\s*Translate the user message/i.test(sys)) return null;
+  // helper calls of one answer (translation, the hidden query rewrite, a table interpretation, the verdict) are not questions
+  if (/^\s*(?:Translate the user message|You turn a visitor's question into search queries|You grade one answer)/i.test(sys) || /The numbered lines are fields or rows from a table/.test(sys)) return null;
   const user = [...messages].reverse().find((m) => m?.role === 'user');
   const text = String(user?.content || '');
+  // a follow-up rewritten to stand alone: the visitor's own words are logged
+  const asked = /(?:^|\n)\s*ASKED AS:\s*([^\n]+)/.exec(text);
+  if (asked) return scrubQuestion(asked[1]) || null;
   const m = /(?:^|\n)\s*QUESTION:\s*([^\n]+)/i.exec(text);
   if (m) return scrubQuestion(m[1]) || null;
   if (text.length > 600 || /\n\s*\[\d+\]|SOURCES?:|^L\d+\s/m.test(text)) return null; // a prompt, not a question

@@ -747,6 +747,14 @@ export function mount(ctx) {
     A.attempts++;
     A.ctrl = new AbortController();
     const body = { question: A.question, label: A.label || null, as: A.persona || 'customer', versionTag: A.version };
+    // the conversation so far: the thread's last two finished answers before this one (Proof Run asks stand alone). The
+    // server uses them only to understand a follow-up ("what about the brown one?"); answers still cite only the files.
+    if (A.by !== 'proof') {
+      const prev = [];
+      for (const x of answers.values()) { if (x === A) break; if (x.by !== 'proof' && x.final && !x.error && x.question) prev.push(x); }
+      const history = prev.slice(-2).map((x) => ({ q: String(x.question).slice(0, 500), a: String(x.final.text || '').replace(/\s*\[\d{1,3}\]/g, '').slice(0, 600) }));
+      if (history.length) body.history = history;
+    }
     try {
       const fin = await api.ask(body, { onEvent: (type, data) => onEvent(A, type, data), signal: A.ctrl.signal });
       if (!A.final && fin) onFinal(A, fin);
@@ -2061,7 +2069,7 @@ export function mount(ctx) {
     const top = r.floor?.top ?? f.why?.best ?? null;
     const atoms = r.searched?.atoms ?? 0;
     const rows = [
-      { label: `Embed + search ${atoms.toLocaleString()} atoms`, start: tEmbed, dur: Math.max(0, tRet - tEmbed), ms: fmtMs(Math.max(0, tRet - tEmbed)) },
+      { label: `Embed + search ${atoms.toLocaleString()} atoms${r.searched?.ways > 1 ? ` · searched ${r.searched.ways} ways` : ''}`, start: tEmbed, dur: Math.max(0, tRet - tEmbed), ms: fmtMs(Math.max(0, tRet - tEmbed)) },
       { label: top == null ? `Floor check · floor ${pct(fl)}` : (Math.abs(Number(top) - fl) * 100 < 1 && Math.round(Number(top) * 1000) % 10 ? `Floor check · floor ${pct(fl)} · best ${(Number(top) * 100).toFixed(1)}` : `Floor check ${fmtMatch(Number(top), fl)} ${top >= fl ? '≥' : '<'} ${pct(fl)}`), start: tRet, dur: 0, ms: top != null && top >= fl ? 'pass' : 'below', tone: top != null && top >= fl ? 'good' : 'muted' },
       { label: `Kept ${kept.length} of ${hits.length}`, start: tRet, dur: 0, ms: '', button: true },
     ];

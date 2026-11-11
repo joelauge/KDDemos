@@ -107,6 +107,33 @@ surface answer and the canonical answer follow identical rules:
 The prompt includes one worked example of a cited answer. On the 1.5B model this took inline citations from 0 per
 answer to 1–2.
 
+## Recall and conversation memory
+
+Every question gets a hidden query expansion (`expandQuery` in `lib/knowbot.js`). One short model call (about 120
+output tokens, capped at 1.8 s) rewrites a follow-up so it stands alone, using the last two exchanges ("what about the
+brown one?" becomes "stock of the Brown Initiative Trackers"). It also returns up to four other phrasings: synonyms,
+likely product, policy or column names, and a keyword form. The original question is always searched too.
+
+If there is no hosted model, or the call times out, fails or returns something unreadable, deterministic rules take
+over: the question, its keywords and, after a follow-up, the question merged with the previous one's keywords.
+
+All the phrasings are searched in parallel against the bot's own scope. The result lists are fused by reciprocal
+rank, keeping one row per atom with its best similarity, so the floor still refuses when nothing is relevant. The
+answer step still reads at most six sources.
+
+History only helps the system understand the question. The select and research prompts show it in a block labelled
+"Earlier in this conversation (for understanding the question only; not a source)". Answers quote only retrieved
+lines, and summaries are verified against those lines and the visitor's own words, never the history.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `KNOWBOT_QUERY_VARIANTS` | `4` | Alternative searches per question besides itself, so at most 5 searches. `0` turns expansion off. |
+| `KNOWBOT_WIDGET_ENGINE` | `haiku` | `/api/chat` (the website widget) answers with Claude Haiku 5.5 when the server has an Anthropic key, and falls back to the local model on errors. `local` keeps the local model. |
+| `KNOWBOT_RESEARCH_EFFORT` | model default | `low`, `medium` or `high`, sent as `output_config.effort` on the research step only. |
+
+AI-agent answers (MCP `ask`, `POST /v1/bots/:id/ask`) always run on Claude Haiku 5.5 when the server has the key,
+whatever the bot's own model. The Anthropic platform's default model for bots is `claude-haiku-5-5`.
+
 ## Tests and evaluation
 
 ```bash

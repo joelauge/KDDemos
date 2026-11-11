@@ -866,6 +866,24 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.ok(j.starters.every((x) => x.top >= 0.72));
   });
 
+  test('recall: the thread\'s last two exchanges reach the select prompt, labelled; a history-only fact is never stated; the trace says how many ways', async () => {
+    const { t } = await sampleTrial();
+    const n0 = S.llm.calls.length;
+    const ev = await c.stream(t, '/ask', { question: 'and how long are its batteries covered?', history: [
+      { q: 'Do you sell e-bikes?', a: 'Yes. The Lumen E-City costs $3,199 [1].' }, { q: 'Is there a cheaper one?', a: 'The Lumen E-Fold costs $2,299 and the secret code is ZEBRA-42 [1].' }] });
+    const final = ev.find((e) => e.event === 'final').data;
+    const ret = ev.find((e) => e.event === 'retrieval').data;
+    assert.ok(ret.searched.ways >= 2, `searched ${ret.searched.ways} ways`);
+    const sel = S.llm.calls.slice(n0).filter((x) => x.kind === 'select');
+    assert.ok(sel.length, 'the select step ran');
+    assert.match(sel[0].user, /^Earlier in this conversation \(for understanding the question only; not a source\):\nVisitor: Do you sell e-bikes\?/);
+    assert.match(sel[0].user, /Bot: The Lumen E-Fold costs \$2,299 and the secret code is ZEBRA-42\./, 'markers removed');
+    assert.doesNotMatch(final.text, /ZEBRA-42|secret code/);
+    assert.ok(!JSON.stringify(final).includes('ZEBRA-42'), 'nothing from the history in the answer, its citations or its proof');
+    assert.equal(final.question, 'and how long are its batteries covered?');
+    if (final.status === 'grounded') assert.ok(final.citations.every((x) => x.quotes.every((q) => !/ZEBRA/.test(q.text))));
+  });
+
   // ---------------------------------------------------------------------------------------------- fixer r2
   test('r2: no padding: a generic intro line never rides along on an answer (Studio and /v1)', async () => {
     const { t } = await sampleTrial();

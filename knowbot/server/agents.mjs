@@ -119,7 +119,7 @@ export function toolDescription(bot = {}) {
   const owner = oneLine(bot.org, 80) || oneLine(bot.name, 80) || 'its owner';
   return `Ask ${botBlurb(bot)} It answers only from ${owner}'s own files and cites them as [n]. When the files don't cover a question it says exactly: "${NOT_IN_DATA}" `
     + 'Show the user the answer with its sources (titles and links), quote it as given, and do not add facts it does not contain. '
-    + 'Ask one plain question at a time; add `context` only when the question depends on what the user said before.';
+    + 'Ask one plain question at a time; add `context` (or `history`, your last questions to this bot with its answers) only when the question depends on what came before.';
 }
 /** The one MCP tool. */
 export function askTool(bot = {}) {
@@ -133,6 +133,8 @@ export function askTool(bot = {}) {
       properties: {
         question: { type: 'string', description: 'The question, in plain words, as the user would ask it.', minLength: 1, maxLength: MAX_Q },
         context: { type: 'string', description: 'Optional: what the user said before, when the question depends on it.', maxLength: MAX_CONTEXT },
+        history: { type: 'array', maxItems: 2, description: 'Optional: the last one or two questions you asked this bot and its answers, oldest first, when this question follows up on them ("what about the blue one?"). Only used to understand the question; the answer still comes only from the files.',
+          items: { type: 'object', properties: { q: { type: 'string', maxLength: 500 }, a: { type: 'string', maxLength: MAX_HISTORY_A } }, required: ['q'], additionalProperties: false } },
       },
       required: ['question'],
       additionalProperties: false,
@@ -155,7 +157,9 @@ export function askTool(bot = {}) {
   };
 }
 
-/** {question, context} from tool arguments or a REST body / query; throws {status:400, message} when unusable. */
+/** One earlier answer's length an agent may send back as history (the bot reads about 600 characters of it). */
+export const MAX_HISTORY_A = 2000;
+/** {question, context, history} from tool arguments or a REST body / query; throws {status:400, message} when unusable. */
 export function readAsk(args) {
   const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
   const q = typeof a.question === 'string' ? a.question : typeof a.q === 'string' ? a.q : '';
@@ -163,7 +167,10 @@ export function readAsk(args) {
   if (!question) throw Object.assign(new Error('Send a question: {"question": "…"}.'), { status: 400, code: 'missing_question' });
   if (question.length > MAX_Q) throw Object.assign(new Error(`The question must be ${MAX_Q} characters or fewer.`), { status: 400, code: 'question_too_long' });
   const context = typeof a.context === 'string' ? a.context.replace(/\s+/g, ' ').trim().slice(0, MAX_CONTEXT) : '';
-  return { question, context };
+  // optional earlier exchanges [{q, a}] (the last two kept): understanding only, never a source
+  const history = (Array.isArray(a.history) ? a.history : []).filter((h) => h && typeof h === 'object' && (typeof h.q === 'string' || typeof h.a === 'string'))
+    .slice(-2).map((h) => ({ q: String(h.q || '').replace(/\s+/g, ' ').trim().slice(0, 500), a: String(h.a || '').replace(/\s+/g, ' ').trim().slice(0, MAX_HISTORY_A) }));
+  return { question, context, ...(history.length ? { history } : {}) };
 }
 
 // ------------------------------------------------------------------ MCP (JSON-RPC 2.0 over Streamable HTTP)
@@ -223,7 +230,7 @@ export function agentManifest({ bot, urls, limits, settings, refusal = NOT_IN_DA
     answers: `Answers only from ${oneLine(bot.org, 80) || oneLine(bot.name, 80) || 'its owner'}'s own files, with sources. Not in the files: "${refusal}"`,
     public: settings.public,
     mcp: { url: urls.mcp, transport: 'streamable-http', tool: 'ask' },
-    ask: { url: urls.ask, method: 'POST', body: { question: 'string', context: 'string (optional)' }, get: `${urls.ask}?q=…` },
+    ask: { url: urls.ask, method: 'POST', body: { question: 'string', context: 'string (optional)', history: '[{q, a}] (optional, the last 2)' }, get: `${urls.ask}?q=…` },
     llms_txt: urls.llms,
     auth: { required: false, optional: 'Authorization: Bearer <the bot owner\'s KnowBot key>: the owner\'s own calls, never limited by the free allowance' },
     rate_limits: settings.paid

@@ -251,7 +251,7 @@ async function probeModel() {
   const { createResearchAgent } = await import('../server/research.mjs');
   agent = createResearchAgent({ ...process.env, KNOWBOT_RESEARCH: 'on' }, { log: (m) => console.error(m), timeoutMs: 60000 });
   if (!agent) { console.error('no research agent'); process.exit(2); }
-  answerMode = `research agent ${agent.model} (lib researchAnswer, effort ${process.env.KNOWBOT_RESEARCH_EFFORT || 'low'}, as the ask path runs it)`;
+  answerMode = `research agent ${agent.model} (lib researchAnswer, effort ${process.env.KNOWBOT_RESEARCH_EFFORT || 'model default'}, as the ask path runs it)`;
 }
 
 /** The agent, counting its calls and token use toward one arm. */

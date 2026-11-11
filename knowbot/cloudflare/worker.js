@@ -37,6 +37,9 @@ export class KnowBotContainer extends Container {
       ...pick(env, ['RESEND_API_KEY', 'KNOWBOT_EMAIL_FROM']),
       // Evidence selector (plain vars, optional): KNOWBOT_EVIDENCE=attend turns it on; unset keeps today's search path
       ...pick(env, ['KNOWBOT_EVIDENCE', 'KNOWBOT_EVIDENCE_BOTS', 'KNOWBOT_EVIDENCE_WEAK', 'ATTENDD_URL', 'ATTENDD_FUSION']),
+      // Recall and engine (plain vars, optional): the hidden query expansion's searches per question (default 4, 0 off),
+      // the website widget's engine (haiku | local; haiku needs ANTHROPIC_API_KEY), the research step's effort (low|medium|high)
+      ...pick(env, ['KNOWBOT_QUERY_VARIANTS', 'KNOWBOT_WIDGET_ENGINE', 'KNOWBOT_RESEARCH_EFFORT']),
     };
   }
 

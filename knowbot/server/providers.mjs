@@ -5,8 +5,18 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 export const PROVIDERS = Object.freeze({
   local: { label: 'Local model (llama.cpp)', needsKey: false },
   openai: { label: 'OpenAI', needsKey: true, keyHint: 'sk-…', docs: 'https://platform.openai.com/api-keys' },
-  anthropic: { label: 'Anthropic (Claude)', needsKey: true, keyHint: 'sk-ant-…', docs: 'https://platform.claude.com/settings/keys', defaultModel: 'claude-opus-5-5' },
+  anthropic: { label: 'Anthropic (Claude)', needsKey: true, keyHint: 'sk-ant-…', docs: 'https://platform.claude.com/settings/keys', defaultModel: 'claude-haiku-5-5' },
 });
+
+/** The default answering model wherever the server has an Anthropic key (widget, AI agents, query rewrite). */
+export const HAIKU_MODEL = 'claude-haiku-5-5';
+/** KNOWBOT_QUERY_VARIANTS: alternative searches per question besides the question itself (default 4, 0 disables, max 4). */
+export function queryVariantsOf(v, dflt = 4) {
+  const s = String(v ?? '').trim();
+  if (!s) return dflt;
+  const n = Math.floor(Number(s));
+  return Number.isFinite(n) ? Math.max(0, Math.min(4, n)) : dflt;
+}
 
 export class ProviderError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -36,6 +46,11 @@ export function openKey(sealed, secret) {
 // Line selection needs a few tokens of answer; thinking models spend their budget thinking first, so give them room.
 const SELECT_MAX = 24;
 const isSelect = (settings) => Number(settings?.max_tokens) > 0 && Number(settings.max_tokens) <= SELECT_MAX * 2;
+// A short step that names its effort (the hidden query rewrite: reasoning_effort 'low', 120 tokens of answer) gets that
+// effort on Claude and the same thinking room as select; every other step keeps the effort below.
+const EFFORTS = new Set(['low', 'medium', 'high']);
+const effortOf = (settings) => (EFFORTS.has(String(settings?.reasoning_effort || '')) ? String(settings.reasoning_effort) : null);
+const isShort = (settings) => isSelect(settings) || (!!effortOf(settings) && Number(settings?.max_tokens) > 0 && Number(settings.max_tokens) <= 200);
 const textOf = (content) => (Array.isArray(content) ? content.filter((b) => b && b.type === 'text').map((b) => b.text).join('') : '');
 
 // Models that take output_config.effort, and the ones that take the server-side refusal fallback.
@@ -70,12 +85,12 @@ async function anthropicComplete(apiKey, model, messages, settings) {
   const client = new A({ apiKey, baseURL: ANTHROPIC_BASE(), maxRetries: 1, timeout: 120000 });
   const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
   const turns = messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content }));
-  const select = isSelect(settings);
+  const select = isShort(settings);
   // No temperature/top_p: current Claude models reject sampling parameters. Depth comes from effort instead.
   const req = {
     model, system, messages: turns,
     max_tokens: select ? 4000 : Math.max(Number(settings?.max_tokens) || 0, 2000) + 6000,
-    ...(CLAUDE_EFFORT.test(model) ? { output_config: { effort: select ? 'low' : 'medium' } } : {}),
+    ...(CLAUDE_EFFORT.test(model) ? { output_config: { effort: effortOf(settings) || (select ? 'low' : 'medium') } } : {}),
   };
   try {
     const r = CLAUDE_FALLBACK.test(model)
@@ -134,8 +149,9 @@ export async function listModels(provider, apiKey) {
   throw new ProviderError(400, `unknown provider "${provider}"`);
 }
 
+/** A bot with no model of its own answers with the provider's default (Anthropic: Claude Haiku 5.5). */
 export function completeWith(provider, apiKey, model, messages, settings) {
   if (provider === 'openai') return openaiComplete(apiKey, model, messages, settings);
-  if (provider === 'anthropic') return anthropicComplete(apiKey, model, messages, settings);
+  if (provider === 'anthropic') return anthropicComplete(apiKey, model || PROVIDERS.anthropic.defaultModel, messages, settings);
   throw new ProviderError(400, `unknown provider "${provider}"`);
 }

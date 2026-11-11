@@ -92,7 +92,7 @@ async function boot(env = {}) {
   assert.equal((await api('/api/instances', { method: 'POST', headers: admin, body: JSON.stringify({ name: 'Front Desk', buckets: ['acme'] }) })).status, 201);
   await kd.settle();
   return {
-    kd, kb, base, api,
+    kd, kb, base, api, llm,
     /** POST form params to a Twilio webhook, signed for the public URL Twilio would have called. */
     twilio(p, params, { token = 'twilio-secret', sign = true } = {}) {
       const headers = { 'content-type': 'application/x-www-form-urlencoded' };
@@ -307,6 +307,22 @@ describe('channels: webhooks against fake providers', () => {
     assert.ok(proof.includes('within 30 days') && proof.includes('returns-policy.md'));
     const ref = messageOf(await (await S.twilio(p, { From: '+14155550100', Body: OFF })).text());
     assert.equal(ref, NOT_IN_DATA);
+  });
+
+  test('SMS remembers the last two exchanges per caller: a follow-up is understood, the history is labelled and never quoted', async () => {
+    const p = '/v1/channels/front-desk/sms';
+    const from = '+14155550123';
+    messageOf(await (await S.twilio(p, { From: from, Body: Q })).text());
+    const n0 = S.llm.calls.length;
+    const msg = messageOf(await (await S.twilio(p, { From: from, Body: 'and how soon is the refund paid?' })).text());
+    const sel = S.llm.calls.slice(n0).filter((c) => c.kind === 'select');
+    assert.ok(sel.length, 'a select call');
+    assert.match(sel[0].user, /^Earlier in this conversation \(for understanding the question only; not a source\):\nVisitor: How many days do I have to return an unused item\?/);
+    assert.match(msg, /5 business days/);
+    // another caller's conversation is their own
+    const n1 = S.llm.calls.length;
+    await (await S.twilio(p, { From: '+14155550124', Body: 'and how soon is the refund paid?' })).text();
+    assert.ok(S.llm.calls.slice(n1).filter((c) => c.kind === 'select').every((c) => !/Earlier in this conversation/.test(c.user)));
   });
 
   test('Voice without GEMINI_API_KEY: Google speech keys do not make a phone engine; the call hears "not set up yet" and is hung up', async () => {

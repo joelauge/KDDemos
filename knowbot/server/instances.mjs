@@ -105,7 +105,7 @@ function cleanBot(body, { partial = false, models = [] } = {}) {
   }
   if (body.model !== undefined) {
     const v = String(body.model ?? '').trim();
-    if (v.length > 100 || /[^\w.:@/-]/.test(v)) throw new InstanceError(400, 'model must be a model id such as claude-opus-5-5 or gpt-4.1-mini');
+    if (v.length > 100 || /[^\w.:@/-]/.test(v)) throw new InstanceError(400, 'model must be a model id such as claude-haiku-5-5 or gpt-4.1-mini');
     out.model = v || undefined;
   }
   if (body.answerMode !== undefined) {

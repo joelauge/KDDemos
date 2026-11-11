@@ -32,7 +32,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
-import { sealKey, openKey } from './providers.mjs';
+import { sealKey, openKey, HAIKU_MODEL, queryVariantsOf } from './providers.mjs';
 import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
 import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle, formatSms, formatWhatsApp, formatEmail, smsInfo } from './channels/util.mjs';
 import { SMS_MAX } from './channels/sms.mjs';
@@ -156,6 +156,22 @@ export function createDevApi(o = {}) {
   // resolve mode (KNOWBOT_EVIDENCE=resolve): the sidecar's ranked window replaces trialSearch's searches (a live bot's
   // retriever does the same itself); everything after the search is unchanged
   const resolver = o.resolver !== undefined ? o.resolver : createResolver(env, { log });
+  // Claude Haiku 5.5 (server.mjs: available() when the server has an Anthropic key): AI-agent answers, live bots with no
+  // model of their own on the Anthropic platform, and the hidden query rewrite. null: the local model and the rules.
+  const haiku = o.haiku && typeof o.haiku.complete === 'function' ? o.haiku : null;
+  const haikuOn = () => !!haiku && (typeof haiku.available !== 'function' || haiku.available());
+  // the hidden query expansion: alternative searches per question besides itself (KNOWBOT_QUERY_VARIANTS, 0 = off)
+  const queryVariants = o.queryVariants ?? queryVariantsOf(env.KNOWBOT_QUERY_VARIANTS);
+  // conversation memory for the channels without a transcript of their own (SMS, WhatsApp, e-mail): the last two
+  // exchanges per caller, 30 minutes; only ever used to understand a follow-up, never as a source
+  const convos = new Map();
+  const CONVO_MS = 30 * 60 * 1000;
+  const convoOf = (key) => { const c = convos.get(key); return c && now() - c.at < CONVO_MS ? c.turns : []; };
+  const convoAdd = (key, q, a) => {
+    const turns = [...convoOf(key), { q: String(q || '').slice(0, 500), a: String(a || '').slice(0, 1200) }].slice(-2);
+    convos.delete(key); convos.set(key, { at: now(), turns });
+    while (convos.size > 5000) convos.delete(convos.keys().next().value);
+  };
   const CANON = o.canonical || { temperature: 0, top_p: 1, max_tokens: 300, seed: 7, frequency_penalty: 0.4 };
   const sealSecret = String(o.secret || registry?.secret || env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || 'knowbot-local-dev');
   const trialSecret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || randomBytes(32).toString('hex');
@@ -449,28 +465,44 @@ export function createDevApi(o = {}) {
   /**
    * @returns {Promise<{ id, bot, botName, question, answer, refused, grounded, citations, proof, latencyMs, guard? }>}
    */
-  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval, cards = false } = {}) {
+  /**
+   * history: the conversation so far ([{q,a}] or chat messages), only to understand a follow-up (lib normalizeHistory
+   * keeps the last two exchanges). pin 'haiku': the answer runs on Claude Haiku 5.5 whatever the bot's own model (AI
+   * agents: cost control for metered answers).
+   */
+  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval, cards = false, pin = null } = {}) {
     const t0 = performance.now();
     const lib = await o.loadLib();
     const q = String(question || '').replace(/\s+/g, ' ').trim().slice(0, MAX_Q);
+    const hist = typeof lib.normalizeHistory === 'function' ? lib.normalizeHistory(history) : [];
     let persona, profile, results = [], sims = new Map(), floor = null, retriever = null, mode = 'select', complete, settings = { ...CANON, ...(lib.CANONICAL || {}) };
+    const onHaiku = pin === 'haiku' && haikuOn();
     if (target.kind === 'trial') {
       const s = target.spec;
       persona = { name: s.name || 'KnowBot', org: s.org || s.name || 'this company', ...(s.instructions ? { instructions: s.instructions } : {}) };
       profile = 'general';
       floor = Number(s.floor) || 0.7;
-      complete = (m, c) => o.llmComplete(m, c?.settings || settings);
+      // the Studio's own answering engine (its provider: Claude Haiku 5.5 in production), so a trial bot answers the same
+      // on the API and its channels as in the Studio
+      complete = onHaiku ? (m, c) => haiku.complete(m, c?.settings || settings)
+        : typeof studio?.answerComplete === 'function' ? async (m, c) => (await studio.answerComplete(m, c?.settings || settings))?.raw ?? ''
+          : (m, c) => o.llmComplete(m, c?.settings || settings);
     } else {
       const inst = target.inst;
       persona = { name: 'KnowBot', org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}), ...(inst.instructions ? { instructions: inst.instructions } : {}) };
       profile = inst.guards || 'general';
       mode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
       const provider = inst.provider || 'local';
-      complete = provider === 'local'
-        ? (m, c) => o.llmComplete(m, c?.settings || settings, inst.model || llmModel)
-        : (m, c) => o.completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
+      complete = onHaiku ? (m, c) => haiku.complete(m, c?.settings || settings)
+        : pin === 'haiku' && provider === 'anthropic' ? (m, c) => o.completeWith(provider, registry.providerKey(provider), HAIKU_MODEL, m, c?.settings || settings)
+          : provider === 'local'
+            ? (m, c) => o.llmComplete(m, c?.settings || settings, inst.model || llmModel)
+            : (m, c) => o.completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
       retriever = registry.retriever(inst.id);
     }
+    // the hidden query rewrite: one short Claude Haiku call when the server has the key, else the deterministic rules
+    const rewrite = haikuOn() ? (m, c) => haiku.complete(m, c?.settings) : null;
+    const canExpand = queryVariants > 0 && typeof lib.expandQuery === 'function' && typeof lib.fuseKept === 'function';
     // Token metering: every model call's full prompt (system + grounding context + history + question) and its output.
     // A provider that reports usage ({usage:{prompt_tokens, completion_tokens}} on its result) is counted exactly;
     // otherwise the count is an estimate (chars / 4) and the response says so (knowbot.usageEstimated).
@@ -496,31 +528,47 @@ export function createDevApi(o = {}) {
       return { file: r.filename, similarity: round4(sim ?? null), ...(sim == null ? { label: r.evidence ? 'selected passage' : 'keyword match' } : {}), excerpt: String(r.text || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
     };
     const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(q, persona, { profile }) : null;
-    let fin = guard, tRet = performance.now(), top = null, candidates = [], sel = null, resolvedReceipt = null;
+    let fin = guard, tRet = performance.now(), top = null, candidates = [], sel = null, resolvedReceipt = null, expansion = null;
+    let standalone = q;
     if (!guard) {
-      // the evidence selector, when on and answering, replaces the search below (and the research agent's search tool)
-      sel = target.kind === 'trial' ? await trialEvidence(target, q) : await selectForRetriever(evidence, retriever, q);
+      // the hidden expansion: the question rewritten to stand alone (with the history) + alternative phrasings, all
+      // searched in parallel against this bot's own scope and fused (reciprocal rank); the floor reads the best
+      // similarity any of them found, so a question nothing answers is still refused
+      const ex = canExpand ? await lib.expandQuery({ question: q, history: hist, complete: rewrite, variants: queryVariants }) : null;
+      if (ex) standalone = ex.standalone || q;
+      // resolve mode: the answer is drawn from resolve's receipted window for the question, so no variants are mixed in
+      const queries = ex && !resolver ? ex.queries : [q];
+      // the evidence selector, when on and answering, replaces the search below (and the research agent's search tool);
+      // it takes one question, so it gets the standalone one (no variants)
+      sel = target.kind === 'trial' ? await trialEvidence(target, standalone) : await selectForRetriever(evidence, retriever, standalone);
+      const tX = performance.now();
       if (sel) {
         results = isRefusal(sel) ? [] : sel.results;
         candidates = results.slice(0, 5);
       } else if (target.kind === 'trial') {
-        const hits = await trialSearch(target, q);
+        const lists = await Promise.all(queries.map((x, i) => (i ? trialSearch(target, x).catch(() => []) : trialSearch(target, x))));
+        // the six hits the answer reads (above the floor) are chosen by the fusion and keep the question's own order
+        const hits = lists.length > 1 ? lib.fuseKept(lists, { k: 6, keep: (h) => h.similarity >= floor, fill: ex.source !== 'model' }) : lists[0];
         // (resolve mode keeps resolve's order, so the best similarity is not always first)
         top = hits.length ? Math.max(...hits.map((h) => h.similarity)) : 0;
-        resolvedReceipt = hits.receipt || null;
+        resolvedReceipt = lists[0].receipt || null;
         candidates = hits.slice(0, 5);
         results = hits.filter((h) => h.similarity >= floor).slice(0, 6);
-        for (const h of hits) { sims.set(h.filename, Math.max(sims.get(h.filename) ?? 0, h.similarity)); sims.set(chunkKey(h.filename, h.text), h.similarity); }
+        for (const h of hits) { sims.set(h.filename, Math.max(sims.get(h.filename) ?? 0, h.similarity)); sims.set(chunkKey(h.filename, h.text), Math.max(sims.get(chunkKey(h.filename, h.text)) ?? 0, h.similarity)); }
       } else {
-        const [ret, s] = await Promise.all([retriever.search(q, 6), liveSimilarities(retriever, q)]);
+        // each live search applies the bot's own floor; a variant that finds nothing above it adds nothing
+        const [ret, s, ...more] = await Promise.all([retriever.search(q, 6), liveSimilarities(retriever, q), ...queries.slice(1).map((x) => retriever.search(x, 6).catch(() => null))]);
         sims = s;
         resolvedReceipt = ret.receipt || null;
         // never cite a stored question or a config file, whatever the retriever returned
-        results = (ret.results || []).filter((r) => r && r.text && !isQuestionFile(r.filename));
-        top = ret.floor?.top ?? (sims.size ? Math.max(...sims.values()) : null);
+        const lists = [ret, ...more].filter(Boolean).map((r) => (r.results || []).filter((x) => x && x.text && !isQuestionFile(x.filename)));
+        results = lists.length > 1 ? lib.fuseKept(lists, { k: 6, fill: ex.source !== 'model' }) : lists[0];
+        const tops = [ret, ...more].filter(Boolean).map((r) => r.floor?.top).filter((x) => typeof x === 'number');
+        top = tops.length ? Math.max(...tops) : (sims.size ? Math.max(...sims.values()) : null);
         floor = ret.floor?.min ?? null;
         candidates = results.slice(0, 5);
       }
+      if (ex) expansion = { queries: queries.length, ms: ex.ms + Math.round(performance.now() - tX), source: ex.source };
       tRet = performance.now();
       onRetrieval?.({ hits: (results.length ? results : candidates).slice(0, 6).map((r) => ({ ...hitView(r), title: r.title || null, kept: results.includes(r) })),
         floor: { min: floor, top: round4(top) }, ms: Math.round(tRet - t0) });
@@ -528,12 +576,12 @@ export function createDevApi(o = {}) {
       // the selector found nothing that answers it: the fixed refusal, no model call
       if (sel && isRefusal(sel)) fin = { text: NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false };
       else {
-        const r = await lib.answerFromSources({ question: q, results, complete: safeComplete, search: !sel && retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
-          history: Array.isArray(history) ? history : [], mode, settings, voice: target.inst?.voice ?? true, evidenceOnly: !!sel,
+        const r = await lib.answerFromSources({ question: q, standalone, results, complete: safeComplete, search: !sel && retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
+          history: hist, mode, settings, voice: target.inst?.voice ?? true, evidenceOnly: !!sel,
           ...(mode === 'select' && researchAgent ? { research: researchAgent, onResearch: (e) => { if (e.type === 'error') log(`[api] research failed: ${e.message}`); } } : {}) });
         fin = r.fin;
         // the answer verdict (lib judgeAnswer): only the closing follow-up changes ("That covers part of it…")
-        if (fin && !fin.refused && mode === 'select' && lib.judgeAnswer) fin = lib.applyVerdict(fin, await lib.judgeAnswer({ complete: safeComplete, question: q, text: fin.text }));
+        if (fin && !fin.refused && mode === 'select' && lib.judgeAnswer) fin = lib.applyVerdict(fin, await lib.judgeAnswer({ complete: safeComplete, question: standalone, text: fin.text }));
       }
     } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
 
@@ -582,7 +630,7 @@ export function createDevApi(o = {}) {
     // model ran, from the question, history and retrieved context the answer was built from)
     const exact = meter.calls > 0 && meter.real.calls === meter.calls;
     const ctxChars = (results.length ? results : candidates).reduce((n, r) => n + String(r.text || '').length, 0);
-    const histChars = (Array.isArray(history) ? history : []).reduce((n, m) => n + String(m?.content || '').length, 0);
+    const histChars = hist.reduce((n, m) => n + String(m.q || '').length + String(m.a || '').length, 0);
     const tokens = exact
       ? { prompt: meter.real.prompt, completion: meter.real.completion, estimated: false, modelCalls: meter.calls }
       : { prompt: meter.calls ? meter.prompt : Math.ceil((q.length + histChars + ctxChars) / 4) + 8, completion: Math.max(meter.completion, approxTokens(text)), estimated: true, modelCalls: meter.calls };
@@ -592,6 +640,8 @@ export function createDevApi(o = {}) {
       ...(fin?.verdict ? { verdict: fin.verdict } : {}),
       proof: { hits, quoted, floor: { min: floor, top: round4(top) }, ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : resolvedReceipt ? { receipt: { digest: resolvedReceipt } } : {}) }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
     };
+    // internal only (logs, tests): how many ways the files were searched; never part of a public answer
+    if (expansion) Object.defineProperty(out, 'expansion', { value: expansion, enumerable: false });
     logAnswer(target, out, channel, callerKey);
     return out;
   }
@@ -836,7 +886,11 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     if (typeof body.question === 'string' && body.question.trim()) {
       const q = body.question.trim();
       if (q.length > MAX_Q) throw new ApiError(400, 'question_too_long', `question must be ${MAX_Q} characters or fewer`);
-      return { question: q, history: [] };
+      // optional earlier exchanges [{q, a}] (or chat messages): only to understand a follow-up, never a source
+      const history = (Array.isArray(body.history) ? body.history : []).slice(-8).filter((h) => h && typeof h === 'object')
+        .map((h) => (typeof h.q === 'string' || typeof h.a === 'string' ? { q: String(h.q || '').slice(0, 2000), a: String(h.a || '').slice(0, 2000) }
+          : CHAT_ROLES.has(h.role) && h.role !== 'system' && typeof h.content === 'string' ? { role: h.role, content: h.content.slice(0, 2000) } : null)).filter(Boolean);
+      return { question: q, history };
     }
     const msgs = body.messages;
     if (!Array.isArray(msgs) || !msgs.length) throw new ApiError(400, 'invalid_request', 'Send "question" (a string) or "messages" ([{role, content}]).');
@@ -951,8 +1005,8 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
    * One question through the answer pipeline, its proof saved (and, with siKey, remembered for "send me this"): the ONE
    * path /v1/bots/:id/chat and the AI-agent endpoints (MCP `ask`, POST /v1/bots/:id/ask) share.
    */
-  async function askOnce(req, target, question, { history = [], channel = 'api', callerKey = null, cards = true, siKey = null, onRetrieval } = {}) {
-    const a = await answer(target, question, { history, channel, callerKey, cards, onRetrieval });
+  async function askOnce(req, target, question, { history = [], channel = 'api', callerKey = null, cards = true, siKey = null, onRetrieval, pin = null } = {}) {
+    const a = await answer(target, question, { history, channel, callerKey, cards, onRetrieval, pin });
     a.proofId = a.refused ? null : saveProof(a, channel);
     if (siKey) rememberAnswer(siKey, a, req);
     return a;
@@ -1016,11 +1070,14 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     return { billing: 'free' };
   }
   /** Ask the bot for an agent → the structured result (agents.mjs agentResult). */
-  async function agentAsk(req, res, target, { question, context = '' }, who) {
+  async function agentAsk(req, res, target, { question, context = '', history = [] }, who) {
     const gate = await agentGate(req, res, target, who, question);
     let a;
     try {
-      a = await askOnce(req, target, question, { history: context ? [{ role: 'user', content: context }] : [], channel: AGENT_CHANNEL, callerKey: who ? who.keyId : `ip:${ipOf(req)}`, cards: true });
+      // the earlier exchanges ({q,a}) and/or what the user said before (context): only to understand the question.
+      // Agent answers always run on Claude Haiku 5.5 (pin), whatever the bot's own model: metered agents, fixed cost.
+      const hist = [...(Array.isArray(history) ? history : []), ...(context ? [{ q: context, a: '' }] : [])];
+      a = await askOnce(req, target, question, { history: hist, channel: AGENT_CHANNEL, callerKey: who ? who.keyId : `ip:${ipOf(req)}`, cards: true, pin: 'haiku' });
     } catch (e) {
       if (gate.billing === 'free') (await agentUsage(target)).free--;
       throw e;
@@ -1201,7 +1258,10 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       background: (p) => track(p),
       limited: (k) => limit(`ch:${name}:${target.id}:${hashCaller(k)}`, limits.channel).limited,
       ask: async (question, { channel, callerKey }) => {
-        const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel, callerKey });
+        // the caller's last two exchanges on this channel (follow-ups like "and on Sundays?")
+        const ck = `${target.id}|${channel}|${callerKey}`;
+        const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel, callerKey, history: convoOf(ck) });
+        convoAdd(ck, question, a.answer);
         a.proofId = a.refused ? null : saveProof(a, channel);
         a.proofUrl = proofUrlFor(req, a.proofId);
         rememberAnswer(`${target.id}|${channel}|${callerKey}`, a, req);

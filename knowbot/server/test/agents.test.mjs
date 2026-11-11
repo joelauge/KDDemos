@@ -69,7 +69,7 @@ describe('agents: shapes (pure)', () => {
     assert.match(t.description, /Show the user the answer with its sources/);
     assert.ok(t.description.includes(NOT_IN_DATA));
     assert.deepEqual(t.inputSchema.required, ['question']);
-    assert.deepEqual(Object.keys(t.inputSchema.properties), ['question', 'context']);
+    assert.deepEqual(Object.keys(t.inputSchema.properties), ['question', 'context', 'history']);
     assert.equal(t.annotations.readOnlyHint, true);
     assert.doesNotMatch(JSON.stringify(t), VENDORS);
     assert.match(toolDescription({ name: 'Bot' }), /^Ask Bot\. It answers only from Bot's own files/);

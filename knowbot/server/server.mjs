@@ -9,7 +9,7 @@ import { Readable } from 'node:stream';
 import { randomUUID, timingSafeEqual, createHmac } from 'node:crypto';
 import { createRetriever, DEFAULT_STORE, DEFAULT_PREFIX } from './retrievers.mjs';
 import { InstanceRegistry, InstanceError, MAX_UPLOAD_BYTES } from './instances.mjs';
-import { completeWith, ProviderError } from './providers.mjs';
+import { completeWith, ProviderError, HAIKU_MODEL, queryVariantsOf } from './providers.mjs';
 import { createStudio } from './trials.mjs';
 import { createDevApi, isDevApiPath, EXPOSE_HEADERS as DEV_EXPOSE_HEADERS } from './devapi.mjs';
 import { createSendInfo } from './sendinfo.mjs';
@@ -117,6 +117,18 @@ export function createKnowBotServer(opts = {}) {
     builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', tag: env.KNOWDRIVE_TAG || 'knowbot:ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
   });
 
+  // ------------------------------------------------------------ Claude Haiku 5.5, the default answering engine
+  // Where the server has an Anthropic key (the dashboard's sealed registry key, else ANTHROPIC_API_KEY): the website
+  // widget's /api/chat (KNOWBOT_WIDGET_ENGINE=haiku|local, default haiku), every AI-agent answer, trial bots' answers
+  // on the API and channels, and the hidden query rewrite. Without a key: the local model and the rewrite rules.
+  const anthropicKey = () => { try { return registry.providerKey('anthropic') || env.ANTHROPIC_API_KEY || null; } catch { return env.ANTHROPIC_API_KEY || null; } };
+  const haiku = opts.haiku !== undefined ? opts.haiku : (() => {
+    const model = env.KNOWBOT_HAIKU_MODEL || HAIKU_MODEL;
+    return { model, available: () => !!anthropicKey(), complete: (messages, settings) => completeWith('anthropic', anthropicKey(), model, messages, settings) };
+  })();
+  const widgetEngine = String(env.KNOWBOT_WIDGET_ENGINE || 'haiku').toLowerCase() === 'local' ? 'local' : 'haiku';
+  const queryVariants = queryVariantsOf(env.KNOWBOT_QUERY_VARIANTS);
+
   // ------------------------------------------------------------ KnowBot Studio (/api/studio/*, server/trials.mjs)
   const kdConfig = kd; // { baseUrl, apiKey, store }: the same knowDrive config as the registry (null in local mode)
   // "send me this" (server/sendinfo.mjs): one instance for the Studio and every /v1 surface (one memory, one opt-out list)
@@ -130,7 +142,7 @@ export function createKnowBotServer(opts = {}) {
     Promise.resolve(studio?.numbers?.meterFor?.({ kind: 'trial', id: e.botId, flags: T?.flags, T })).then((m) => m && m.phoneNumber === e.fromNumber && m.charge('text', Math.max(1, Math.ceil((e.length || 160) / 153)), 'send_info'))
       .catch((err) => log(`[sendinfo] credit not recorded: ${err.message}`));
   } });
-  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent, evidence, resolver,
+  const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent, evidence, resolver, haiku, queryVariants,
     rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, sendInfo, leads,
     // tracked links for the Studio's own "send me this" sends (server/leads.mjs), made by the developer API like proof links
     linkTracker: (req, trialId, channel) => devapi.linkTracker(req, trialId, channel),
@@ -138,7 +150,7 @@ export function createKnowBotServer(opts = {}) {
     proofLink: (req, trialId, a) => devapi.proofLink(req, trialId, a), ...(opts.studio || {}) });
 
   // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
-  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, evidence, resolver, readRaw, readJson, clientIp, requireAdmin,
+  const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, evidence, resolver, haiku, queryVariants, readRaw, readJson, clientIp, requireAdmin,
     logger: log, dataDir, llmModel, canonical: CANONICAL, sendInfo, leads, ...(opts.devapi || {}) });
 
   // ------------------------------------------------------------ events / SSE
@@ -308,6 +320,8 @@ export function createKnowBotServer(opts = {}) {
       const answerMode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
       const r = await lib.answerFromSources({ question, results, complete, search: sel ? undefined : (x) => retriever.search(x, k), persona, minScore, k, evidenceOnly: !!sel,
         history: Array.isArray(history) ? history : [], mode: answerMode, settings,
+        // the hidden query expansion (lib answerFromSources: the alternatives are searched and fused with these results)
+        expand: queryVariants, rewrite: haiku?.available?.() ? (m, c) => haiku.complete(m, c?.settings) : null,
         ...(answerMode === 'select' && researchAgent ? { research: researchAgent } : {}),
         // Owner rule: every live bot answers as a kind librarian (opener, "In “Title”, page N, it says: “…” [1].", closer).
         // An instance may opt out with voice:false; anything else (unset included) gets the guide voice.
@@ -346,6 +360,8 @@ export function createKnowBotServer(opts = {}) {
     if (chars > 24000) throw new HttpError(413, 'messages too long (max 24000 chars)');
     const out = { model: llmModel, messages, stream: body.stream === true };
     for (const k of ['temperature', 'top_p', 'seed', 'frequency_penalty', 'presence_penalty']) if (typeof body[k] === 'number' && Number.isFinite(body[k])) out[k] = body[k];
+    // the hidden query rewrite asks for low effort (Claude only; dropped before the local model)
+    if (['low', 'medium', 'high'].includes(body.reasoning_effort)) out.reasoning_effort = body.reasoning_effort;
     const mt = Math.floor(Number(body.max_tokens));
     out.max_tokens = Math.min(maxTokens, mt > 0 ? mt : CANONICAL.max_tokens);
     return out;
@@ -580,6 +596,24 @@ export function createKnowBotServer(opts = {}) {
           if (rateLimited(clientIp(req))) throw new HttpError(429, 'rate limit exceeded (30/min)');
           const rawBody = await readJson(req);
           const body = chatBody(rawBody);
+          // the website widget's answers: Claude Haiku 5.5 when the server has the key (KNOWBOT_WIDGET_ENGINE=local keeps
+          // the local model); any failure falls back to the local model below
+          if (widgetEngine === 'haiku' && haiku?.available?.()) {
+            const settings = { max_tokens: body.max_tokens, ...(body.reasoning_effort ? { reasoning_effort: body.reasoning_effort } : {}) };
+            let text = null;
+            try { text = String(await haiku.complete(body.messages, settings) ?? ''); } catch (e) { log(`[chat] ${haiku.model} failed (${e.message}); local model`); }
+            if (text !== null) {
+              const model = haiku.model;
+              const reply = body.stream
+                ? `data: ${JSON.stringify({ id: `chatcmpl-${randomUUID().slice(0, 8)}`, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`
+                : JSON.stringify({ id: `chatcmpl-${randomUUID().slice(0, 8)}`, object: 'chat.completion', model, choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }] });
+              res.writeHead(200, { 'content-type': body.stream ? 'text/event-stream; charset=utf-8' : 'application/json', 'cache-control': 'no-store', ...(body.stream ? { 'x-accel-buffering': 'no' } : {}) });
+              res.end(reply);
+              devapi.logChat({ body: rawBody, reply, stream: body.stream, callerKey: clientIp(req) });
+              return;
+            }
+          }
+          delete body.reasoning_effort; // a Claude setting: never forwarded to the local model
           const ac = new AbortController();
           res.on('close', () => { if (!res.writableFinished) ac.abort(); });
           let up;

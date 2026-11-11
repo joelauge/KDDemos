@@ -30,7 +30,7 @@ import * as kbLib from '../lib/knowbot.js';
 import { createResearchAgent } from './research.mjs';
 import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAnswerable } from './evidence.mjs';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
-import { completeWith, PROVIDERS } from './providers.mjs';
+import { completeWith, PROVIDERS, queryVariantsOf } from './providers.mjs';
 import { createImageFinder, indexFromJson, indexToJson, indexAdd, within } from './products.mjs';
 import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS, createStoreFetcher, readPageHtml, renderMarkdown, slugOf, titleOfHtml } from './storeimport.mjs';
 import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
@@ -1185,6 +1185,12 @@ export function createStudio(o = {}) {
     if (studioProvider && (studioProvider === 'local' || providerKey())) return { raw: await studioComplete(messages, settings), model: studioModel };
     return { raw: await o.llmComplete(messages, settings), model: llmModel };
   }
+  // The hidden query expansion (lib expandQuery): KNOWBOT_QUERY_VARIANTS alternative searches per question besides
+  // itself (default 4, 0 = off). The one short rewrite call runs on the studio's hosted provider (Claude Haiku 5.5 in
+  // production); with only the local model it uses the deterministic rules (a 1.5B rewrite would only add latency).
+  const queryVariants = Math.max(0, Math.min(4, Math.floor(Number(o.queryVariants ?? queryVariantsOf(env.KNOWBOT_QUERY_VARIANTS))) || 0));
+  const rewriteComplete = () => (studioProvider && studioProvider !== 'local' && providerKey() ? (m, c) => studioComplete(m, c?.settings)
+    : o.haiku?.available?.() ? (m, c) => o.haiku.complete(m, c?.settings) : null);
   const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => { const t = setTimeout(() => rej(Object.assign(new Error('timeout'), { name: 'TimeoutError' })), ms); t.unref?.(); })]);
 
   // F's learning loop (11.1). Guarded: the Studio keeps working if questions.mjs is absent or throws.
@@ -1905,7 +1911,7 @@ export function createStudio(o = {}) {
     return Array.isArray(j.data) ? j.data : [];
   }
   /** Vector (+ optional hybrid) search, normalized, joined and tag-checked. */
-  async function retrieve(T, query, { files, vectorK = 12, hybridK = 8, hybrid = true, signal } = {}) {
+  async function retrieve(T, query, { files, vectorK = 12, hybridK = 8, hybrid = true, signal, variant = false } = {}) {
     files = files || await filesOf(T);
     const filter = scopeFilter(T, files);
     const disabledTags = filter.none_of.filter((t) => t.startsWith('tfile:'));
@@ -1916,6 +1922,14 @@ export function createStudio(o = {}) {
     const searchable = new Set(files.filter((f) => f.replay && ['vectorizing', 'ready'].includes(f.stage)).map((f) => f.id));
     const sharedOk = (h) => !!h.tags && h.tags.includes(`sample-set:${sharedSet}`) && h.tags.includes('kind:trial-sample') && !ALWAYS_EXCLUDE.some((t) => h.tags.includes(t)) && searchable.has(h.fileId);
     const ok = (h) => (hitAllowed(h, T.id, disabledTags) || convertedHitOk(T, h, disabledTags) || (sharedSet && sharedOk(h))) && !disabledIds.has(h.fileId);
+    // a hidden alternative phrasing (retrieveExpanded): one hybrid search per scope (one knowDrive call: hybrid hits carry
+    // their vector distance even under a narrow filter), scored by that distance, never by RRF; the same fences
+    if (variant) {
+      const [hb, shb] = await Promise.all([rawSearch(query, 'hybrid', vectorK, filter, signal), sharedSet ? rawSearch(query, 'hybrid', vectorK, sharedFilter, signal) : []]);
+      const vector = [...hb, ...shb].map((d) => ({ ...normHit(d, 'hybrid'), mode: 'vector', viaHybrid: true, rrf: null })).filter((h) => h.similarity != null && h.text).filter(ok)
+        .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
+      return { vector, hybridOnly: [], top: vector.length ? vector[0].similarity ?? 0 : 0, files };
+    }
     // resolve mode: the sidecar's ranked windows replace the searches below (an answer's search, not a starter's
     // vector-only check); the same fences apply. null (off, down, an error): today's searches.
     if (resolver && store && hybrid) {
@@ -1977,6 +1991,27 @@ export function createStudio(o = {}) {
     }
     const top = merged.length ? Math.max(...merged.map((h) => h.similarity ?? 0)) : 0;
     return { vector: merged, hybridOnly, top, files };
+  }
+
+  /**
+   * retrieve() for a question and its hidden alternatives (lib expandQuery): the first query (the question as it stands
+   * alone) gets the full search (vector + hybrid + clauses), each alternative one hybrid search scored by vector
+   * distance (one knowDrive call per scope), all in parallel. The vector lists are fused by reciprocal rank, one row per atom keeping its best
+   * similarity, so the floor reads the best evidence any phrasing found (and still refuses when none clears it). Resolve
+   * mode keeps its receipted window for the question alone. → retrieve()'s shape + { ways, waysMs }.
+   */
+  async function retrieveExpanded(T, queries, { files, signal, floor = 0, fill = false } = {}) {
+    const t0 = performance.now();
+    if (queries.length < 2 || (resolver && store)) return { ...(await retrieve(T, queries[0], { files, signal })), ways: 1, waysMs: 0 };
+    const [main, ...alts] = await Promise.all([retrieve(T, queries[0], { files, signal }),
+      ...queries.slice(1).map((q) => retrieve(T, q, { files, signal, variant: true, vectorK: 8 }).catch(() => null))]);
+    const keyOf = (h) => h.atomId || `${h.fileId}|${h.seq}|${sha1(normText(h.text).slice(0, 200))}`;
+    // the six hits the answer reads (above the floor) are chosen by the fusion and keep the main search's order
+    const vector = kbLib.fuseKept([main.vector, ...alts.filter(Boolean).map((x) => x.vector)], { k: 6, keep: (h) => (h.similarity ?? 0) >= floor, keyOf, copy: false, fill });
+    const inV = new Set(vector.map(keyOf));
+    const hybridOnly = main.hybridOnly.filter((h) => !inV.has(keyOf(h)));
+    const top = vector.length ? Math.max(...vector.map((h) => h.similarity ?? 0)) : 0;
+    return { ...main, vector, hybridOnly, top, ways: queries.length, waysMs: Math.round(performance.now() - t0) };
   }
 
   /**
@@ -2435,6 +2470,8 @@ export function createStudio(o = {}) {
     const question = oneLine(body.question);
     if (!question) fail(400, 'bad_request', 'question is required');
     if (question.length > 500) fail(400, 'bad_request', 'question must be 500 characters or fewer');
+    // the thread's last two exchanges [{q, a}] (samplebot): only to understand a follow-up, never a source
+    const history = kbLib.normalizeHistory(Array.isArray(body.history) ? body.history.slice(-4) : []);
     const label = typeof body.label === 'string' ? clip(oneLine(body.label), 40) : null;
     // Proof Run / mini-run asks are the Studio testing itself, not a visitor asking: they never reach the insights loop.
     const source = body.by === 'proof' || body.source === 'proof' || /^(?:proof run|mini[- ]?run|proof)$/i.test(label || '') ? 'proof' : 'visitor';
@@ -2488,10 +2525,16 @@ export function createStudio(o = {}) {
       // 2. search
       emit('status', { step: 'embed', t: ms() });
       const files = await filesOf(T);
+      // the hidden expansion: the follow-up rewritten to stand alone (with the thread's last two exchanges) plus
+      // alternative phrasings, searched in parallel; the visitor only ever sees their own question
+      const ex = queryVariants ? await kbLib.expandQuery({ question, history, complete: rewriteComplete(), signal: ac.signal, variants: queryVariants }) : null;
+      const standalone = ex?.standalone || question;
+      const queries = ex ? [standalone, ...ex.queries.filter((x) => x !== standalone)] : [question];
       emit('status', { step: 'search', t: ms() });
       const floor = spec.floor;
-      // the evidence selector, when on and answering, replaces the search (and the research agent's search tool)
-      const sel = await evidenceSelect(T, question, files, ac.signal);
+      // the evidence selector, when on and answering, replaces the search (and the research agent's search tool); it
+      // takes one question, so it gets the standalone one (the alternatives are for the searches below)
+      const sel = await evidenceSelect(T, standalone, files, ac.signal);
       if (ac.signal.aborted) { clearInterval(ping); return; }
       let receipt = sel?.receipt?.digest ? { digest: sel.receipt.digest } : null;
       if (sel && isRefusal(sel)) {
@@ -2502,7 +2545,7 @@ export function createStudio(o = {}) {
           why: { best: 0, floor, candidates: [], reason: sel.status === 'underspecified' ? 'the question names nothing to look for' : 'nothing in the files answers the question' },
           closeMiss: null, guard: null, latencyMs: { retrieve: tRet0, select: 0, quote: 0, total: ms() } });
       }
-      const r = sel ? { vector: sel.hits, hybridOnly: [], top: floor, files } : await retrieve(T, question, { files, signal: ac.signal });
+      const r = sel ? { vector: sel.hits, hybridOnly: [], top: floor, files } : await retrieveExpanded(T, queries, { files, signal: ac.signal, floor, fill: ex?.source !== 'model' });
       // resolve mode: the receipt of the ranked windows the answer was drawn from (proof page), as with the selector's
       if (!receipt && r.receipt) receipt = { digest: r.receipt };
       const tRet = ms();
@@ -2521,7 +2564,8 @@ export function createStudio(o = {}) {
       });
       emit('status', { step: 'rank', t: ms() });
       const ready = files.filter((f) => f.enabled && f.stage === 'ready');
-      emit('retrieval', { ms: tRet, searched: { atoms: files.filter((f) => f.enabled).reduce((s, f) => s + (f.vectorized || 0), 0), files: ready.length },
+      // ways: how many phrasings were searched (the Proof trace's "searched N ways"); never in the visitor's answer
+      emit('retrieval', { ms: tRet, searched: { atoms: files.filter((f) => f.enabled).reduce((s, f) => s + (f.vectorized || 0), 0), files: ready.length, ...(r.ways > 1 ? { ways: r.ways, waysMs: (ex?.ms || 0) + (r.waysMs || 0) } : {}) },
         floor: { min: floor, top: round4(top) }, hits: shown.map(hitView) });
       // 4. floor refusal
       if (top < floor || !kept.length) {
@@ -2557,7 +2601,7 @@ export function createStudio(o = {}) {
           tagHits(got.sources, got.srcHit);
           return got.sources;
         };
-        rfin = await kbLib.researchAnswer({ question, sources, search: searchMore, searchTool: !sel, agent: researchAgent, persona, voice: true, k: 8, signal: ac.signal,
+        rfin = await kbLib.researchAnswer({ question, standalone, history, sources, search: searchMore, searchTool: !sel, agent: researchAgent, persona, voice: true, k: 8, signal: ac.signal,
           onEvent: (e) => { if (e.type === 'search') emit('research', { query: e.query, t: ms() }); else if (e.type === 'error') log(`[studio] research failed: ${e.message}`); } }).catch((e) => { log(`[studio] research failed: ${e?.message}`); return null; });
         if (ac.signal.aborted) { clearInterval(ping); return; }
         if (rfin) {
@@ -2567,21 +2611,21 @@ export function createStudio(o = {}) {
       }
       emit('lines', { count: lines.length, items: lines.slice(0, 12).map(lineView) });
       if (!rfin) try {
-        const out = await withTimeout(selectComplete(kbLib.buildSelectMessages(question, lines, persona), { ...kbLib.SELECT_SETTINGS }), 20000);
+        const out = await withTimeout(selectComplete(kbLib.buildSelectMessages(standalone, lines, persona, { history, asked: question }), { ...kbLib.SELECT_SETTINGS }), 20000);
         raw = String(out.raw ?? ''); model = out.model || model;
       } catch (e) { raw = ''; model = 'keyword-fallback'; log(`[studio] select failed (${e.message}); keyword fallback`); }
       if (ac.signal.aborted) { clearInterval(ping); return; }
       let fin0;
       if (rfin) { const { lines: _l, allLines: _a, sources: _s, ...rest } = rfin; fin0 = rest; }
-      else { fin0 = kbLib.finalizeSelection(raw, lines, sources, { question, voice: true }); if (fin0.fallback) model = 'keyword-fallback'; }
+      else { fin0 = kbLib.finalizeSelection(raw, lines, sources, { question: standalone, voice: true }); if (fin0.fallback) model = 'keyword-fallback'; }
       // keep only lines that answer the question themselves (within LINE_MARGIN of the best selected line); research
       // picks spans on purpose (a name line and its price line), so they are kept as chosen
       if (!rfin && !fin0.refused && (fin0.selected || []).length > 1) {
-        const keep = keepRelevantLines(question, fin0.selected, (L) => lines[L - 1]?.text || '', (L) => srcHit[lines[L - 1]?.source]?.similarity ?? floor, LINE_MARGIN,
+        const keep = keepRelevantLines(standalone, fin0.selected, (L) => lines[L - 1]?.text || '', (L) => srcHit[lines[L - 1]?.source]?.similarity ?? floor, LINE_MARGIN,
           { isIntro: (L) => { const h = srcHit[lines[L - 1]?.source]; return !!h && Number(h.seq) <= 2 && !!h.crumb && !h.crumb.includes(' > '); } });
         if (keep.length && keep.length < fin0.selected.length) {
           const fb = fin0.fallback;
-          fin0 = { ...kbLib.finalizeSelection(keep.map((L) => `L${L}`).join(', '), lines, sources, { question, voice: true }), fallback: fb };
+          fin0 = { ...kbLib.finalizeSelection(keep.map((L) => `L${L}`).join(', '), lines, sources, { question: standalone, voice: true }), fallback: fb };
         }
       }
       emit('selected', { lines: fin0.selected ?? [], ms: ms() - tSel0, model, ...(fin0.research ? { research: fin0.research } : {}), ...(fin0.summary ? { summary: true } : {}) });
@@ -2592,14 +2636,14 @@ export function createStudio(o = {}) {
       let fin = citeQuotedLines(fin0, kbLib.requireCitations);
       // table rows (CSV / spreadsheet / JSON fields): one plain, verified sentence instead of the raw cells
       if (!fin.refused && !fin0.summary && kbLib.interpretTabular) {
-        const t = await kbLib.interpretTabular({ fin: { ...fin, selected: fin0.selected }, lines, sources, question, persona, complete: (m, st) => selectComplete(m, st) });
+        const t = await kbLib.interpretTabular({ fin: { ...fin, selected: fin0.selected }, lines, sources, question, ask: standalone, persona, complete: (m, st) => selectComplete(m, st) });
         if (ac.signal.aborted) { clearInterval(ping); return; }
         if (t.tabular) { fin = t; fin0 = { ...fin0, summary: t.summary, tabular: true }; }
       }
       // the answer verdict (does it answer the core question?): sets the closing follow-up, never removes a cited fact
       let verdict = null;
       if (!fin.refused && kbLib.judgeAnswer) {
-        verdict = await kbLib.judgeAnswer({ complete: (m, st) => selectComplete(m, st), question, text: fin.text });
+        verdict = await kbLib.judgeAnswer({ complete: (m, st) => selectComplete(m, st), question: standalone, text: fin.text });
         if (ac.signal.aborted) { clearInterval(ping); return; }
         fin = kbLib.applyVerdict(fin, verdict);
       }
@@ -5325,7 +5369,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!T.rows) { try { await refreshRows(T); } catch { /* the index still answers */ } }
     return productsFor(T, args);
   }
-  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
+  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
+    // a trial bot's answering engine for the API and its channels (devapi): the same as the Studio's select step
+    answerComplete: (messages, settings) => selectComplete(messages, settings), flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };
