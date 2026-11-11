@@ -2321,6 +2321,8 @@ export function mount(ctx) {
     const ico = h('span', { class: 'in-ico', html: htmlKindIcon(f.kind, 18) });
     const name = h('span', { class: 'in-name', id: nameId, title: f.name }, h('span', { 'aria-hidden': 'true', class: 'in-name-v' }, mid(f.name, isMobile() ? 24 : 38)), h('span', { class: 'in-sr' }, f.name));
     const tag = h('span', { class: 'chip violet is-label in-tag', hidden: !f.sample }, 'Sample');
+    // the owner's tags on this file (knowDrive topic:* tags), up to 2 then "+N"
+    const topics = h('span', { class: 'in-ftags', hidden: true });
     const size = h('span', { class: 'in-size in-num' }, fmtSize(f.bytes));
     // the file's real first line while it is being extracted, with a scan sweep (decorative: the status says it)
     const readT = h('span', { class: 'in-read-t' });
@@ -2329,7 +2331,7 @@ export function mount(ctx) {
     // per-file actions: KnowDrive's <RowActionMenu> (kdw.js adds the menu keyboard and fixed placement)
     const kebab = h('span', { class: 'in-kebab' });
     const rowMenu = mountRowMenu(kebab, rowMenuProps(f));
-    const main = h('div', { class: 'in-row-main' }, incLabel, ico, h('div', { class: 'in-namewrap' }, name, tag, size, read), status, kebab);
+    const main = h('div', { class: 'in-row-main' }, incLabel, ico, h('div', { class: 'in-namewrap' }, name, tag, topics, size, read), status, kebab);
 
     // the file's processing state: KnowDrive's FileGauge (four stage pips + F/V search badges, a report card on hover,
     // focus or tap), mounted as a React island by kdw.js from the file's real counts (gaugeProps)
@@ -2343,7 +2345,7 @@ export function mount(ctx) {
     const summary = h('div', { class: 'in-sum', hidden: true });
     const detail = h('div', { class: 'in-detail' }, detailInner, summary);
     li.append(main, detail);
-    const refs = { li, inc, incLabel, ico, name, tag, size, read, readT, status, kebab, track, gauge, gaugeKey: '', rowMenu, menuKey: '', note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '', readKey: '' };
+    const refs = { li, inc, incLabel, ico, name, tag, topics, topicsKey: '', size, read, readT, status, kebab, track, gauge, gaugeKey: '', rowMenu, menuKey: '', note, actions, detail, summary, lastPhase: null, actionsKey: '', summaryKey: '', readKey: '' };
     rowEls.set(f.localId, refs);
     return refs;
   }
@@ -2398,6 +2400,16 @@ export function mount(ctx) {
     setDs(r.li, 'off', isEnabled(f) ? '' : 'off');
     r.li.classList.toggle('st-working', !TERMINAL.has(f.phase) && f.phase !== 'queued' && !(meta(lid).retryAt));
     setHidden(r.tag, !f.sample);
+    const tks = (f.topics || []).join(',');
+    if (r.topicsKey !== tks) {
+      r.topicsKey = tks;
+      const all = f.topics || [];
+      const shown = all.slice(0, 2), rest = all.slice(2);   // two, then "+N" (the rest on hover)
+      r.topics.replaceChildren(h('span', { class: 'in-sr' }, `Tags: ${all.join(', ')}`),
+        ...shown.map((t) => h('span', { class: 'in-ftag', 'aria-hidden': 'true', title: `Tag: ${t}` }, t)),
+        ...(rest.length ? [h('span', { class: 'in-ftag in-ftag-more', 'aria-hidden': 'true', title: `Also tagged: ${rest.join(', ')}` }, `+${rest.length}`)] : []));
+      setHidden(r.topics, !all.length);
+    }
     setText(r.size, fmtSize(f.bytes));
     // include toggle only once the file exists on the server and can be searched
     const canScope = !!f.id && f.phase !== 'failed' && f.phase !== 'rejected';
@@ -3056,6 +3068,7 @@ export function mount(ctx) {
       vectorized: Number(row.vectorized ?? prev.vectorized) || 0, pages: row.pages ?? prev.pages ?? null,
       stageAt: row.stageAt || prev.stageAt || {}, key: row.key || prev.key || null,
       stalledFor: Number(row.stalledFor) || 0, replay: !!row.replay || !!prev.replay,
+      topics: Array.isArray(row.topics) ? row.topics.filter((t) => typeof t === 'string' && t).slice(0, 8) : (prev.topics || []),
     };
     if (phase === 'failed') patch.error = { code: (row.error && row.error.code) || 'upstream', message: (row.error && row.error.message) || 'Processing failed on our side. Try again.', raw: row.error && row.error.raw, actions: ['retry', 'replace', 'remove'] };
     else if (prev.phase === 'failed' && phase !== 'failed') patch.error = null;

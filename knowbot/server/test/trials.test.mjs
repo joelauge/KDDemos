@@ -2409,6 +2409,10 @@ describe("Didn't get the answer you needed? POST /trials/:id/notes", () => {
       assert.equal(tg.tags[0].count, 2);
       const other = await c.trial();
       assert.deepEqual((await (await c.json(other, '/notes', 'GET')).json()).tags, [], 'another bot sees only its own tags');
+      // the file list carries each file's tags for its row in Sources
+      const fl = await (await c.json(t, '/files', 'GET')).json();
+      const noteRow = (fl.files || fl).find((f) => f.name === 'notes/do-you-take-walk-ins.md');
+      assert.deepEqual(noteRow?.topics, ['hours', 'booking'], JSON.stringify(noteRow));
       await S.kd.settle();
       await sleep(300);
       const after = (await c.stream(t, '/ask', { question: Q })).find((e) => e.event === 'final').data;

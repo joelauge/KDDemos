@@ -1518,6 +1518,8 @@ export function createStudio(o = {}) {
       stage, kdStage: fileStage(r), chunks: r.chunk_count ?? r.chunks ?? null, atoms,
       vectorized: Number(r.atoms_vectorized ?? (stage === 'ready' ? atoms : 0)), pages: r.page_count ?? r.metadata?.pages ?? null,
       sample: tags.some((x) => x.startsWith('sample:')), ...(tags.includes('src:store') ? { origin: 'store' } : {}),
+      // the owner's tags on this file (knowDrive topic:<tag>), shown on its row in Sources
+      topics: [...new Set(tags.filter((x) => x.startsWith('topic:')).map((x) => x.slice(6)).filter(Boolean))].slice(0, 8),
       ...(storePage ? { page: storePage, path: rel, url: man?.url || T.flags.storePdfUrls?.[r.id] || T.flags.storeJob?.written?.[rel] || null } : {}), enabled: T.spec.sources?.[r.id] !== false, error, summary: T.summaries.get(r.id) || null,
       stageAt: { ...stamps }, createdAt: isoOf(r.created_at), updatedAt: isoOf(r.updated_at || r.created_at),
     };
