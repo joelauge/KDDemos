@@ -6,3 +6,5 @@ export const HOSTED_APIS = {
 export const hostedApi = () => {
   try { return (HOSTED_APIS[location.hostname] || '').replace(/\/+$/, '') || null; } catch { return null; }
 };
+/** The API that serves an embed script loaded from this host (embed.js on a customer's page), or null. */
+export const apiForScriptHost = (host) => (HOSTED_APIS[String(host || '')] || '').replace(/\/+$/, '') || null;

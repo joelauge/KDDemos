@@ -22,6 +22,7 @@
 // engine and phone prompt as a real call.
 
 import { mountWidget } from './kdw.js?v=09e5dd0';
+import { apiForScriptHost } from '../lib/site-config.js?v=09e5dd0';
 import { mountNumbers, numberCache } from './numbers.js?v=09e5dd0';
 import { siteSettings } from './sitebrand.js?v=09e5dd0';
 import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel } from './surfaces.js?v=09e5dd0';
@@ -230,11 +231,19 @@ const devCache = { info: null, at: 0, promise: null };
 
 /** The Website tool's one embed line (lib/embed.js), as Set up shows it. A trial bot with voice on carries its trial
  *  key (the server's own key, never invented: 'YOUR_KNOWBOT_KEY' when the key can't be read). */
+/** ` data-api="…"` for a snippet, or '' when the hosted embed script already knows its API (lib/site-config.js), so
+ *  the website line never names the server (only self-hosted and dev servers need it). */
+export function apiAttrFor(siteBase, apiBase) {
+  let hosted = null;
+  try { hosted = apiForScriptHost(new URL(siteBase).hostname); } catch { hosted = null; }
+  return hosted && hosted === String(apiBase || '').replace(/\/+$/, '').replace(/\/api$/, '') ? '' : ` data-api="${apiBase}"`;
+}
 export function websiteLineText({ siteBase, apiBase, botId, surfaces, key = null, converted = false }) {
   const on = new Set(normalizeSurfaces(surfaces));
   const yes = (x) => (on.has(x) ? 'on' : 'off');
   const voiceKey = on.has('webvoice') && !converted ? `\n        data-key="${key || 'YOUR_KNOWBOT_KEY'}"` : '';
-  return `<script type="module" src="${siteBase}lib/embed.js" data-api="${apiBase}" data-bot="${botId}"\n        data-chat="${yes('webchat')}" data-voice="${yes('webvoice')}" data-homepage="${yes('site')}"${voiceKey}></script>`;
+  const apiAttr = apiAttrFor(siteBase, apiBase);
+  return `<script type="module" src="${siteBase}lib/embed.js"${apiAttr} data-bot="${botId}"\n        data-chat="${yes('webchat')}" data-voice="${yes('webvoice')}" data-homepage="${yes('site')}"${voiceKey}></script>`;
 }
 
 /** websiteLine(ctx) -> {copy, display}: the same line for the first-time guide (ftue.js); display masks the key. */
@@ -440,7 +449,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   const CH = () => {
     const id = botId();
     const ch = (name) => `${apiRoot}/v1/channels/${id}/${name}`;
-    const embed = `<script type="module" src="${siteBase}lib/embed.js" data-instance="${id}" data-api="${apiBase}"></script>`;
+    const embed = `<script type="module" src="${siteBase}lib/embed.js" data-instance="${id}"${apiAttrFor(siteBase, apiBase)}></script>`;
     return mineFirst(phoneByEngine([
       // Owner rule: customer-facing copy never names the phone vendor; it is "your KnowBot number" / "your phone number provider".
       { id: 'sms', name: 'Texts', blurb: 'Customers text your KnowBot number, your bot texts back with [1] citations and a proof link.', provider: 'KnowBot Messaging', hue: 1, url: ch('sms'), status: 'Needs a KnowBot number', tryLabel: 'Preview an SMS reply',
@@ -487,7 +496,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         steps: ['Switch Voice on above: your one website line adds it (a mic in the chat bubble, or a round button in your orb colour when the chat bubble is off). The orb moves with the visitor\'s voice.', 'It talks with the visitor in real time, the same live voice as your phone line, and speaks just the answer from your sources; the sources show as links while it speaks.', 'Pick the orb colour below. It applies to voice mode everywhere: this assistant, web chat and homepage search.'],
         configs: [
           // a trial bot needs its trial key in the embed (masked on screen, real on Copy); a launched bot's voice socket is public
-          { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n        data-api="${apiRoot}" data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-target="#id" to place it inline; data-position="left"; data-orb="silver" to override the colour -->` },
+          { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n       ${apiAttrFor(siteBase, apiRoot)} data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-target="#id" to place it inline; data-position="left"; data-orb="silver" to override the colour -->` },
           { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
         ] },
       // Homepage search (server/site.mjs, ../site/overlay.js): a simple search box that hovers over the homepage

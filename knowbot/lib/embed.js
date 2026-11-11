@@ -15,6 +15,7 @@
 // these attributes, a bot whose switches can't be read keeps the old behaviour (the chat bubble). Old snippets
 // (data-mode="voice", data-mode="inline", data-voice="on" in the chat) work as before.
 import { mount, ensureCss } from './widget.js?v=09e5dd0';
+import { apiForScriptHost } from './site-config.js?v=09e5dd0';
 
 const me = new URL(import.meta.url);
 const script = [...document.querySelectorAll('script[src]')].find((s) => s.src === me.href)
@@ -34,7 +35,8 @@ const apiParam = (() => {
     return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname) || 'allowApiParam' in d ? u.href.replace(/\/+$/, '') : null;
   } catch { return null; }
 })();
-const apiBase = apiParam || d.api || (me.port === '8787' ? me.origin : location.port === '8787' ? location.origin : 'http://localhost:8787');
+// no data-api: the hosted script finds its own API (lib/site-config.js), so the website line never names the server
+const apiBase = apiParam || d.api || apiForScriptHost(me.hostname) || (me.port === '8787' ? me.origin : location.port === '8787' ? location.origin : 'http://localhost:8787');
 const engine = d.engine === 'webllm' ? { type: 'webllm', ...(d.model ? { model: d.model } : {}) } : d.engine === 'openai'
   ? { type: 'openai', baseUrl: d.llm, model: d.model } : { type: 'server' };
 
