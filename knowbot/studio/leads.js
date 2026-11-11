@@ -83,13 +83,13 @@ export async function openLeads() {
   const trackSw = h('button', { type: 'button', role: 'switch', 'aria-checked': 'true', class: 'kb-leads-switch', 'aria-describedby': 'kb-leads-track-hint', onclick: () => toggleTracking() },
     h('span', { class: 'kb-leads-knob', 'aria-hidden': 'true' }), h('span', { class: 'kb-leads-switch-label' }, 'Track links'));
   const trackHint = h('span', { id: 'kb-leads-track-hint', class: 'kb-leads-hint' }, 'Adds campaign tags and a short tracking link to every link your bot sends by text, email or WhatsApp.');
-  const close = h('button', { type: 'button', class: 'st-iconbtn kb-leads-close', 'aria-label': 'Close the leads report', html: icon('close', 18), onclick: () => dialog.close() });
+  const close = h('button', { type: 'button', class: 'st-iconbtn kb-leads-close', 'aria-label': 'Close Stats & Leads', html: icon('close', 18), onclick: () => dialog.close() });
   const dialog = h('dialog', { class: 'kb-leads', 'aria-labelledby': titleId, 'aria-describedby': 'kb-leads-sub' },
     h('div', { class: 'kb-leads-panel' },
       h('header', { class: 'kb-leads-head' },
         h('span', { class: 'kb-leads-ico', 'aria-hidden': 'true', html: icon('users', 18) }),
         h('div', { class: 'kb-leads-titles' },
-          h('h2', { id: titleId }, 'Leads'),
+          h('h2', { id: titleId }, 'Stats & Leads'),
           h('p', { id: 'kb-leads-sub' }, 'Who your bot talked to, what it sent them, and what they clicked. Download it into your own CRM.')),
         close),
       h('div', { class: 'kb-leads-bar' }, seg, h('div', { class: 'kb-leads-track' }, trackSw, trackHint), csvBtn),

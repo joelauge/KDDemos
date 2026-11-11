@@ -1567,3 +1567,101 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 :root:not([data-details="on"]) .st-bot { background: var(--st-panel-bot); }
 :root:not([data-details="on"]) #sb-thread-slot[data-prompt="1"] { place-items: center; }
 :root:not([data-details="on"]) #sb-thread-slot[data-prompt="1"]::before { content: 'Ask your bot anything. It answers only from your files.'; display: block; border: 0; background: none; box-shadow: none; color: var(--muted); font: 400 17px/1.4 var(--display, var(--font)); padding: 0; }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   First-time guide (ftue.js): one slim card in the flow of the pane, above the suggestions and the composer. A
+   hairline, no shadow, one filled action; it never covers the bot and it never blocks a click elsewhere. */
+.st-ftue { flex: 0 1 auto; min-height: 96px; position: relative; z-index: 3; margin: 6px var(--st-gutter) 8px; padding: 12px 14px 14px; border: 1px solid var(--line);
+  border-radius: 14px; background: var(--panel); color: var(--text); max-height: min(60vh, 560px); overflow: auto; overscroll-behavior: contain; }
+/* while the guide shows, the thread takes the room that is left (it scrolls), so the guide's action and the
+   suggestions and composer under it always stay on screen. The last step carries more (the tools, then the three
+   ways to add it): it may grow taller, and scrolls inside itself when the pane is short. */
+.st-bot:has(> .st-ftue:not([hidden])) > #sb-thread-slot { flex: 1 1 0; min-height: 96px; }
+.st-ftue:not([data-step="done"]) { flex: none; }
+.st-ftue[data-step="done"] { max-height: min(72vh, 660px); }
+.st-ftue-go { box-shadow: none !important; }
+.st-ftue[hidden], :root[data-landing] .st-ftue { display: none !important; }
+.st-ftue:focus { outline: none; }
+.st-ftue:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
+@media (min-width: 900px) { .st-bot > .st-ftue { width: min(100% - 2 * var(--st-gutter), 720px); margin-inline: auto; box-sizing: border-box; } }
+.st-ftue-top { display: flex; align-items: center; gap: 10px; min-height: 24px; }
+.st-ftue-eyebrow { margin: 0; font: 500 12px/1.3 var(--font); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.st-ftue-dots { display: flex; gap: 4px; margin: 0; padding: 0; list-style: none; flex: 1 1 auto; max-width: 120px; }
+.st-ftue-dots li { flex: 1 1 0; height: 3px; border-radius: 3px; background: var(--line); }
+.st-ftue-dots li[data-state="done"] { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.st-ftue-dots li[data-state="now"] { background: var(--accent); }
+.st-ftue-x { margin-left: auto; flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; margin-right: -6px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--muted); cursor: pointer; }
+.st-ftue-x:hover { background: var(--raise); color: var(--strong); }
+.st-ftue-x:focus-visible, .st-ftue-link:focus-visible, .st-ftue-tab:focus-visible, .st-ftue-tool:focus-visible, .st-ftue-pre:focus-visible, .st-ftue-panel:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
+.st-ftue-main { display: grid; gap: 8px; margin-top: 4px; min-width: 0; }
+.st-ftue-h { margin: 0; font: 600 15.5px/1.35 var(--display, var(--font)); color: var(--strong); }
+.st-ftue-h:focus { outline: none; }
+.st-ftue-p { margin: 0; font: 400 13.5px/1.5 var(--font); color: var(--muted); }
+.st-ftue-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 4px; }
+.st-ftue-go { min-height: 36px; max-width: 100%; }
+.st-ftue-go > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-ftue-link { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 2px; border: 0; background: transparent; color: var(--accent-2);
+  font: 500 13.5px/1.3 var(--font); text-decoration: none; cursor: pointer; border-radius: 6px; }
+.st-ftue-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.st-ftue-or { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 6px; color: var(--muted); font-size: 13px; }
+.st-ftue-ico { display: inline-flex; }
+.st-ftue-progress { display: grid; gap: 6px; }
+.st-ftue-bar { height: 4px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.st-ftue-bar > i { display: block; height: 100%; width: 4%; border-radius: inherit; background: var(--accent); transition: width var(--dur-3) var(--ease-out); }
+.st-ftue-count { margin: 0; font: 500 13px/1.4 var(--font); color: var(--strong); font-variant-numeric: tabular-nums; }
+/* step 5 */
+.st-ftue-done-mark { display: inline-flex; vertical-align: -3px; margin-right: 6px; color: var(--good); }
+.st-ftue.is-celebrating .st-ftue-done-mark { animation: st-ftue-pop 600ms var(--ease-out) both; }
+@keyframes st-ftue-pop { 0% { opacity: 0; transform: scale(.6); } 60% { opacity: 1; transform: scale(1.12); } 100% { transform: none; } }
+.st-ftue-fireworks { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 80; }
+.st-ftue-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 2px; }
+.st-ftue-tool { position: relative; display: flex; align-items: flex-start; gap: 8px; min-height: 56px; padding: 10px 28px 10px 10px; border: 1px solid var(--line); border-radius: 12px;
+  background: transparent; color: var(--strong); text-align: left; font: 600 13.5px/1.3 var(--font); cursor: pointer; transition: border-color var(--dur-1), background-color var(--dur-1); }
+.st-ftue-tool:hover { border-color: var(--line-2); }
+.st-ftue-tool[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.st-ftue-tool-ico { display: inline-flex; color: var(--accent); flex: none; margin-top: 1px; }
+.st-ftue-tool-t { display: grid; gap: 2px; min-width: 0; }
+.st-ftue-tool-t small { font: 400 12px/1.35 var(--font); color: var(--muted); }
+.st-ftue-tool-tick { position: absolute; top: 9px; right: 9px; display: inline-flex; color: var(--accent); opacity: 0; }
+.st-ftue-tool[aria-pressed="true"] .st-ftue-tool-tick { opacity: 1; }
+.st-ftue-note { margin: 0; font: 400 12.5px/1.4 var(--font); color: var(--muted); }
+.st-ftue-note:empty { display: none; }
+.st-ftue-next { display: grid; gap: 8px; min-width: 0; }
+.st-ftue-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.st-ftue-tab { flex: none; min-height: 36px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; color: var(--muted);
+  font: 500 13px/1 var(--font); cursor: pointer; white-space: nowrap; }
+.st-ftue-tab:hover { color: var(--strong); }
+.st-ftue-tab[aria-selected="true"] { color: var(--strong); border-bottom-color: var(--accent); }
+.st-ftue-panel { display: grid; gap: 8px; min-width: 0; padding-top: 2px; }
+.st-ftue-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font: 400 13.5px/1.5 var(--font); color: var(--text); }
+.st-ftue-code { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); min-width: 0; }
+.st-ftue-pre { margin: 0; padding: 10px 12px; max-height: 180px; overflow: auto; font: 400 12px/1.55 var(--mono); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.st-ftue-codebar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 4px 10px; border-top: 1px solid var(--line); }
+.st-ftue-foot { padding-top: 4px; }
+.st-ftue-stats { margin: 2px 0 0; font: 400 12.5px/1.5 var(--font); color: var(--muted); }
+.st-ftue-stats .st-ftue-link { min-height: 0; font-size: 12.5px; }
+.st-ftue-link.is-inline { padding: 0; }
+@media (max-width: 899px) {
+  .st-ftue, .st-ftue[data-step="done"] { margin: 6px var(--st-gutter) 6px; max-height: 56vh; }
+  .st-ftue-tools { grid-template-columns: minmax(0, 1fr); }
+  .st-ftue-tool { min-height: 48px; }
+  .st-ftue-go, .st-ftue-link { min-height: 44px; }
+  .st-ftue-stats .st-ftue-link { min-height: 32px; }
+  .st-ftue-x { width: 44px; height: 44px; margin-right: -10px; }
+}
+:root[data-motion="reduce"] :is(.st-ftue-bar > i, .st-ftue-tool) { transition: none; }
+:root[data-motion="reduce"] .st-ftue.is-celebrating .st-ftue-done-mark { animation: st-ftue-fade 400ms linear both; }
+@keyframes st-ftue-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Stats & Leads: a quiet text button left of Launch (desktop); on phones it is in the ⋯ menu */
+.st-hlink { display: inline-flex; align-items: center; height: 34px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text);
+  font: 500 13.5px/1 var(--font); cursor: pointer; white-space: nowrap; transition: background-color var(--dur-1), color var(--dur-1); }
+.st-hlink:hover { background: var(--raise); color: var(--strong); }
+.st-hlink:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.st-hlink[hidden] { display: none; }
+@media (max-width: 899px) { #st-leads { display: none !important; } }
+/* the guide points at it once: a soft ring that breathes three times (a steady ring when motion is reduced) */
+.is-guide-pulse { animation: st-guide-pulse 1300ms var(--ease-out) 3; }
+@keyframes st-guide-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
+:root[data-motion="reduce"] .is-guide-pulse { animation: none; box-shadow: 0 0 0 2px var(--accent); }

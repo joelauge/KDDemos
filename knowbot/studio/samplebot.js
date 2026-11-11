@@ -3308,7 +3308,7 @@ export function mount(ctx) {
   const compMeta = h('div', { class: 'sb-comp-meta' }, scopeBtn, personaPill, hint, moreBtn);
   const form = h('form', { class: 'sb-composer', novalidate: true }, compBox, compMeta);
   // "Didn't get the answer you needed?": write the missing answer, tag it, and it joins your bot's sources
-  const missBtn = h('button', { type: 'button', class: 'sb-miss', hidden: true, onclick: () => openMiss() },
+  const missBtn = h('button', { type: 'button', class: 'sb-miss', hidden: true, onclick: () => openMiss({ invoker: missBtn }) },
     ico('plus', 13), h('span', null, 'Didn’t get the answer you needed?'));
   compMeta.insertBefore(missBtn, moreBtn);
   dom.composer.innerHTML = '';
@@ -3372,10 +3372,14 @@ export function mount(ctx) {
     return (miss || t[t.length - 1] || {}).question || '';
   }
   let missDlg = null;
-  function openMiss() {
+  /** The note form. mode 'miss' (default): "Didn't get the answer you needed?" after an answer. mode 'note': the same
+   *  form as a first note ("Add a note"), opened from the empty state or the first-time guide, with no answer yet. */
+  function openMiss({ mode = 'miss', invoker = null } = {}) {
     if (missDlg) missDlg.remove();
-    const qIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-q', maxlength: '300', value: lastMissed(), placeholder: 'e.g. Do you take walk-ins?' });
-    const aIn = h('textarea', { class: 'input sb-miss-ta', id: 'sb-miss-a', rows: '5', maxlength: '20000', required: true, placeholder: 'Write it the way you’d want your bot to say it. For example: “Yes, we take walk-ins Monday to Friday, 9am to noon.”' });
+    const note = mode === 'note';
+    const back = invoker && invoker.isConnected ? invoker : null;
+    const qIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-q', maxlength: '300', value: note ? '' : lastMissed(), placeholder: 'e.g. Do you take walk-ins?' });
+    const aIn = h('textarea', { class: 'input sb-miss-ta', id: 'sb-miss-a', rows: '5', maxlength: '20000', required: true, placeholder: note ? 'For example: “We take walk-ins Monday to Friday, 9am to noon. Bookings: 555-0100.”' : 'Write it the way you’d want your bot to say it. For example: “Yes, we take walk-ins Monday to Friday, 9am to noon.”' });
     // tags: chips the owner picks or types; the bot's earlier tags (knowDrive topic:* tags) are offered underneath
     const tagOf = (t) => String(t).toLowerCase().trim().replace(/[^a-z0-9 _-]+/g, '').replace(/\s+/g, '-').slice(0, 32);
     const picked = [];
@@ -3408,10 +3412,13 @@ export function mount(ctx) {
     const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Save and teach my bot');
     const cancel = h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => missDlg.close() }, 'Cancel');
     const formEl = h('form', { class: 'sb-miss-form', method: 'dialog', novalidate: true },
-      h('h2', { class: 'sb-miss-h' }, 'Teach your bot the answer'),
-      h('p', { class: 'sb-miss-sub' }, 'Your bot only answers from its sources. Add what it’s missing and it will answer from it next time, with this note as its source.'),
-      h('label', { for: 'sb-miss-q' }, 'The question'), qIn,
-      h('label', { for: 'sb-miss-a' }, 'The answer your bot should give'), aIn,
+      h('h2', { class: 'sb-miss-h' }, note ? 'Add a note' : 'Teach your bot the answer'),
+      h('p', { class: 'sb-miss-sub' }, note ? 'Write what your bot should know. It answers from your note, and shows it as the source.' : 'Your bot only answers from its sources. Add what it’s missing and it will answer from it next time, with this note as its source.'),
+      ...(note
+        ? [h('label', { for: 'sb-miss-a' }, 'What your bot should know'), aIn,
+          h('label', { for: 'sb-miss-q' }, 'A question it answers ', h('span', { class: 'sb-miss-opt' }, '(optional)')), qIn]
+        : [h('label', { for: 'sb-miss-q' }, 'The question'), qIn,
+          h('label', { for: 'sb-miss-a' }, 'The answer your bot should give'), aIn]),
       h('label', { for: 'sb-miss-t' }, 'Tags ', h('span', { class: 'sb-miss-opt' }, '(optional)')), tagBox, hint, sugg,
       err, h('div', { class: 'sb-miss-actions' }, cancel, save));
     formEl.addEventListener('submit', async (e) => {
@@ -3425,7 +3432,7 @@ export function mount(ctx) {
         const r = await api.addNote({ question: qIn.value.trim(), answer, tags: [...picked] });
         formEl.replaceChildren(
           h('h2', { class: 'sb-miss-h' }, ico('checkCircle', 18), ' Saved'),
-          h('p', { class: 'sb-miss-sub' }, `Your bot is learning it now as ${r?.file?.name || 'a new source'}${r?.tags?.length ? `, tagged ${r.tags.join(', ')}` : ''}. Ask again in a moment and it will answer from it.`),
+          h('p', { class: 'sb-miss-sub' }, `Your bot is learning it now as ${r?.file?.name || 'a new source'}${r?.tags?.length ? `, tagged ${r.tags.join(', ')}` : ''}. ${note ? 'Ask about it in a moment' : 'Ask again in a moment'} and it will answer from it.`),
           ...(r?.links?.length ? [h('ul', { class: 'sb-miss-links', 'aria-label': 'Linked pages' }, r.links.map((l) => {
             let host = l.url; try { host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
             return h('li', { class: l.ok ? 'is-ok' : 'is-bad' }, ico(l.ok ? 'checkCircle' : 'warn', 14),
@@ -3440,10 +3447,10 @@ export function mount(ctx) {
     });
     missDlg = h('dialog', { class: 'sb-miss-dlg', 'aria-labelledby': 'sb-miss-h' }, formEl);
     formEl.querySelector('.sb-miss-h').id = 'sb-miss-h';
-    missDlg.addEventListener('close', () => { missDlg?.remove(); missDlg = null; missBtn.focus(); });
+    missDlg.addEventListener('close', () => { missDlg?.remove(); missDlg = null; const t = back && back.isConnected && back.offsetParent !== null ? back : (missBtn.offsetParent !== null ? missBtn : ta); t.focus(); });
     document.body.append(missDlg);
     missDlg.showModal();
-    (qIn.value ? aIn : qIn).focus();
+    (note || qIn.value ? aIn : qIn).focus();
   }
 
   function setComposer(text) {
@@ -3597,7 +3604,7 @@ export function mount(ctx) {
         el.setAttribute('aria-describedby', fid);
         el.append(h('hr', { role: 'separator' }));
       }
-      if (readiness().ready.length) el.append(menuItem('Didn’t get the answer you needed?', { icoName: 'plus', onSelect: () => { closeMenu(); openMiss(); } }));
+      if (readiness().ready.length) el.append(menuItem('Didn’t get the answer you needed?', { icoName: 'plus', onSelect: () => { closeMenu(); openMiss({ invoker: moreBtn }); } }));
       el.append(menuItem('Run the Proof Run', { icoName: 'flask', onSelect: () => { closeMenu(); emit('proof:run', { mini: false }); } }));
       el.append(menuItem(getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Show Proof view', { icoName: 'shieldCheck', onSelect: () => { closeMenu(true); emit('view:set', { view: getState().ui.view === 'proof' ? 'bot' : 'proof' }); } }));
       const last = [...answers.values()].filter((x) => x.final && x.by !== 'proof').pop();
@@ -3705,5 +3712,5 @@ export function mount(ctx) {
     dom.thread.innerHTML = ''; dom.suggest.innerHTML = ''; dom.composer.innerHTML = ''; if (dom.banner) dom.banner.innerHTML = '';
   }
 
-  return { ask, destroy };
+  return { ask, destroy, openNote: ({ invoker = null } = {}) => openMiss({ mode: 'note', invoker }) };
 }

@@ -228,6 +228,32 @@ let current = null;   // the open go-live dialog (one at a time)
 const exampleCache = { trial: null, promise: null };   // one prefilled Try it exchange per trial
 const devCache = { info: null, at: 0, promise: null };
 
+/** The Website tool's one embed line (lib/embed.js), as Set up shows it. A trial bot with voice on carries its trial
+ *  key (the server's own key, never invented: 'YOUR_KNOWBOT_KEY' when the key can't be read). */
+export function websiteLineText({ siteBase, apiBase, botId, surfaces, key = null, converted = false }) {
+  const on = new Set(normalizeSurfaces(surfaces));
+  const yes = (x) => (on.has(x) ? 'on' : 'off');
+  const voiceKey = on.has('webvoice') && !converted ? `\n        data-key="${key || 'YOUR_KNOWBOT_KEY'}"` : '';
+  return `<script type="module" src="${siteBase}lib/embed.js" data-api="${apiBase}" data-bot="${botId}"\n        data-chat="${yes('webchat')}" data-voice="${yes('webvoice')}" data-homepage="${yes('site')}"${voiceKey}></script>`;
+}
+
+/** websiteLine(ctx) -> {copy, display}: the same line for the first-time guide (ftue.js); display masks the key. */
+export async function websiteLine(ctx) {
+  const { api, store } = ctx;
+  const s = store.getState();
+  const apiBase = (api.BASE || location.origin).replace(/\/+$/, '');
+  const siteBase = `${location.origin}${location.pathname.replace(/\/studio(?:\/.*)?$/, '/')}`.replace(/\/?$/, '/');
+  let info = devCache.info && devCache.info.trial === s.trial.id ? devCache.info : null;
+  if (!info) {
+    try { const r = await api.devKey(); if (r && typeof r.key === 'string' && /^kb_(trial|live)_/.test(r.key)) info = { key: r.key, botId: r.botId || null }; } catch { info = null; }
+  }
+  const botId = info?.botId || s.trial.id || 'tr_yourbot';
+  const base = { siteBase, apiBase, botId, surfaces: s.spec?.surfaces, converted: !!s.trial?.converted };
+  const k = info?.key || null;
+  const mask = k ? `${k.slice(0, 13)}${'•'.repeat(10)}${k.slice(-4)}` : null;
+  return { copy: websiteLineText({ ...base, key: k }), display: websiteLineText({ ...base, key: mask }) };
+}
+
 /**
  * openGoLive(ctx, {tab:'channels'|'developers', channel?, invoker?, helpers}) -> close()
  * helpers come from checkout.js: {h, copyButton, copyText, lastQA, botName, hueVar, price}.
@@ -713,10 +739,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   }
   /** Website: ONE embed line (lib/embed.js) that turns on the features switched on above. */
   function websiteLine(mode) {
-    const on = new Set(liveSurfaces());
-    const yes = (x) => (on.has(x) ? 'on' : 'off');
-    const voiceKey = on.has('webvoice') && !getState().trial?.converted ? `\n        data-key="${keyFor(mode)}"` : '';
-    return `<script type="module" src="${siteBase}lib/embed.js" data-api="${apiBase}" data-bot="${botId()}"\n        data-chat="${yes('webchat')}" data-voice="${yes('webvoice')}" data-homepage="${yes('site')}"${voiceKey}></script>`;
+    return websiteLineText({ siteBase, apiBase, botId: botId(), surfaces: liveSurfaces(), key: keyFor(mode), converted: !!getState().trial?.converted });
   }
   function paintWebsiteLine() {
     const box = chDetail && $('#gl-webline', chDetail);

@@ -6,7 +6,7 @@
 //      links are tracked short links (one is clicked); the bot is texted, messaged on WhatsApp and e-mailed (signed
 //      webhooks) → three inbound leads; a phone call's checkout link is recorded (the phone flow itself has its own test
 //      in server/test/voice-live.test.mjs) and clicked
-//   2. the Leads panel opens from the header: totals, interactions by channel, the leads table, checkout links + clicks,
+//   2. the Stats & Leads panel opens from the header button (⋯ menu on phones): totals, interactions by channel, the leads table, checkout links + clicks,
 //      7 / 30 days, the tracking switch, and Download CSV (the downloaded file's columns and rows are checked)
 //   3. axe (when the CDN is reachable), Escape closes and focus returns, light + dark screenshots at 2x
 //
@@ -74,7 +74,7 @@ try {
   check('the report lists 5 leads', rep.leads?.length === 5, JSON.stringify(rep.leads?.map((l) => `${l.channel}:${l.type}`)));
   check('the report needs the trial token', (await api(T('/leads'))).status === 401 && (await api(T('/leads.csv'))).status === 401);
 
-  console.log('2. the Leads panel');
+  console.log('2. the Stats & Leads panel');
   browser = await chromium.launch({ headless: !process.env.HEADED });
   await fsp.mkdir(SHOTS, { recursive: true });
   let axeSource = null;
@@ -92,18 +92,16 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
-    // simple view: Leads lives in the header's ⋯ menu
-    const more = page.locator('#st-more');
-    await more.waitFor({ state: 'visible', timeout: 20000 });
-    await more.click();
-    const btn = page.locator('[role="menuitem"]', { hasText: 'Leads' });
-    await btn.waitFor({ state: 'visible', timeout: 5000 });
-    check(`${theme}: the ⋯ menu has Leads`, await btn.isVisible());
+    // desktop: "Stats & Leads" is a quiet text button in the header, left of Launch
+    const btn = page.locator('#st-leads');
+    await btn.waitFor({ state: 'visible', timeout: 20000 });
+    check(`${theme}: the header has Stats & Leads, left of Launch`, await btn.isVisible() && (await btn.textContent()) === 'Stats & Leads'
+      && await page.evaluate(() => document.getElementById('st-leads').getBoundingClientRect().right <= document.getElementById('st-pricewrap').getBoundingClientRect().left));
     await btn.click();
     const dlg = page.locator('dialog.kb-leads[open]');
     await dlg.waitFor({ timeout: 10000 });
     await page.locator('.kb-leads-tile').first().waitFor({ timeout: 10000 });
-    check(`${theme}: the dialog is named "Leads"`, (await page.locator('#kb-leads-title').textContent()) === 'Leads');
+    check(`${theme}: the dialog is named "Stats & Leads"`, (await page.locator('#kb-leads-title').textContent()) === 'Stats & Leads');
     const tiles = await page.locator('.kb-leads-tile-n').allTextContents();
     check(`${theme}: totals (questions, leads, checkout links, clicks)`, tiles.length === 4 && Number(tiles[1]) === 5 && Number(tiles[2]) === 1 && Number(tiles[3]) >= 2, tiles.join(' / '));
     const bars = await page.locator('.kb-leads-bars li').allTextContents();
@@ -144,11 +142,12 @@ try {
       } else console.log('  (axe skipped: CDN unreachable)');
       await page.keyboard.press('Escape');
       await page.waitForSelector('dialog.kb-leads', { state: 'detached', timeout: 5000 });
-      check('Escape closes it and focus returns to the ⋯ menu button', await page.evaluate(() => document.activeElement?.id === 'st-more'));
-      // mobile: the ⋯ menu has it, the panel fills the screen
+      check('Escape closes it and focus returns to the Stats & Leads button', await page.evaluate(() => document.activeElement?.id === 'st-leads'));
+      // mobile: the header keeps its room; the ⋯ menu has Stats & Leads, the panel fills the screen
       await page.setViewportSize({ width: 390, height: 844 });
+      check('mobile: Stats & Leads leaves the header', !(await page.locator('#st-leads').isVisible()));
       await page.locator('#st-more').click();
-      await page.getByRole('menuitem', { name: 'Leads' }).click();
+      await page.getByRole('menuitem', { name: 'Stats & Leads' }).click();
       await page.locator('.kb-leads-tile').first().waitFor({ timeout: 10000 });
       const wide = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1 && document.querySelector('.kb-leads-panel').getBoundingClientRect().width <= window.innerWidth);
       check('mobile: opens from the ⋯ menu, no horizontal page scroll', wide);

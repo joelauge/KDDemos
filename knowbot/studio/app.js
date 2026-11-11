@@ -33,6 +33,7 @@ import { mountBuilderPane } from './builderpane.js?v=93c5afa';
 import { siteSettings } from './sitebrand.js?v=93c5afa';
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=93c5afa';
 import { openLeads } from './leads.js?v=93c5afa';
+import { mountFtue } from './ftue.js?v=93c5afa';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -197,9 +198,9 @@ function renderHeader() {
   const livePill = h('span', { id: 'st-livepill', class: 'chip green is-label no-dot st-pill st-pill-live', role: 'status', hidden: true }, h('i', { 'aria-hidden': 'true' }), 'Live');
   const dash = h('a', { id: 'st-dash', class: 'st-dash', href: 'https://knowdrive.ai/', target: '_blank', rel: 'noopener', hidden: true },
     h('span', null, 'Dashboard'), h('span', { class: 'st-dash-ico', 'aria-hidden': 'true', html: icon('external', 13) }), h('span', { class: 'st-sr' }, ' (opens in a new tab)'));
-  // the Leads report (studio/leads.js): contacts visitors gave the bot, links it sent, clicks, CSV export
-  const leadsBtn = h('button', { type: 'button', id: 'st-leads', class: 'st-restart st-menu-only', 'aria-haspopup': 'dialog', onclick: () => openLeads() },
-    h('span', { html: icon('users', 14), 'aria-hidden': 'true' }), h('span', null, 'Leads'));
+  // Stats & Leads (studio/leads.js): questions by channel, contacts visitors gave the bot, links it sent, clicks, CSV.
+  // A quiet text button left of Launch on desktop; on phones it lives in the ⋯ menu (studio.css).
+  const leadsBtn = h('button', { type: 'button', id: 'st-leads', class: 'st-hlink', 'aria-haspopup': 'dialog', hidden: !getState().trial.id, onclick: () => openLeads() }, 'Stats & Leads');
   const restart = h('button', { type: 'button', id: 'st-restart', class: 'st-restart st-menu-only', 'aria-haspopup': 'dialog', onclick: () => confirmStartOver() },
     h('span', { html: icon('refresh', 14), 'aria-hidden': 'true' }), h('span', null, 'Start over'));
   const theme = h('button', { type: 'button', id: 'st-theme', class: 'st-iconbtn st-menu-only', onclick: toggleTheme });
@@ -210,7 +211,7 @@ function renderHeader() {
   el.append(
     h('h1', { class: 'st-sr' }, 'KnowBot Studio: build a bot that answers only from your files'),
     h('div', { class: 'st-header-left' }, brand, h('span', { class: 'st-hsep', 'aria-hidden': 'true' }), botchip, botchipDesc),
-    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, livePill, dash, priceWrap, leadsBtn, restart, theme, mot, more),
+    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, livePill, dash, leadsBtn, priceWrap, restart, theme, mot, more),
   );
   updateIdentity();
   updatePrice();
@@ -390,6 +391,7 @@ function updatePrice() {
   const activating = !live && activatingUntil > Date.now();
   if (document.documentElement.hasAttribute('data-live') !== live) document.documentElement.toggleAttribute('data-live', live);
   const wrap = $('#st-pricewrap'); const pill = $('#st-livepill'); const dash = $('#st-dash');
+  setHidden($('#st-leads'), !getState().trial.id);
   setHidden(wrap, live);
   setHidden(pill, !live);
   if (dash) { setHidden(dash, !live); setAttr(dash, 'href', getState().config?.dashboardUrl || 'https://knowdrive.ai/'); }
@@ -719,10 +721,51 @@ function dedupeLandingLink() {
         onclick: () => { addUserMessage('Enter your website'); dispatchAction({ type: 'import_store' }, { fromClick: true }); } }, 'add your website');
       p.append(h('span', { class: 'sb-store' }, ' Or ', link, '.'));
     }
+    // "… Or write a note.": the same form as "Didn't get the answer you needed?" (samplebot.js), titled for a first note
+    for (const p of $$('.sb-empty', slots.bot)) {
+      if (p.querySelector('[data-note-link]')) continue;
+      const link = h('button', { type: 'button', class: 'sb-link', dataset: { noteLink: '1' }, onclick: (e) => openNote(e.currentTarget) }, 'write a note');
+      p.append(h('span', { class: 'sb-note' }, ' Or ', link, '.'));
+    }
   };
   run();
   if (!landingMO && slots.suggest) { landingMO = new MutationObserver(run); landingMO.observe(slots.suggest, { childList: true, subtree: true }); }
 }
+/** "Write a note": samplebot.js's note form (the "Didn't get the answer you needed?" form, titled for a first note). */
+function openNote(invoker) {
+  const inv = invoker && invoker.isConnected ? invoker : document.activeElement;
+  whenReady(() => {
+    if (isMobile()) setTab('bot');
+    if (mods.samplebot?.openNote) mods.samplebot.openNote({ invoker: inv });
+    else toast({ kind: 'warn', text: 'Your bot is still loading. Try again in a moment.' });
+  });
+}
+
+// ---- the first-time guide (ftue.js): five steps, each advanced by the real milestone, never by a Next button
+let ftue = null;
+function initFtue(fresh) {
+  try {
+    ftue = mountFtue(ctx, {
+      fresh,
+      addSamples: () => emit('builder:action', { type: 'attach_samples', set: 'lumen-bikes' }),
+      upload: () => emit('builder:action', { type: 'request_upload' }),
+      website: () => emit('builder:action', { type: 'import_store' }),
+      note: () => openNote(document.activeElement),
+      ask: (q) => dispatchAction({ type: 'ask_samplebot', question: q }),
+      focusAsk: () => focusBotComposer(),
+      runTest: () => emit('builder:action', { type: 'run_proof' }),
+      launch: () => launchOpen('header'),
+      openStats: () => openLeads(),
+      openSetup: () => openSetup({}),
+      saveSurfaces: (list) => updateSpec({ surfaces: normalizeSurfaces(list) }, { by: 'user', source: 'landing', quiet: true }),
+      websiteLine: () => import('./golive.js?v=93c5afa').then((m) => m.websiteLine(ctx)),
+      isLive,
+      onDismiss: () => toast({ kind: 'info', text: 'Guide hidden. Bring it back any time from ⋯ → Show the guide.' }),
+    });
+    ctx.ftue = ftue;
+  } catch (err) { console.error('[studio] the first-time guide failed to mount; the studio keeps working', err); }
+}
+
 function hideHero() { const el = $('#st-hero'); if (el) el.remove(); if (landingMO) { landingMO.disconnect(); landingMO = null; } }
 on('change:fileOrder', ({ value }) => { if (value && value.length) hideHero(); });
 
@@ -2520,7 +2563,8 @@ function openMoreMenu(anchor) {
     h('span', { html: icon(ico, 16) }), h('span', { class: 'st-menu-main' }, label)));
   const list = h('ul', { class: 'st-menu-list', role: 'menu', 'aria-label': 'More options' },
     item('edit', 'Bot settings', () => openSpec()),
-    t.id ? item('users', 'Leads', () => openLeads()) : null,
+    t.id && isMobile() ? item('chart', 'Stats & Leads', () => openLeads()) : null,
+    ftue ? item('question', 'Show the guide', () => ftue.show()) : null,
     item(dark ? 'sun' : 'moon', dark ? 'Light theme' : 'Dark theme', toggleTheme),
     item('motion', motion.reduced() ? 'Full motion' : 'Reduce motion', toggleMotion),
     item('command', 'Command palette', () => openPalette()),
@@ -5606,6 +5650,7 @@ async function boot() {
   setState({ config: DEFAULT_CONFIG }, 'config:default');
   // 3. render the shell immediately (config fills in when it arrives; first paint never waits on the network)
   renderHeader(); renderSpine(); renderSetupPane(); renderBotHeader(); renderTabs(); ensureOverlay(); wireApplyOnInput(); initShapes();
+  initFtue(!hadTrial && !params.get('t') && !params.get('launched'));
   // The thread slot scrolls (B's layout), so it must be reachable by keyboard; C may refine the label/role.
   // r6 (D9/D10): the thread is a skip-link / J target (tabindex -1), not a Tab stop of its own: it was a 375x14 focus
   // target on phones and one more stop between the composer and the first [n]

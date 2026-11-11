@@ -165,7 +165,8 @@ async function setupCell(browser, cell) {
     reducedMotion: cell.motion === 'reduce' ? 'reduce' : 'no-preference', colorScheme: cell.theme,
   });
   // the journey starts in the Studio itself; the first view (landing) has its own test
-  await context.addInitScript(() => { try { localStorage.setItem('kb-landing', 'skip'); } catch { /* ignore */ } });
+  // the first-time guide (studio/ftue.js) has its own walk-through (ftue-smoke.mjs); this journey runs without it
+  await context.addInitScript(() => { try { localStorage.setItem('kb-landing', 'skip'); if (!localStorage.getItem('kb-ftue')) localStorage.setItem('kb-ftue', JSON.stringify({ status: 'dismissed' })); } catch { /* ignore */ } });
   await context.addInitScript(() => {
     // record every banner text the page shows (at FAKE_SPEED=4 the partial banner can come and go between polls)
     window.__bannerSeen = [];
