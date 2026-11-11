@@ -9,9 +9,11 @@
 //   orb.setPreset('sunset'); orb.stats(); orb.destroy();
 //
 // Performance: one requestAnimationFrame loop per orb; no DOM writes, layout reads or allocations per frame (the canvas
-// is resized from a ResizeObserver, the meter reads into preallocated arrays). WebGL draws one full-canvas triangle with a
-// small fragment shader (a soft glowing sphere whose surface is displaced by 3D noise); without WebGL it falls back to
-// Canvas2D (a smooth blob with two gradients). The loop stops while the canvas is off screen or the tab is hidden.
+// is resized from a ResizeObserver, the meter reads into preallocated arrays). WebGL draws two things: the glow (one
+// full-canvas triangle, a soft halo) and the orb itself as a dense cloud of tiny particles on a sphere (one static vertex
+// buffer; every particle's displacement, depth shading and colour is computed in the vertex shader from 3D noise driven by
+// the voice level and bands, so the CPU uploads only a few uniforms per frame). Without WebGL it falls back to Canvas2D
+// (the same particle sphere, fewer particles). The loop stops while the canvas is off screen or the tab is hidden.
 // The level is smoothed with a fast attack and a slower release, so it reacts at once to a voice and never jitters.
 // prefers-reduced-motion: no surface motion, only a gentle size pulse with the level.
 
@@ -69,11 +71,29 @@ export function createMeter(analyser) {
 }
 
 // ------------------------------------------------------------------------------------------------ WebGL renderer
-const VERT = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
-const FRAG = `precision mediump float;
+// the halo behind the particles: a soft glow that breathes with the level
+const GLOW_VERT = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
+const GLOW_FRAG = `precision mediump float;
+uniform vec2 uRes;uniform float uLevel;uniform vec3 uA;uniform vec3 uC;uniform float uGlow;uniform float uScale;
+void main(){
+  float half_=0.5*min(uRes.x,uRes.y);
+  vec2 p=(gl_FragCoord.xy-0.5*uRes)/half_;
+  float len=length(p);
+  float R=0.6*uScale;
+  float core=exp(-len*len/(R*R*0.55))*(0.10+0.16*uGlow);
+  float halo=exp(-max(len-R*0.82,0.0)*(7.5-3.5*uGlow))*(0.16+0.5*uGlow);
+  float fade=1.0-smoothstep(0.8,1.0,len);
+  vec3 gc=mix(uA,uC,0.35);
+  float a=clamp((core+halo)*fade,0.0,1.0);
+  gl_FragColor=vec4(gc*a,a);
+}`;
+// the orb: N particles on a sphere (Fibonacci lattice), rotated, displaced by noise and drawn as soft round dots
+const DOT_VERT = `precision highp float;
+attribute vec3 aPos;attribute float aSeed;
 uniform vec2 uRes;uniform float uTime;uniform float uLevel;uniform vec3 uBands;
 uniform vec3 uA;uniform vec3 uB;uniform vec3 uC;
-uniform float uAmp;uniform float uGlow;uniform float uScale;uniform float uThink;
+uniform float uAmp;uniform float uScale;uniform float uThink;uniform float uDot;
+varying vec3 vCol;varying float vAlpha;
 vec3 m289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 m289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
 vec4 perm(vec4 x){return m289(((x*34.0)+1.0)*x);}
@@ -98,62 +118,89 @@ float snoise(vec3 v){
   return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
 }
 void main(){
-  float half_=0.5*min(uRes.x,uRes.y);
-  vec2 p=(gl_FragCoord.xy-0.5*uRes)/half_;
-  float len=length(p);
-  vec2 dir=len>0.0001?p/len:vec2(1.0,0.0);
   float t=uTime;
-  float n1=snoise(vec3(dir*1.1,t*0.33));
-  float n2=snoise(vec3(dir*2.4+3.1,t*0.61));
-  float n3=snoise(vec3(dir*4.2-1.7,t*0.9));
-  float disp=uAmp*(0.62*n1+0.28*n2*(0.6+uBands.y)+0.1*n3*(0.4+uBands.z));
-  float R=0.6*uScale+disp*0.06;
-  float d=len-R;
-  float aa=1.6/half_;
-  float inside=1.0-smoothstep(-aa,aa,d);
-  float rr=clamp(len/max(R,0.001),0.0,1.0);
-  float z=sqrt(max(0.0,1.0-rr*rr));
-  vec3 nrm=vec3(p/max(R,0.001),z);
-  vec3 q=vec3(nrm.xy*0.85,t*0.16);
-  float f=snoise(q)*0.5+0.5;
-  float g=snoise(q*1.5+vec3(5.2,1.3,t*0.13))*0.5+0.5;
-  vec3 col=mix(uB,uA,smoothstep(0.0,1.0,f));
-  col=mix(col,uC,smoothstep(0.45,1.05,g)*(0.35+0.4*uLevel));
-  vec3 L=normalize(vec3(-0.45,0.55,0.75));
-  float diff=clamp(dot(nrm,L),0.0,1.0);
-  float spec=pow(clamp(dot(reflect(-L,nrm),vec3(0.0,0.0,1.0)),0.0,1.0),22.0);
-  float rim=pow(1.0-z,2.4);
-  float ang=atan(p.y,p.x);
-  float sweep=pow(0.5+0.5*sin(ang*2.0-t*3.2+nrm.y*1.5),8.0)*uThink;
-  col=col*(0.58+0.52*diff)+vec3(spec*0.38)+rim*uC*(0.3+0.7*uLevel)+uC*sweep*0.45*rim*2.0;
-  float fade=1.0-smoothstep(0.78,1.0,len);
-  float glow=exp(-max(d,0.0)*(9.0-4.0*uGlow))*(0.22+0.6*uGlow)*(1.0-inside)*fade;
-  vec3 gc=mix(uA,uC,0.35);
-  gl_FragColor=vec4(col*inside+gc*glow,clamp(inside+glow,0.0,1.0));
+  // slow rotation (faster while thinking)
+  float ry=t*0.35+uThink*t*0.6;float rx=0.35+0.15*sin(t*0.21);
+  float cy=cos(ry),sy=sin(ry),cx=cos(rx),sx=sin(rx);
+  vec3 q=aPos;
+  q=vec3(cy*q.x+sy*q.z,q.y,-sy*q.x+cy*q.z);
+  q=vec3(q.x,cx*q.y-sx*q.z,sx*q.y+cx*q.z);
+  // the surface: three octaves of noise; the voice bands push the finer ones
+  float n1=snoise(aPos*1.25+vec3(0.0,0.0,t*0.42));
+  float n2=snoise(aPos*2.6+vec3(3.1,0.0,t*0.75))*(0.55+uBands.y);
+  float n3=snoise(aPos*5.0+vec3(-1.7,2.0,t*1.1))*(0.35+uBands.z);
+  float disp=uAmp*(0.62*n1+0.28*n2+0.12*n3);
+  // a little scatter per particle so the shell has depth, more when loud
+  float jit=(aSeed-0.5)*(0.035+0.06*uLevel);
+  float r=0.6*uScale*(1.0+disp*0.09+jit);
+  vec3 w=q*r;
+  float half_=0.5*min(uRes.x,uRes.y);
+  vec2 xy=w.xy*half_/(0.5*uRes);
+  gl_Position=vec4(xy,-w.z*0.5,1.0);
+  float front=q.z*0.5+0.5;            // 0 back .. 1 front
+  gl_PointSize=uDot*(0.7+0.75*front)*(1.0+0.35*uLevel);
+  // colour: deep at the back, bright at the front; noise and the voice bring in the highlight colour
+  float f=snoise(aPos*0.9+vec3(5.2,1.3,t*0.16))*0.5+0.5;
+  vec3 col=mix(uB,uA,smoothstep(0.15,0.9,front*0.7+f*0.5));
+  float ang=atan(q.y,q.x);
+  float sweep=pow(0.5+0.5*sin(ang*2.0-t*3.2+q.z*1.5),8.0)*uThink;
+  col=mix(col,uC,clamp(smoothstep(0.55,1.0,f)*(0.25+0.6*uLevel)+max(disp,0.0)*0.35+sweep*0.8,0.0,1.0));
+  vCol=col;
+  vAlpha=(0.22+0.78*front)*(0.85+0.15*aSeed);
 }`;
+const DOT_FRAG = `precision mediump float;
+varying vec3 vCol;varying float vAlpha;
+void main(){
+  vec2 c=gl_PointCoord-0.5;
+  float d=dot(c,c)*4.0;                 // 0 centre .. 1 edge
+  float a=(1.0-smoothstep(0.35,1.0,d))*vAlpha;
+  if(a<0.01)discard;
+  gl_FragColor=vec4(vCol*a,a);
+}`;
+
+/** Points on a sphere (Fibonacci lattice) + a per-point seed. */
+function spherePoints(n) {
+  const pos = new Float32Array(n * 3), seed = new Float32Array(n);
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (2 * (i + 0.5)) / n, rr = Math.sqrt(1 - y * y), th = ga * i;
+    pos[i * 3] = Math.cos(th) * rr; pos[i * 3 + 1] = y; pos[i * 3 + 2] = Math.sin(th) * rr;
+    seed[i] = ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1;
+  }
+  return { pos, seed };
+}
+export const PARTICLES = 3600;
 
 function webglRenderer(canvas) {
   let gl = null;
   try { gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, powerPreference: 'low-power' }); } catch { gl = null; }
   if (!gl) return null;
   const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null; };
-  let prog = null, U = null;
+  const link = (vs, fs) => {
+    const v = sh(gl.VERTEX_SHADER, vs), f = sh(gl.FRAGMENT_SHADER, fs);
+    if (!v || !f) return null;
+    const pr = gl.createProgram();
+    gl.attachShader(pr, v); gl.attachShader(pr, f); gl.linkProgram(pr);
+    return gl.getProgramParameter(pr, gl.LINK_STATUS) ? pr : null;
+  };
+  let G = null, D = null, maxPt = 64;
   function init() {
-    const v = sh(gl.VERTEX_SHADER, VERT), f = sh(gl.FRAGMENT_SHADER, FRAG);
-    if (!v || !f) return false;
-    prog = gl.createProgram();
-    gl.attachShader(prog, v); gl.attachShader(prog, f); gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return false;
-    gl.useProgram(prog);
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    const gp = link(GLOW_VERT, GLOW_FRAG), dp = link(DOT_VERT, DOT_FRAG);
+    if (!gp || !dp) return false;
+    const tri = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, tri);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, 'p');
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    U = {};
-    for (const n of ['uRes', 'uTime', 'uLevel', 'uBands', 'uA', 'uB', 'uC', 'uAmp', 'uGlow', 'uScale', 'uThink']) U[n] = gl.getUniformLocation(prog, n);
+    G = { prog: gp, buf: tri, loc: gl.getAttribLocation(gp, 'p'), U: {} };
+    for (const n of ['uRes', 'uLevel', 'uA', 'uC', 'uGlow', 'uScale']) G.U[n] = gl.getUniformLocation(gp, n);
+    const { pos, seed } = spherePoints(PARTICLES);
+    const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb); gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    const sb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, sb); gl.bufferData(gl.ARRAY_BUFFER, seed, gl.STATIC_DRAW);
+    D = { prog: dp, pb, sb, lp: gl.getAttribLocation(dp, 'aPos'), ls: gl.getAttribLocation(dp, 'aSeed'), U: {} };
+    for (const n of ['uRes', 'uTime', 'uLevel', 'uBands', 'uA', 'uB', 'uC', 'uAmp', 'uScale', 'uThink', 'uDot']) D.U[n] = gl.getUniformLocation(dp, n);
+    maxPt = (gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE) || [1, 64])[1] || 64;
     gl.clearColor(0, 0, 0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); // premultiplied
     return true;
   }
   if (!init()) return null;
@@ -164,15 +211,31 @@ function webglRenderer(canvas) {
     kind: 'webgl',
     draw(s) {
       if (lost) return;
-      gl.viewport(0, 0, canvas.width, canvas.height);
+      const w = canvas.width, h = canvas.height;
+      gl.viewport(0, 0, w, h);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.uniform2f(U.uRes, canvas.width, canvas.height);
-      gl.uniform1f(U.uTime, s.phase);
-      gl.uniform1f(U.uLevel, s.level);
-      gl.uniform3f(U.uBands, s.bands[0], s.bands[1], s.bands[2]);
-      gl.uniform3fv(U.uA, s.colors[0]); gl.uniform3fv(U.uB, s.colors[1]); gl.uniform3fv(U.uC, s.colors[2]);
-      gl.uniform1f(U.uAmp, s.amp); gl.uniform1f(U.uGlow, s.glow); gl.uniform1f(U.uScale, s.scale); gl.uniform1f(U.uThink, s.think);
+      // glow
+      gl.useProgram(G.prog);
+      gl.bindBuffer(gl.ARRAY_BUFFER, G.buf);
+      gl.enableVertexAttribArray(G.loc); gl.vertexAttribPointer(G.loc, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform2f(G.U.uRes, w, h); gl.uniform1f(G.U.uLevel, s.level);
+      gl.uniform3fv(G.U.uA, s.colors[0]); gl.uniform3fv(G.U.uC, s.colors[2]);
+      gl.uniform1f(G.U.uGlow, s.glow); gl.uniform1f(G.U.uScale, s.scale);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.disableVertexAttribArray(G.loc);
+      // particles
+      gl.useProgram(D.prog);
+      gl.bindBuffer(gl.ARRAY_BUFFER, D.pb); gl.enableVertexAttribArray(D.lp); gl.vertexAttribPointer(D.lp, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, D.sb); gl.enableVertexAttribArray(D.ls); gl.vertexAttribPointer(D.ls, 1, gl.FLOAT, false, 0, 0);
+      gl.uniform2f(D.U.uRes, w, h);
+      gl.uniform1f(D.U.uTime, s.phase); gl.uniform1f(D.U.uLevel, s.level);
+      gl.uniform3f(D.U.uBands, s.bands[0], s.bands[1], s.bands[2]);
+      gl.uniform3fv(D.U.uA, s.colors[0]); gl.uniform3fv(D.U.uB, s.colors[1]); gl.uniform3fv(D.U.uC, s.colors[2]);
+      gl.uniform1f(D.U.uAmp, s.amp); gl.uniform1f(D.U.uScale, s.scale); gl.uniform1f(D.U.uThink, s.think);
+      // dot size follows the orb's size on screen: tiny, close together
+      gl.uniform1f(D.U.uDot, Math.min(maxPt, Math.max(1.4, Math.min(w, h) * 0.0085)));
+      gl.drawArrays(gl.POINTS, 0, PARTICLES);
+      gl.disableVertexAttribArray(D.lp); gl.disableVertexAttribArray(D.ls);
     },
     destroy() { try { gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch { /* ignore */ } },
   };
@@ -183,32 +246,31 @@ function canvas2dRenderer(canvas) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   const css = (c, a = 1) => `rgba(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)},${a})`;
-  const N = 72;
+  const N = 700;
+  const { pos, seed } = spherePoints(N);
   return {
     kind: '2d',
     draw(s) {
       const w = canvas.width, hgt = canvas.height, half = Math.min(w, hgt) / 2, cx = w / 2, cy = hgt / 2;
       ctx.clearRect(0, 0, w, hgt);
       const R = half * 0.6 * s.scale;
-      const glow = ctx.createRadialGradient(cx, cy, R * 0.9, cx, cy, half);
-      glow.addColorStop(0, css(s.colors[0], 0.22 + 0.5 * s.glow));
+      const glow = ctx.createRadialGradient(cx, cy, R * 0.6, cx, cy, half);
+      glow.addColorStop(0, css(s.colors[0], 0.16 + 0.4 * s.glow));
       glow.addColorStop(1, css(s.colors[0], 0));
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, w, hgt);
-      ctx.beginPath();
-      const k = 0.05 * s.amp, t = s.phase;
-      for (let i = 0; i <= N; i++) {
-        const a = (i / N) * Math.PI * 2;
-        const r = R * (1 + k * (Math.sin(3 * a + t * 1.3) + 0.6 * Math.sin(5 * a - t * 1.7) + 0.4 * Math.sin(2 * a + t * 0.9)));
-        const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
-        if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      const t = s.phase, ry = t * 0.35, cyy = Math.cos(ry), syy = Math.sin(ry), k = 0.09 * s.amp;
+      const dot = Math.max(1, half * 0.02);
+      for (let i = 0; i < N; i++) {
+        const x0 = pos[i * 3], y0 = pos[i * 3 + 1], z0 = pos[i * 3 + 2];
+        const x = cyy * x0 + syy * z0, z = -syy * x0 + cyy * z0;
+        const d = Math.sin(3 * x0 + t * 1.3) + 0.6 * Math.sin(5 * y0 - t * 1.7) + 0.4 * Math.sin(2 * z0 + t * 0.9);
+        const r = R * (1 + k * d + (seed[i] - 0.5) * 0.04);
+        const front = z * 0.5 + 0.5;
+        ctx.fillStyle = css(front > 0.55 ? s.colors[0] : s.colors[1], 0.25 + 0.75 * front);
+        const sz = dot * (0.7 + 0.7 * front) * (1 + 0.35 * s.level);   // dots swell with the voice, as in WebGL
+        ctx.fillRect(cx + x * r - sz / 2, cy - y0 * r - sz / 2, sz, sz);
       }
-      const fill = ctx.createRadialGradient(cx - R * 0.35, cy - R * 0.4, R * 0.05, cx, cy, R * 1.05);
-      fill.addColorStop(0, css(s.colors[2]));
-      fill.addColorStop(0.45, css(s.colors[0]));
-      fill.addColorStop(1, css(s.colors[1]));
-      ctx.fillStyle = fill;
-      ctx.fill();
     },
     destroy() {},
   };
