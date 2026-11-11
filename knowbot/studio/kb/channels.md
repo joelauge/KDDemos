@@ -22,7 +22,7 @@ The SMS channel works with a KnowBot number. The number's messaging webhook poin
 
 Source: /studio/
 
-The telephone (Phone) channel works with a KnowBot number and works for any KnowBot, a trial bot in KnowBot Studio or a launched bot. Callers ask out loud and hear the answer from the bot's own files only, with spoken attribution such as "According to the Returns Policy, …". When the answer is not in the files, the caller hears the same refusal sentence as on every other channel. It needs a KnowBot number, with the number's voice webhook pointed at the bot's telephone webhook address.
+The telephone (Phone) channel works with a KnowBot number and works for any KnowBot, a trial bot in KnowBot Studio or a launched bot. Callers ask out loud and hear the answer from the bot's own files only. To keep calls short, the bot gives just the answer without reading out where it came from; it names the source if the caller asks. When email or text sending is set up, the greeting says the sources can be sent at the end, and before the call ends the bot offers, in its own words, to send the transcript of the conversation and the sources for everything it shared, by email or text. When the answer is not in the files, the caller hears the same refusal sentence as on every other channel. It needs a KnowBot number, with the number's voice webhook pointed at the bot's telephone webhook address.
 
 ## Telephone voice engine
 

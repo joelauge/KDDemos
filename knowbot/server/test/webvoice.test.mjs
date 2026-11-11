@@ -118,10 +118,14 @@ describe('webvoice: units', () => {
     assert.equal(webVoiceEngine({ GEMINI_API_KEY: 'x' }), 'gemini');
     assert.equal(webVoiceEngine({ GEMINI_API_KEY: 'x', KNOWBOT_WEBVOICE_ENGINE: 'text' }), 'text');
   });
-  test('prompt grounds every answer in the search tool, keeps the spoken attribution and the canonical refusal', () => {
+  test('prompt grounds every answer in the search tool, speaks answers without attribution, keeps the canonical refusal', () => {
     const p = webSystemInstruction({ botName: 'Front Desk', org: 'Acme' });
     assert.match(p, /Before answering ANY question, call search_knowledge_base/);
-    assert.match(p, /always keep the "According to \.\.\." attribution/);
+    assert.match(p, /without saying where it comes from \(no "According to \.\.\."/);
+    assert.match(p, /If the visitor asks where something comes from, name it from "source_titles"/);
+    const ps = webSystemInstruction({ botName: 'Front Desk', org: 'Acme', sendInfo: { email: true, text: false } });
+    assert.match(ps, /happy to send you the sources for anything I share by email or text before you go/);
+    assert.match(ps, /Before the conversation ends .* transcript of your conversation and the sources for what you shared, by email/);
     assert.ok(p.includes(NOT_IN_DATA));
     assert.match(p, /Never answer from general knowledge/);
     assert.deepEqual(webToolDeclarations({ org: 'Acme' })[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base']);
@@ -164,7 +168,7 @@ describe('webvoice: text engine (no GEMINI_API_KEY)', () => {
     const a = await b.wait('answer', 15000);
     assert.equal(a.refused, false);
     assert.match(a.text, /30 days/);
-    assert.match(a.spoken, /^According to (the )?Returns Policy/i);
+    assert.match(a.spoken, /^You can return/i, 'just the answer, no spoken attribution');
     assert.ok(a.citations.length >= 1);
     assert.match(a.citations[0].title, /Returns Policy/i);
     assert.match(a.proofUrl, /^https:\/\/kb\.example\.test\/.*p\/[A-Za-z0-9_-]+$/);
@@ -255,12 +259,13 @@ describe('webvoice: Gemini Live engine', () => {
     assert.equal(searching.query, Q);
     const cites = await b.wait('citations', 15000);
     assert.equal(cites.refused, false);
-    assert.match(cites.say, /^According to (the )?Returns Policy/i);
+    assert.match(cites.say, /^You can return/i);
     assert.match(cites.citations[0].title, /Returns Policy/i);
     assert.ok(cites.proofUrl);
     await until(() => seen.tool, 5000, 'tool response');
     assert.equal(seen.tool.response.status, 'ok');
-    assert.match(seen.tool.response.say, /According to/);
+    assert.ok(!/According to/.test(seen.tool.response.say), 'the tool gives just the answer');
+    assert.deepEqual(seen.tool.response.source_titles.length > 0, true, 'and the source titles, for when the visitor asks');
     await until(() => b.json.some((m) => m.type === 'transcript' && m.role === 'agent' && /30 days/.test(m.text)), 5000, 'caption');
     assert.ok(b.json.some((m) => m.type === 'transcript' && m.role === 'user' && m.text === Q));
     // typed question goes to the live session; an off-topic search is refused with the canonical line

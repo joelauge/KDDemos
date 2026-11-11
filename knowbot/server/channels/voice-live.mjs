@@ -116,10 +116,14 @@ export function claimStreamToken(token, callSid, botId) {
 
 // ------------------------------------------------------------------ prompt + tools
 export const MAX_TEXTS_PER_CALL = 3;
-export function greetingFor(botName) {
+/** The phone greeting. offerSources: this line can send email or text, so the caller hears they can get the sources at the end. */
+export function greetingFor(botName, { offerSources = false } = {}) {
   const name = botName ? `${botName}. ` : '';
-  return `Hi, you've reached ${name}I answer from my files and tell you where each answer comes from. What would you like to know?`;
+  return offerSources
+    ? `Hi, you've reached ${name}I answer from my files, and I'm happy to send you the sources for anything I share by email or text at the end of the call. What would you like to know?`
+    : `Hi, you've reached ${name}I answer from my files. What would you like to know?`;
 }
+const canSend = (sendInfo) => !!(sendInfo && (sendInfo.email || sendInfo.text));
 
 /**
  * The "send me this" part of a voice prompt. sendInfo: { email, text, callerKnown } (what this line can send, and whether
@@ -133,24 +137,27 @@ export function sendInfoInstruction(sendInfo, { who = 'caller' } = {}) {
   if (sendInfo.email) lines.push(`- For an email, ask for their email address, spell it back to them and get a yes before sending.`);
   if (!sendInfo.email) lines.push(`- Email isn't available here; offer a text instead.`);
   if (!sendInfo.text) lines.push(`- Texts aren't available here; offer an email instead.`);
-  lines.push(`- Only after they confirm, call send_info with channel "text" or "email" and "to" set to the number or address they confirmed${sendInfo.text && sendInfo.callerKnown ? ' (leave "to" empty to text the number they are calling from)' : ''}.`);
+  lines.push(`- Only after they confirm, call send_info with channel "text" or "email" and "to" set to the number or address they confirmed${sendInfo.text && sendInfo.callerKnown ? ' (leave "to" empty to text the number they are calling from)' : ''}. Use what "conversation" for the end-of-${who === 'visitor' ? 'conversation' : 'call'} offer (the transcript and the sources for everything you shared), what "last_answer" when they ask for one answer.`);
   lines.push(`- When it succeeds, tell them it's on its way. If it reports a problem, say so briefly and offer the other way. If it says there is nothing to send yet, ask what they'd like to know first. Never read out the link.`);
+  const end = who === 'visitor' ? 'conversation' : 'call';
+  lines.push(`- Before the ${end} ends (they say goodbye, thanks, or that they're done), if you answered at least one question from the files and haven't sent anything yet, first offer to send them the transcript of your conversation and the sources for what you shared, by ${sendInfo.email && sendInfo.text ? 'email or text' : sendInfo.email ? 'email' : 'text'}. Say it in your own words, briefly and warmly, the way a person would (for example: "Before you go, want me to send you a transcript of our chat and the sources for what I shared?"). Never use the same wording twice, and don't press if they say no.`);
   return `\n\nSending the answer:\n${lines.join('\n')}`;
 }
-export const sendInfoDeclaration = () => ({ name: 'send_info', description: 'Send the caller your last answer from the files (the answer, its sources and a link to them) by text or email. Only after they asked for it and confirmed the number or address.',
+export const sendInfoDeclaration = () => ({ name: 'send_info', description: 'Send the caller, by text or email, either the transcript of this conversation with the sources for every answer you gave (what "conversation"), or your last answer with its sources (what "last_answer"). Only after they asked for it or accepted your offer, and confirmed the number or address.',
   parameters: { type: 'OBJECT', properties: {
     channel: { type: 'STRING', enum: ['text', 'email'], description: 'text or email.' },
+    what: { type: 'STRING', enum: ['conversation', 'last_answer'], description: 'conversation: the transcript and the sources for everything shared (the end-of-call offer). last_answer: just the last answer and its sources.' },
     to: { type: 'STRING', description: 'The mobile number or email address the caller confirmed, as they said it. Empty to text the number they are calling from.' },
   }, required: ['channel'] } });
 
 export function systemInstruction({ botName, org, productLinks = false, sendInfo = null }) {
   const who = botName || 'KnowBot';
   const orgName = org || botName || 'this business';
-  const base = `You are ${who}, the phone assistant for ${orgName}, speaking with a caller on a live phone call. You are a kind librarian: you answer only from ${orgName}'s own files and you say which file each answer comes from.
+  const base = `You are ${who}, the phone assistant for ${orgName}, speaking with a caller on a live phone call. You are a kind librarian: you answer only from ${orgName}'s own files.
 
 Grounding rules:
 - Before answering ANY question, call search_knowledge_base. Write the query as a complete standalone question, filling in anything the caller referred to earlier (for "how much is it?", name the product).
-- The tool returns "say": the answer from the files, already worded for the phone and already naming its source ("According to the Shipping page, ..."). Speak it as given. You may leave out filler, but always keep the "According to ..." attribution, and never change, round or add any fact, number, date, price or name.
+- The tool returns "say": the answer from the files, already worded for the phone. Speak it as given, without saying where it comes from (no "According to ...": it keeps the call short${canSend(sendInfo) ? ', and the sources can be sent at the end' : ''}). If the caller asks where something comes from, name it from "source_titles". You may leave out filler, but never change, round or add any fact, number, date, price or name.
 - If the tool returns status "not_in_data", say exactly: "${NOT_IN_DATA}" Then offer to help with something else.
 - Never answer from general knowledge, never guess, and never answer a question you did not search for.
 
@@ -161,7 +168,7 @@ Speaking style:
 - While a search is running, say at most a few words such as "One moment."
 
 Call flow:
-- The call starts with a message like "[call connected] Caller's number ends in 0378." Greet the caller with: "${greetingFor(botName)}"
+- The call starts with a message like "[call connected] Caller's number ends in 0378." Greet the caller with: "${greetingFor(botName, { offerSources: canSend(sendInfo) })}"
 - When the caller says goodbye or that they're done, say a short goodbye and then call end_call.${sendInfoInstruction(sendInfo)}`;
   if (!productLinks) return base;
   return `${base}
@@ -236,10 +243,11 @@ export function twilioRest(env = {}, { from = null } = {}) {
  * @param {string|null} [o.shopDomain]  product links on when set
  * @param {(to: string) => boolean} [o.textAllowed]  per-destination / per-bot text quota (devapi.mjs); false → 'texts are limited'
  */
-export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, sendInfo = null, env = {}, botName = '', org = '', log = () => {}, fromNumber = null }) {
+export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, sendInfo = null, env = {}, botName = '', org = '', log = () => {}, fromNumber = null, getTranscript = () => [] }) {
   const lineNumber = fromNumber || env.TWILIO_FROM_NUMBER;
   let textsSent = 0;
-  let lastAnswer = null; // the last grounded answer on this call: what send_info sends
+  let lastAnswer = null; // the last grounded answer on this call: what send_info sends for what "last_answer"
+  const grounded = []; // every grounded answer on this call: the sources of a "conversation" send
   const seen = []; // retrieved text this call (citation excerpts + urls), for product handle lookup
   const answers = []; // {query, refused, spoken, citations:[{n,title,file}]} for the call log
   const names = [botName, org].filter(Boolean);
@@ -266,10 +274,11 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
       try { r = await ask(query); } catch (e) { log(`[voice-live] ${callSid} search failed: ${e.message}`); return { status: 'error', retryable: false, reason: 'The files could not be searched right now.' }; }
       for (const c of r.citations || []) seen.push({ text: c.excerpt || '', url: c.url || '', file: c.file || '', title: humanTitle(c) });
       for (const h of r.proof?.hits || []) seen.push({ text: h.excerpt || '', file: h.file || '' });
-      const spoken = r.refused ? NOT_IN_DATA : formatSpoken(r, 450, { names });
+      const spoken = r.refused ? NOT_IN_DATA : formatSpoken(r, 450, { names, attribute: false });
       answers.push({ query, refused: !!r.refused, spoken, citations: (r.citations || []).map((c) => ({ n: c.n, title: humanTitle(c), file: c.file })) });
       if (r.refused) return { status: 'not_in_data', say: NOT_IN_DATA };
       lastAnswer = r;
+      grounded.push(r);
       // only the answer to speak and the titles it came from: no raw excerpts (prices, figures) the model could read
       // from beyond the answer, and no page addresses (product handles come from this call's own `seen` list)
       return { status: 'ok', say: spoken, source_titles: [...new Set((r.citations || []).slice(0, 4).map((c) => humanTitle(c)))] };
@@ -282,7 +291,8 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
       const to = String(args.to || '').trim() || (via === 'text' ? callerNumber : '');
       if (!to) return { status: via === 'email' ? 'need_email_address' : 'need_phone_number', reason: via === 'email' ? 'Ask for their email address and spell it back.' : 'Ask for their mobile number and read it back.' };
       let r;
-      try { r = await sendInfo({ via, to, answer: lastAnswer }); } catch (e) { log(`[voice-live] ${callSid} send_info failed: ${e.message}`); return { status: 'error', retryable: false, reason: "It couldn't be sent." }; }
+      const convo = String(args.what || 'conversation') !== 'last_answer';
+      try { r = await sendInfo({ via, to, answer: lastAnswer, ...(convo ? { answers: [...grounded], transcript: (getTranscript() || []).slice(-200) } : {}) }); } catch (e) { log(`[voice-live] ${callSid} send_info failed: ${e.message}`); return { status: 'error', retryable: false, reason: "It couldn't be sent." }; }
       log(`[voice-live] ${callSid} send_info by ${via}: ${r.status}`);
       if (r.status === 'sent') return { status: 'ok', sent_by: via, ...(via === 'text' ? { sent_to_last_four: String(r.to || '').replace(/\D/g, '').slice(-4) } : {}) };
       return { status: r.status, retryable: r.status === 'invalid', reason: r.reply };
@@ -559,7 +569,7 @@ export function handleMediaStream(twilioWs, cx) {
         cx.onStart?.({ callSid, from: callerNumber });
         const sendSms = rest.canText ? async (to, body) => { const r = await rest.sendSms(to, body); try { cx.onTextSent?.({ to, body }); } catch { /* metering only */ } return r; } : null;
         runShared = createToolRunner({ ask: cx.ask, searchRaw: cx.searchRaw, callSid, callerNumber, sendSms,
-          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, sendInfo: cx.sendInfo || null, env, botName: cx.botName, org: cx.org, log, fromNumber: rest.fromNumber });
+          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, sendInfo: cx.sendInfo || null, env, botName: cx.botName, org: cx.org, log, fromNumber: rest.fromNumber, getTranscript: () => transcript });
         log(`[voice-live] ${callSid} media stream started (bot ${cx.botId})`);
         openSession().catch((e) => { log(`[voice-live] ${callSid} could not open a Gemini session: ${e.message}`); closeAll(); });
         break;

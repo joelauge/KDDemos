@@ -200,6 +200,53 @@ export function textMessage(answer, { botName = 'KnowBot', proofUrl = null } = {
   return `${body}\n${footer}`.slice(0, TEXT_MAX);
 }
 
+/**
+ * The end-of-call send (voice bots): the transcript of the conversation, then each answer from the files with its quoted
+ * lines, sources and proof link. items: [{answer (normalized), proofUrl}], transcript: [{role: 'caller'|'user'|'agent', text}].
+ */
+export function conversationEmail(items, transcript = [], { botName = 'KnowBot', to = '' } = {}) {
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const lines = (transcript || []).filter((t) => t && String(t.text || '').trim()).slice(-200)
+    .map((t) => ({ who: t.role === 'agent' ? botName : 'You', text: oneLine(t.text).slice(0, 2000) }));
+  const note = `You asked ${botName} to send this to ${to}. Nothing else will be sent unless you ask again, so there is nothing to unsubscribe from. If this wasn't you, you can ignore it.`;
+  // each answer as formatEmail writes it, minus its closing "answers only from its own files" line (said once below)
+  const closer = `${botName} answers only from its own files, and cites every line.`;
+  const parts = items.map(({ answer, proofUrl }) => {
+    const m = formatEmail({ ...answer, refused: false }, { proofUrl, botName, question: answer.question });
+    return { q: answer.question, text: m.text.replace(`\n${closer}`, '').trimEnd(), html: m.html.split(esc(closer)).join('').replace(/<p[^>]*>\s*<\/p>/g, '') };
+  });
+  const text = [
+    `Your conversation with ${botName}`, '',
+    ...(lines.length ? ['Transcript', ...lines.map((l) => `${l.who}: ${l.text}`), ''] : []),
+    'Sources for what we covered', '',
+    ...parts.flatMap((x, i) => [`${i + 1}. ${x.q || 'Answer'}`, x.text, '']),
+    closer, '', '--', note,
+  ].join('\n');
+  const h2 = (t) => `<p style="margin:24px 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#666">${esc(t)}</p>`;
+  const html = `<div style="font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111;max-width:600px">`
+    + `<p style="margin:0 0 4px;font-size:18px;font-weight:600">Your conversation with ${esc(botName)}</p>`
+    + (lines.length ? h2('Transcript') + lines.map((l) => `<p style="margin:0 0 6px"><strong style="color:${l.who === 'You' ? '#111' : '#4f46e5'}">${esc(l.who)}:</strong> ${esc(l.text)}</p>`).join('') : '')
+    + h2('Sources for what we covered')
+    + parts.map((x, i) => `<div style="margin:0 0 18px;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px"><p style="margin:0 0 8px;color:#555">${i + 1}. ${esc(x.q || 'Answer')}</p>${x.html}</div>`).join('')
+    + `<p style="margin:16px 0 0;color:#555;font-size:13px">${esc(closer)}</p>`
+    + `<p style="margin:24px 0 0;padding-top:12px;border-top:1px solid #e5e7eb;color:#888;font-size:12px">${esc(note)}</p></div>`;
+  return { subject: clipWords(`Your conversation with ${botName}: transcript and sources`, 140).replace(/[\r\n]+/g, ' '), text, html };
+}
+/** The end-of-call text: one proof link per answer (each opens the answer with its sources), as many as fit in 320 characters. */
+export function conversationText(items, { botName = 'KnowBot' } = {}) {
+  const footer = toGsm7(`You asked ${clipWords(botName, 40).replace(/…$/, '')} to send this. Reply STOP to opt out.`);
+  let body = toGsm7(`Sources from your chat with ${clipWords(botName, 40).replace(/…$/, '')}:`);
+  let shown = 0;
+  for (const { answer, proofUrl } of items) {
+    if (!proofUrl) continue;
+    const line = toGsm7(`\n${shown + 1}) ${clipWords(answer.question || 'Answer', 48).replace(/…$/, '…')} ${proofUrl}`);
+    if ((body + line).length + footer.length + 1 > TEXT_MAX) break;
+    body += line; shown++;
+  }
+  if (!shown) return null;
+  return `${body}\n${footer}`.slice(0, TEXT_MAX);
+}
+
 // ------------------------------------------------------------------ the conversation seam
 const ASK_RE = /\bwhat (?:e-?mail address|mobile number|e-?mail address or mobile number)\b[^?]*\?|doesn'?t look like (?:a valid|an?) |reply with (?:that|your) (?:e-?mail|address)|I can (?:also )?(?:e-?mail|text) it to you/i;
 
@@ -269,9 +316,11 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
    * Sends `answer` to one address. → { status: 'sent'|'invalid'|'nothing'|'unavailable'|'limited'|'opted_out'|'failed', via, to (masked), reply }
    * `to` is an e-mail address or a phone number as typed or spoken; `via` is inferred from it when not given.
    */
-  async function send({ botId, botName = 'KnowBot', replyTo = null, channel = 'api', via = null, to, answer, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [] }) {
+  async function send({ botId, botName = 'KnowBot', replyTo = null, channel = 'api', via = null, to, answer, answers = null, transcript = null, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [] }) {
     const media = sendInfoMedia(env, fromNumber);
-    const a = normalizeAnswer(answer);
+    // answers[] (+ transcript): the whole conversation (the voice bots' end-of-call offer); else the one answer
+    const convo = Array.isArray(answers) ? answers.map(normalizeAnswer).filter((x) => x && !x.refused).slice(-12) : [];
+    const a = convo.length ? convo[convo.length - 1] : normalizeAnswer(answer);
     if (!a || a.refused) return { status: 'nothing', reply: NOTHING };
     const raw = String(to || '').trim();
     via = via || (/@/.test(raw) ? 'email' : 'text');
@@ -284,9 +333,19 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
       log(`[sendinfo] bot ${botId}: send by ${via} refused, rate limited`);
       return { status: 'limited', via, reply: "I've sent several messages already. Please try again a little later." };
     }
-    const proofUrl = a.proofUrl || (typeof proofUrlFor === 'function' ? await Promise.resolve(proofUrlFor(a)).catch(() => null) : null);
+    const proofOf = async (x) => x.proofUrl || (typeof proofUrlFor === 'function' ? await Promise.resolve(proofUrlFor(x)).catch(() => null) : null);
+    const proofUrl = await proofOf(a);
+    const items = convo.length ? await Promise.all(convo.map(async (x) => ({ answer: x, proofUrl: x === a ? proofUrl : await proofOf(x) }))) : null;
+    const convoText = items && via === 'text' ? conversationText(items, { botName }) : null;
+    let sentLength = 0;
     try {
-      if (via === 'email') {
+      if (items && via === 'email') {
+        const m = conversationEmail(items, transcript || [], { botName, to: dest });
+        await sendEmail(env, { from: emailFrom(env, botName), to: dest, subject: m.subject, html: m.html, text: m.text, replyTo: replyTo && validEmail(replyTo) ? validEmail(replyTo) : null }, fetchImpl);
+      } else if (convoText) {
+        await sendText(env, { from: fromNumber || null, to: dest, body: convoText }, fetchImpl);
+        sentLength = convoText.length;
+      } else if (via === 'email') {
         const m = emailMessage(a, { botName, to: dest, proofUrl });
         await sendEmail(env, { from: emailFrom(env, botName), to: dest, subject: m.subject, html: m.html, text: m.text, replyTo: replyTo && validEmail(replyTo) ? validEmail(replyTo) : null }, fetchImpl);
       } else {
@@ -298,8 +357,9 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     }
     hit(ck, lim.caller, HOUR); hit(dk, lim.dest, HOUR); hit(bk, lim.bot, DAY);
     log(`[sendinfo] bot ${botId}: sent by ${via} (${channel}) to:${hash8(dest)}`);
-    try { onSent?.({ botId, via, channel, callerKey, scopeTags, to: hash8(dest), fromNumber: via === 'text' ? (fromNumber || null) : null, length: via === 'text' ? textMessage(a, { botName, proofUrl }).length : 0 }); } catch (e) { log(`[sendinfo] insights event failed: ${e.message}`); }
+    try { onSent?.({ botId, via, channel, callerKey, scopeTags, to: hash8(dest), fromNumber: via === 'text' ? (fromNumber || null) : null, length: via === 'text' ? (sentLength || textMessage(a, { botName, proofUrl }).length) : 0 }); } catch (e) { log(`[sendinfo] insights event failed: ${e.message}`); }
     const masked = maskOf(via, dest);
+    if (items) return { status: 'sent', via, to: masked, scope: 'conversation', reply: via === 'email' ? `Sent to ${masked}: the transcript of our conversation and the sources for each answer.` : `Sent to ${masked}, with a link to the sources for each answer.` };
     return { status: 'sent', via, to: masked, reply: via === 'email' ? `Sent to ${masked}. It has the answer, the quoted lines with their sources, and a link to see them in context.` : `Sent to ${masked}, with a link to the sources.` };
   }
 

@@ -53,18 +53,20 @@ export function webVoiceEngine(env = {}) {
   return env.GEMINI_API_KEY ? 'gemini' : 'text';
 }
 
-export function webGreeting(botName) {
-  return `Hi, I'm ${botName || 'KnowBot'}. I answer from my files and show you where each answer comes from. What would you like to know?`;
+export function webGreeting(botName, { offerSources = false } = {}) {
+  return offerSources
+    ? `Hi, I'm ${botName || 'KnowBot'}. I answer from my files, and I'm happy to send you the sources for anything I share by email or text before you go. What would you like to know?`
+    : `Hi, I'm ${botName || 'KnowBot'}. I answer from my files, and the sources show on screen. What would you like to know?`;
 }
 
 export function webSystemInstruction({ botName, org, sendInfo = null }) {
   const who = botName || 'KnowBot';
   const orgName = org || botName || 'this business';
-  return `You are ${who}, the voice assistant on ${orgName}'s website, speaking with a visitor through their browser microphone. You are a kind librarian: you answer only from ${orgName}'s own files and you say which file each answer comes from. The visitor also sees the sources on screen while you speak.
+  return `You are ${who}, the voice assistant on ${orgName}'s website, speaking with a visitor through their browser microphone. You are a kind librarian: you answer only from ${orgName}'s own files. The visitor sees the sources on screen while you speak.
 
 Grounding rules:
 - Before answering ANY question, call search_knowledge_base. Write the query as a complete standalone question, filling in anything the visitor referred to earlier.
-- The tool returns "say": the answer from the files, already worded to be spoken and already naming its source ("According to the Shipping page, ..."). Speak it as given. You may leave out filler, but always keep the "According to ..." attribution, and never change, round or add any fact, number, date, price or name.
+- The tool returns "say": the answer from the files, already worded to be spoken. Speak it as given, without saying where it comes from (no "According to ...": the sources are on screen${sendInfo && (sendInfo.email || sendInfo.text) ? ' and can be sent at the end' : ''}). If the visitor asks where something comes from, name it from "source_titles". You may leave out filler, but never change, round or add any fact, number, date, price or name.
 - If the tool returns status "not_in_data", say exactly: "${NOT_IN_DATA}" Then offer to help with something else.
 - Never answer from general knowledge, never guess, and never answer a question you did not search for.
 
@@ -74,7 +76,7 @@ Speaking style:
 - If the question is unclear, ask one short clarifying question.
 
 Session flow:
-- The session starts with the message "[visitor connected]". Greet the visitor with: "${webGreeting(botName)}"
+- The session starts with the message "[visitor connected]". Greet the visitor with: "${webGreeting(botName, { offerSources: !!(sendInfo && (sendInfo.email || sendInfo.text)) })}"
 - Typed messages from the visitor arrive as text; treat them exactly like spoken questions.${sendInfoInstruction(sendInfo, { who: 'visitor' })}`;
 }
 
@@ -157,7 +159,7 @@ export function handleWebVoice(ws, cx) {
     try { a = await ask(q); } catch (e) {
       return sendJson({ type: 'error', code: e.limit ? 'question_limit' : 'answer_failed', message: e.limit ? 'This session has reached its question limit. Start a new one to keep going.' : "Couldn't answer right now. Please try again." });
     }
-    const spoken = a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names });
+    const spoken = a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false });
     transcript.push({ role: 'user', text: q }, { role: 'agent', text: spoken });
     sendJson({ type: 'answer', question: q, text: a.refused ? NOT_IN_DATA : a.answer, spoken, refused: !!a.refused, citations: citationChips(a), proofUrl: a.proofUrl || null });
   }
@@ -237,16 +239,16 @@ export function handleWebVoice(ws, cx) {
     let note;
     if (engine === 'gemini') {
       runShared = createToolRunner({ ask: (q) => ask(q).then((a) => {
-        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names }), citations: citationChips(a), proofUrl: a.proofUrl || null });
+        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false }), citations: citationChips(a), proofUrl: a.proofUrl || null });
         return a;
-      }), sendInfo: cx.sendInfo ? (x) => cx.sendInfo({ ...x, callerKey }) : null, env, botName: cx.botName, org: cx.org, callSid: sid, log });
+      }), sendInfo: cx.sendInfo ? (x) => cx.sendInfo({ ...x, callerKey }) : null, env, botName: cx.botName, org: cx.org, callSid: sid, log, getTranscript: () => transcript });
       try { session = await openGemini(); } catch (e) {
         log(`[webvoice] ${sid} Gemini Live unavailable (${e.message}); text engine`);
         engine = 'text'; note = 'Live voice is unavailable right now, so your browser recognizes and speaks instead.';
       }
       if (closed) return;
     }
-    sendJson({ type: 'ready', engine, bot: { id: cx.botId, name: cx.botName || 'KnowBot' }, mode: phone ? 'phone' : 'web', greeting: phone ? phoneGreeting(cx.botName) : webGreeting(cx.botName), input: { rate: 16000, encoding: 'pcm16le' }, output: { rate: 24000, encoding: 'pcm16le' }, maxSeconds, ...(note ? { note } : {}) });
+    sendJson({ type: 'ready', engine, bot: { id: cx.botId, name: cx.botName || 'KnowBot' }, mode: phone ? 'phone' : 'web', greeting: phone ? phoneGreeting(cx.botName, { offerSources: !!(cx.sendInfo && cx.sendInfoMedia && (cx.sendInfoMedia.email || cx.sendInfoMedia.text)) }) : webGreeting(cx.botName, { offerSources: !!(cx.sendInfo && cx.sendInfoMedia && (cx.sendInfoMedia.email || cx.sendInfoMedia.text)) }), input: { rate: 16000, encoding: 'pcm16le' }, output: { rate: 24000, encoding: 'pcm16le' }, maxSeconds, ...(note ? { note } : {}) });
     if (engine === 'gemini' && session) {
       sessionReady = true;
       session.sendText(phone ? '[call connected] A test call placed from the browser.' : '[visitor connected]');

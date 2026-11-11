@@ -122,6 +122,33 @@ describe('sendinfo: the conversation seam (createSendInfo)', () => {
     assert.equal(calls.length, 1);
     assert.equal(await si.maybeSendInfo({ ...base, key: 'k1', question: 'thanks, what about refunds?' }), null, 'the flow is over');
   });
+  test('end-of-call send: the transcript and the sources for every answer (email), proof links (text)', async () => {
+    const { si, calls } = mk();
+    const A2 = { ...ANSWER, proofUrl: null, question: 'Do you ship to Canada?', answer: 'Yes, for a flat $25 [1].', citations: [{ n: 1, file: 'shipping.md', title: 'Shipping', excerpt: 'We ship to Canada for a flat $25.' }], proof: { quoted: [{ n: 1, text: 'We ship to Canada for a flat $25.' }] } };
+    const transcript = [{ role: 'caller', text: Q }, { role: 'agent', text: 'You can return it within 30 days.' }, { role: 'caller', text: 'Do you ship to Canada?' }, { role: 'agent', text: 'Yes, for a flat $25.' }];
+    const proofUrlFor = (a) => `https://kb.example.test/p/${/Canada/.test(a.question) ? 'ship1' : 'ret1'}`;
+    const e = await si.send({ ...base, channel: 'phone', via: 'email', to: 'jo@example.com', answer: A2, answers: [{ ...ANSWER, proofUrl: null }, { ...ANSWER, refused: true }, A2], transcript, proofUrlFor });
+    assert.equal(e.status, 'sent');
+    assert.equal(e.scope, 'conversation');
+    assert.match(e.reply, /transcript of our conversation and the sources/);
+    const mail = JSON.parse(calls[0].body);
+    assert.match(mail.subject, /Your conversation with Front Desk: transcript and sources/);
+    assert.match(mail.text, /Transcript\nYou: .*\nFront Desk: You can return it within 30 days\./);
+    assert.match(mail.text, /1\. .*return/i);
+    assert.match(mail.text, /2\. Do you ship to Canada\?/);
+    assert.match(mail.text, /\/p\/ret1/);
+    assert.match(mail.text, /\/p\/ship1/);
+    assert.match(mail.html, /Sources for what we covered/);
+    assert.equal((mail.text.match(/answers only from its own files/g) || []).length, 1, 'said once, not after every answer');
+    const t = await si.send({ ...base, channel: 'phone', via: 'text', to: '+1 415 555 0134', answer: A2, answers: [{ ...ANSWER, proofUrl: null }, A2], transcript, proofUrlFor, fromNumber: LINE });
+    assert.equal(t.status, 'sent');
+    const sms = new URLSearchParams(calls[1].body).get('Body');
+    assert.match(sms, /^Sources from your chat with Front Desk:/);
+    assert.match(sms, /1\) .*\/p\/ret1/);
+    assert.match(sms, /2\) Do you ship to Canada\? https:\/\/kb\.example\.test\/p\/ship1/);
+    assert.ok(sms.length <= TEXT_MAX);
+    assert.match(sms, /Reply STOP to opt out\.$/);
+  });
   test('nothing grounded yet: nothing is sent', async () => {
     const { si, calls } = mk();
     si.remember('k2', { ...ANSWER, refused: true });

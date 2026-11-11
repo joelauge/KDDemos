@@ -16,7 +16,7 @@ import { twilioSignature, NOT_IN_DATA } from '../channels/util.mjs';
 import { acceptWebSocket } from '../channels/ws.mjs';
 import {
   mulawDecode, mulawEncode, twilioToGemini, createTwilioToGemini, createGeminiToTwilio, issueStreamToken, claimStreamToken, createToolRunner,
-  systemInstruction, toolDeclarations, MAX_TEXTS_PER_CALL, hasFigure, phoneLimits, phoneSessions,
+  systemInstruction, toolDeclarations, sendInfoDeclaration, MAX_TEXTS_PER_CALL, hasFigure, phoneLimits, phoneSessions,
 } from '../channels/voice-live.mjs';
 import { createShop, toE164, handleInText, shopDomainFor, textableNumber, describeLines, MAX_LINK_ITEMS } from '../channels/shop.mjs';
 import { phoneEngine, PHONE_NOT_SET_UP } from '../channels/voice.mjs';
@@ -246,7 +246,17 @@ describe('voice-live: prompt, tools, product links', () => {
     const p = systemInstruction({ botName: 'Front Desk', org: 'Acme' });
     assert.match(p, /Before answering ANY question, call search_knowledge_base/);
     assert.ok(p.includes(NOT_IN_DATA));
-    assert.match(p, /always keep the "According to \.\.\." attribution/);
+    // answers are spoken without "According to ..." (shorter calls); the source is named only when asked
+    assert.match(p, /without saying where it comes from \(no "According to \.\.\."/);
+    assert.match(p, /If the caller asks where something comes from, name it from "source_titles"/);
+    assert.match(p, /I answer from my files\. What would you like to know\?/, 'no sending set up: no offer in the greeting');
+    // with sending: the greeting offers the sources at the end, and the prompt asks for a natural end-of-call offer
+    const ps = systemInstruction({ botName: 'Front Desk', org: 'Acme', sendInfo: { email: true, text: true, callerKnown: true } });
+    assert.match(ps, /happy to send you the sources for anything I share by email or text at the end of the call/);
+    assert.match(ps, /Before the call ends .* offer to send them the transcript of your conversation and the sources for what you shared, by email or text/);
+    assert.match(ps, /Say it in your own words/);
+    assert.match(ps, /what "conversation" for the end-of-call offer/);
+    assert.equal(sendInfoDeclaration().parameters.properties.what.enum.join(','), 'conversation,last_answer');
     assert.ok(!/send_product_link/.test(p));
     assert.deepEqual(toolDeclarations({ org: 'Acme' })[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'end_call']);
     assert.deepEqual(toolDeclarations({ org: 'Acme', productLinks: true })[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'send_product_link', 'end_call']);
@@ -387,7 +397,7 @@ describe('voice-live: prompt, tools, product links', () => {
     const run = createToolRunner({ ask, callSid: 'CA8', callerNumber: PHONE, sendSms: async (to, body) => { texts.push({ to, body }); }, shopDomain: `${F.url}/shop`, org: 'Acme' });
     const s = await run({ name: 'search_knowledge_base', args: { query: 'How much is the dice tray?' } });
     assert.equal(s.status, 'ok');
-    assert.equal(s.say, 'According to the Magnetic Dice Tray page, the magnetic dice tray is $29.99.');
+    assert.equal(s.say, 'The magnetic dice tray is $29.99.', 'just the answer: no spoken attribution');
     // only what to say and where it came from: no raw excerpts or page addresses the model could read beyond the answer
     assert.deepEqual(Object.keys(s).sort(), ['say', 'source_titles', 'status']);
     assert.deepEqual(s.source_titles, ['Magnetic Dice Tray']);
@@ -568,11 +578,11 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     const audio = s.received.find((m) => m.realtimeInput?.audio);
     assert.equal(audio.realtimeInput.audio.mimeType, 'audio/pcm;rate=16000');
     assert.equal(Buffer.from(audio.realtimeInput.audio.data, 'base64').length, 640);
-    // grounded answer, spoken attribution, canonical refusal
+    // grounded answer (no spoken attribution), canonical refusal
     const [, t1, t2, t3, t4, t5] = toolResponses;
     assert.equal(t1.id, 't1');
     assert.equal(t1.response.status, 'ok');
-    assert.match(t1.response.say, /^According to the Returns Policy, you can return any unused item within 30 days/);
+    assert.match(t1.response.say, /^You can return any unused item within 30 days/);
     assert.deepEqual(t1.response.source_titles, ['Returns Policy']);
     assert.equal(t1.response.sources, undefined, 'no raw excerpts reach the model');
     assert.deepEqual(t2.response, { status: 'not_in_data', say: NOT_IN_DATA });

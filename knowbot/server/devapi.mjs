@@ -1055,7 +1055,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         // "send me this": typed turns (text engine) and the send_info tool (live engine; the visitor confirms out loud)
         sendInfoMedia: sendInfo.media(botFromNumber(target)),
         maybeSendInfo: (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }),
-        sendInfo: ({ via, to, answer: ans, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice') }),
+        sendInfo: ({ via, to, answer: ans, answers, transcript, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, answers, transcript, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice') }),
         onEnd: ({ sid, engine, questions }) => log(`[webvoice] ${sid} ended (${engine || 'not started'}, ${questions} questions)`),
       });
     })().catch((e) => { log(`[webvoice] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
@@ -1095,7 +1095,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         },
         // "send me this" on a call: the send_info tool (texts default to the verified caller ID; the caller confirms first)
         sendInfoMedia: sendInfo.media(botFromNumber(target)),
-        sendInfo: ({ via, to, answer: ans }) => sendInfo.send({ ...siOf(target), channel: 'phone', via, to, answer: ans, callerKey: ws.callerKey || null, proofUrlFor: proofLinkFor(req, target, 'phone') }),
+        sendInfo: ({ via, to, answer: ans, answers, transcript }) => sendInfo.send({ ...siOf(target), channel: 'phone', via, to, answer: ans, answers, transcript, callerKey: ws.callerKey || null, proofUrlFor: proofLinkFor(req, target, 'phone') }),
         searchRaw: (q) => searchRaw(target, q),
         onStart: ({ from }) => { ws.callerKey = from || null; callStart = now(); },
         // a spoken figure with no search behind it: flagged in the questions loop for the owner to review

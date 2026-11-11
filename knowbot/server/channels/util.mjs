@@ -419,10 +419,10 @@ export function spokenSource(c = {}) {
   return withArticle(t);
 }
 /**
- * Voice: spoken attribution ("According to the Lumen Warranty and Returns Policy, e-bike batteries …"), no markers, at most two quoted lines,
+ * Voice: spoken attribution ("According to the Lumen Warranty and Returns Policy, e-bike batteries …"; none with attribute:false), no markers, at most two quoted lines,
  * ≤ ~450 characters. A refusal is the canonical sentence. `names`: the bot's name / org, whose words keep their capital.
  */
-export function formatSpoken(r, max = 450, { names = [] } = {}) {
+export function formatSpoken(r, max = 450, { names = [], attribute = true } = {}) {
   if (r.refused) return NOT_IN_DATA;
   const quotes = (r.proof?.quoted || []).filter((q) => q.text);
   const byN = new Map((r.citations || []).map((c) => [c.n, c]));
@@ -444,7 +444,8 @@ export function formatSpoken(r, max = 450, { names = [] } = {}) {
     if (!s) continue;
     if (!/[.!?]$/.test(s)) s += '.';
     const c = byN.get(it.n);
-    if (c && it.n !== lastN) parts.push(`${parts.length ? 'And according to' : 'According to'} ${spokenSource(c)}, ${lowerLead(s, proper)}`);
+    // attribute:false (the live voice bots): just the answer, to keep calls short; the sources go by email or text on request
+    if (attribute && c && it.n !== lastN) parts.push(`${parts.length ? 'And according to' : 'According to'} ${spokenSource(c)}, ${lowerLead(s, proper)}`);
     else parts.push(s);
     lastN = it.n;
   }
