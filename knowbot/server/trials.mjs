@@ -2351,8 +2351,10 @@ export function createStudio(o = {}) {
     };
     // "can you email me that?": the send-info flow replies instead of an answer (not a question: never in insights)
     if (o.sendInfo && source === 'visitor') {
+      // tracked links (server/leads.mjs) unless the owner turned them off; the address becomes a lead of this bot
+      const trackLink = o.linkTracker ? await Promise.resolve(o.linkTracker(req, T.id, 'studio')).catch(() => null) : null;
       const si = await o.sendInfo.maybeSendInfo({ key: `trial:${T.id}`, botId: T.id, botName: spec.name || 'Your bot', replyTo: spec.replyTo || null, question, channel: 'studio',
-        callerKey: T.id, scopeTags: [`trial:${T.id}`], proofUrlFor: (a) => (o.proofLink ? o.proofLink(req, T.id, a) : null) }).catch((e) => { log(`[studio] send-info failed: ${e.message}`); return null; });
+        callerKey: T.id, scopeTags: [`trial:${T.id}`], proofUrlFor: (a) => (o.proofLink ? o.proofLink(req, T.id, a) : null), trackLink, leadId: T.id }).catch((e) => { log(`[studio] send-info failed: ${e.message}`); return null; });
       if (si) {
         emit('final', { ...base, text: si.reply, refused: false, status: 'send_info', sendInfo: { status: si.status, ...(si.via ? { via: si.via } : {}), ...(si.to ? { to: si.to } : {}) },
           citations: [], proof: emptyProof(spec.floor), why: null, guard: null, latencyMs: { retrieve: 0, select: 0, quote: 0, total: ms() } });
@@ -4507,6 +4509,34 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return shapeInsights(T, localInsights(T, limit));
   }
 
+  // ------------------------------------------------------------------------- leads report (server/leads.mjs)
+  // GET /trials/:id/leads?days=7|30 → { interactions:{total, answered, refused, byChannel, byDay, sends}, leads:[…],
+  //   conversions:{sent, clicks, clickedSends, items:[…]}, links:{sent, clicks}, tracking, days, retentionDays }
+  // GET /trials/:id/leads.csv?days=… → the CRM export (leads.mjs CSV_COLUMNS). PATCH /trials/:id/leads {tracking:boolean}.
+  // The trial token is required (auth below): leads are never served on a public endpoint.
+  const leadDays = (url) => { const d = Math.floor(Number(url.searchParams.get('days'))); return [1, 7, 30, 90].includes(d) ? d : 30; };
+  async function leadsReport(T, days) {
+    await questionsReady;
+    let interactions = null;
+    if (questionsMod?.questionActivity) {
+      try { interactions = await withTimeout(Promise.resolve(questionsMod.questionActivity({ kd: { ...kd, store }, store, scopeTags: [`trial:${T.id}`], days, now: now() })), 8000); }
+      catch (e) { log(`[studio] leads: question activity failed: ${e.message}`); }
+    }
+    // questions asked moments ago may not be listed by knowDrive yet: never report fewer than this session saw
+    const since = now() - days * DAY;
+    const local = (T.asked || []).filter((a) => a.at >= since);
+    if (!interactions || interactions.total < local.length) {
+      const base = interactions || { days, total: 0, answered: 0, refused: 0, byChannel: {}, byDay: [], sends: null, source: 'session' };
+      const byChannel = { ...base.byChannel };
+      for (const k of Object.keys(byChannel)) byChannel[k] = 0;
+      for (const a of local) { const c = a.channel || 'studio'; byChannel[c] = (byChannel[c] || 0) + 1; }
+      interactions = { ...base, total: local.length, refused: local.filter((a) => a.outcome === 'refused').length, byChannel, source: 'session' };
+      interactions.answered = interactions.total - interactions.refused;
+    }
+    const r = o.leads ? await o.leads.report([T.id], { days }) : { days, leads: [], conversions: { sent: 0, clicks: 0, clickedSends: 0, items: [] }, links: { sent: 0, clicks: 0 }, retentionDays: null };
+    return { botId: T.id, ...r, interactions, tracking: T.flags?.leadTracking !== false, available: !!o.leads };
+  }
+
   // ------------------------------------------------------------------------- HTTP
   function sendJson(res, status, body, headers = {}) {
     if (res.headersSent) { try { res.end(); } catch {} return; }
@@ -4914,6 +4944,26 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       // listen for the SSE `proof` event {status:'ready'} to start; today it runs at once and the server re-queues it.
       return sendJson(res, 200, { ...qv, pending: { files: learning.length, names: learning.map((f) => f.name) }, complete: learning.length === 0,
         expected: { proof: qv.proof.length, probes: qv.probes.length } });
+    }
+    if (sub === 'leads' && !fid) {
+      if (m === 'PATCH') {
+        const b = await readBody(req);
+        if (typeof b?.tracking !== 'boolean') fail(400, 'bad_request', 'tracking must be true or false', { field: 'tracking' });
+        T.flags = { ...(T.flags || {}), leadTracking: b.tracking };
+        if (b.tracking) delete T.flags.leadTracking; // on is the default
+        saveSpecSoon(T);
+        return sendJson(res, 200, { tracking: b.tracking });
+      }
+      allow('GET');
+      return sendJson(res, 200, await leadsReport(T, leadDays(url)));
+    }
+    if (sub === 'leads.csv' && !fid) {
+      allow('GET');
+      const days = leadDays(url);
+      const body = o.leads ? await o.leads.csv([T.id], { days }) : '';
+      const name = `knowbot-leads-${String(T.spec?.name || T.id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'bot'}-${new Date(now()).toISOString().slice(0, 10)}.csv`;
+      res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+      return res.end(`\ufeff${body}`); // a BOM so spreadsheet apps read UTF-8 names and questions correctly
     }
     if (sub === 'insights') {
       allow('GET');

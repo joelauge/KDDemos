@@ -593,7 +593,18 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     assert.equal(sms.length, 1);
     assert.equal(sms[0].form.To, PHONE);
     assert.equal(sms[0].form.From, '+15550001111');
-    assert.match(sms[0].form.Body, /^2 x Magnetic Dice Tray are in your cart at .*\/shop\/cart\/4401:2\?utm_source=ai-assistant&utm_medium=sms&utm_campaign=voice-agent&utm_content=magnetic-dice-tray&ref=ai-voice-agent&attributes%5Bcall%5D=CA2$/);
+    // the checkout link goes out as a tracked short link (server/leads.mjs); it 302s to the cart permalink, tagged
+    // knowbot / phone / <bot>, its own ref and call attribute kept as built (never re-encoded), plus the click id
+    assert.match(sms[0].form.Body, /^2 x Magnetic Dice Tray are in your cart at .*Tap to check out: https:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+$/);
+    const hop = await S.api(new URL(/(https:\S+)$/.exec(sms[0].form.Body)[1]).pathname, { redirect: 'manual' });
+    assert.equal(hop.status, 302);
+    assert.match(hop.headers.get('location'), /\/shop\/cart\/4401:2\?utm_source=knowbot&utm_medium=phone&utm_campaign=front-desk&utm_content=magnetic-dice-tray&ref=ai-voice-agent&attributes%5Bcall%5D=CA2&kb_cid=[a-z0-9]{10}$/);
+    const rep = await S.kb.leads.report(['front-desk'], { days: 7 });
+    assert.equal(rep.conversions.sent, 1, 'checkout link sent is recorded');
+    assert.equal(rep.conversions.items[0].phone, PHONE);
+    assert.equal(rep.conversions.items[0].itemsText, '2 x Magnetic Dice Tray');
+    assert.equal(rep.conversions.clicks, 1, 'the click is tied back to the checkout link sent');
+    assert.ok(rep.leads.some((l) => l.type === 'phone' && l.value === PHONE && l.consent === 'inbound_call'), 'the caller ID is a lead');
     assert.equal(t4.response.status, 'unavailable');
     assert.equal(t4.response.item_number, 2, 'the sold-out item is named by its place in the list');
     assert.equal(t5.response.status, 'ok');

@@ -243,7 +243,8 @@ export function twilioRest(env = {}, { from = null } = {}) {
  * @param {string|null} [o.shopDomain]  product links on when set
  * @param {(to: string) => boolean} [o.textAllowed]  per-destination / per-bot text quota (devapi.mjs); false → 'texts are limited'
  */
-export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, sendInfo = null, env = {}, botName = '', org = '', log = () => {}, fromNumber = null, getTranscript = () => [] }) {
+export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, sendInfo = null, env = {}, botName = '', org = '', log = () => {}, fromNumber = null, getTranscript = () => [],
+  linkUtm = null, trackProductLink = null }) {
   const lineNumber = fromNumber || env.TWILIO_FROM_NUMBER;
   let textsSent = 0;
   let lastAnswer = null; // the last grounded answer on this call: what send_info sends for what "last_answer"
@@ -263,7 +264,9 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
     if (h || !searchRaw) return h;
     try { return inSeen(await searchRaw(`${name} product page`)); } catch { return null; }
   };
-  const shop = shopDomain ? createShop({ domain: shopDomain, env, orgName: org || botName || 'the store', findHandle, log }) : null;
+  // linkUtm: the leads report's tags ({source, medium, campaign}); trackProductLink({to, link}) → {url, sent()}: the tracked
+  // short link to text instead, and a callback once the text went out (server/devapi.mjs, server/leads.mjs)
+  const shop = shopDomain ? createShop({ domain: shopDomain, env, orgName: org || botName || 'the store', findHandle, log, utm: linkUtm }) : null;
 
   async function runTool(call) {
     const args = call?.args || {};
@@ -318,9 +321,12 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
         log(`[voice-live] ${callSid} text to ***${to.slice(-4)} refused: texts are limited`);
         return { status: 'error', retryable: false, reason: 'texts are limited' };
       }
+      let tracked = null;
+      try { tracked = trackProductLink ? trackProductLink({ to, link }) : null; } catch (e) { log(`[voice-live] ${callSid} link tracking failed: ${e.message}`); }
       try {
-        await sendSms(to, shop.smsBody(link));
+        await sendSms(to, shop.smsBody({ ...link, url: tracked?.url || link.url }));
         textsSent += 1;
+        try { tracked?.sent?.(); } catch { /* the report only */ }
         log(`[voice-live] ${callSid} texted a ${link.kind} link for ${describeLines(link.lines)} to ***${to.slice(-4)}`);
         return { status: 'ok', sent_to_last_four: to.slice(-4), opens: link.kind === 'checkout' ? 'a new checkout with exactly these items in the cart' : 'the product page', items: link.lines };
       } catch (e) {
@@ -569,7 +575,8 @@ export function handleMediaStream(twilioWs, cx) {
         cx.onStart?.({ callSid, from: callerNumber });
         const sendSms = rest.canText ? async (to, body) => { const r = await rest.sendSms(to, body); try { cx.onTextSent?.({ to, body }); } catch { /* metering only */ } return r; } : null;
         runShared = createToolRunner({ ask: cx.ask, searchRaw: cx.searchRaw, callSid, callerNumber, sendSms,
-          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, sendInfo: cx.sendInfo || null, env, botName: cx.botName, org: cx.org, log, fromNumber: rest.fromNumber, getTranscript: () => transcript });
+          shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, sendInfo: cx.sendInfo || null, env, botName: cx.botName, org: cx.org, log, fromNumber: rest.fromNumber, getTranscript: () => transcript,
+          linkUtm: cx.linkUtm || null, trackProductLink: cx.trackProductLink || null });
         log(`[voice-live] ${callSid} media stream started (bot ${cx.botId})`);
         openSession().catch((e) => { log(`[voice-live] ${callSid} could not open a Gemini session: ${e.message}`); closeAll(); });
         break;

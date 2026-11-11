@@ -46,6 +46,7 @@ import { createResearchAgent } from './research.mjs';
 import { createEvidenceSelector, createResolver, selectForRetriever, isRefusal, isAnswerable, hashFor } from './evidence.mjs';
 import { createSendInfo } from './sendinfo.mjs';
 import { orbOf } from './site.mjs';
+import { campaignOf, contactOf, newClickId, LINK_ID_RE, trackAnswer } from './leads.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
 export const KEY_RE = /^kb_(live|trial)_[A-Za-z0-9_.-]{20,600}$/;
@@ -61,7 +62,7 @@ export const EXPOSE_HEADERS = 'content-type, retry-after, x-request-id, x-rateli
 
 /** True for the paths createDevApi().handle serves (the one dispatch test server.mjs uses). */
 // Every /v1 route is also served under /api/v1 (and /p under /api/p): the production Worker forwards only /api/*.
-export const isDevApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p === '/api/v1' || p.startsWith('/api/v1/') || /^\/(?:api\/)?p\/[A-Za-z0-9_-]+$/.test(p)
+export const isDevApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p === '/api/v1' || p.startsWith('/api/v1/') || /^\/(?:api\/)?[pr]\/[A-Za-z0-9_-]+$/.test(p)
   || /^\/api\/instances\/[^/]+\/(?:keys|insights)(?:\/[^/]*)?$/.test(p) || /^\/api\/studio\/trials\/[^/]+\/devkey$/.test(p) || /^\/api\/site\/[^/]+(?:\/logo)?$/.test(p);
 
 export class ApiError extends Error {
@@ -135,6 +136,7 @@ export function createDevApi(o = {}) {
   const log = o.logger || (() => {});
   const registry = o.registry;
   const studio = o.studio || null;
+  const leads = o.leads || null; // server/leads.mjs: the leads report (tracked links, contacts, checkout links sent)
   const kd = o.kd || null;
   const now = typeof o.now === 'function' ? o.now : () => Date.now();
   /** Milliseconds between streamed chat.completion.chunk deltas (capped so a whole answer streams in under ~1 s); 0 disables. */
@@ -725,7 +727,40 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   };
   const botFromNumber = (target) => provisionedNumber(target) || target?.inst?.smsNumber || target?.inst?.phoneNumber || target?.spec?.smsNumber || target?.spec?.phoneNumber || null;
   const siOf = (target) => ({ botId: target.id, botName: target.name || 'KnowBot', replyTo: target.inst?.replyTo || target.spec?.replyTo || null, fromNumber: botFromNumber(target),
-    scopeTags: target.kind === 'trial' ? [`trial:${target.id}`] : [`bot:${target.id}`] });
+    scopeTags: target.kind === 'trial' ? [`trial:${target.id}`] : [`bot:${target.id}`], leadId: leadBotOf(target) });
+  // ---------------------------------------------------------------- leads report (server/leads.mjs)
+  /** The id a bot's leads are kept under: its Studio bot (a launched bot linked to one through numberTrial reports there). */
+  const leadBotOf = (target) => (target?.kind === 'trial' ? target.id : target?.inst?.numberTrial || target?.id);
+  /** Tracked links are on unless the owner turned them off for this bot (Studio Leads report; kept on the Studio bot's flags). */
+  const trackingOn = (target) => {
+    const id = leadBotOf(target);
+    const flags = (id && studio?.trials?.get?.(id)?.flags) || target?.flags || target?.T?.flags || null;
+    return !!leads && flags?.leadTracking !== false && target?.inst?.leadTracking !== false;
+  };
+  /** Short links are served at <public origin>[/api]/r/<id> (the proof links' prefix: /api behind the production Worker). */
+  const linkBase = (req) => String(env.KNOWBOT_LINK_URL || '').replace(/\/+$/, '') || `${publicBase(req, env)}${PROOF_PREFIX}`;
+  /** (url, {kind, cid, via}) → the tracked short link for a link this bot sends on `channel`; null when tracking is off. */
+  const trackerFor = (req, target, channel) => (trackingOn(target)
+    ? (url, { kind = 'source', cid = null, via = null } = {}) => leads.link({ botId: leadBotOf(target), url, channel, delivery: via === 'text' ? 'sms' : via || channel, kind, cid, base: linkBase(req) })
+    : null);
+  /** One click id per sender, channel and day: every reply's links and the sender's inbound lead share it, so a click
+   * on any link the bot texted / e-mailed back is tied to that lead. */
+  const senderCid = (target, channel, callerKey) => (callerKey ? createHash('sha256').update(`${leadBotOf(target)}|${channel}|${String(callerKey).toLowerCase()}|${new Date(now()).toISOString().slice(0, 10)}`).digest('hex').replace(/[^a-z0-9]/g, '').slice(0, 10) : newClickId());
+  /** A channel reply's answer with its links tracked (the remembered answer keeps the originals). */
+  const trackedReply = (req, target, channel, a, callerKey = null) => {
+    const tl = !a?.refused && trackerFor(req, target, channel);
+    if (!tl) return a;
+    const cid = senderCid(target, channel, callerKey);
+    return trackAnswer(a, (u, kind) => tl(u, { kind, cid, via: channel }));
+  };
+  /** The caller's own number / address on an inbound channel, recorded as a lead (once per value and channel per day). */
+  const inboundLead = (target, channel, callerKey, question = '') => {
+    if (!leads || !callerKey) return;
+    const c = contactOf(callerKey);
+    if (!c) return;
+    leads.lead({ botId: leadBotOf(target), channel, type: c.type, value: c.value, question, consent: channel === 'phone' ? 'inbound_call' : channel === 'email' ? 'inbound_email' : 'inbound_message', session: hashCaller(callerKey),
+      ...(channel === 'phone' || !trackingOn(target) ? {} : { cid: senderCid(target, channel, callerKey) }) });
+  };
   /** A proof link for any answer that has none yet (a remembered or Studio answer): saved like any other proof. */
   const proofLinkFor = (req, target, channel) => (a) => {
     if (a.proofUrl) return a.proofUrl;
@@ -738,7 +773,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
    * on the same conversation key are remembered by rememberAnswer() so "send me that" sends the last one.
    */
   function sendInfoTurn(req, target, { key, question, history = [], channel, caller = null, callerKey = null, lastAnswer = null }) {
-    return sendInfo.maybeSendInfo({ ...siOf(target), key, question, history, channel, caller, callerKey, lastAnswer, proofUrlFor: proofLinkFor(req, target, channel),
+    return sendInfo.maybeSendInfo({ ...siOf(target), key, question, history, channel, caller, callerKey, lastAnswer, proofUrlFor: proofLinkFor(req, target, channel), trackLink: trackerFor(req, target, channel),
       answerFor: async (q) => {
         const a = await answer(target, String(q || '').slice(0, MAX_Q), { channel, callerKey });
         a.proofId = a.refused ? null : saveProof(a, channel);
@@ -1001,7 +1036,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         a.proofId = a.refused ? null : saveProof(a, channel);
         a.proofUrl = proofUrlFor(req, a.proofId);
         rememberAnswer(`${target.id}|${channel}|${callerKey}`, a, req);
-        return a;
+        // the sender's own number / address is a lead (not the Studio's own channel test); the reply's links are tracked
+        if (!req.headers['x-knowbot-channel-test']) inboundLead(target, channel, callerKey, question);
+        return trackedReply(req, target, channel, a, callerKey);
       },
       // "send me this": null (answer normally) or {reply, status} to send instead; the caller's own address is known
       sendInfo: (question, { channel, callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|${channel}|${callerKey}`, question, channel, caller: callerKey, callerKey }),
@@ -1064,7 +1101,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         // "send me this": typed turns (text engine) and the send_info tool (live engine; the visitor confirms out loud)
         get sendInfoMedia() { return siteOnly ? null : media; },
         get maybeSendInfo() { return siteOnly ? null : (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }); },
-        get sendInfo() { return siteOnly ? null : ({ via, to, answer: ans, answers, transcript, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, answers, transcript, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice') }); },
+        get sendInfo() { return siteOnly ? null : ({ via, to, answer: ans, answers, transcript, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, answers, transcript, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice'), trackLink: trackerFor(req, target, 'voice') }); },
         onEnd: ({ sid, engine, questions }) => log(`[webvoice] ${sid} ended (${engine || 'not started'}, ${questions} questions)`),
       });
     })().catch((e) => { log(`[webvoice] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
@@ -1104,9 +1141,18 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         },
         // "send me this" on a call: the send_info tool (texts default to the verified caller ID; the caller confirms first)
         sendInfoMedia: sendInfo.media(botFromNumber(target)),
-        sendInfo: ({ via, to, answer: ans, answers, transcript }) => sendInfo.send({ ...siOf(target), channel: 'phone', via, to, answer: ans, answers, transcript, callerKey: ws.callerKey || null, proofUrlFor: proofLinkFor(req, target, 'phone') }),
+        sendInfo: ({ via, to, answer: ans, answers, transcript }) => sendInfo.send({ ...siOf(target), channel: 'phone', via, to, answer: ans, answers, transcript, callerKey: ws.callerKey || null, proofUrlFor: proofLinkFor(req, target, 'phone'), trackLink: trackerFor(req, target, 'phone') }),
+        // texted product / checkout links (shop.mjs): tagged knowbot / phone / <bot>, sent as a tracked short link, and
+        // recorded as "checkout link sent" once the text went out
+        linkUtm: trackingOn(target) ? { source: 'knowbot', medium: 'phone', campaign: campaignOf(leadBotOf(target)) } : null,
+        trackProductLink: ({ to, link }) => {
+          const tl = link?.status === 'ok' && trackerFor(req, target, 'phone');
+          const cid = tl ? newClickId() : null;
+          const url = tl ? tl(link.url, { kind: link.kind === 'checkout' ? 'checkout' : 'product', cid, via: 'text' }) : link.url;
+          return { url, sent: () => leads?.checkout({ botId: leadBotOf(target), channel: 'phone', phone: to, items: link.lines, linkKind: link.kind, cid, session: ws.callerKey ? hashCaller(ws.callerKey) : null }) };
+        },
         searchRaw: (q) => searchRaw(target, q),
-        onStart: ({ from }) => { ws.callerKey = from || null; callStart = now(); },
+        onStart: ({ from }) => { ws.callerKey = from || null; callStart = now(); inboundLead(target, 'phone', from || null); },
         // a spoken figure with no search behind it: flagged in the questions loop for the owner to review
         onUngrounded: ({ question, text }) => logAnswer(target, { question: question || '(question not transcribed)', refused: false, citations: [], proof: { floor: { top: null } } },
           'phone', ws.callerKey || null, { flags: ['ungrounded'], note: String(text || '').slice(0, 300) }),
@@ -1349,6 +1395,22 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       return send(res, 200, { ...s.site, preview: !s.published, key: trialKey(id, exp, 'site'), keyExpiresAt: new Date(exp).toISOString(),
         endpoints: { chat: `${apiBase(req)}/v1/bots/${id}/chat`, voice: `${apiBase(req).replace(/^http/, 'ws')}/v1/bots/${id}/voice/live` } });
     }
+    // tracked short links (server/leads.mjs): only ids we generated redirect, so this is never an open redirect
+    if ((mt = /^\/r\/([A-Za-z0-9_-]+)$/.exec(p))) {
+      if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      const ip = typeof o.clientIp === 'function' ? o.clientIp(req) : (req.socket?.remoteAddress || 'unknown');
+      const rl = limit(`r:${ip}`, 120);
+      if (rl.limited) throw new ApiError(429, 'rate_limit_exceeded', `Too many requests. Try again in ${rl.retryAfter}s.`, {}, { 'retry-after': String(rl.retryAfter) });
+      // link previews (messaging apps, mail scanners) and HEAD requests are followed but not counted as a click
+      const preview = m === 'HEAD' || /bot\b|crawl|spider|preview|facebookexternalhit|slurp|whatsapp|telegram|skype|discord|slack|safelinks|proofpoint|mimecast|barracuda/i.test(String(req.headers['user-agent'] || ''));
+      const dest = leads && LINK_ID_RE.test(mt[1]) ? await leads.click(mt[1], { count: !preview }) : null;
+      if (!dest) {
+        res.writeHead(404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex', 'x-content-type-options': 'nosniff', 'content-security-policy': PROOF_CSP });
+        return res.end(m === 'HEAD' ? undefined : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Link expired</title><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><style>${PROOF_CSS}</style></head><body><main><h1>This link has expired</h1><p>Ask the bot again for a fresh link.</p></main></body></html>`);
+      }
+      res.writeHead(302, { location: dest, 'cache-control': 'no-store', 'x-robots-tag': 'noindex', 'referrer-policy': 'no-referrer' });
+      return res.end();
+    }
     // proof pages
     if ((mt = /^\/(?:v1\/)?p\/([A-Za-z0-9_-]+)$/.exec(p))) {
       if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
@@ -1389,7 +1451,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     url = url || new URL(req.url, 'http://localhost');
     p = p || url.pathname;
     m = m || req.method;
-    if (/^\/api\/(?:v1(?:\/|$)|p\/)/.test(p)) { req.kbApiPrefix = '/api'; p = p.slice(4); }
+    if (/^\/api\/(?:v1(?:\/|$)|[pr]\/)/.test(p)) { req.kbApiPrefix = '/api'; p = p.slice(4); }
     try { await route(req, res, url, p, m); } catch (e) {
       if (!['GET', 'HEAD'].includes(m) && !req.readableEnded) req.resume();
       if (res.headersSent) { try { res.end(); } catch {} return; }
@@ -1401,6 +1463,8 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     handle, upgrade, answer, resolveTarget, logLive, logChat, trialKey, createKey, revokeKey, sendInfo,
     /** The Studio's "send me this" proof link: a public /p/<id> for a trial answer (sendinfo.mjs normalizeAnswer shape). */
     proofLink: async (req, trialId, a) => proofLinkFor(req, await resolveTarget(trialId), 'studio')(a),
+    /** The Studio's "send me this" link tracker (leads.mjs) for a trial, or null when tracking is off for it. */
+    linkTracker: async (req, trialId, channel = 'studio') => trackerFor(req, await resolveTarget(trialId), channel),
     /** Resolves when background work (question logs, WhatsApp replies, proof files) has settled. Tests. */
     idle: async () => { while (background.size) await Promise.all([...background]); },
     close() { clearInterval(sweep); },

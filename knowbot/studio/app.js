@@ -32,6 +32,7 @@ import { mountShapes } from './shapes.js?v=abbc025';
 import { mountBuilderPane } from './builderpane.js?v=abbc025';
 import { siteSettings } from './sitebrand.js?v=abbc025';
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=abbc025';
+import { openLeads } from './leads.js?v=abbc025';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -196,6 +197,9 @@ function renderHeader() {
   const livePill = h('span', { id: 'st-livepill', class: 'chip green is-label no-dot st-pill st-pill-live', role: 'status', hidden: true }, h('i', { 'aria-hidden': 'true' }), 'Live');
   const dash = h('a', { id: 'st-dash', class: 'st-dash', href: 'https://knowdrive.ai/', target: '_blank', rel: 'noopener', hidden: true },
     h('span', null, 'Dashboard'), h('span', { class: 'st-dash-ico', 'aria-hidden': 'true', html: icon('external', 13) }), h('span', { class: 'st-sr' }, ' (opens in a new tab)'));
+  // the Leads report (studio/leads.js): contacts visitors gave the bot, links it sent, clicks, CSV export
+  const leadsBtn = h('button', { type: 'button', id: 'st-leads', class: 'st-restart st-hide-mobile', 'aria-haspopup': 'dialog', onclick: () => openLeads() },
+    h('span', { html: icon('users', 14), 'aria-hidden': 'true' }), h('span', null, 'Leads'));
   const restart = h('button', { type: 'button', id: 'st-restart', class: 'st-restart st-hide-mobile', 'aria-haspopup': 'dialog', onclick: () => confirmStartOver() },
     h('span', { html: icon('refresh', 14), 'aria-hidden': 'true' }), h('span', null, 'Start over'));
   const theme = h('button', { type: 'button', id: 'st-theme', class: 'st-iconbtn st-hide-mobile', onclick: toggleTheme });
@@ -206,7 +210,7 @@ function renderHeader() {
   el.append(
     h('h1', { class: 'st-sr' }, 'KnowBot Studio: build a bot that answers only from your files'),
     h('div', { class: 'st-header-left' }, brand, h('span', { class: 'st-hsep', 'aria-hidden': 'true' }), botchip, botchipDesc),
-    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, livePill, dash, priceWrap, restart, theme, mot, more),
+    h('div', { class: 'st-header-right' }, dbg, net, trial, kbd, kbdDesc, livePill, dash, priceWrap, leadsBtn, restart, theme, mot, more),
   );
   updateIdentity();
   updatePrice();
@@ -2505,6 +2509,7 @@ function openMoreMenu(anchor) {
     h('span', { html: icon(ico, 16) }), h('span', { class: 'st-menu-main' }, label)));
   const list = h('ul', { class: 'st-menu-list', role: 'menu', 'aria-label': 'More options' },
     item('edit', 'Open bot spec', () => openSpec()),
+    t.id ? item('users', 'Leads', () => openLeads()) : null,
     item(dark ? 'sun' : 'moon', dark ? 'Light theme' : 'Dark theme', toggleTheme),
     item('motion', motion.reduced() ? 'Full motion' : 'Reduce motion', toggleMotion),
     item('command', 'Command palette', () => openPalette()),
@@ -2875,6 +2880,7 @@ function paletteCommands() {
     { id: 'launch', label: launchChipLabel(), ico: 'rocket', run: () => launchOpen('palette') },
     { id: 'channels', label: 'Test it before going live (SMS, phone, WhatsApp, email, voice)', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
+    { id: 'leads', label: 'Leads report · contacts, links sent, clicks, CSV download', ico: 'users', run: () => openLeads() },
     ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
     { id: 'motion', label: motion.reduced() ? 'Full motion' : 'Reduce motion', ico: 'motion', run: toggleMotion },
@@ -3829,7 +3835,8 @@ store.registerCard('insights', (data, el) => {
   const card = h('div', { class: 'card st-card st-insights' },
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('trending', 14) }), h('span', null, 'What people ask'), metaEl),
     h('div', { class: 'st-ins-grid' }, topCol, gapCol),
-    h('p', { class: 'st-card-foot' }, h('span', { html: icon('lock', 12) }), ' Every question is logged to your question insights. Logged questions are never used as sources.'));
+    h('p', { class: 'st-card-foot' }, h('span', { html: icon('lock', 12) }), ' Every question is logged to your question insights. Logged questions are never used as sources. ',
+      h('button', { type: 'button', class: 'st-link-btn', 'aria-haspopup': 'dialog', onclick: () => openLeads() }, 'See leads and clicks')));
   el.append(card);
   const rowsByKey = new Map();
   const row = (kind, t, max) => {

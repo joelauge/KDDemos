@@ -813,7 +813,54 @@ export async function questionInsights({ kd = null, store, scopeTags = [], limit
   };
 }
 
-export const SCOPE_GONE_MESSAGE = "This bot's files are no longer in the store (the trial expired or was reset), so there are no question insights to show.";
+/**
+ * Interactions over time for the leads report (server/leads.mjs, Studio "Leads"): customer questions per channel and
+ * per UTC day over the last `days` days, from the same question log as questionInsights (the knowDrive file listing:
+ * channel and outcome are tags, the time is in the path, so no file is read), merged with this process's pending
+ * entries. Test traffic (setup / Proof Run / probes) is left out, as in insights.
+ * → { days, since, total, answered, refused, byChannel:{studio, web, …}, byDay:[{day, total, answered, refused, byChannel}], sends, source }
+ */
+export async function questionActivity({ kd = null, store, scopeTags = [], days = 30, now = Date.now() } = {}) {
+  const d = Math.max(1, Math.min(366, Math.floor(Number(days)) || 30));
+  const tags = cleanTags(scopeTags);
+  const scopeKey = scopeKeyOf(tags);
+  const start = Date.parse(`${dayOf(now - (d - 1) * 86400000)}T00:00:00Z`);
+  const entries = new Map();
+  for (const e of recent.get(scopeKey) || []) {
+    if (e.state === 'failed' || e.test || !tags.every((t) => e.tags.includes(t))) continue;
+    entries.set(e.path, { at: e.at, channel: e.channel || 'web', outcome: e.outcome });
+  }
+  let source = 'memory';
+  const st = String(store || kd?.store || '');
+  if (kdUsable(kd) && st) {
+    const rows = await listQuestionRows(kd, st, [QUESTIONS_TAG, ...tags]);
+    source = 'knowdrive';
+    for (const r of rows) {
+      const tg = (r.tags || []).map(String);
+      if (!tg.includes(QUESTIONS_TAG) || !tags.every((t) => tg.includes(t))) continue;
+      const p = parseQuestionPath(r.filename);
+      if (!p) continue;
+      const ch = tagVal(tg, 'channel') || 'web';
+      if (TEST_ORIGINS.includes(tagVal(tg, 'origin')) || (ch === 'studio' && probeHashes.has(p.hash))) continue;
+      if (!entries.has(r.filename)) entries.set(r.filename, { at: p.at || atOf(r.created_at), channel: ch, outcome: tagVal(tg, 'outcome') === 'refused' ? 'refused' : 'answered' });
+    }
+  }
+  const zero = () => Object.fromEntries(CHANNELS.map((c) => [c, 0]));
+  const byDay = Array.from({ length: d }, (_, i) => ({ day: dayOf(start + i * 86400000), total: 0, answered: 0, refused: 0, byChannel: zero() }));
+  const byChannel = zero();
+  let total = 0, refused = 0;
+  for (const e of entries.values()) {
+    if (!(e.at >= start) || e.at > now + 60000) continue;
+    const row = byDay[Math.min(d - 1, Math.floor((e.at - start) / 86400000))];
+    total++; row.total++;
+    if (e.outcome === 'refused') { refused++; row.refused++; } else row.answered++;
+    byChannel[e.channel] = (byChannel[e.channel] || 0) + 1;
+    row.byChannel[e.channel] = (row.byChannel[e.channel] || 0) + 1;
+  }
+  return { days: d, since: new Date(start).toISOString(), total, answered: total - refused, refused, byChannel, byDay, sends: sendEventCounts(tags), source };
+}
+
+export const SCOPE_GONE_MESSAGE ="This bot's files are no longer in the store (the trial expired or was reset), so there are no question insights to show.";
 /** Thrown by questionInsights({onMissing:'throw'}) when the scope's files are gone. status 410, code 'scope_gone'. */
 export class InsightsScopeError extends Error {
   constructor(scopeKey) { super(SCOPE_GONE_MESSAGE); this.name = 'InsightsScopeError'; this.status = 410; this.code = 'scope_gone'; this.scope = scopeKey; }

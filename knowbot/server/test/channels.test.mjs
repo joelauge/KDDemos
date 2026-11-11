@@ -290,9 +290,19 @@ describe('channels: webhooks against fake providers', () => {
     assert.match(xml, /^<\?xml version="1.0" encoding="UTF-8"\?>\n<Response><Message>/);
     const msg = messageOf(xml);
     assert.ok(msg.length <= 320);
-    assert.match(msg, /30 days[^.]*\[1\]\. Proof: https:\/\/kb\.example\.test\/p\/[A-Za-z0-9_-]+$/);
+    // the proof link goes out as a tracked short link (server/leads.mjs) that 302s to the proof page with its UTM tags
+    assert.match(msg, /30 days[^.]*\[1\]\. Proof: https:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+$/);
     assert.ok(!msg.includes('…'));
-    const id = /\/p\/([A-Za-z0-9_-]+)$/.exec(msg)[1];
+    const short = /\/r\/([A-Za-z0-9]+)$/.exec(msg)[1];
+    const hop = await S.api(`/r/${short}`, { redirect: 'manual' });
+    assert.equal(hop.status, 302);
+    const to = new URL(hop.headers.get('location'));
+    assert.match(to.pathname, /^\/p\/[A-Za-z0-9_-]+$/);
+    assert.equal(to.searchParams.get('utm_source'), 'knowbot');
+    assert.equal(to.searchParams.get('utm_medium'), 'sms');
+    assert.equal(to.searchParams.get('utm_campaign'), 'front-desk');
+    assert.match(to.searchParams.get('kb_cid'), /^[a-z0-9]{10}$/);
+    const id = to.pathname.slice(3);
     const proof = await (await S.api(`/p/${id}`)).text();
     assert.ok(proof.includes('within 30 days') && proof.includes('returns-policy.md'));
     const ref = messageOf(await (await S.twilio(p, { From: '+14155550100', Body: OFF })).text());

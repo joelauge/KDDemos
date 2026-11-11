@@ -118,12 +118,14 @@ export function describeLines(lines = []) {
   return parts.length > 1 ? `${parts.slice(0, -1).join('; ')} and ${parts.at(-1)}` : parts[0] || '';
 }
 
-export function createShop({ domain, env = {}, orgName = 'the store', findHandle = null, fetchImpl = fetch, log = () => {} } = {}) {
+export function createShop({ domain, env = {}, orgName = 'the store', findHandle = null, fetchImpl = fetch, log = () => {}, utm: utmTags = null } = {}) {
   const cache = new Map(); // handle → { product, at }
+  // utmTags: the leads report's tags (knowbot / phone / <bot id>, server/leads.mjs) when link tracking is on for the bot;
+  // LINK_UTM_* still win, so an owner's own campaign naming is kept
   const tags = {
-    utm_source: env.LINK_UTM_SOURCE || 'ai-assistant',
-    utm_medium: env.LINK_UTM_MEDIUM || 'sms',
-    utm_campaign: env.LINK_UTM_CAMPAIGN || 'voice-agent',
+    utm_source: env.LINK_UTM_SOURCE || utmTags?.source || 'ai-assistant',
+    utm_medium: env.LINK_UTM_MEDIUM || utmTags?.medium || 'sms',
+    utm_campaign: env.LINK_UTM_CAMPAIGN || utmTags?.campaign || 'voice-agent',
     ref: env.LINK_REF || 'ai-voice-agent',
   };
 

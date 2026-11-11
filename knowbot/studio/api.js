@@ -416,6 +416,12 @@ export async function questions() { return request('GET', trialPath('/questions'
 
 /** GET /insights (SPEC 11.1) -> {total, answered, refused, top:[{q, count, lastAt, outcome}], gaps:[{q, count, lastAt}]}. */
 export async function insights() { return request('GET', trialPath('/insights')); }
+/** GET /leads?days=7|30 (Leads report, studio/leads.js) -> {interactions:{total, byChannel, byDay}, leads:[…], conversions:{sent, clicks, items}, links, tracking, days}. */
+export async function leads(days = 30) { return request('GET', trialPath(`/leads?days=${encodeURIComponent(days)}`)); }
+/** GET /leads.csv?days= -> the raw Response (text/csv): the CRM export, downloaded by the Leads report. */
+export async function leadsCsv(days = 30) { return request('GET', trialPath(`/leads.csv?days=${encodeURIComponent(days)}`), { raw: true }); }
+/** PATCH /leads {tracking} -> {tracking}: tracked links on (default) or off for this bot. */
+export async function setLeadTracking(tracking) { return request('PATCH', trialPath('/leads'), { body: { tracking: !!tracking } }); }
 /** GET /notes -> {tags:[{tag, count}]}: the tags this bot's notes and files already use (knowDrive topic:* tags). */
 export async function noteTags() { return request('GET', trialPath('/notes')); }
 /** POST /notes {question, answer, tags[]} -> {file, tags, usage}: the owner's missing answer, saved as a source file. */

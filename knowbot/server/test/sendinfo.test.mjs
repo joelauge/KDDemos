@@ -270,10 +270,15 @@ describe('sendinfo: every surface through the server (fake mail + texting APIs)'
     for (const body of [m.body.html, m.body.text]) {
       assert.match(body, /30 days/);
       assert.match(body, /Returns Policy/);
-      assert.match(body, /https:\/\/kb\.example\.test\/p\/[A-Za-z0-9_-]+/);
+      assert.match(body, /https:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+/, 'the proof link is a tracked short link');
     }
-    const proof = /https:\/\/kb\.example\.test(\/p\/[A-Za-z0-9_-]+)/.exec(m.body.text)[1];
-    assert.equal((await api(proof)).status, 200, 'the proof link resolves');
+    const short = /https:\/\/kb\.example\.test(\/r\/[A-Za-z0-9]+)/.exec(m.body.text)[1];
+    const hop = await api(short, { redirect: 'manual' });
+    assert.equal(hop.status, 302);
+    const to = new URL(hop.headers.get('location'));
+    assert.match(to.pathname, /^\/p\/[A-Za-z0-9_-]+$/);
+    assert.deepEqual([to.searchParams.get('utm_source'), to.searchParams.get('utm_medium'), to.searchParams.get('utm_campaign'), to.searchParams.get('utm_content')], ['knowbot', 'webchat', 'front-desk', 'proof_email']);
+    assert.equal((await api(to.pathname + to.search)).status, 200, 'the proof link resolves');
   });
   test('API chat: a mobile number in the same message → ONE text (≤ 320, proof link, STOP line); a refused answer is never sent', async () => {
     F.reset();
@@ -285,7 +290,7 @@ describe('sendinfo: every surface through the server (fake mail + texting APIs)'
     assert.equal(F.texts[0].To, '+14155550123');
     assert.equal(F.texts[0].From, LINE);
     assert.ok(F.texts[0].Body.length <= 320);
-    assert.match(F.texts[0].Body, /Proof: https:\/\/kb\.example\.test\/p\//);
+    assert.match(F.texts[0].Body, /Proof: https:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+/);
     assert.match(F.texts[0].Body, /You asked Front Desk to send this\. Reply STOP to opt out\./);
     F.reset();
     const off = await chat(OFF, 'u3');
@@ -386,7 +391,7 @@ describe('sendinfo: every surface through the server (fake mail + texting APIs)'
     assert.equal(F.emails.length, 1);
     assert.match(F.emails[0].body.from, /^Lumen Help <answers@knowbot\.knowdrive\.ai>$/);
     assert.match(F.emails[0].body.text, /warranty/i);
-    assert.match(F.emails[0].body.text, /https:\/\/kb\.example\.test\/p\/[A-Za-z0-9_-]+/);
+    assert.match(F.emails[0].body.text, /https:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+/);
   });
   test('channel status says which media can be sent', async () => {
     const j = await (await api('/v1/channels/front-desk')).json();

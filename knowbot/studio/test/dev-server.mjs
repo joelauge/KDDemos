@@ -118,7 +118,9 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
     KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen2.5-1.5b',
     KNOWBOT_CHECKOUT_URL: 'https://knowdrive.ai/signup?plan=knowbot',
     ...(channels ? { ...DEV_CHANNEL_SECRETS, META_GRAPH_BASE_URL: `${sink.url}/graph/v21.0`, EMAIL_REPLY_WEBHOOK: `${sink.url}/email-relay`,
-      TWILIO_API_BASE_URL: sink.url, KNOWBOT_STUDIO_CHANNEL_TEST: '1' } : {}),
+      TWILIO_API_BASE_URL: sink.url, KNOWBOT_STUDIO_CHANNEL_TEST: '1',
+      // "send me this" by e-mail (and the Leads report's e-mail leads): a fake mail key; every e-mail lands in the sink
+      RESEND_API_KEY: 're_dev_fake', RESEND_BASE_URL: sink.url } : {}),
     ...(tw && pay ? { ...DEV_NUMBER_SECRETS, TWILIO_API_BASE_URL: tw.url, TWILIO_PRICING_BASE_URL: tw.url, STRIPE_API_BASE_URL: pay.url, STRIPE_JS_URL: `${pay.url}/stripe.js` } : {}),
     ...(engine === 'llm' ? { KNOWBOT_STUDIO_PROVIDER: 'local' } : {}),
     ...extra,
@@ -127,7 +129,7 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
     assertLoopback(env.KNOWDRIVE_BASE_URL);
     assertLoopback(env.LLM_BASE_URL, 'LLM_BASE_URL');
     if (env.KNOWBOT_STUDIO_PROVIDER && env.KNOWBOT_STUDIO_PROVIDER !== 'local') throw new Error('dev-server: only the local (fake) model is allowed');
-    for (const k of ['META_GRAPH_BASE_URL', 'EMAIL_REPLY_WEBHOOK', 'TWILIO_API_BASE_URL', 'TWILIO_PRICING_BASE_URL', 'STRIPE_API_BASE_URL', 'STRIPE_JS_URL']) if (env[k]) assertLoopback(env[k], k);
+    for (const k of ['META_GRAPH_BASE_URL', 'EMAIL_REPLY_WEBHOOK', 'RESEND_BASE_URL', 'TWILIO_API_BASE_URL', 'TWILIO_PRICING_BASE_URL', 'STRIPE_API_BASE_URL', 'STRIPE_JS_URL']) if (env[k]) assertLoopback(env[k], k);
     for (const k of REAL_PROVIDER_KEYS) if (env[k]) throw new Error(`dev-server refuses to start: ${k} would reach a real provider`);
     if (/^(?:sk|rk)_(?:live|test)_/.test(String(env.STRIPE_SECRET_KEY || ''))) throw new Error('dev-server refuses to start: STRIPE_SECRET_KEY is a real payments key');
     if (env.STRIPE_SECRET_KEY && !env.STRIPE_API_BASE_URL) throw new Error('dev-server refuses to start: STRIPE_SECRET_KEY without a loopback STRIPE_API_BASE_URL');

@@ -27,7 +27,8 @@ import { promises as fsp } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { formatEmail, formatSms, toGsm7, clipWords } from './channels/util.mjs';
 import { toE164, countryCodeOf, textableNumber } from './channels/shop.mjs';
-import { logSendEvent } from './questions.mjs';
+import { logSendEvent, hashCaller } from './questions.mjs';
+import { trackAnswer, newClickId } from './leads.mjs';
 
 export const DEFAULT_EMAIL_FROM = 'KnowBot <answers@knowbot.knowdrive.ai>';
 export const TEXT_MAX = 320;
@@ -250,7 +251,7 @@ export function conversationText(items, { botName = 'KnowBot' } = {}) {
 // ------------------------------------------------------------------ the conversation seam
 const ASK_RE = /\bwhat (?:e-?mail address|mobile number|e-?mail address or mobile number)\b[^?]*\?|doesn'?t look like (?:a valid|an?) |reply with (?:that|your) (?:e-?mail|address)|I can (?:also )?(?:e-?mail|text) it to you/i;
 
-export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(), dataDir = null, onSent = (e) => logSendEvent({ scopeTags: e.scopeTags, via: e.via, callerKey: e.callerKey }), fetchImpl = fetch } = {}) {
+export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(), dataDir = null, onSent = (e) => logSendEvent({ scopeTags: e.scopeTags, via: e.via, callerKey: e.callerKey }), onLead = null, fetchImpl = fetch } = {}) {
   const lim = { caller: Number(env.KNOWBOT_SENDINFO_PER_CALLER_HOUR || 5), dest: Number(env.KNOWBOT_SENDINFO_PER_DEST_HOUR || 5), bot: Number(env.KNOWBOT_SENDINFO_PER_BOT_DAY || 200) };
   const last = new Map();     // conversation key → { at, answer }  (grounded answers only)
   const pending = new Map();  // conversation key → { at, via, answer }
@@ -316,7 +317,12 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
    * Sends `answer` to one address. → { status: 'sent'|'invalid'|'nothing'|'unavailable'|'limited'|'opted_out'|'failed', via, to (masked), reply }
    * `to` is an e-mail address or a phone number as typed or spoken; `via` is inferred from it when not given.
    */
-  async function send({ botId, botName = 'KnowBot', replyTo = null, channel = 'api', via = null, to, answer, answers = null, transcript = null, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [] }) {
+  /**
+   * trackLink(url, {kind, cid, via}) → the link to send instead (server/leads.mjs: UTM parameters + a short /r/ link), or
+   * null/absent to send links as they are (tracking off). Every link of one send shares one click id (`cid`), which is
+   * also on the lead recorded through onLead, so a click is tied back to who asked.
+   */
+  async function send({ botId, botName = 'KnowBot', replyTo = null, channel = 'api', via = null, to, answer, answers = null, transcript = null, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null }) {
     const media = sendInfoMedia(env, fromNumber);
     // answers[] (+ transcript): the whole conversation (the voice bots' end-of-call offer); else the one answer
     const convo = Array.isArray(answers) ? answers.map(normalizeAnswer).filter((x) => x && !x.refused).slice(-12) : [];
@@ -334,8 +340,14 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
       return { status: 'limited', via, reply: "I've sent several messages already. Please try again a little later." };
     }
     const proofOf = async (x) => x.proofUrl || (typeof proofUrlFor === 'function' ? await Promise.resolve(proofUrlFor(x)).catch(() => null) : null);
-    const proofUrl = await proofOf(a);
-    const items = convo.length ? await Promise.all(convo.map(async (x) => ({ answer: x, proofUrl: x === a ? proofUrl : await proofOf(x) }))) : null;
+    const proofRaw = await proofOf(a);
+    // tracked links (leads.mjs): the proof link, the sources and any link in the answer text, one click id per send
+    const cid = typeof trackLink === 'function' ? newClickId() : null;
+    const tracked = (x, p) => (cid ? trackAnswer({ ...x, proofUrl: p || undefined }, (u, kind) => { try { return trackLink(u, { kind, cid, via }); } catch { return u; } }) : { ...x, proofUrl: p || undefined });
+    const ta = tracked(a, proofRaw);
+    const proofUrl = ta.proofUrl || null;
+    const items = convo.length ? await Promise.all(convo.map(async (x) => { const t = x === a ? ta : tracked(x, await proofOf(x)); return { answer: t, proofUrl: t.proofUrl || null }; })) : null;
+    const aOut = ta;
     const convoText = items && via === 'text' ? conversationText(items, { botName }) : null;
     let sentLength = 0;
     try {
@@ -346,10 +358,10 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
         await sendText(env, { from: fromNumber || null, to: dest, body: convoText }, fetchImpl);
         sentLength = convoText.length;
       } else if (via === 'email') {
-        const m = emailMessage(a, { botName, to: dest, proofUrl });
+        const m = emailMessage(aOut, { botName, to: dest, proofUrl });
         await sendEmail(env, { from: emailFrom(env, botName), to: dest, subject: m.subject, html: m.html, text: m.text, replyTo: replyTo && validEmail(replyTo) ? validEmail(replyTo) : null }, fetchImpl);
       } else {
-        await sendText(env, { from: fromNumber || null, to: dest, body: textMessage(a, { botName, proofUrl }) }, fetchImpl);
+        await sendText(env, { from: fromNumber || null, to: dest, body: textMessage(aOut, { botName, proofUrl }) }, fetchImpl);
       }
     } catch (e) {
       log(`[sendinfo] bot ${botId}: send by ${via} failed: ${e.message}`);
@@ -357,7 +369,12 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     }
     hit(ck, lim.caller, HOUR); hit(dk, lim.dest, HOUR); hit(bk, lim.bot, DAY);
     log(`[sendinfo] bot ${botId}: sent by ${via} (${channel}) to:${hash8(dest)}`);
-    try { onSent?.({ botId, via, channel, callerKey, scopeTags, to: hash8(dest), fromNumber: via === 'text' ? (fromNumber || null) : null, length: via === 'text' ? (sentLength || textMessage(a, { botName, proofUrl }).length) : 0 }); } catch (e) { log(`[sendinfo] insights event failed: ${e.message}`); }
+    try { onSent?.({ botId, via, channel, callerKey, scopeTags, to: hash8(dest), fromNumber: via === 'text' ? (fromNumber || null) : null, length: via === 'text' ? (sentLength || textMessage(aOut, { botName, proofUrl }).length) : 0 }); } catch (e) { log(`[sendinfo] insights event failed: ${e.message}`); }
+    // the leads report (server/leads.mjs): the address they asked us to send to, with what they asked and the click id
+    try {
+      onLead?.({ botId: leadId || botId, channel, type: via === 'email' ? 'email' : 'phone', value: dest, via, cid, consent: 'asked_to_send', scopeTags,
+        question: (convo.length ? convo.map((x) => x.question).filter(Boolean).join(' | ') : a.question) || '', session: callerKey ? hashCaller(callerKey) : null });
+    } catch (e) { log(`[sendinfo] lead not recorded: ${e.message}`); }
     const masked = maskOf(via, dest);
     if (items) return { status: 'sent', via, to: masked, scope: 'conversation', reply: via === 'email' ? `Sent to ${masked}: the transcript of our conversation and the sources for each answer.` : `Sent to ${masked}, with a link to the sources for each answer.` };
     return { status: 'sent', via, to: masked, reply: via === 'email' ? `Sent to ${masked}. It has the answer, the quoted lines with their sources, and a link to see them in context.` : `Sent to ${masked}, with a link to the sources.` };
@@ -404,7 +421,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
    * @param {(q: string) => Promise<object>} [o.answerFor]  answers a referenced question (logged like any question)
    */
   async function maybeSendInfo({ key, botId, botName = 'KnowBot', replyTo = null, question, history = [], lastAnswer = null, channel = 'api', caller = null,
-    callerKey = null, proofUrlFor = null, answerFor = null, fromNumber = null, scopeTags = [] }) {
+    callerKey = null, proofUrlFor = null, answerFor = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null }) {
     const q = oneLine(question).slice(0, 1000);
     if (!q || !key) return null;
     const media = sendInfoMedia(env, fromNumber);
@@ -450,7 +467,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
       }
       return { status: 'ask', via: want, reply: askFor(want, media) };
     }
-    const r = await send({ botId, botName, replyTo, channel, via: valid[0].via, to: valid[0].to, answer, proofUrlFor, callerKey: callerKey || caller || key, fromNumber, scopeTags });
+    const r = await send({ botId, botName, replyTo, channel, via: valid[0].via, to: valid[0].to, answer, proofUrlFor, callerKey: callerKey || caller || key, fromNumber, scopeTags, trackLink, leadId });
     if (r.status === 'sent' || r.status === 'nothing') pending.delete(key);
     else pending.set(key, { at: now(), via: pend?.via || null, answer });
     return r;

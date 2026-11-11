@@ -1302,6 +1302,7 @@ textarea.st-text { resize: vertical; }
   background: transparent; color: var(--body, var(--strong)); font: 600 13px/1 var(--font); cursor: pointer; transition: background-color var(--dur-1), color var(--dur-1), border-color var(--dur-1); }
 .st-restart:hover { background: var(--raise); color: var(--strong); }
 .st-restart:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+:root[data-early] #st-leads { display: none !important; }   /* the Leads report (studio/leads.js) after a first answer */
 .st-confirm { z-index: 90; padding: 16px; }   /* look: KnowDrive .confirm-dialog */
 .st-confirm-away { position: absolute; inset: 0; }
 .st-confirm-panel { position: relative; width: min(460px, 100%); gap: 0 !important; color: var(--text-heading); }
