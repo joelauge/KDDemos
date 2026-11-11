@@ -2,7 +2,7 @@
 // Web Animations API only, no animation library. One signature animation at a time via `director`.
 // Everything degrades under reduced motion: information stays, movement goes.
 
-import { getState, setState, emit, on, batch } from './store.js?v=138122b';
+import { getState, setState, emit, on, batch } from './store.js?v=e3d6fc1';
 
 export const DUR = { 1: 120, 2: 220, 3: 380, 4: 700 };
 export const EASE = {
