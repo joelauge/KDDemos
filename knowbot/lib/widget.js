@@ -1,7 +1,7 @@
 // KnowBot UI: floating widget, inline panel, full-page chat. Plain ESM, imports the core library.
-import { KnowBot } from './knowbot.js?v=5b1d706';
+import { KnowBot } from './knowbot.js?v=228872e';
 
-const CSS_URL = new URL('./knowbot.css?v=5b1d706', import.meta.url).href;
+const CSS_URL = new URL('./knowbot.css?v=228872e', import.meta.url).href;
 let uid = 0;
 
 /* ---------- tiny safe markdown ---------- */

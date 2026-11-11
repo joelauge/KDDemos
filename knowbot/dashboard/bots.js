@@ -446,11 +446,11 @@ export function mountBots(ctx) {
     if (canvas || canvasErr === 'loading') return;
     canvasErr = 'loading'; paintCanvasState();
     if (!document.querySelector('link[data-flow-css]')) {
-      const { FLOW_CSS } = await import('./flow-canvas.js?v=5b1d706').catch(() => ({ FLOW_CSS: null }));
-      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=5b1d706"]'));
+      const { FLOW_CSS } = await import('./flow-canvas.js?v=228872e').catch(() => ({ FLOW_CSS: null }));
+      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=228872e"]'));
     }
     try {
-      const { createCanvas } = await import('./flow-canvas.js?v=5b1d706');
+      const { createCanvas } = await import('./flow-canvas.js?v=228872e');
       const el = $('#flow-canvas'); rc(el);
       canvas = await createCanvas(el);
       canvasErr = '';
