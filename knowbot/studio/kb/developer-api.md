@@ -12,6 +12,12 @@ Source: /v1
 
 `POST /v1/chat/completions` is OpenAI-compatible: set `model` to the bot id and send `messages`, optionally with `stream`. It returns standard chat.completion objects (or chat.completion.chunk when streaming), with citations as numbered footnotes in the content and a structured `knowbot` field holding the citations, the refusal flag and the proof. The official OpenAI SDKs work by changing only the base URL. A refusal returns the refusal sentence.
 
+## AI agents: MCP and the ask endpoint
+
+Source: /v1
+
+Every bot answers as a remote MCP endpoint at `POST /api/mcp/bots/:botId` (Streamable HTTP, JSON-RPC 2.0; also `/v1/bots/:botId/mcp`) with one tool, `ask`, taking `{question, context?}`. `POST /v1/bots/:botId/ask` with `{"question": "..."}` (or `GET ?q=`) returns the same result as JSON: `answered` (yes, partly or no), `answer`, `sources` (number, title, link, quote), and `products` and `follow_up` when there are any. No key is needed; past the free daily limit the reply is HTTP 429 (an MCP result with isError) saying so, with `retry_after`. Sending your bot's own key as a Bearer token is never limited by the free allowance. `GET /v1/bots/:botId/agent.json` and `/llms.txt` describe the bot for agents.
+
 ## API keys
 
 Source: /studio/

@@ -175,7 +175,7 @@ export function mount(ctx) {
         list.append(h('li', { class: 'co-surf-line' }, h('span', { class: 'co-surf-name' }, 'KnowBot plan'), h('span', { class: 'co-surf-amt' }, `${pr.fmt(line.amount)}/${pr.per}`)));
       }
       tools.innerHTML = '';
-      for (const t of toolSwitches(getState().spec?.surfaces)) {
+      for (const t of toolSwitches(getState().spec?.surfaces).filter((x) => x.id !== 'agents')) { // AI agents: metered, not a plan line
         const onF = t.features.filter((f) => f.on).map((f) => f.label);
         const state = t.features.length === 1 ? (onF.length ? 'on' : 'off') : onF.length ? `${onF.join(', ')} on` : 'all off';
         tools.append(h('li', { class: `co-tool${t.on ? ' is-on' : ''}` }, h('span', { class: 'co-incl-ico', html: icon(t.on ? 'check' : 'plus', 12) }),

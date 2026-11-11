@@ -13,7 +13,7 @@ import { icon } from './icons.js?v=09e5dd0';
 
 const CHANNELS = [
   ['web', 'Website chat'], ['site', 'Homepage search'], ['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['email', 'Email'],
-  ['phone', 'Phone'], ['voice', 'Web voice'], ['api', 'Developer API'], ['studio', 'Studio (your tests)'],
+  ['phone', 'Phone'], ['voice', 'Web voice'], ['agent', 'AI agents'], ['api', 'Developer API'], ['studio', 'Studio (your tests)'],
 ];
 const CHANNEL_LABEL = Object.fromEntries(CHANNELS);
 const channelLabel = (c) => CHANNEL_LABEL[c] || c || 'Other';
@@ -169,9 +169,9 @@ export async function openLeads() {
       tile('Leads', data.leads.length, `${plural(emails, 'email')} · ${plural(phones, 'phone')}`),
       tile('Checkout links sent', data.conversions.sent, `${plural(data.conversions.clickedSends || 0, 'opened', 'opened')}`),
       tile('Link clicks', data.links?.clicks || 0, `on ${plural(data.links?.sent || 0, 'tracked link')}`));
-    body.replaceChildren(tiles, channelsSection(ix), leadsSection(data.leads), checkoutSection(data.conversions.items || []),
+    body.replaceChildren(...[tiles, channelsSection(ix), agentsSection(data.agents), leadsSection(data.leads), checkoutSection(data.conversions.items || []),
       h('p', { class: 'kb-leads-foot' }, h('span', { 'aria-hidden': 'true', html: icon('lock', 12) }),
-        ` Only you can see this report. Leads are kept for ${data.retentionDays || 90} days. Tracked links carry utm_source=knowbot, utm_medium (the channel) and utm_campaign (this bot), so your own analytics can count visits and sales from them.`));
+        ` Only you can see this report. Leads are kept for ${data.retentionDays || 90} days. Tracked links carry utm_source=knowbot, utm_medium (the channel) and utm_campaign (this bot), so your own analytics can count visits and sales from them. The CSV lists each AI agent question on channel "agent".`)].filter(Boolean));
   }
 
   function tile(label, n, sub) {
@@ -196,6 +196,21 @@ export async function openLeads() {
       sec.append(h('figure', { class: 'kb-leads-days' }, h('div', { class: 'kb-leads-days-chart', html: svg }),
         h('figcaption', null, `Questions per day. Busiest: ${new Date(`${busiest.day}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} (${plural(busiest.total, 'question')}).`)));
     }
+    return sec;
+  }
+
+  /** AI agents (server/agents.mjs): questions other AI assistants asked, how they were answered, and the usage meter. */
+  function agentsSection(a) {
+    if (!a || !(a.questions || a.limited)) return null;
+    const sec = h('section', { class: 'kb-leads-sec', 'aria-labelledby': 'kb-leads-ag' }, h('h3', { id: 'kb-leads-ag' }, 'AI agents', h('span', { class: 'kb-leads-count st-mono' }, (a.questions || 0).toLocaleString())));
+    const item = (label, n, sub) => h('li', { class: 'kb-leads-agent' }, h('strong', { class: 'st-mono' }, Number(n || 0).toLocaleString()), h('span', null, label), sub ? h('span', { class: 'kb-leads-hint' }, sub) : null);
+    sec.append(h('ul', { class: 'kb-leads-agents', 'aria-label': 'AI agents' },
+      item('answered from your files', a.answered),
+      item('not in your files', a.refused),
+      item('free answers', a.free, 'within the daily free limit'),
+      item('paid answers', a.paid, 'metered (paid agent access)'),
+      item('turned away', a.limited, 'past the free limit'),
+      a.owner ? item('your own tests', a.owner, 'with your bot\'s key; never counted') : null));
     return sec;
   }
 

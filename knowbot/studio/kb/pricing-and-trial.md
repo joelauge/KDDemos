@@ -49,6 +49,12 @@ The plan includes three tools, and you switch their features on and off in Set u
 
 All of them answer from the same sources you built the bot with, with the same citations and the same refusal sentence. Every feature is included in the plan, so switching one on or off never changes the price. The KnowBot number's own usage is billed separately, and Set up shows its cost before you get a number. Building and testing every feature is free.
 
+## AI agents: free, then metered
+
+Source: /studio/
+
+A fourth tool, AI agents, lets other AI assistants ask your bot and get the same cited answers. It is free up to 20 agent answers a day per bot. Past that, agents are told the bot has reached its free limit for today, until you turn on paid agent access in Set up. Paid agent access is metered at $10 per 1,000 agent answers and lifts the daily limit. Your own tests with your bot's key are never counted.
+
 ## More than 100 MB, or larger deployments
 
 Source: /studio/

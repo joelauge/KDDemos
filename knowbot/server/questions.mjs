@@ -37,7 +37,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 export const QUESTIONS_TAG = 'questions';
-export const CHANNELS = Object.freeze(['studio', 'web', 'api', 'sms', 'voice', 'phone', 'whatsapp', 'email', 'site']);
+export const CHANNELS = Object.freeze(['studio', 'web', 'api', 'sms', 'voice', 'phone', 'whatsapp', 'email', 'site', 'agent']);
 /** Origins that are the Studio testing the bot, never a customer: kept out of top questions and gaps. */
 export const TEST_ORIGINS = Object.freeze(['setup', 'proof', 'probe']);
 // Resolved (integrator): server/trials.mjs passes origin:'probe' | 'setup' for its probes and "Asked by Setup" asks; the

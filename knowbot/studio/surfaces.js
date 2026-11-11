@@ -12,6 +12,11 @@
 // feature ids above) is unchanged, so existing bots map onto the switches with no data loss. The KnowBot number's own
 // usage is billed separately (server/numbers.mjs). The price is shown only at the launch/checkout step, after the
 // visitor has tested; the landing and the Builder never volunteer it early.
+//
+// A fourth tool, AI agents (server/agents.mjs): other AI assistants ask the bot (a remote MCP server, a plain HTTP ask)
+// and get the same cited answers. Its one switch, "Public answers", is NOT a spec.surfaces id: it is spec.agents.public,
+// on unless the owner turns it off (absent = on), so every bot is public to agents by default. Free up to a daily limit
+// per bot; past it, the owner's paid agent access (spec.agents.paid) is metered per 1,000 agent answers.
 
 export const SURFACES = [
   { id: 'webchat', label: 'Website chat', feature: 'Chat bubble', tool: 'website', short: 'web chat' },
@@ -24,6 +29,9 @@ export const SURFACES = [
   { id: 'site', label: 'Homepage search', feature: 'Homepage search', tool: 'website', short: 'site' },
 ];
 export const SURFACE_IDS = SURFACES.map((s) => s.id);
+/** The AI agents tool's one switch (spec.agents.public, not a spec.surfaces id). */
+export const AGENTS_FEATURE = 'agents';
+export const AGENTS_LABEL = 'Public answers';
 export const DEFAULT_SURFACES = ['webchat'];
 
 /** The three tools of the plan, each with its features (spec.surfaces ids) in the order the switches show. */
@@ -34,8 +42,12 @@ export const TOOLS = [
     features: ['sms', 'phone', 'whatsapp'] },
   { id: 'email', label: 'Email', sub: 'One inbox address', blurb: 'Email comes in, a cited answer goes out.',
     features: ['email'] },
+  { id: 'agents', label: 'AI agents', sub: 'Answers other AI assistants, with sources', blurb: 'Other AI assistants ask your bot and get the same cited answers. Free up to a daily limit.',
+    features: [AGENTS_FEATURE], metered: true },
 ];
 export const TOOL_IDS = TOOLS.map((t) => t.id);
+/** The tools whose features are spec.surfaces ids (Website, KnowBot number, Email): the plan's included tools. */
+export const SURFACE_TOOLS = TOOLS.filter((t) => t.id !== 'agents');
 
 export const PRICE_MONTH = 549;
 export const PRICE_YEAR = 5490;
@@ -45,7 +57,9 @@ const byId = new Map(SURFACES.map((s) => [s.id, s]));
 const toolById = new Map(TOOLS.map((t) => [t.id, t]));
 export const surfaceLabel = (id) => byId.get(id)?.label || String(id);
 /** "Chat bubble", "Texts", ...: the switch label inside its tool. */
-export const featureLabel = (id) => byId.get(id)?.feature || surfaceLabel(id);
+export const featureLabel = (id) => (id === AGENTS_FEATURE ? AGENTS_LABEL : byId.get(id)?.feature || surfaceLabel(id));
+/** spec.agents → {public, paid}: public unless turned off, paid off unless turned on. */
+export const agentSwitches = (a) => ({ public: !(a && a.public === false), paid: !!(a && a.paid === true) });
 export const toolOf = (id) => toolById.get(byId.get(id)?.tool) || null;
 export const toolLabel = (id) => toolById.get(id)?.label || String(id);
 
@@ -67,8 +81,9 @@ export function surfacesText(list) {
  * feature of exactly one tool). toolSwitches(['webchat','sms']) ->
  * [{ id:'website', on:true, features:[{id:'webchat', label:'Chat bubble', on:true}, ...] }, ...]
  */
-export function toolSwitches(list) {
+export function toolSwitches(list, { agents = null } = {}) {
   const on = new Set(normalizeSurfaces(list));
+  if (agentSwitches(agents).public) on.add(AGENTS_FEATURE);
   return TOOLS.map((t) => {
     const features = t.features.map((id) => ({ id, label: featureLabel(id), on: on.has(id) }));
     return { ...t, features, on: features.some((f) => f.on) };
@@ -85,7 +100,7 @@ export function setFeature(list, id, on) {
 
 /** "Website (Chat bubble, Voice) and KnowBot number (Texts)": the tools in use, with their features on. */
 export function toolsText(list) {
-  const parts = toolSwitches(list).filter((t) => t.on).map((t) => (t.features.length === 1 ? t.label
+  const parts = toolSwitches(list).filter((t) => t.on && t.id !== 'agents').map((t) => (t.features.length === 1 ? t.label
     : `${t.label} (${t.features.filter((f) => f.on).map((f) => f.label).join(', ')})`));
   return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }

@@ -39,8 +39,11 @@ describe('studio/kb docs', () => {
     assert.match(pricing.text, /cancel anytime/);
     assert.match(pricing.text, /up to 100 MB/);
     assert.match(pricing.text, /enterprise[^.]*sales@recoursellm\.com/i);
+    assert.match(pricing.text, /free up to 20 agent answers a day per bot/);
+    assert.match(pricing.text, /metered at \$10 per 1,000 agent answers/);
     // owner allow-list: $549 is only ever monthly, $5,490 only ever yearly; any other amount fails
-    const allowed = { '$549': /^\$549 per month/, '$5,490': /^\$5,490 per year/ };
+    // and the AI agents tool's metered price (server/agents.mjs KNOWBOT_AGENT_PRICE_PER_1K default), only ever per 1,000 agent answers
+    const allowed = { '$549': /^\$549 per month/, '$5,490': /^\$5,490 per year/, '$10': /^\$10 per 1,000 agent answers/ };
     for (const d of docs) {
       for (const m of d.text.matchAll(/[$€£]\s?\d[\d,.]*/g)) {
         const amt = m[0].replace(/[.,]$/, '');

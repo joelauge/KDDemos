@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// The plan's three tools (studio/surfaces.js TOOLS) end to end, against the dev server's fakes on 127.0.0.1 only:
+// The plan's four tools (studio/surfaces.js TOOLS: Website, KnowBot number, Email, AI agents) end to end, against the dev server's fakes on 127.0.0.1 only:
 //   1. the Website tool's ONE embed line (lib/embed.js) on a homepage: data-chat / data-homepage switch the chat bubble
 //      and the homepage search, and a line without them follows the bot's saved switches (GET /v1/channels/:bot → website)
-//   2. screenshots (deviceScaleFactor 2) of Set up (three tool cards with switches), the bot spec "Answers on" and the
+//   2. screenshots (deviceScaleFactor 2) of Set up (four tool cards with switches), the bot spec "Answers on" and the
 //      launch / checkout price
+//   3. AI agents: the card's MCP address, its public / paid switches, and its Try it (POST /v1/bots/:id/ask), plus the
+//      MCP endpoint itself (initialize, tools/list, tools/call) against the dev server
 //
 //   TOOLS_SHOTS=/some/dir node studio/test/tools-shots.mjs      (default: studio/test/screens/tools)
 import path from 'node:path';
@@ -88,9 +90,9 @@ try {
   await page.waitForSelector('.sh-tool[data-tool="website"]', { timeout: 30000 });
   await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
   await page.waitForSelector('.gl-tool[data-tool="website"]', { timeout: 20000 });
-  check('Set up: three tool cards', (await page.locator('.gl-tool').count()) === 3);
+  check('Set up: four tool cards', (await page.locator('.gl-tool').count()) === 4);
   const sw = await page.$$eval('.gl-feat input[role="switch"]', (xs) => xs.map((x) => `${x.dataset.surface}:${x.checked ? 'on' : 'off'}`).join(','));
-  check('Set up: the saved surfaces map onto the switches', sw === 'webchat:on,webvoice:off,site:on,sms:on,phone:off,whatsapp:off,email:off', sw);
+  check('Set up: the saved surfaces map onto the switches; AI agents public by default', sw === 'webchat:on,webvoice:off,site:on,sms:on,phone:off,whatsapp:off,email:off,agents:on', sw);
   await page.waitForTimeout(900);
   await page.locator('.gl-toolgrid').scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(SHOTS, 'setup-tools.png') });
@@ -107,7 +109,34 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'setup-email.png') });
   const emailCard = await page.textContent('#gl-chdetail');
   check('Email: vendor-neutral copy', !/SendGrid|Postmark|Mailgun|EMAIL_WEBHOOK_SECRET/.test(emailCard));
-  // the bot spec drawer: Answers on = the three tools
+  // ------------------------------------------------------------------ 3. AI agents
+  await page.click('.gl-tool[data-tool="agents"] .gl-feat-open[data-ch="agents"]');
+  await page.waitForSelector('#gl-ag-access .gl-switch', { timeout: 10000 });
+  await page.waitForTimeout(600);
+  const agentCard = await page.textContent('#gl-chdetail');
+  check('AI agents: the MCP address is shown with Copy', agentCard.includes(`/mcp/bots/${t.trialId}`) && (await page.locator('#gl-chdetail .gl-ag-copy button').count()) === 1, agentCard.slice(0, 160));
+  check('AI agents: free limit and the paid price', /Free up to \d+ answers a day/.test(agentCard) && /\$\d+(?:\.\d\d)? per 1,000 agent answers/.test(agentCard), agentCard.match(/Free up to[^.]*\./)?.[0]);
+  check('AI agents: no vendor names', !/\b(?:Claude|Anthropic|ChatGPT|OpenAI|Gemini|Copilot|Cursor|Perplexity)\b/.test(agentCard));
+  await page.locator('#gl-chdetail').scrollIntoViewIfNeeded();
+  await page.fill('#gl-chdetail .gl-try input.gl-input', 'How long is the frame warranty?');
+  await page.press('#gl-chdetail .gl-try input.gl-input', 'Enter');
+  await page.waitForSelector('#gl-chdetail .gl-ag-answer', { timeout: 30000 }).catch(() => {});
+  const tried = await page.textContent('#gl-chdetail .gl-ag-out').catch(() => '');
+  check('AI agents: Try it shows the structured answer with its sources', /Answered|Partly answered/.test(tried) && (await page.locator('#gl-chdetail .gl-ag-src li').count()) >= 1, tried.slice(0, 200));
+  await page.screenshot({ path: path.join(SHOTS, 'setup-agents.png') });
+  await page.click('label[for="gl-ag-paid"]');
+  await page.waitForTimeout(800);
+  const saved = await (await api(`/api/studio/trials/${t.trialId}`, { headers: H() })).json();
+  check('AI agents: the paid switch saves spec.agents.paid', saved.spec?.agents?.paid === true && saved.spec?.agents?.public === true, JSON.stringify(saved.spec?.agents));
+  await page.click('label[for="gl-ag-paid"]');
+  await page.waitForTimeout(500);
+  const mcp = (msg) => api(`/api/mcp/bots/${t.trialId}`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', ...msg }) }).then((x) => x.json());
+  const init = await mcp({ id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'tools-shots', version: '1' } } });
+  const list = await mcp({ id: 2, method: 'tools/list' });
+  const call = await mcp({ id: 3, method: 'tools/call', params: { name: 'ask', arguments: { question: 'How long is the frame warranty?' } } });
+  check('AI agents: MCP initialize → tools/list → tools/call (no key)', init.result?.serverInfo?.title === 'Lumen Bikes Help' && list.result?.tools?.[0]?.name === 'ask' && ['yes', 'partly'].includes(call.result?.structuredContent?.answered),
+    JSON.stringify(call.result?.structuredContent || call).slice(0, 200));
+  // the bot spec drawer: Answers on = the three tools of the plan's answer surfaces (AI agents lives in Set up)
   await page.keyboard.press('Escape');
   await page.evaluate(() => document.querySelector('#st-botchip')?.click());
   await page.waitForSelector('.st-tools', { timeout: 20000 });

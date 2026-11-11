@@ -18,14 +18,16 @@
 // The Channels tab is the plan's three tools (studio/surfaces.js TOOLS): Website (one embed line: chat bubble, voice,
 // homepage search), KnowBot number (one phone number: texts, calls, WhatsApp) and Email (one inbox address). Each tool
 // card has a switch per feature (spec.surfaces through spec:request, never a price change) and opens that feature's
-// setup and Try it below; the Website tool also shows its one embed line, which follows the switches. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
+// setup and Try it below; the Website tool also shows its one embed line, which follows the switches. The fourth tool,
+// AI agents (server/agents.mjs), has one switch (Public answers: spec.agents.public, on by default), its MCP address,
+// the free daily limit and paid access (spec.agents.paid, metered), and a Try it over the plain HTTP ask. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
 // engine and phone prompt as a real call.
 
 import { mountWidget } from './kdw.js?v=09e5dd0';
 import { apiForScriptHost } from '../lib/site-config.js?v=09e5dd0';
 import { mountNumbers, numberCache } from './numbers.js?v=09e5dd0';
 import { siteSettings } from './sitebrand.js?v=09e5dd0';
-import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel } from './surfaces.js?v=09e5dd0';
+import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE } from './surfaces.js?v=09e5dd0';
 
 const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -76,6 +78,7 @@ const lines = (text) => String(text || '').split('\n').map((l) => l.replace(/^\s
 
 // small inline glyphs for channels the shared icon set doesn't carry
 const GLYPH = {
+  agents: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4.5" y="7.5" width="15" height="11" rx="3"/><path d="M12 7.5V4.5"/><circle cx="12" cy="3.6" r="1"/><circle cx="9.3" cy="12.5" r="1.1"/><circle cx="14.7" cy="12.5" r="1.1"/><path d="M9.5 15.8h5"/><path d="M2.5 12v2.5M21.5 12v2.5"/></svg>',
   sms: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 5.5h15a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 3.5V17.5h-1A1.5 1.5 0 0 1 3 16V7a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg>',
   phone: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.6 3.8 9 4.4l1.2 4-2 1.6a12 12 0 0 0 5.8 5.8l1.6-2 4 1.2.6 2.4c.2.9-.4 1.8-1.3 2A15.8 15.8 0 0 1 4.6 5.1c.2-.9 1.1-1.5 2-1.3Z"/></svg>',
   whatsapp: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.2 5.2 16A8.4 8.4 0 1 1 8.4 19Z"/><path d="M9.2 8.6c.2-.5.5-.6.8-.6h.5c.2 0 .4.1.5.4l.7 1.6c.1.2 0 .5-.1.7l-.5.6c-.1.2-.1.4 0 .6.6 1 1.4 1.8 2.4 2.4.2.1.4.1.6 0l.6-.5c.2-.1.5-.2.7-.1l1.6.7c.3.1.4.3.4.5v.5c0 .3-.1.6-.6.8-.6.3-1.6.4-2.9-.2a9 9 0 0 1-4.1-4.1c-.6-1.3-.5-2.3-.2-2.9Z"/></svg>',
@@ -268,12 +271,12 @@ export async function websiteLine(ctx) {
  * helpers come from checkout.js: {h, copyButton, copyText, lastQA, botName, hueVar, price}.
  */
 // answer surface id (studio/surfaces.js) → channel card id
-const SURFACE_CH = { webchat: 'text', sms: 'sms', whatsapp: 'whatsapp', email: 'email', phone: 'phone', webvoice: 'voice', site: 'site' };
+const SURFACE_CH = { webchat: 'text', sms: 'sms', whatsapp: 'whatsapp', email: 'email', phone: 'phone', webvoice: 'voice', site: 'site', [AGENTS_FEATURE]: 'agents' };
 const CH_SURFACE = Object.fromEntries(Object.entries(SURFACE_CH).map(([k, v]) => [v, k]));
 /** The tool a channel card belongs to ('website' | 'number' | 'email'). */
 const toolOfCh = (ch) => (TOOLS.find((t) => t.features.includes(CH_SURFACE[ch])) || TOOLS[0]);
-const TOOL_GLYPH = { website: 'text', number: 'phone', email: 'email' };
-const TOOL_HUE = { website: 0, number: 3, email: 2 };
+const TOOL_GLYPH = { website: 'text', number: 'phone', email: 'email', agents: 'agents' };
+const TOOL_HUE = { website: 0, number: 3, email: 2, agents: 7 };
 export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = null, helpers = {}, inline = null, surfaces = null } = {}) {
   if (current && !inline) { current.select(tab, channel); return current.close; }
   const { store, api, motion, icons, slots, announce } = ctx;
@@ -331,7 +334,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     h('div', { class: 'gl-head-main' },
       h('p', { class: 'gl-eyebrow' }, h('span', { html: icon('rocket', 13) }), inline ? 'Set up' : 'Go live'),
       h('h2', { class: 'gl-title', id: titleId }, inline ? `Set up ${botName()}` : `Put ${botName()} everywhere`),
-      h('p', { class: 'gl-sub' }, inline ? 'Three tools, all in your plan. Switch features on and off, set each one up, and try it right here. ' : 'Three tools, all in your plan: same files, same citations, same refusal everywhere. ', idPill)),
+      h('p', { class: 'gl-sub' }, inline ? 'Four tools, one plan. Switch features on and off, set each one up, and try it right here. ' : 'Four tools, one plan: same files, same citations, same refusal everywhere. ', idPill)),
     xBtn);
   // the scroller: the tab strip (sticky at its top) and the panels render into it
   const body = h('div', { class: 'gl-body' });
@@ -433,7 +436,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         const res = await fetch(`${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/devkey`, { headers: t.token ? { authorization: `Bearer ${t.token}` } : {}, credentials: 'omit' });
         if (res.ok) r = await res.json(); else info.httpStatus = res.status;
         if (r && typeof r.key === 'string' && /^kb_(trial|live)_/.test(r.key)) info = { status: 'ok', trial: t.id, key: r.key, botId: r.botId || null, expiresAt: r.expiresAt || t.expiresAt || null, voice: r.voice || null, endpoints: r.endpoints || null,
-          rateLimit: r.rateLimit || null, channels: r.channels && typeof r.channels === 'object' ? r.channels : null };
+          rateLimit: r.rateLimit || null, channels: r.channels && typeof r.channels === 'object' ? r.channels : null, agents: r.agents && typeof r.agents === 'object' ? r.agents : null };
       } catch { /* network: unavailable */ }
       devCache.info = info; devCache.at = Date.now(); devCache.promise = null;
       syncRoot(info);
@@ -499,6 +502,9 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           { label: 'Embed (voice)', lang: 'html', secret: true, code: (mode) => `<script type="module" src="${siteBase}lib/embed.js" data-mode="voice"\n       ${apiAttrFor(siteBase, apiRoot)} data-bot="${id}" data-name="${String(botName()).replace(/"/g, '&quot;')}"\n        data-key="${keyFor(mode)}"></script>\n<!-- data-target="#id" to place it inline; data-position="left"; data-orb="silver" to override the colour -->` },
           { label: 'Voice socket', lang: 'text', code: `${webVoiceUrl()}\n  → {"type":"start","key":"kb_trial_…"}   then 16 kHz PCM16 mono frames, or {"type":"text","text":"…"}\n  ← ready · transcript · citations · 24 kHz PCM16 speech (live) · answer (browser speech)` },
         ] },
+      // AI agents (server/agents.mjs): its detail is its own calm view (agentsSetup / agentsTry), not the steps layout
+      { id: 'agents', name: 'AI agents', blurb: 'Other AI assistants ask your bot and get the same answer your chat bubble gives: the sources, the refusal, product cards.', provider: 'MCP and HTTP', hue: 7, url: null,
+        status: agentSwitches(getState().spec?.agents).public ? 'Public · try it' : 'Off · only you', tryLabel: 'Ask like an AI agent', needs: [], steps: [], configs: [] },
       // Homepage search (server/site.mjs, ../site/overlay.js): a simple search box that hovers over the homepage
       { id: 'site', name: 'Homepage search', blurb: 'A simple search box that hovers over your homepage. Visitors ask anything; answers quote your pages and link to them. They close it with × and see your site as usual.', provider: 'One line on your homepage', hue: 6, url: null, status: 'Try it now', tryLabel: 'On your homepage',
         needs: ['Nothing to connect: it is built from your files', 'Access to your homepage\'s HTML, or your website builder\'s custom code box'],
@@ -550,7 +556,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function buildChannels(panel) {
     panel.innerHTML = '';
     const intro = h('div', { class: 'gl-intro' },
-      h('p', null, h('b', null, 'Three tools, one plan.'), ' Every feature is included: switching one on or off never changes your price. Pick a feature to set it up and try it right here. Everything answers from the same files and shows its sources.'));
+      h('p', null, h('b', null, 'Four tools, one plan.'), ' Every feature is included: switching one on or off never changes your price. Pick a feature to set it up and try it right here. Everything answers from the same files and shows its sources.'));
     chGrid = h('div', { class: 'gl-toolgrid', role: 'list', 'aria-label': 'Tools' });
     chDetail = h('section', { class: 'card gl-chdetail', id: 'gl-chdetail', 'aria-live': 'polite' });
     const chans = CH();
@@ -561,7 +567,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         const c = chans.find((x) => x.id === chId) || { name: featureLabel(sid) };
         const swId = `gl-sw-${sid}-${rid(4)}`;
         const input = h('input', { type: 'checkbox', role: 'switch', class: 'gl-switch-in', id: swId, dataset: { surface: sid } });
-        input.addEventListener('change', () => flipFeature(sid, input.checked, input));
+        input.addEventListener('change', () => (sid === AGENTS_FEATURE ? setAgents({ public: input.checked }, input) : flipFeature(sid, input.checked, input)));
         feats.append(h('li', { class: 'gl-feat', dataset: { ch: chId, surface: sid } },
           h('label', { class: 'gl-switch', for: swId }, input, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), h('span', { class: 'gl-feat-name' }, featureLabel(sid))),
           h('button', { type: 'button', class: 'gl-feat-open', 'aria-pressed': 'false', 'aria-controls': 'gl-chdetail', dataset: { ch: chId }, onclick: () => selectChannel(chId, { user: true }) },
@@ -576,20 +582,25 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         feats);
       chGrid.append(h('div', { role: 'listitem', class: 'gl-toolitem' }, card));
     });
-    panel.append(intro, chGrid, h('p', { class: 'gl-plan-note' }, 'All three tools and every feature are in your one plan. Your KnowBot number\'s own usage is billed separately.'), chDetail);
+    panel.append(intro, chGrid, h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
     motion.stagger($$('.gl-tool', chGrid), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring', fill: 'backwards' }, 60);
     paintSwitches();
     paintCardStatus();
     selectChannel(cur.channel, { first: true });
-    const off = on('spec:changed', (d) => { if (d?.patch && 'surfaces' in d.patch && !closing) { paintSwitches(); if (toolOfCh(cur.channel).id === 'website') paintWebsiteLine(); } });
+    const off = on('spec:changed', (d) => {
+      if (!d?.patch || closing) return;
+      if ('surfaces' in d.patch) { paintSwitches(); if (toolOfCh(cur.channel).id === 'website') paintWebsiteLine(); }
+      if ('agents' in d.patch) { paintSwitches(); paintAgentAccess(); }
+    });
     cleanups.push(off);
     loadDev().then(() => { if (!closing && cur.tab === 'channels') { idPill.querySelector('code').textContent = botId(); paintCardStatus({ animate: true }); renderDetail(cur.channel, { quiet: true }); } });
   }
   /** Every switch shows the saved (or optimistic) spec.surfaces; the last feature on can't be switched off. */
   function paintSwitches() {
     if (!chGrid) return;
-    const tools = toolSwitches(liveSurfaces());
-    const onCount = tools.reduce((n, t) => n + t.features.filter((f) => f.on).length, 0);
+    const tools = toolSwitches(liveSurfaces(), { agents: getState().spec?.agents });
+    // the last feature on can't be switched off: AI agents' public switch is not one of the plan's answer surfaces
+    const onCount = tools.filter((t) => t.id !== 'agents').reduce((n, t) => n + t.features.filter((f) => f.on).length, 0);
     for (const t of tools) {
       const card = $(`.gl-tool[data-tool="${t.id}"]`, chGrid);
       if (!card) continue;
@@ -606,7 +617,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         if (!input) continue;
         input.checked = f.on;
         row.classList.toggle('is-on', f.on);
-        input.disabled = f.on && onCount === 1;
+        input.disabled = f.id !== AGENTS_FEATURE && f.on && onCount === 1;
         input.title = input.disabled ? 'Your bot needs at least one feature switched on' : '';
       }
     }
@@ -622,6 +633,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     return n && n.state === 'active' ? n : null;
   };
   function chStatus(c) {
+    if (c.id === 'agents') return { tone: agentSpec().public ? 'go' : 'off', label: c.status, needs: null, known: false };
     const info = dev().channels && dev().channels[CH_KEY[c.id]];
     const ln = (c.id === 'sms' || c.id === 'phone') ? liveNumber() : null;
     // (calls also need this server's live voice: without it the card keeps saying so)
@@ -698,6 +710,15 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const head = h('div', { class: 'gl-cd-head' },
       h('span', { class: 'gl-chcard-ico is-lg', html: GLYPH[c.id] }),
       h('div', null, h('h3', { class: 'gl-cd-title', tabindex: '-1' }, c.name), h('p', { class: 'gl-cd-blurb' }, c.blurb)));
+    if (c.id === 'agents') {
+      const right = keep || h('div', { class: 'gl-try' });
+      if (!keep) { right.append(h('div', { class: 'gl-try-head' }, h('span', { class: 'gl-try-k' }, 'Try it'), h('b', null, c.tryLabel))); agentsTry(right); }
+      chDetail.append(head, h('div', { class: 'gl-cd-grid' }, agentsSetup(), right));
+      paintAgentAccess();
+      if (animate) motion.animate(chDetail, [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'out' });
+      if (!quiet && animate) announce(`${c.name} selected.`, 'polite');
+      return;
+    }
     const left = h('div', { class: 'gl-cd-setup' });
     const ownNumber = c.id === 'sms' || c.id === 'phone';
     if (ownNumber) left.append(numberBlock());
@@ -746,6 +767,115 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     if (t.id === 'website') bar.append(h('div', { class: 'gl-webline', id: 'gl-webline' }));
     return bar;
   }
+
+  // ------------------------------------------------------------ AI agents (server/agents.mjs)
+  // The calm view: one line on what it does, the MCP address with Copy (the one primary action), who may ask and what it
+  // costs (the public switch, the free daily limit, paid access with its price), and the rest on demand (how to connect
+  // an AI assistant, the HTTP ask with curl, the discovery snippet). The Try it asks over HTTP with this bot's own key,
+  // exactly as an agent would, and shows the structured result. Customer-facing copy never names an AI vendor.
+  const agentSpec = () => agentSwitches(getState().spec?.agents);
+  function agentsInfo() {
+    const d = dev().agents || {};
+    const c = cfg().agents || {};
+    const id = encodeURIComponent(botId());
+    return {
+      mcp: d.mcp || `${apiRoot}/mcp/bots/${id}`, ask: d.ask || `${apiRoot}/v1/bots/${id}/ask`, manifest: d.manifest || `${apiRoot}/v1/bots/${id}/agent.json`, llms: d.llms || `${apiRoot}/v1/bots/${id}/llms.txt`,
+      freePerDay: d.freePerDay ?? c.freePerDay ?? 20, priceText: d.priceText || c.priceText || '$10 per 1,000 agent answers', today: d.today || null,
+    };
+  }
+  /** spec.agents through the spec patch path (optimistic, quiet), like a feature switch. */
+  function setAgents(patch, input) {
+    const next = { ...agentSpec(), ...patch };
+    setState({ spec: { ...getState().spec, agents: next } }, 'spec:plan');
+    emit('spec:request', { patch: { agents: next }, by: 'user', quiet: true });
+    if (devCache.info?.agents) devCache.info.agents = { ...devCache.info.agents, ...next };
+    paintSwitches();
+    paintAgentAccess();
+    paintCardStatus();
+    if (input) input.checked = 'public' in patch ? next.public : next.paid;
+    announce('public' in patch ? (next.public ? 'AI agents can ask your bot.' : 'AI agents can no longer ask your bot. You can still try it here.')
+      : next.paid ? `Paid agent access on: ${agentsInfo().priceText}, no daily limit.` : `Paid agent access off: free up to ${agentsInfo().freePerDay} answers a day.`, 'polite');
+  }
+  function agentSwitch(label, sub, on, onChange, id) {
+    const input = h('input', { type: 'checkbox', role: 'switch', class: 'gl-switch-in', id, checked: on });
+    input.checked = on;
+    input.addEventListener('change', () => onChange(input.checked, input));
+    return h('div', { class: 'gl-ag-row' },
+      h('label', { class: 'gl-switch', for: id }, input, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), h('span', { class: 'gl-feat-name' }, label)),
+      h('p', { class: 'gl-ag-sub', id: `${id}-d` }, sub));
+  }
+  function paintAgentAccess() {
+    const box = chDetail && $('#gl-ag-access', chDetail);
+    if (!box) return;
+    const a = agentsInfo(), s = agentSpec();
+    const used = a.today ? a.today.free : null;
+    box.replaceChildren(
+      agentSwitch('Public answers', s.public ? 'Any AI agent can ask, no key needed.' : 'Off: only you can ask, with your bot\'s key.', s.public, (v, el) => setAgents({ public: v }, el), 'gl-ag-public'),
+      agentSwitch('Paid access', s.paid ? `${a.priceText}. No daily limit; a per-address limit still stops floods.` : `${a.priceText}. Turn it on to lift the free limit.`, s.paid, (v, el) => setAgents({ paid: v }, el), 'gl-ag-paid'),
+      h('p', { class: `gl-ag-meter${!s.paid && used != null && used >= a.freePerDay ? ' is-full' : ''}` },
+        s.paid ? h('span', null, h('b', null, 'Metered.'), a.today ? ` Today: ${(a.today.paid || 0).toLocaleString()} paid answer${a.today.paid === 1 ? '' : 's'}.` : '')
+          : h('span', null, h('b', null, `Free up to ${a.freePerDay} answers a day.`), used != null ? ` Today: ${used} of ${a.freePerDay} used${a.today.limited ? `, ${a.today.limited} turned away` : ''}.` : ''),
+        ' Your own tests here are never counted.'));
+  }
+  function agentsSetup() {
+    const a = agentsInfo();
+    const name = botName();
+    const left = h('div', { class: 'gl-cd-setup gl-ag' });
+    const curl = `curl -s ${a.ask} \\\n  -H 'content-type: application/json' \\\n  -d '{"question": "How long is the warranty?"}'`;
+    const head = `<link rel="alternate" type="application/json" title="Ask ${String(name).replace(/"/g, '&quot;')} (AI agents)" href="${a.manifest}">`;
+    const llms = `- [Ask ${name}](${a.mcp}): answers from our own files, with sources (MCP server). Over HTTP: ${a.ask}`;
+    const more = (title, ...kids) => h('details', { class: 'gl-ag-more' }, h('summary', null, title), h('div', { class: 'gl-ag-more-b' }, ...kids));
+    left.append(
+      h('h4', { class: 'gl-h4' }, 'Your bot\'s agent address'),
+      h('div', { class: 'gl-url gl-ag-url' }, h('span', { class: 'gl-method' }, 'MCP'), h('code', { class: 'gl-mono gl-url-v' }, urlParts(a.mcp))),
+      h('div', { class: 'gl-ag-copy' }, copyButton(a.mcp, 'Copy address', { what: 'Agent address copied', aria: 'Copy the MCP address', primary: true })),
+      h('h4', { class: 'gl-h4' }, 'Who can ask'),
+      h('div', { class: 'gl-ag-access', id: 'gl-ag-access' }),
+      more('Connect from an AI assistant',
+        h('ol', { class: 'gl-steps' }, [
+          'In the assistant\'s settings, add a custom connector (or remote MCP server).',
+          'Paste the address above. No key and no sign-in needed.',
+          `Ask it something your files cover. It calls “Ask ${name}” and shows your sources.`,
+        ].map((s, i) => h('li', null, h('span', { class: 'gl-step-n' }, String(i + 1)), h('span', null, s))))),
+      more('Ask over HTTP',
+        h('p', { class: 'gl-tw-hint' }, 'For coding and shopping agents: POST a question, get the answer, its sources, product cards and the follow-up as JSON.'),
+        codeTabs([{ label: 'curl', lang: 'sh', code: curl }, { label: 'Link', lang: 'text', code: `${a.ask}?q=${encodeURIComponent('How long is the warranty?')}` }], 'gl-ag-curl')),
+      more('Help agents find it',
+        h('p', { class: 'gl-tw-hint' }, 'Add one of these to your site so assistants that read it know your bot is there.'),
+        codeTabs([{ label: 'HTML <head>', lang: 'html', code: head }, { label: 'llms.txt', lang: 'text', code: llms }], 'gl-ag-find')));
+    return left;
+  }
+  function agentsTry(el) {
+    const out = h('div', { class: 'gl-ag-out', 'aria-live': 'polite' });
+    const f = askForm({ placeholder: 'Ask the way an AI agent would…', button: 'Ask', onAsk: (q) => run(q) });
+    el.append(h('p', { class: 'gl-tw-hint' }, 'What an AI agent gets back, from the same answers as your chat bubble.'), f.form, f.row, out);
+    const label = { yes: 'Answered', partly: 'Partly answered', no: 'Not in the files' };
+    async function run(q) {
+      f.setBusy(true);
+      out.replaceChildren(h('p', { class: 'gl-tw-hint' }, 'Asking…'));
+      const d = await loadDev();
+      const a = agentsInfo();
+      const t0 = performance.now();
+      try {
+        const res = await fetch(a.ask, { method: 'POST', credentials: 'omit', headers: { 'content-type': 'application/json', ...(d.key ? { authorization: `Bearer ${d.key}` } : {}) }, body: JSON.stringify({ question: q }) });
+        const j = await res.json().catch(() => null);
+        if (!j || typeof j.answered !== 'string') throw new Error((j && j.error && j.error.message) || `HTTP ${res.status}`);
+        const ms = Math.round(performance.now() - t0);
+        out.replaceChildren(
+          h('p', { class: 'gl-ag-req gl-mono' }, `POST ${pub(`/v1/bots/${encodeURIComponent(botId())}/ask`)} · ${res.status} · ${ms} ms`),
+          h('p', { class: 'gl-ag-q' }, q),
+          h('p', null, h('span', { class: `chip ${j.answered === 'yes' ? 'green' : j.answered === 'partly' ? 'amber' : 'gray'} is-label gl-ag-chip` }, j.limited ? 'Limited' : label[j.answered] || j.answered)),
+          h('p', { class: `gl-ag-answer${j.answered === 'no' ? ' is-refused' : ''}` }, j.answer),
+          ...(j.sources && j.sources.length ? [h('ol', { class: 'gl-ag-src', 'aria-label': 'Sources' }, j.sources.map((s) => h('li', null, h('span', { class: 'gl-ag-n gl-mono' }, String(s.n)),
+            h('span', null, s.url ? h('a', { href: s.url, target: '_blank', rel: 'noopener' }, s.title) : s.title, s.quote ? h('q', null, String(s.quote).slice(0, 160)) : null))))] : []),
+          ...(j.products && j.products.length ? [h('p', { class: 'gl-tw-hint' }, `${j.products.length} product card${j.products.length === 1 ? '' : 's'}: ${j.products.map((p) => p.title).filter(Boolean).slice(0, 3).join(', ')}`)] : []),
+          h('details', { class: 'gl-ag-more gl-ag-json' }, h('summary', null, 'Show the JSON'), h('pre', { class: 'gl-pre', tabindex: '0' }, h('code', { html: highlightJson(j) }))));
+      } catch (e) {
+        out.replaceChildren(h('p', { class: 'alert alert-danger', role: 'alert' }, `Couldn't ask right now. ${e && e.message ? e.message : ''}`.trim()));
+      } finally { f.setBusy(false); }
+    }
+  }
+
   /** Website: ONE embed line (lib/embed.js) that turns on the features switched on above. */
   function websiteLine(mode) {
     return websiteLineText({ siteBase, apiBase, botId: botId(), surfaces: liveSurfaces(), key: keyFor(mode), converted: !!getState().trial?.converted });

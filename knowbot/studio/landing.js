@@ -69,14 +69,17 @@
   // ------------------------------------------------------------ "Where should it answer?" (toggle buttons, multi-select)
   var surfEl = document.getElementById('kl-surf');
   var surfLive = document.getElementById('kl-surf-live');
-  // three tools (Website, KnowBot number, Email); each turns on all of its features (one plan includes them all)
+  // four tools (Website, KnowBot number, Email, AI agents); each turns on all of its features (one plan includes them all).
+  // AI agents is not an answer surface: its toggle is spec.agents.public (on by default), handed off as action.agents.
   var surfBtns = surfEl ? [].slice.call(surfEl.querySelectorAll('[data-tool]')) : [];
   var nameOf = function (b) { var t = b.querySelector('.kl-ch-t'); return (t ? (t.firstChild && t.firstChild.textContent) || t.textContent : b.textContent || '').trim(); };
   var featuresOf = function (b) { return String(b.getAttribute('data-surfaces') || '').split(',').filter(Boolean); };
   var pressedBtns = function () { return surfBtns.filter(function (b) { return b.getAttribute('aria-pressed') === 'true'; }); };
+  var isAgents = function (b) { return b.getAttribute('data-tool') === 'agents'; };
+  var agentsBtn = surfBtns.filter(isAgents)[0] || null;
   function selectedSurfaces() {
     var on = [];
-    pressedBtns().forEach(function (b) { featuresOf(b).forEach(function (f) { if (on.indexOf(f) < 0) on.push(f); }); });
+    pressedBtns().forEach(function (b) { if (!isAgents(b)) featuresOf(b).forEach(function (f) { if (on.indexOf(f) < 0) on.push(f); }); });
     return on.length ? on : ['webchat'];
   }
   function sayList(list) {
@@ -84,7 +87,7 @@
     return names.length <= 1 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
   }
   function resetSurfaces() {
-    surfBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-tool') === 'website' ? 'true' : 'false'); });
+    surfBtns.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-tool') === 'website' || isAgents(b) ? 'true' : 'false'); });
     if (surfEl) surfEl.classList.remove('is-nudge');
     if (surfLive) surfLive.textContent = '';
   }
@@ -92,7 +95,7 @@
     var b = e.target && e.target.closest && e.target.closest('[data-tool]');
     if (!b) return;
     var on = b.getAttribute('aria-pressed') === 'true';
-    if (on && pressedBtns().length === 1) {
+    if (on && !isAgents(b) && pressedBtns().filter(function (x) { return !isAgents(x); }).length === 1) {
       // at least one tool: the last one stays on, and the visitor is told why
       surfEl.classList.add('is-nudge');
       if (surfLive) surfLive.textContent = nameOf(b) + ' stays on: pick another first. Your bot needs at least one.';
@@ -107,6 +110,7 @@
   var leaving = false;
   function deliver(action) {
     action.surfaces = selectedSurfaces();
+    if (agentsBtn) action.agents = agentsBtn.getAttribute('aria-pressed') === 'true';
     var s = window.__studio;
     if (s && typeof s.landing === 'function') s.landing(action);
     else window.__kbLanding = action;          // app.js drains this once the Builder exists

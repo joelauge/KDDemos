@@ -38,6 +38,7 @@ import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
 import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
+import { agentLimits, agentSettings, priceText as agentPriceText } from './agents.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -410,7 +411,9 @@ const isDerivedLine = (t) => /;\s/.test(t) && (String(t).match(/[^;:]{1,60}:\s[^
 
 // ------------------------------------------------------------------------------------------- spec
 const TONES = ['friendly', 'neutral', 'formal'], LENGTHS = ['short', 'normal'], AUDIENCES = ['customers', 'employees', 'students'];
-const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces']);
+const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces', 'agents']);
+// agents: the AI agents tool (server/agents.mjs): {public, paid}. Public answers are on unless the owner turns them off
+// (absent = on); paid agent access is off unless turned on (metered, it replaces the free daily limit). Not material.
 // answer surfaces: where the bot answers (studio/surfaces.js SURFACE_IDS, same order): the features of the plan's three tools
 // (Website: webchat, webvoice, site · KnowBot number: sms, phone, whatsapp · Email: email). Not material: the answers and
 // the bot version never change with them, and neither does the price (one plan, every feature included).
@@ -509,6 +512,19 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
         next.surfaces = SURFACE_IDS.filter((id) => want.has(id));
         break;
       }
+      case 'agents': {
+        const v = patch.agents;
+        if (!v || typeof v !== 'object' || Array.isArray(v)) bad('agents', 'must be {public?: boolean, paid?: boolean}');
+        const cur = next.agents && typeof next.agents === 'object' ? next.agents : {};
+        const out = { public: cur.public !== false, paid: cur.paid === true };
+        for (const [kk, vv] of Object.entries(v)) {
+          if (kk !== 'public' && kk !== 'paid') bad('agents', `unknown setting ${JSON.stringify(kk).slice(0, 30)}: use public or paid`);
+          if (typeof vv !== 'boolean') bad('agents', `${kk} must be true or false`);
+          out[kk] = vv;
+        }
+        next.agents = out;
+        break;
+      }
       case 'email': {
         const e = String(patch.email ?? '').trim();
         if (e && (e.length > 254 || !EMAIL_RE.test(e))) bad('email', 'is not a valid email address');
@@ -519,8 +535,9 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
     }
   }
   const diff = [];
-  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar', 'surfaces']) {
-    if (JSON.stringify(spec[k] ?? (k === 'surfaces' ? ['webchat'] : undefined)) !== JSON.stringify(next[k] ?? (k === 'surfaces' ? ['webchat'] : undefined))) diff.push({ field: k, from: spec[k], to: next[k] });
+  const dflt = (k, v) => v ?? (k === 'surfaces' ? ['webchat'] : k === 'agents' ? { public: true, paid: false } : undefined);
+  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar', 'surfaces', 'agents']) {
+    if (JSON.stringify(dflt(k, spec[k])) !== JSON.stringify(dflt(k, next[k]))) diff.push({ field: k, from: spec[k], to: next[k] });
   }
   const material = diff.some((d) => MATERIAL.includes(d.field));
   next.instructions = composeInstructions(next);
@@ -3584,7 +3601,7 @@ export function createStudio(o = {}) {
       chips: ready.length ? [C('ask-starter', 'Ask a question', { kind: 'primary', action: { type: 'ask_samplebot', question: ready.length ? (T.questionsCache?.value?.starters?.[0]?.q || null) : null } }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] : [C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
     if (has('explain_types')) return { reply: 'PDF, Word (DOCX), PowerPoint (PPTX), Excel (XLSX), HTML, Markdown, plain text and CSV, images (PNG, JPG, WEBP, GIF) and audio (MP3, WAV, M4A, OGG). Up to 95 MB per file and 100 MB in total.',
       chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
-    if (has('explain_plan')) return { reply: `One plan, $${PRICE} a month or $${PRICE_YEAR.toLocaleString('en-US')} for a whole year, includes three tools you switch features on and off in:\n• Website: one line on your site for the chat bubble, voice and homepage search\n• KnowBot number: one phone number for texts, calls and WhatsApp\n• Email: one inbox address that answers with citations\n\nEvery feature is included, so switching one on or off never changes the price. They all use the same files, so your bot gives the same answers everywhere, and it always shows where it found them. The number's own usage is billed separately.\n\nYou can store up to 100 MB of files. The first 30 days are free, but you need a credit card to start. You can cancel anytime, and you won't have to upload your files again.\n\nNeed more than 100 MB? Email sales@recoursellm.com.`,
+    if (has('explain_plan')) return { reply: `One plan, $${PRICE} a month or $${PRICE_YEAR.toLocaleString('en-US')} for a whole year, includes three tools you switch features on and off in:\n• Website: one line on your site for the chat bubble, voice and homepage search\n• KnowBot number: one phone number for texts, calls and WhatsApp\n• Email: one inbox address that answers with citations\n\nEvery feature is included, so switching one on or off never changes the price. They all use the same files, so your bot gives the same answers everywhere, and it always shows where it found them. The number's own usage is billed separately.\n\nA fourth tool, AI agents, lets other AI assistants ask your bot and get the same cited answers: free up to ${agentLimits(env).freePerDay} answers a day, then metered at ${agentPriceText(agentLimits(env).pricePer1k)} per 1,000 agent answers if you turn on paid access.\n\nYou can store up to 100 MB of files. The first 30 days are free, but you need a credit card to start. You can cancel anytime, and you won't have to upload your files again.\n\nNeed more than 100 MB? Email sales@recoursellm.com.`,
       chips: [C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
     if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
     if (has('import_store')) {
@@ -3723,6 +3740,7 @@ export function createStudio(o = {}) {
         case 'greeting': return `it now opens with "${clip(String(d.to || ''), 60)}"`;
         case 'purpose': return 'a new purpose';
         case 'surfaces': return `it answers on ${surfacesWords(d.to)}`;
+        case 'agents': return agentsWords(d.to);
         case 'sources': case 'avatar': case 'starters': return null;
         default: return `${d.field} updated`;
       }
@@ -3872,8 +3890,14 @@ export function createStudio(o = {}) {
       case 'floor': return `strictness is ${fmtFloor(d.to)}`;
       case 'greeting': return 'greeting updated';
       case 'surfaces': return `it answers on ${surfacesWords(d.to)}`;
+      case 'agents': return agentsWords(d.to);
       default: return `${d.field} updated`;
     }
+  }
+  /** The AI agents switches in words. */
+  function agentsWords(a) {
+    const x = agentSettings(a);
+    return !x.public ? 'AI agents can no longer ask it' : x.paid ? 'AI agents can ask it with paid access (metered)' : 'AI agents can ask it, free up to a daily limit';
   }
 
   // gap advice ("add a file about X") is given once per question within a 2-turn window
@@ -4667,7 +4691,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       interactions.answered = interactions.total - interactions.refused;
     }
     const r = o.leads ? await o.leads.report([T.id], { days }) : { days, leads: [], conversions: { sent: 0, clicks: 0, clickedSends: 0, items: [] }, links: { sent: 0, clicks: 0 }, retentionDays: null };
-    return { botId: T.id, ...r, interactions, tracking: T.flags?.leadTracking !== false, available: !!o.leads };
+    const { agentItems, ...rest } = r; // the per-question list is for the CSV; the report shows the counts
+    return { botId: T.id, ...rest, agents: rest.agents || { questions: 0, answered: 0, refused: 0, limited: 0, free: 0, paid: 0, owner: 0, byDay: [] }, interactions, tracking: T.flags?.leadTracking !== false, available: !!o.leads };
   }
 
   // ------------------------------------------------------------------------- HTTP
@@ -4771,6 +4796,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES, ttlDays }, types: TYPES,
         builder: { engine: builderEngine(), provider: studioProvider && builderEngine() === 'llm' ? studioProvider : null },
         samples: sampleSets().map(({ names, ...s }) => s), sampleMode, anchors: ANCHORS, contact, floor: floorDefault,
+        // the AI agents tool (server/agents.mjs): the free daily allowance and the metered price, from the environment
+        agents: (({ freePerDay, pricePer1k, currency }) => ({ freePerDay, pricePer1k, currency, priceText: `${agentPriceText(pricePer1k)} per 1,000 agent answers` }))(agentLimits(env)),
       });
     }
     // the payments webhook (no trial token: verified by its Stripe-Signature; the session's metadata names the bot)

@@ -13,7 +13,7 @@ import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { validatePatch, defaultSpec, parseIntent, surfacesIntentOf, SURFACE_IDS as SERVER_IDS } from '../trials.mjs';
 import { SURFACES as TOOL_IDS } from '../builder/tools.mjs';
-import { SURFACES, SURFACE_IDS, TOOLS, normalizeSurfaces, planTotals, surfacesText, money, toolSwitches, setFeature, toolsText, featureLabel } from '../../studio/surfaces.js';
+import { SURFACES, SURFACE_IDS, TOOLS, SURFACE_TOOLS, AGENTS_FEATURE, agentSwitches, normalizeSurfaces, planTotals, surfacesText, money, toolSwitches, setFeature, toolsText, featureLabel } from '../../studio/surfaces.js';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -49,12 +49,21 @@ describe('answer surfaces: shared ids and plan math (studio/surfaces.js)', () =>
   });
 });
 
-describe('the three tools (studio/surfaces.js TOOLS): stored surfaces map to switches with no data loss', () => {
-  test('Website, KnowBot number, Email; every surface id is a feature of exactly one tool', () => {
-    assert.deepEqual(TOOLS.map((t) => t.id), ['website', 'number', 'email']);
-    assert.deepEqual(TOOLS.map((t) => t.features), [['webchat', 'webvoice', 'site'], ['sms', 'phone', 'whatsapp'], ['email']]);
-    assert.deepEqual(TOOLS.flatMap((t) => t.features).sort(), [...SURFACE_IDS].sort());
-    assert.deepEqual(TOOLS.map((t) => t.features.map(featureLabel)), [['Chat bubble', 'Voice', 'Homepage search'], ['Texts', 'Calls', 'WhatsApp'], ['Inbox']]);
+describe('the four tools (studio/surfaces.js TOOLS): stored surfaces map to switches with no data loss', () => {
+  test('Website, KnowBot number, Email, AI agents; every surface id is a feature of exactly one tool', () => {
+    assert.deepEqual(TOOLS.map((t) => t.id), ['website', 'number', 'email', 'agents']);
+    assert.deepEqual(TOOLS.map((t) => t.features), [['webchat', 'webvoice', 'site'], ['sms', 'phone', 'whatsapp'], ['email'], ['agents']]);
+    assert.deepEqual(SURFACE_TOOLS.flatMap((t) => t.features).sort(), [...SURFACE_IDS].sort(), 'the plan tools cover every answer surface');
+    assert.ok(!SURFACE_IDS.includes(AGENTS_FEATURE), 'AI agents is spec.agents.public, never a spec.surfaces id');
+    assert.deepEqual(TOOLS.map((t) => t.features.map(featureLabel)), [['Chat bubble', 'Voice', 'Homepage search'], ['Texts', 'Calls', 'WhatsApp'], ['Inbox'], ['Public answers']]);
+    assert.deepEqual(TOOLS.slice(3).map((t) => [t.label, t.sub]), [['AI agents', 'Answers other AI assistants, with sources']]);
+  });
+  test('AI agents: public by default, off only when spec.agents.public is false; never part of the plan text', () => {
+    assert.equal(toolSwitches(['webchat']).find((t) => t.id === 'agents').on, true);
+    assert.equal(toolSwitches(['webchat'], { agents: { public: false } }).find((t) => t.id === 'agents').on, false);
+    assert.deepEqual(agentSwitches(undefined), { public: true, paid: false });
+    assert.deepEqual(setFeature(['webchat'], AGENTS_FEATURE, true), ['webchat'], 'not a surface switch');
+    assert.equal(toolsText(['webchat']), 'Website (Chat bubble)');
   });
   test('every stored list round-trips through the switches', () => {
     for (const list of [['webchat'], ['sms', 'whatsapp'], ['email', 'site'], SURFACE_IDS, ['phone', 'webvoice']]) {
@@ -63,7 +72,7 @@ describe('the three tools (studio/surfaces.js TOOLS): stored surfaces map to swi
       assert.deepEqual(normalizeSurfaces(back), normalizeSurfaces(list), JSON.stringify(list));
     }
     const sw = toolSwitches(['webchat', 'sms']);
-    assert.deepEqual(sw.map((t) => t.on), [true, true, false]);
+    assert.deepEqual(sw.map((t) => t.on), [true, true, false, true]);
     assert.deepEqual(toolSwitches(undefined)[0].features.map((f) => f.on), [true, false, false], 'an old trial = the chat bubble');
   });
   test('switching a feature: on, off, and never the last one off', () => {
@@ -128,12 +137,15 @@ describe('the Builder reads surface changes in plain words (parseIntent)', () =>
 describe('landing: "Where should it answer?" (studio/index.html, landing.js) never shows a price', () => {
   const html = read('studio/index.html');
   const land = html.slice(html.indexOf('<div id="kl-landing"'), html.indexOf('<!-- end landing -->') > 0 ? html.indexOf('<!-- end landing -->') : html.indexOf('id="st-app"'));
-  test('a toggle per tool (Website, KnowBot number, Email) covering every feature, website pressed by default', () => {
+  test('a toggle per tool (Website, KnowBot number, Email, AI agents) covering every feature; website and AI agents pressed by default', () => {
     const btns = [...land.matchAll(/<button type="button" class="kl-ch kl-tool"[^>]*data-tool="(\w+)" data-surfaces="([\w,]+)" aria-pressed="(true|false)">[\s\S]*?<span class="kl-ch-t">([^<]+)<span/g)];
-    assert.deepEqual(btns.map((m) => m[1]), ['website', 'number', 'email']);
-    assert.deepEqual(btns.map((m) => m[4].trim()), ['Website', 'KnowBot number', 'Email'], 'the accessible name starts with the visible text');
-    assert.deepEqual(btns.flatMap((m) => m[2].split(',')).sort(), [...SURFACE_IDS].sort(), 'every feature belongs to exactly one tool');
-    assert.deepEqual(btns.filter((m) => m[3] === 'true').map((m) => m[1]), ['website']);
+    assert.deepEqual(btns.map((m) => m[1]), ['website', 'number', 'email', 'agents']);
+    assert.deepEqual(btns.map((m) => m[4].trim()), ['Website', 'KnowBot number', 'Email', 'AI agents'], 'the accessible name starts with the visible text');
+    assert.deepEqual(btns.slice(0, 3).flatMap((m) => m[2].split(',')).sort(), [...SURFACE_IDS].sort(), 'every feature belongs to exactly one tool');
+    assert.deepEqual(btns.filter((m) => m[3] === 'true').map((m) => m[1]), ['website', 'agents'], 'bots are public to AI agents by default');
+    const js = read('studio/landing.js');
+    assert.match(js, /action\.agents = agentsBtn\.getAttribute\('aria-pressed'\) === 'true'/, 'the AI agents toggle is handed off as spec.agents.public, not as a surface');
+    assert.match(read('studio/app.js'), /typeof a\.agents === 'boolean'/);
     assert.match(land, /role="group" aria-labelledby="kl-surf-h"/);
     assert.match(land, /id="kl-surf-h"[^>]*>Where should it answer\?</);
   });

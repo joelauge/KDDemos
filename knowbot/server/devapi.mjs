@@ -9,6 +9,9 @@
 //   *    /v1/channels/:botId/<sms|voice|whatsapp|email>   provider webhooks (server/channels/*)
 //   GET  /v1/channels/:botId           which channels this server can run, with the webhook URLs
 //   GET  /p/:id (and /v1/p/:id)        public proof page of one answer: the question, the answer, every quoted line
+//   POST /mcp/bots/:botId (= /v1/bots/:botId/mcp)  AI agents: a remote MCP server with one tool, `ask` (server/agents.mjs)
+//   POST /v1/bots/:botId/ask           AI agents over plain HTTP (GET ?q= too); GET /v1/bots/:botId/agent.json, /llms.txt
+//                                      public by default (no key), metered: a free allowance per bot per day
 //
 //   admin (KNOWBOT_ADMIN_TOKEN):
 //   GET|POST /api/instances/:id/keys, DELETE /api/instances/:id/keys/:keyId   live keys (kb_live_…), shown once
@@ -48,6 +51,8 @@ import { createSendInfo } from './sendinfo.mjs';
 import { orbOf } from './site.mjs';
 import { campaignOf, contactOf, newClickId, LINK_ID_RE, trackAnswer } from './leads.mjs';
 import { storePageHead } from './trials.mjs';
+import { AGENT_CHANNEL, agentLimits, agentSettings, agentResult, toolResult, limitedResult, readAsk, mcpDispatch, agentManifest, llmsTxt, secondsToReset,
+  limitMessage, OFF_MESSAGE, burstMessage, priceText, RPC } from './agents.mjs';
 
 export const DEVKEYS_PATH = 'knowbot/_config/devkeys.json';
 export const KEY_RE = /^kb_(live|trial)_[A-Za-z0-9_.-]{20,600}$/;
@@ -59,11 +64,12 @@ const MAX_Q = 1000;
 
 /** Response headers a browser client may read on every /v1 response (CORS). Both the OpenAI names (so SDK backoff
  * works unchanged) and the short x-ratelimit-* names, plus retry-after and x-request-id. */
-export const EXPOSE_HEADERS = 'content-type, retry-after, x-request-id, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset';
+export const EXPOSE_HEADERS = 'content-type, retry-after, x-request-id, mcp-session-id, mcp-protocol-version, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset';
 
 /** True for the paths createDevApi().handle serves (the one dispatch test server.mjs uses). */
 // Every /v1 route is also served under /api/v1 (and /p under /api/p): the production Worker forwards only /api/*.
 export const isDevApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p === '/api/v1' || p.startsWith('/api/v1/') || /^\/(?:api\/)?[pr]\/[A-Za-z0-9_-]+$/.test(p)
+  || /^\/(?:api\/)?mcp\/bots\/[^/]+\/?$/.test(p)
   || /^\/api\/instances\/[^/]+\/(?:keys|insights)(?:\/[^/]*)?$/.test(p) || /^\/api\/studio\/trials\/[^/]+\/devkey$/.test(p) || /^\/api\/site\/[^/]+(?:\/logo)?$/.test(p);
 
 export class ApiError extends Error {
@@ -583,6 +589,7 @@ export function createDevApi(o = {}) {
     const out = {
       id: `ans_${rid(16)}`, bot: target.id, botName: target.name, question: q, answer: text, refused, grounded: !refused && citations.length > 0, citations,
       ...(products.length ? { products } : {}),
+      ...(fin?.verdict ? { verdict: fin.verdict } : {}),
       proof: { hits, quoted, floor: { min: floor, top: round4(top) }, ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : resolvedReceipt ? { receipt: { digest: resolvedReceipt } } : {}) }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
     };
     logAnswer(target, out, channel, callerKey);
@@ -926,9 +933,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       let n = 0;
       const emit = (event, data) => { try { res.write(`id: ${++n}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {} };
       try {
-        const a = await answer(target, question, { history, channel, callerKey, cards: true, onRetrieval: (r) => emit('retrieval', r) });
-        a.proofId = a.refused ? null : saveProof(a, channel);
-        rememberAnswer(siKey, a, req);
+        const a = await askOnce(req, target, question, { history, channel, callerKey, cards: true, siKey, onRetrieval: (r) => emit('retrieval', r) });
         for (const piece of answerPieces(a, format)) emit('delta', { text: piece.text ?? piece.raw, n: piece.n, raw: piece.raw });
         emit('final', publicAnswer(a, req, format));
         emit('done', { latencyMs: a.latencyMs });
@@ -938,10 +943,157 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       }
       return res.end();
     }
-    const a = await answer(target, question, { history, channel, callerKey, cards: true });
-    a.proofId = a.refused ? null : saveProof(a, channel);
-    rememberAnswer(siKey, a, req);
+    const a = await askOnce(req, target, question, { history, channel, callerKey, cards: true, siKey });
     return send(res, 200, publicAnswer(a, req, format));
+  }
+
+  /**
+   * One question through the answer pipeline, its proof saved (and, with siKey, remembered for "send me this"): the ONE
+   * path /v1/bots/:id/chat and the AI-agent endpoints (MCP `ask`, POST /v1/bots/:id/ask) share.
+   */
+  async function askOnce(req, target, question, { history = [], channel = 'api', callerKey = null, cards = true, siKey = null, onRetrieval } = {}) {
+    const a = await answer(target, question, { history, channel, callerKey, cards, onRetrieval });
+    a.proofId = a.refused ? null : saveProof(a, channel);
+    if (siKey) rememberAnswer(siKey, a, req);
+    return a;
+  }
+
+  // ---------------------------------------------------------------- AI agents (server/agents.mjs)
+  // Public by default: an agent asks with no key. Free: AG.freePerDay answers per bot per UTC day (plus a per-address
+  // burst limit); past it, a 429 / an MCP isError result that says so and how the owner lifts it. Paid agent access (the
+  // owner's switch) replaces the free limit with metered usage (a generous burst limit still applies). The bot's own key
+  // as a Bearer is the owner's: never counted against the free allowance. Usage is recorded by leads.agent, per bot per day.
+  const AG = { ...agentLimits(env), ...(o.agentLimits || {}) };
+  const agentDays = new Map(); // `${bot}|${day}` → {free, paid, owner, limited, ready}
+  const dayOf = (t) => new Date(t).toISOString().slice(0, 10);
+  const ipOf = (req) => (typeof o.clientIp === 'function' ? o.clientIp(req) : (req.socket?.remoteAddress || 'unknown'));
+  /** The owner's switches: a Studio bot's spec.agents; a launched bot's linked Studio bot, else inst.agents. */
+  function agentCfg(target) {
+    if (target.kind === 'trial') return agentSettings(target.spec?.agents);
+    const linked = target.inst?.numberTrial ? studio?.trials?.get?.(target.inst.numberTrial)?.spec : null;
+    return agentSettings(linked?.agents ?? target.inst?.agents);
+  }
+  const botInfo = (target) => ({ id: target.id, name: target.name, org: target.inst?.org || target.spec?.org || null, purpose: target.spec?.purpose || target.inst?.purpose || null });
+  /** Today's agent usage of this bot (memory, seeded once a day from the recorded events, so a restart keeps the count). */
+  async function agentUsage(target) {
+    const bot = leadBotOf(target), day = dayOf(now()), k = `${bot}|${day}`;
+    let u = agentDays.get(k);
+    if (!u) {
+      for (const key of agentDays.keys()) if (!key.endsWith(`|${day}`)) agentDays.delete(key);
+      u = { free: 0, paid: 0, owner: 0, limited: 0 };
+      u.ready = typeof leads?.agentDay === 'function'
+        ? Promise.resolve(leads.agentDay(bot, day)).then((c) => { for (const x of ['free', 'paid', 'owner', 'limited']) u[x] += Number(c?.[x]) || 0; }).catch(() => {})
+        : Promise.resolve();
+      agentDays.set(k, u);
+    }
+    await u.ready;
+    return u;
+  }
+  const usageView = (u) => ({ free: u.free, paid: u.paid, owner: u.owner, limited: u.limited });
+  const upgradeOf = () => ({ how: "The bot's owner can turn on paid agent access in KnowBot Studio (Set up, AI agents).", price: `${priceText(AG.pricePer1k)} per 1,000 agent answers` });
+  /** The owner's own key for this bot (kb_live_ / kb_trial_) → who. No key, or any other bearer: an anonymous agent (null). */
+  async function agentOwner(req, botId) {
+    if (!/^kb_(?:live|trial)_/.test(bearerOf(req))) return null;
+    const who = await authKey(req, botId, { site: true });
+    return who.scope === 'site' ? null : who; // the Homepage search's public key is a visitor, not the owner
+  }
+  const agentLimitError = (sc) => Object.assign(new ApiError(429, sc.reason === 'burst' ? 'rate_limit_exceeded' : 'agent_free_limit', sc.answer, {}, { 'retry-after': String(sc.retry_after) }), { agent: sc });
+  /** May this call be answered now? → {billing:'owner'|'paid'|'free'}. Throws 403 (public answers off) or a 429 (agent). */
+  async function agentGate(req, res, target, who, question) {
+    if (who) { rateLimit(res, who); return { billing: 'owner' }; }
+    const cfg = agentCfg(target);
+    if (!cfg.public) throw new ApiError(403, 'agents_off', OFF_MESSAGE);
+    const burst = limit(`agentip:${cfg.paid ? 'paid' : 'free'}:${target.id}:${ipOf(req)}`, cfg.paid ? AG.paidIpPerMinute : AG.ipPerMinute);
+    if (burst.limited) throw agentLimitError(limitedResult({ message: burstMessage(burst.retryAfter), retryAfter: burst.retryAfter, reason: 'burst' }));
+    if (cfg.paid) return { billing: 'paid' };
+    const u = await agentUsage(target);
+    if (u.free >= AG.freePerDay) {
+      u.limited++;
+      if (u.limited <= 100) leads?.agent?.({ botId: leadBotOf(target), outcome: 'limited', billing: 'free', question: scrubQuestion(question) });
+      throw agentLimitError(limitedResult({ message: limitMessage(AG.freePerDay), retryAfter: secondsToReset(now()), reason: 'free_limit', upgrade: upgradeOf() }));
+    }
+    u.free++; // reserved now, so concurrent calls can't overrun the allowance; released if the answer fails
+    return { billing: 'free' };
+  }
+  /** Ask the bot for an agent → the structured result (agents.mjs agentResult). */
+  async function agentAsk(req, res, target, { question, context = '' }, who) {
+    const gate = await agentGate(req, res, target, who, question);
+    let a;
+    try {
+      a = await askOnce(req, target, question, { history: context ? [{ role: 'user', content: context }] : [], channel: AGENT_CHANNEL, callerKey: who ? who.keyId : `ip:${ipOf(req)}`, cards: true });
+    } catch (e) {
+      if (gate.billing === 'free') (await agentUsage(target)).free--;
+      throw e;
+    }
+    if (gate.billing !== 'free') (await agentUsage(target))[gate.billing]++;
+    leads?.agent?.({ botId: leadBotOf(target), outcome: a.refused ? 'refused' : 'answered', billing: gate.billing, question: scrubQuestion(a.question) });
+    // TODO(KnowDrive billing): send each bot's daily 'paid' agent answers (leads.agentDay) to KnowDrive metered billing at
+    // AG.pricePer1k per 1,000. Until then paid usage is only recorded here and shown to the owner.
+    const lib = await o.loadLib();
+    return agentResult(a, { text: answerText(a), followUps: lib.FOLLOW_UPS || {}, proofUrl: a.proofId ? proofUrlFor(req, a.proofId) : null });
+  }
+  /** The public URLs of a bot's agent endpoints (the /api form: the production Worker forwards /api/* only). */
+  function agentUrls(req, id) {
+    const b = apiBase(req), e = encodeURIComponent(id);
+    return { mcp: `${b}/mcp/bots/${e}`, ask: `${b}/v1/bots/${e}/ask`, manifest: `${b}/v1/bots/${e}/agent.json`, llms: `${b}/v1/bots/${e}/llms.txt`,
+      terms: String(env.KNOWBOT_AGENT_TERMS_URL || 'https://knowdrive.ai/terms') };
+  }
+  /** What the Studio's AI agents card shows (GET …/devkey → agents). */
+  async function agentInfo(req, target) {
+    const cfg = agentCfg(target);
+    return { ...agentUrls(req, target.id), public: cfg.public, paid: cfg.paid, freePerDay: AG.freePerDay, ipPerMinute: AG.ipPerMinute, paidIpPerMinute: AG.paidIpPerMinute,
+      pricePer1k: AG.pricePer1k, currency: AG.currency, priceText: `${priceText(AG.pricePer1k)} per 1,000 agent answers`, today: usageView(await agentUsage(target)) };
+  }
+  const agentErrBody = (e, sc) => ({ ...sc, error: { message: e.message, type: TYPES[e.status] || 'api_error', code: e.code, param: null, status: e.status } });
+  /** POST /v1/bots/:id/ask {question, context?} (GET ?q=) → the structured result; a 429 / 403 carries it too. */
+  async function agentRest(req, res, url, botId, m) {
+    const args = m === 'GET' ? { q: url.searchParams.get('q') ?? url.searchParams.get('question') ?? '', context: url.searchParams.get('context') || '' } : await bodyJson(req);
+    const who = await agentOwner(req, botId);
+    const target = await resolveTarget(botId, who);
+    let ask;
+    try { ask = readAsk(args); } catch (e) { throw new ApiError(400, e.code || 'invalid_request', e.message); }
+    try { return send(res, 200, await agentAsk(req, res, target, ask, who)); } catch (e) {
+      if (e.agent) return send(res, 429, agentErrBody(e, e.agent), e.headers);
+      if (e.code === 'agents_off') return send(res, 403, agentErrBody(e, { answered: 'no', answer: OFF_MESSAGE, sources: [] }));
+      throw e;
+    }
+  }
+  /** POST /mcp/bots/:id: one JSON-RPC message (or a batch) → JSON; notifications only → 202. No event stream is opened. */
+  async function agentMcp(req, res, botId, m) {
+    const rpcErr = (status, id, code, message) => send(res, status, { jsonrpc: '2.0', id: id ?? null, error: { code, message } });
+    if (m !== 'POST') { res.setHeader('allow', 'POST, OPTIONS'); throw new ApiError(405, 'method_not_allowed', 'This MCP server takes POST requests (Streamable HTTP, JSON responses); it opens no event stream.'); }
+    let body;
+    try { body = await o.readJson(req); } catch (e) { return rpcErr(Number(e.status) === 413 ? 413 : 400, null, RPC.PARSE, 'Parse error: send a JSON-RPC 2.0 message as JSON.'); }
+    const first = Array.isArray(body) ? body[0] : body;
+    let target, who;
+    try { who = await agentOwner(req, botId); target = await resolveTarget(botId, who); } catch (e) { return rpcErr(Number(e.status) || 500, first?.id, -32001, e.message || 'No such bot.'); }
+    if (!who && !agentCfg(target).public) return rpcErr(403, first?.id, -32003, OFF_MESSAGE);
+    const hs = limit(`mcpip:${ipOf(req)}`, 240);
+    if (hs.limited) { res.setHeader('retry-after', String(hs.retryAfter)); return rpcErr(429, first?.id, -32029, burstMessage(hs.retryAfter)); }
+    const msgs = Array.isArray(body) ? body : [body];
+    if (!msgs.length || msgs.length > 20) return rpcErr(400, null, RPC.INVALID, 'Send one JSON-RPC message (or a batch of up to 20).');
+    const call = async (args) => {
+      try { return toolResult(await agentAsk(req, res, target, args, who)); } catch (e) {
+        if (e.agent) return toolResult(e.agent, { isError: true });
+        if (e instanceof ApiError && e.status < 500) return toolResult({ answered: 'no', answer: e.message, sources: [] }, { isError: true });
+        log(`[agents] ask failed: ${e?.stack || e}`);
+        return toolResult({ answered: 'no', answer: "Couldn't answer right now. Try again in a moment.", sources: [] }, { isError: true });
+      }
+    };
+    const out = [];
+    for (const msg of msgs) { const r = await mcpDispatch(msg, { bot: botInfo(target), call }); if (r) out.push(r); }
+    if (!out.length) { res.writeHead(202, { 'cache-control': 'no-store' }); return res.end(); }
+    return send(res, 200, Array.isArray(body) ? out : out[0]);
+  }
+  /** GET /v1/bots/:id/agent.json | llms.txt: public discovery (whether or not public answers are on). */
+  async function agentDiscovery(req, res, botId, what) {
+    const rl = limit(`agentdisc:${ipOf(req)}`, 60);
+    if (rl.limited) throw new ApiError(429, 'rate_limit_exceeded', `Too many requests. Try again in ${rl.retryAfter}s.`, {}, { 'retry-after': String(rl.retryAfter) });
+    const target = await resolveTarget(botId);
+    const d = { bot: botInfo(target), urls: agentUrls(req, target.id), limits: AG, settings: agentCfg(target) };
+    if (what === 'agent.json') return send(res, 200, agentManifest(d), { 'cache-control': 'public, max-age=300' });
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff' });
+    return res.end(llmsTxt(d));
   }
 
   // ---------------------------------------------------------------- /v1/chat/completions (OpenAI-compatible)
@@ -1229,6 +1381,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         { method: 'POST', path: '/v1/chat/completions', about: 'OpenAI-compatible. model = your bot id. Citations as footnotes in content plus a "knowbot" field.' },
         { method: 'GET', path: '/v1/models', about: 'The bot this key can use (OpenAI list shape).' },
         { method: 'POST', path: '/v1/bots/{botId}/voice', about: 'Audio in → transcript → cited answer → audio out (Google speech when configured).' },
+        { method: 'POST', path: '/v1/bots/{botId}/ask', about: 'AI agents: {question, context?} -> {answered, answer, sources, products?, follow_up?}. No key needed (a free allowance per bot per day); GET ?q= works too.' },
+        { method: 'POST', path: '/v1/bots/{botId}/mcp', about: 'AI agents: a remote MCP server (Streamable HTTP) with one tool, ask. The same server is at /api/mcp/bots/{botId}.' },
+        { method: 'GET', path: '/v1/bots/{botId}/agent.json', about: 'AI agents: the bot manifest (name, MCP and ask URLs, rate limits). Also /v1/bots/{botId}/llms.txt.' },
         { method: 'GET', path: '/v1/channels/{botId}', about: 'Channel status and webhook URLs.' },
         { method: 'POST', path: '/v1/channels/{botId}/{sms|voice|whatsapp|email}', about: 'Channel webhooks (SMS, phone, WhatsApp, inbound email).' },
       ].map((e) => ({ ...e, url: `${base}${e.path}` })),
@@ -1380,10 +1535,11 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       const data = studio.verifyToken(bearerOf(req), id); // throws 401 unauthorized / expired
       const g = googleConfig(env);
       const base = apiBase(req);
-      return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, expiresAt: new Date(Number(data.e)).toISOString(), scope: 'trial',
+      const tgt = await resolveTarget(id).catch(() => null);
+      return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, ...(tgt ? { agents: await agentInfo(req, tgt) } : {}), expiresAt: new Date(Number(data.e)).toISOString(), scope: 'trial',
         rateLimit: { perMinute: limits.trial }, voice: { google: g.stt && g.tts, stt: g.stt ? 'google' : 'browser', tts: g.tts ? 'google' : 'browser' },
         endpoints: { chat: `${base}/v1/bots/${id}/chat`, completions: `${base}/v1/chat/completions`, voice: `${base}/v1/bots/${id}/voice`, channels: `${base}/v1/channels/${id}` },
-        channels: channelsInfo(req, id, await resolveTarget(id).catch(() => null)).channels });
+        channels: channelsInfo(req, id, tgt).channels });
     }
     // the Homepage search (server/site.mjs): its public view and a key that can only ask questions. Published sites
     // only; the owner's own trial key (the Studio's preview) also opens a site that is not published yet.
@@ -1455,6 +1611,16 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       return send(res, 200, { id: who.bot, object: 'model', created: 0, owned_by: 'knowbot' });
     }
     if (p === '/v1/chat/completions') { if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only'); return completions(req, res); }
+    // AI agents (server/agents.mjs): the MCP server, the plain HTTP ask, and discovery
+    if ((mt = /^\/mcp\/bots\/([^/]+)\/?$/.exec(p)) || (mt = /^\/v1\/bots\/([^/]+)\/mcp\/?$/.exec(p))) return agentMcp(req, res, decodeURIComponent(mt[1]), m);
+    if ((mt = /^\/v1\/bots\/([^/]+)\/ask\/?$/.exec(p))) {
+      if (m !== 'POST' && m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'POST {"question"} or GET ?q=');
+      return agentRest(req, res, url, decodeURIComponent(mt[1]), m);
+    }
+    if ((mt = /^\/v1\/bots\/([^/]+)\/(agent\.json|llms\.txt)$/.exec(p))) {
+      if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
+      return agentDiscovery(req, res, decodeURIComponent(mt[1]), mt[2]);
+    }
     if ((mt = /^\/v1\/bots\/([^/]+)\/(chat|voice|preview)$/.exec(p))) {
       if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only');
       const botId = decodeURIComponent(mt[1]);
@@ -1473,7 +1639,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     url = url || new URL(req.url, 'http://localhost');
     p = p || url.pathname;
     m = m || req.method;
-    if (/^\/api\/(?:v1(?:\/|$)|[pr]\/)/.test(p)) { req.kbApiPrefix = '/api'; p = p.slice(4); }
+    if (/^\/api\/(?:v1(?:\/|$)|[pr]\/|mcp\/)/.test(p)) { req.kbApiPrefix = '/api'; p = p.slice(4); }
     try { await route(req, res, url, p, m); } catch (e) {
       if (!['GET', 'HEAD'].includes(m) && !req.readableEnded) req.resume();
       if (res.headersSent) { try { res.end(); } catch {} return; }
@@ -1482,7 +1648,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   }
 
   return {
-    handle, upgrade, answer, resolveTarget, logLive, logChat, trialKey, createKey, revokeKey, sendInfo,
+    handle, upgrade, answer, resolveTarget, agentLimits: AG, logLive, logChat, trialKey, createKey, revokeKey, sendInfo,
     /** The Studio's "send me this" proof link: a public /p/<id> for a trial answer (sendinfo.mjs normalizeAnswer shape). */
     proofLink: async (req, trialId, a) => proofLinkFor(req, await resolveTarget(trialId), 'studio')(a),
     /** The Studio's "send me this" link tracker (leads.mjs) for a trial, or null when tracking is off for it. */

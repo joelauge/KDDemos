@@ -13,6 +13,11 @@
 //             a product / checkout link texted from a call (server/channels/shop.mjs)
 //   link      {kind:'link', at, bot, id, target, channel, medium, linkKind, cid}  one short link we generated (/r/<id>)
 //   click     {kind:'click', at, bot, id, cid}                                     one visit to a short link
+//   agent     {kind:'agent', at, bot, outcome:'answered'|'refused'|'limited', billing:'free'|'paid'|'owner', question}
+//             one question an AI agent asked (server/agents.mjs): the usage meter for agent answers, per bot per day.
+//             'free' counts against the daily free allowance, 'paid' is metered (paid agent access on), 'owner' is a
+//             call made with the bot's own key. 'limited' is a question turned away by the free limit (at most 100 a day
+//             are recorded; the rest are only counted in memory).
 //
 // Tracked links (on by default; the owner turns it off per bot): every http(s) link a bot sends a person in a text,
 // e-mail or WhatsApp reply (the proof page, the answer's source links, checkout links) gets
@@ -259,6 +264,26 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     if (!rec || !isHttpUrl(rec.target) || now() - Number(rec.at) > keepMs) return null;
     return rec;
   }
+  /** One AI-agent question (server/agents.mjs): recorded per bot; the free allowance and the meter count these. */
+  function agent({ botId, outcome = 'answered', billing = 'free', question = '', at = null } = {}) {
+    try {
+      if (!botId) return null;
+      const ev = { v: 1, kind: 'agent', at: Number.isFinite(at) ? at : now(), bot: campaignOf(botId), outcome: ['answered', 'refused', 'limited'].includes(outcome) ? outcome : 'answered',
+        billing: ['free', 'paid', 'owner'].includes(billing) ? billing : 'free', question: oneLine(question).slice(0, 500) };
+      return append(botId, ev);
+    } catch (e) { log(`[leads] agent question not recorded: ${e.message}`); return null; }
+  }
+  /** Agent usage of one bot on one UTC day (YYYY-MM-DD): {free, paid, owner, limited, answered, refused}. */
+  async function agentDay(botId, day = new Date(now()).toISOString().slice(0, 10)) {
+    const out = { free: 0, paid: 0, owner: 0, limited: 0, answered: 0, refused: 0 };
+    for (const e of await eventsOf(botId)) {
+      if (e.kind !== 'agent' || new Date(Number(e.at)).toISOString().slice(0, 10) !== day) continue;
+      if (e.outcome === 'limited') { out.limited++; continue; }
+      out[e.billing] = (out[e.billing] || 0) + 1;
+      out[e.outcome === 'refused' ? 'refused' : 'answered']++;
+    }
+    return out;
+  }
   /** A visit to /r/<id>: → the URL to redirect to (a click is recorded unless `count` is false), or null (404). */
   async function click(id, { count = true } = {}) {
     const rec = await linkRecord(id);
@@ -301,9 +326,24 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     const sent = all.filter((e) => e.kind === 'checkout').map((e) => ({ at: iso(e.at), bot: e.bot, channel: e.channel, phone: e.phone, items: e.items, itemsText: itemsText(e.items),
       linkKind: e.linkKind, cid: e.cid || null, session: e.session || null, clickedAt: e.cid ? iso(firstClick.get(e.cid)) : null, clicks: e.cid ? clicksByCid.get(e.cid) || 0 : 0,
       ...(e.cid ? utmOf(e.cid, e.channel) : {}) })).reverse();
+    // AI agents (kind:'agent'): questions answered for other AI assistants, by outcome and billing, and per UTC day
+    const ag = all.filter((e) => e.kind === 'agent');
+    const agentDays = new Map();
+    for (const e of ag) {
+      const day = new Date(Number(e.at)).toISOString().slice(0, 10);
+      const row = agentDays.get(day) || { day, questions: 0, answered: 0, refused: 0, limited: 0, paid: 0 };
+      if (e.outcome === 'limited') row.limited++;
+      else { row.questions++; row[e.outcome === 'refused' ? 'refused' : 'answered']++; if (e.billing === 'paid') row.paid++; }
+      agentDays.set(day, row);
+    }
+    const asked = ag.filter((e) => e.outcome !== 'limited');
+    const agents = { questions: asked.length, answered: asked.filter((e) => e.outcome !== 'refused').length, refused: asked.filter((e) => e.outcome === 'refused').length,
+      limited: ag.length - asked.length, free: asked.filter((e) => e.billing === 'free').length, paid: asked.filter((e) => e.billing === 'paid').length,
+      owner: asked.filter((e) => e.billing === 'owner').length, byDay: [...agentDays.values()] };
     return {
       days: d, since: iso(since), retentionDays: keepDays,
-      leads,
+      leads, agents,
+      agentItems: asked.map((e) => ({ at: iso(e.at), bot: e.bot, outcome: e.outcome, billing: e.billing, question: e.question || '' })).reverse(),
       conversions: { sent: sent.length, clicks: sent.reduce((n, s) => n + s.clicks, 0), clickedSends: sent.filter((s) => s.clickedAt).length, items: sent },
       links: { sent: linkById.size, clicks },
     };
@@ -313,10 +353,12 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     const r = await report(botIds, { days });
     const rows = [
       ...r.leads.map((l) => ({ t: l.at, cells: [l.at, l.bot, l.channel, l.type, l.type === 'email' ? l.value : '', l.type === 'phone' ? l.value : '', l.question, l.utm_source || '', l.utm_medium || '', l.utm_campaign || '', l.cid || '', l.clickedAt || '', '', l.consent, l.session || ''] })),
+      // channel "agent": one row per question an AI agent asked (type agent_answered | agent_refused; session = free | paid | owner)
+      ...(r.agentItems || []).map((x) => ({ t: x.at, cells: [x.at, x.bot, 'agent', `agent_${x.outcome}`, '', '', x.question, '', '', '', '', '', '', '', x.billing] })),
       ...r.conversions.items.map((s) => ({ t: s.at, cells: [s.at, s.bot, s.channel, 'checkout', '', s.phone || '', '', s.utm_source || '', s.utm_medium || '', s.utm_campaign || '', s.cid || '', s.clickedAt || '', s.itemsText, 'checkout_link', s.session || ''] })),
     ].sort((a, b) => String(b.t).localeCompare(String(a.t)));
     return `${[csvRow(CSV_COLUMNS), ...rows.map((x) => csvRow(x.cells))].join('\r\n')}\r\n`;
   }
 
-  return { lead, checkout, link, click, linkRecord, report, csv, retentionDays: keepDays, idle: async () => { while (pending.size) await Promise.all([...pending]); } };
+  return { lead, checkout, link, click, agent, agentDay, linkRecord, report, csv, retentionDays: keepDays, idle: async () => { while (pending.size) await Promise.all([...pending]); } };
 }

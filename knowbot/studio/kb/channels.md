@@ -10,7 +10,19 @@ A launched KnowBot answers through three tools, and you switch their features on
 - KnowBot number: one phone number, with texts (SMS), calls (live voice) and WhatsApp.
 - Email: one inbox address. Email comes in and a cited answer goes out.
 
-Every feature uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. Set up in KnowBot Studio shows the three tools, each with its feature switches, its setup and a way to try it.
+A fourth tool, AI agents, lets other AI assistants ask your bot (see AI agents below).
+
+Every feature uses the same answering pipeline, so answers are cited and the refusal sentence is the same everywhere. Set up in KnowBot Studio shows the four tools, each with its feature switches, its setup and a way to try it.
+
+## AI agents
+
+Source: /studio/
+
+The AI agents tool lets other people's AI assistants, coding agents and shopping agents ask your bot. They get exactly the answer your chat bubble gives: the cited sources, the refusal sentence when the files don't cover a question, product cards and the follow-up question. They get answers, never your raw files.
+
+Your bot has its own agent address, a remote MCP endpoint with one tool called ask. In an AI assistant, add a custom connector (a remote MCP connection) and paste the address from Set up, AI agents. No key is needed. Coding and shopping agents can also POST a question over plain HTTP to the ask address and get the answer, its sources, product cards and the follow-up as JSON. Set up shows the address, a curl example, a snippet to add to your site so assistants can find your bot, and a Try it box.
+
+Every bot is public to AI agents by default. Switch "Public answers" off in Set up and agents get a plain message that the bot doesn't answer them; you can still test it with your bot's key. Agent questions show up in Stats & Leads as the AI agents channel, and the CSV lists each one on channel agent.
 
 ## Website: one embed line
 

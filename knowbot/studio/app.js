@@ -27,7 +27,7 @@ import * as store from './store.js?v=09e5dd0';
 import * as api from './api.js?v=09e5dd0';
 import * as motion from './motion.js?v=09e5dd0';
 import * as icons from './icons.js?v=09e5dd0';
-import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=09e5dd0';
+import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, SURFACE_TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=09e5dd0';
 import { mountShapes } from './shapes.js?v=09e5dd0';
 import { mountBuilderPane } from './builderpane.js?v=09e5dd0';
 import { siteSettings } from './sitebrand.js?v=09e5dd0';
@@ -2033,7 +2033,7 @@ function withPurpose(rows, specHint = null) {
   return rows;
 }
 
-const FIELD_LABEL = { name: 'Name', org: 'Org', purpose: 'Purpose', audience: 'Audience', tone: 'Tone', length: 'Length', greeting: 'Greeting', surfaces: 'Answers on',
+const FIELD_LABEL = { name: 'Name', org: 'Org', purpose: 'Purpose', audience: 'Audience', tone: 'Tone', length: 'Length', greeting: 'Greeting', surfaces: 'Answers on', agents: 'AI agents',
   starters: 'Starters', floor: 'Strictness', sources: 'Sources', avatar: 'Avatar', refusal: 'Refusal', email: 'Email', sampleSet: 'Sample files' };
 const MATERIAL = ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar'];
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -2090,7 +2090,7 @@ const diffVersions = (rows) => (rows && rows.version ? { fromVersion: rows.fromV
 /** PATCHes the server, applies the returned spec, posts a ConfigDiffCard. by: 'user'|'setup'|'scope'. */
 async function updateSpec(patch, { by = 'user', source = 'chat', quiet = false } = {}) {
   const clean = {};
-  for (const [k, v] of Object.entries(patch || {})) if (MATERIAL.includes(k) || k === 'email' || k === 'surfaces') clean[k] = v;
+  for (const [k, v] of Object.entries(patch || {})) if (MATERIAL.includes(k) || k === 'email' || k === 'surfaces' || k === 'agents') clean[k] = v;
   if (!Object.keys(clean).length) return null;
   await trialP;
   const prev = getState().spec;
@@ -2696,7 +2696,7 @@ function buildSpecForm() {
       h('ul', { class: 'st-starters-auto', id: 'st-spec-auto', 'aria-label': 'Suggested by your bot (auto)' }), addStarter),
     h('div', { class: 'st-field' }, h('span', { class: 'flabel st-label' }, 'Sources'), sources),
     h('fieldset', { class: 'st-field st-fieldset' }, h('legend', { class: 'flabel st-label' }, 'Answers on'),
-      h('div', { class: 'st-tools' }, TOOLS.map((t) => h('div', { class: 'st-tool', role: 'group', 'aria-labelledby': `st-tool-${t.id}` },
+      h('div', { class: 'st-tools' }, SURFACE_TOOLS.map((t) => h('div', { class: 'st-tool', role: 'group', 'aria-labelledby': `st-tool-${t.id}` },
         h('p', { class: 'st-tool-h', id: `st-tool-${t.id}` }, h('b', null, t.label), h('span', { class: 'st-tool-sub' }, ` · ${t.sub}`)),
         h('div', { class: 'st-sources st-surfaces' }, t.features.map((id) => h('div', { class: 'st-src' },
           h('input', { type: 'checkbox', id: `st-surf-${id}`, class: 'st-check', name: 'surface', value: id }),
@@ -5395,6 +5395,8 @@ function landingAction(a) {
   if (!a) return;
   if (!messages.length && !isLive()) renderB0();
   if (Array.isArray(a.surfaces)) landingSurfaces(a.surfaces);
+  // the AI agents toggle (public answers, on by default): saved only when the visitor switched it off
+  if (typeof a.agents === 'boolean' && a.agents !== (getState().spec?.agents?.public !== false)) updateSpec({ agents: { public: a.agents } }, { by: 'user', source: 'landing', quiet: true });
   if (a.text) { userSays(String(a.text).slice(0, 2000)); return; }
   const id = a.chip;
   const btn = id && $(`.st-msg-a .st-chip[data-chip="${id}"]`, logEl);
