@@ -2422,6 +2422,45 @@ describe("Didn't get the answer you needed? POST /trials/:id/notes", () => {
   });
 });
 
+describe('Teach form: pages a note links to are read and added as sources', () => {
+  test('a linked page becomes a source with the note tags; a broken link is reported, the note still saved', async () => {
+    const site = http.createServer((req, res) => {
+      if (req.url === '/robots.txt') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('User-agent: *\nAllow: /\n'); }
+      if (req.url === '/collections/weekly-games') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end('<!doctype html><html><head><title>Weekly games</title></head><body><main><h1>Weekly games</h1><p>The Everlasting Rime runs every Thursday at 7pm Eastern on Discord, with three drop-in seats each week.</p></main></body></html>');
+      }
+      res.writeHead(404, { 'content-type': 'text/html' }); res.end('<h1>Not found</h1>');
+    });
+    await new Promise((r) => site.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${site.address().port}`;
+    const S = await boot({ studio: { storeNet: { allowAddresses: ['127.0.0.1'], allowPorts: 'any', paceMs: 0 } } });
+    try {
+      const c = client(S);
+      const t = await c.trial();
+      const r = await c.json(t, '/notes', 'POST', { question: 'Does Jason run remote games?', tags: ['weekly-live-games'],
+        answer: `Yes! See the weekly games page: ${base}/collections/weekly-games. Old link: ${base}/gone.` });
+      assert.equal(r.status, 201);
+      const j = await r.json();
+      assert.equal(j.links.length, 2);
+      assert.equal(j.links[0].ok, true, JSON.stringify(j.links[0]));
+      assert.equal(j.links[0].title, 'Weekly games');
+      assert.match(j.links[0].file.name, /^notes\/links\/127\.0\.0\.1-weekly-games\.md$/);
+      assert.deepEqual([j.links[1].ok, j.links[1].reason], [false, 'That page was not found.']);
+      const row = [...S.kd.files.values()].find((f) => f.filename.endsWith('notes/links/127.0.0.1-weekly-games.md'));
+      assert.ok(row && row.tags.includes('src:note-link') && row.tags.includes('topic:weekly-live-games') && row.tags.includes(`trial:${t.trialId}`));
+      assert.match(row.text, /Thursday at 7pm Eastern/);
+      assert.match(row.text, new RegExp(`Source: ${base.replace(/[.]/g, '\\.')}/collections/weekly-games`));
+      await S.kd.settle();
+      await sleep(300);
+      const a = (await c.stream(t, '/ask', { question: 'When does The Everlasting Rime run every Thursday on Discord?' })).find((e) => e.event === 'final').data;
+      assert.equal(a.refused, false, JSON.stringify(a).slice(0, 300));
+      assert.match(a.text, /Thursday/);
+      assert.ok(a.citations.some((x) => /notes\/links\/127\.0\.0\.1-weekly-games\.md/.test(x.file || '')), JSON.stringify(a.citations.map((x) => x.file)));
+    } finally { await S.close(); await new Promise((r) => site.close(r)); }
+  });
+});
+
 describe('Start over with many files', () => {
   test('answers quickly (deletes in parallel, the rest in the background) and every file of the trial is gone', async () => {
     const S = await boot({ studio: { startOverWaitMs: 300 } });

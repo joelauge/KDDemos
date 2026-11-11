@@ -969,6 +969,14 @@ details.pf-dspan > span { display: block; margin-top: 4px; }
 .sb-tag-opt { height: 28px; padding: 0 10px; border: 1px dashed var(--line-2, var(--line)); border-radius: 999px; background: var(--panel); color: var(--strong); font: 500 13px/1 var(--font); cursor: pointer; }
 .sb-tag-opt:hover, .sb-tag-opt:focus-visible { border-style: solid; border-color: var(--accent); color: var(--accent-2); }
 @media (pointer: coarse) { .sb-tag-opt, .sb-tag-x { min-height: 36px; } }
+.sb-miss-links { list-style: none; margin: 0 0 4px; padding: 0; display: grid; gap: 6px; font-size: 13.5px; line-height: 1.45; color: var(--text); }
+.sb-miss-links li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; overflow-wrap: anywhere; }
+.sb-miss-links li svg { margin-top: 3px; }
+.sb-miss-links .is-ok svg { color: var(--good); }
+.sb-miss-links .is-bad { color: var(--muted); }
+.sb-miss-links .is-bad svg { color: var(--warn, #b45309); }
+.pf-link { color: var(--accent-2); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.pf-link:hover { color: var(--accent); }
 .sb-miss-err { margin: 6px 0 0; font-size: 13px; color: var(--bad, #b91c1c); }
 .sb-miss-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 @media (max-width: 599px) {

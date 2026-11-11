@@ -31,7 +31,7 @@ import { createResearchAgent } from './research.mjs';
 import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAnswerable } from './evidence.mjs';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS } from './providers.mjs';
-import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS } from './storeimport.mjs';
+import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS, createStoreFetcher, readPageHtml, renderMarkdown, slugOf, titleOfHtml } from './storeimport.mjs';
 import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
@@ -4074,6 +4074,59 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return { reply: clip(oneLine(j.reply), 600), patch, actions, chips: chips.slice(0, 4) };
   }
 
+  // ------------------------------------------------------------------------- note links
+  /** The distinct http(s) links in a note's text, at most NOTE_LINKS_MAX, trailing punctuation trimmed. */
+  const NOTE_LINKS_MAX = 5;
+  function linksIn(text) {
+    const out = [];
+    for (const m of String(text || '').matchAll(/\bhttps?:\/\/[^\s<>"'`“”‘’]+/gi)) {
+      let u = m[0].replace(/[).,;:!?\]}'"”’]+$/, '');
+      try { u = new URL(u).href; } catch { continue; }
+      if (!out.includes(u)) out.push(u);
+      if (out.length >= NOTE_LINKS_MAX) break;
+    }
+    return out;
+  }
+  /**
+   * Reads each linked page with the website importer's fetcher (public addresses only, robots.txt honoured, 20 MB and
+   * 12 s per page, 30 s in all) and adds it as a source: a web page as Markdown (notes/links/<host>-<slug>.md, under
+   * "# <title> · <url>" like an imported page), a PDF as itself. Tagged src:note-link plus the note's topic tags.
+   * Returns [{url, ok, file?, title?, reason?}]; a page that can't be read never fails the note.
+   */
+  async function addNoteLinks(T, urls, tags) {
+    if (!urls.length) return [];
+    const f = createStoreFetcher({ budgetMs: 30000, timeoutMs: 12000, maxBytes: 20 * 1024 * 1024, ...(o.storeNet || {}) });
+    const out = [];
+    for (const url of urls) {
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        f.allowHost(host);
+        const r = await f.get(url, { accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.5' });
+        const type = String(r.headers['content-type'] || '').toLowerCase();
+        const base = `${host.replace(/^www\./, '').replace(/[^a-z0-9.-]+/g, '-')}-${slugOf(r.url || url)}`.slice(0, 90);
+        let name, bytes, mime, title = null;
+        if (type.includes('application/pdf') || /\.pdf$/i.test(new URL(r.url || url).pathname)) {
+          name = `notes/links/${base}.pdf`; bytes = r.body; mime = 'application/pdf';
+        } else if (!type || /html|xml|text\/plain/.test(type)) {
+          const html = r.text();
+          const doc = /text\/plain/.test(type) ? { url: r.url || url, title: url, sections: [{ heading: null, text: html.slice(0, 200000) }] } : readPageHtml(html, r.url || url, { kind: 'page' });
+          title = doc.title || titleOfHtml(html) || null;
+          const md = renderMarkdown({ ...doc, url: r.url || url });
+          if (md.replace(/^#.*$/m, '').replace(/^Source:.*$/m, '').trim().length < 40) { out.push({ url, ok: false, reason: 'That page had no readable text (it may build itself with JavaScript).' }); continue; }
+          name = `notes/links/${base}.md`; bytes = Buffer.from(md, 'utf8'); mime = 'text/markdown';
+        } else { out.push({ url, ok: false, reason: 'That link is not a web page or PDF.' }); continue; }
+        if (usageOf(T, await filesOf(T)).bytes + bytes.length > QUOTA_BYTES) { out.push({ url, ok: false, reason: 'Your bot is at its 100 MB limit.' }); continue; }
+        const file = await uploadInto(T, { name, bytes, mime, extraTags: ['src:note-link', ...tags.map((t) => `topic:${t}`)] });
+        out.push({ url, ok: true, file, title });
+      } catch (e) {
+        const reason = e?.code === 'robots' ? "That site's robots.txt asks bots not to read it." : e?.code === 'blocked_host' ? "That address can't be read (only public web addresses)." :
+          e?.code === 'not_found' ? 'That page was not found.' : e?.code === 'timeout' ? 'That page took too long to answer.' : e?.code === 'too_large' ? 'That page was too large to read.' : "That page couldn't be read.";
+        out.push({ url, ok: false, reason });
+      }
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------------- note tags
   /** This bot's topic tags in knowDrive (topic:<t> on files tagged trial:<id>), as [{tag, count}], most used first. */
   async function noteTagsOf(T) {
@@ -4766,9 +4819,11 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       if (usageOf(T, files).bytes + bytes.length > QUOTA_BYTES) fail(413, 'quota', 'Your bot is at its 100 MB limit. Remove a file first.');
       const slug = (question || answer).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'note';
       const file = await uploadInto(T, { name: `notes/${slug}.md`, bytes, mime: 'text/markdown', extraTags: ['src:note', ...tags.map((t) => `topic:${t}`)] });
+      // the pages the note links to are read and added too (the owner wants what is there in the answers)
+      const links = await addNoteLinks(T, linksIn(answer), tags);
       kickPoller(T);
       const all = await filesOf(T);
-      return sendJson(res, 201, { file, tags, usage: usageOf(T, all) });
+      return sendJson(res, 201, { file, tags, links, usage: usageOf(T, all) });
     }
     if (sub === 'samples') {
       if (m === 'POST') {

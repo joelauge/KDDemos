@@ -1494,6 +1494,7 @@ export function mount(ctx) {
       if (!L.sent.querySelector('.sb-from')) splitFrom(L.sent);
       if (!L.sent.querySelector('.sb-qm')) wrapMarks(L.sent.querySelector('.sb-quote') || L.sent);
     });
+    for (const L of lines) linkifyIn(L.sent);   // a link quoted from a source is clickable in the answer too
   }
   /** "From “Title”, under “Benefits”: “quote”" -> <span.sb-from>From … Benefits</span><span.sb-quote>“quote”</span> */
   function splitFrom(sent) {
@@ -2467,7 +2468,7 @@ export function mount(ctx) {
     if (!items.length) {
       if (err) body.append(h('div', { class: 'alert alert-danger sb-err', role: 'alert' }, ico('warn', 15), h('span', null, 'Couldn’t load this passage.'), h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: () => { body.innerHTML = ''; body.append(drawerSkeleton()); renderDrawerPassage(data, body, foot); } }, ico('refresh', 13), 'Retry')));
       const fallback = q?.text || data.hit?.excerpt || '';
-      if (fallback) body.append(h('div', { class: 'pf-atom is-main' }, h('span', { class: 'pf-atom-seq sb-num' }, data.seq != null ? `atom #${data.seq + 1}` : 'atom'), h('p', null, h('mark', { class: 'pf-mark is-on' }, fallback))));
+      if (fallback) body.append(h('div', { class: 'pf-atom is-main' }, h('span', { class: 'pf-atom-seq sb-num' }, data.seq != null ? `atom #${data.seq + 1}` : 'atom'), h('p', null, h('mark', { class: 'pf-mark is-on' }, ...withLinks(fallback)))));
     } else {
       // r6: the neighbours (seq ±1) are titled and dimmed as context, so the quoted span is unambiguous even when a
       // neighbour is about another product
@@ -2487,13 +2488,13 @@ export function mount(ctx) {
           if (Array.isArray(q.offset) && t.slice(q.offset[0], q.offset[1]) === qt.slice(0, q.offset[1] - q.offset[0]) && q.offset[1] <= t.length) { [s, e] = q.offset; }
           else if (qt && t.indexOf(qt) >= 0) { s = t.indexOf(qt); e = s + qt.length; }
           if (q.derived || s == null) {
-            p.append(h('mark', { class: 'pf-mark' }, t));
+            p.append(h('mark', { class: 'pf-mark' }, ...withLinks(t)));
             span = q.derived ? 'table row' : null;
           } else {
-            p.append(t.slice(0, s), h('mark', { class: 'pf-mark' }, t.slice(s, e)), t.slice(e));
+            p.append(...withLinks(t.slice(0, s)), h('mark', { class: 'pf-mark' }, ...withLinks(t.slice(s, e))), ...withLinks(t.slice(e)));
             span = `chars ${s}–${e} of the atom’s text`;
           }
-        } else p.textContent = it.text || '';
+        } else p.append(...withLinks(it.text || ''));
         const crumb = it.meta?.breadcrumb ? h('span', { class: 'pf-atom-crumb' }, clip(it.meta.breadcrumb.split(' > ').slice(-1)[0], 40)) : null;
         body.append(h('div', { class: `pf-atom${main ? ' is-main' : ' is-ctx'}`, dataset: { seq: String(it.seq) } },
           h('span', { class: 'pf-atom-seq sb-num' }, `atom #${it.seq + 1}${r.atoms ? ` of ${r.atoms}` : ''}`, crumb ? ' · ' : '', crumb),
@@ -2513,6 +2514,32 @@ export function mount(ctx) {
         h('button', { type: 'button', class: 'btn btn-primary sb-btn sb-btn-sm sb-btn-primary', onclick: () => askAboutPassage(data) }, ico('chat', 13), 'Ask about this passage')));
   }
 
+  const URL_RE = /\bhttps?:\/\/[^\s<>"'`“”‘’]+/gi;
+  const URL_TAIL = /[).,;:!?\]}'"”’]+$/;
+  /** Links inside an answer line's text nodes become real links (not inside a link, button or citation chip). */
+  function linkifyIn(el) {
+    if (!el) return;
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest('a, button, .pf-cite') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    const nodes = []; for (let n = tw.nextNode(); n; n = tw.nextNode()) if (/https?:\/\//i.test(n.nodeValue || '')) nodes.push(n);
+    for (const n of nodes) { const parts = withLinks(n.nodeValue); if (parts.some((x) => typeof x !== 'string')) n.replaceWith(...parts); }
+  }
+  /** Text with its http(s) links as real links (new tab, no referrer): what an owner pasted into a note stays clickable. */
+  function withLinks(text) {
+    const t = String(text ?? '');
+    const out = [];
+    let at = 0;
+    for (const m of t.matchAll(URL_RE)) {
+      const url = m[0].replace(URL_TAIL, '');
+      if (m.index > at) out.push(t.slice(at, m.index));
+      let ok = false;
+      try { ok = /^https?:$/.test(new URL(url).protocol); } catch { ok = false; }
+      out.push(ok ? h('a', { class: 'pf-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, url) : url);
+      at = m.index + url.length;
+    }
+    if (at < t.length) out.push(t.slice(at));
+    return out;
+  }
+
   async function expandSource(data, body, btn) {
     btn.disabled = true;
     const seq = data.seq ?? 0;
@@ -2521,7 +2548,7 @@ export function mount(ctx) {
     catch { btn.disabled = false; toastWarn('Couldn’t load the source. Try again.'); return; }
     if (!drawer || drawer.data !== data) return;
     const list = h('ol', { class: 'pf-src-list', 'aria-label': `${data.file}: atoms` }, (r?.items || []).map((it) => h('li', { class: it.seq === data.seq ? 'is-main' : '', dataset: { seq: String(it.seq) } },
-      h('span', { class: 'pf-atom-seq sb-num' }, `#${it.seq + 1}`), h('span', null, it.text || ''))));
+      h('span', { class: 'pf-atom-seq sb-num' }, `#${it.seq + 1}`), h('span', null, ...withLinks(it.text || '')))));
     body.innerHTML = '';
     body.append(h('p', { class: 'pf-src-head' }, `${data.file} · ${plural(r?.atoms || (r?.items || []).length, 'atom')}${(r?.items || []).length < (r?.atoms || 0) ? ` · showing ${(r.items || []).length}` : ''}`), list);
     btn.textContent = '';
@@ -3286,13 +3313,19 @@ export function mount(ctx) {
       e.preventDefault();
       const answer = aIn.value.trim();
       if (answer.length < 3) { err.textContent = 'Write the information your bot should know.'; err.hidden = false; aIn.focus(); return; }
-      err.hidden = true; save.disabled = true; save.textContent = 'Saving…';
+      const nLinks = new Set((answer.match(URL_RE) || []).map((u) => u.replace(URL_TAIL, ''))).size;
+      err.hidden = true; save.disabled = true; save.textContent = nLinks ? `Saving and reading ${Math.min(nLinks, 5)} linked ${nLinks === 1 ? 'page' : 'pages'}…` : 'Saving…';
       try {
         if (tIn.value.trim()) { addTag(tIn.value); tIn.value = ''; }
         const r = await api.addNote({ question: qIn.value.trim(), answer, tags: [...picked] });
         formEl.replaceChildren(
           h('h2', { class: 'sb-miss-h' }, ico('checkCircle', 18), ' Saved'),
           h('p', { class: 'sb-miss-sub' }, `Your bot is learning it now as ${r?.file?.name || 'a new source'}${r?.tags?.length ? `, tagged ${r.tags.join(', ')}` : ''}. Ask again in a moment and it will answer from it.`),
+          ...(r?.links?.length ? [h('ul', { class: 'sb-miss-links', 'aria-label': 'Linked pages' }, r.links.map((l) => {
+            let host = l.url; try { host = new URL(l.url).hostname.replace(/^www\./, ''); } catch {}
+            return h('li', { class: l.ok ? 'is-ok' : 'is-bad' }, ico(l.ok ? 'checkCircle' : 'warn', 14),
+              h('span', null, l.ok ? h('span', null, 'Also learning the linked page ', h('b', null, l.title || host), ` (${host})`) : h('span', null, `Couldn’t read ${host}: ${l.reason}`)));
+          }))] : []),
           h('div', { class: 'sb-miss-actions' }, h('button', { type: 'button', class: 'btn btn-primary', onclick: () => { missDlg.close(); const q = qIn.value.trim(); if (q) setComposer(q); ta.focus(); } }, 'Done')));
         emit('note:added', { fileId: r?.file?.id, tags: r?.tags || [] });
       } catch (x) {
