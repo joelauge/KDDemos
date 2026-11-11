@@ -328,7 +328,8 @@ async function journey(browser, dev, cell) {
   // r7: chips are named "<visible text>: citation, atom n" (axe label-content-name-mismatch), so select by data-n
   const citeCount = await page.locator('#sb-thread-slot button.pf-cite[data-n="1"]').count();
   check('05-first-answer', 'answer has a [1] chip', citeCount > 0 || /\[1/.test(threadText), { detail: `${citeCount} citation buttons` });
-  check('05-first-answer', 'pill says "From your files"', /From your files/.test(threadText));
+  // simple view hides the grounding pill (it stays in the DOM; "Show details" shows it)
+  check('05-first-answer', 'pill says "From your files"', /From your files/.test(threadText) || await page.evaluate(() => /From your files/.test(document.querySelector('#sb-thread-slot .sb-pill')?.textContent || '')));
   const geo5 = await page.evaluate(() => { const b = document.getElementById('st-bot').getBoundingClientRect(); const t = document.getElementById('sb-thread-slot').getBoundingClientRect(); return { pane: Math.round(b.height), thread: Math.round(t.height) }; });
   check('05-first-answer', 'thread gets ≥ 50% of the bot pane', geo5.thread >= geo5.pane * 0.5, { detail: `${geo5.thread}/${geo5.pane}` });
   const price5 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);

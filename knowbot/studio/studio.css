@@ -1540,7 +1540,6 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 /* Builder: the right pane already lists the files; at most two suggestions per message; the spec card shows the
    new values only */
 :root:not([data-details="on"]) .in-card-sum { display: none !important; }
-:root:not([data-details="on"]) .st-chips > .st-chip:nth-of-type(n+3) { display: none !important; }
 :root:not([data-details="on"]) :is(.st-diff-from, .st-diff-arrow, .st-diff-lock) { display: none !important; }
 /* Keep this bot: the send is the action; "No thanks" is a small grey link */
 :root:not([data-details="on"]) .st-email .btn-primary { background: color-mix(in srgb, var(--accent) 12%, transparent) !important; color: var(--accent) !important; border-color: transparent !important; }
