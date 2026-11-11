@@ -3,7 +3,7 @@
 // goodbye. No phone number and no Twilio: the call runs over the web voice socket in phone mode
 // (GET <api>/v1/bots/:id/voice/live, {type:'start', mode:'phone'}; server/channels/webvoice.mjs).
 //
-//   import { mountPhone } from './phonesim.js?v=da53fe0';
+//   import { mountPhone } from './phonesim.js?v=8edc9a1';
 //   const sim = mountPhone(el, { endpoint, key, botName, number?, starters? });   sim.stop()
 //
 // Engines (the server decides): gemini = voice to voice (16 kHz PCM16 up, 24 kHz PCM16 down, full duplex like a real

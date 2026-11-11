@@ -11,7 +11,7 @@
 // (POST <api>/api/v1/bots/:bot/chat, streamed). Answers show their quotes as blocks with [n] marks and a Sources list:
 // a website page links to the page itself, an uploaded file to the answer's proof page. No framework, no build step.
 // The Studio's preview passes the owner's trial key in the URL fragment (#k=…): never sent anywhere but the API.
-import { hostedApi } from '../lib/site-config.js?v=da53fe0';
+import { hostedApi } from '../lib/site-config.js?v=8edc9a1';
 
 const me = new URL(import.meta.url);
 const tag = [...document.querySelectorAll('script[src]')].find((s) => s.src === me.href) || document.querySelector('script[src*="site.js"]');
