@@ -28,7 +28,7 @@ export const DEFAULT_SURFACES = ['webchat'];
 
 /** The three tools of the plan, each with its features (spec.surfaces ids) in the order the switches show. */
 export const TOOLS = [
-  { id: 'website', label: 'Website', sub: 'One embed line', blurb: 'One line on your site turns on the chat bubble, voice and homepage search.',
+  { id: 'website', label: 'Website', sub: 'A chat bubble on your site', blurb: 'One line on your site turns on the chat bubble, voice and homepage search.',
     features: ['webchat', 'webvoice', 'site'] },
   { id: 'number', label: 'KnowBot number', sub: 'One phone number', blurb: 'One number for texts, live phone calls and WhatsApp.',
     features: ['sms', 'phone', 'whatsapp'] },

@@ -489,7 +489,7 @@ async function journey(browser, dev, cell) {
   await page.waitForTimeout(1500);
 
   // 11 proof run
-  const ranChip = await clickBuilderChip(page, cell, /Proof Run/i);
+  const ranChip = await clickBuilderChip(page, cell, /Proof Run|trip it up/i);
   if (!ranChip) await builderSay(page, cell, 'run the proof run');
   const sc = await page.waitForFunction(() => { const c = document.querySelector('#st-log [data-card="scorecard"]'); return c && /8\/8/.test(c.innerText) && /3\/3/.test(c.innerText); }, null, { timeout: 60000 }).then(() => true).catch(() => false);
   const scText = await page.evaluate(() => document.querySelector('#st-log [data-card="scorecard"]')?.innerText || '');

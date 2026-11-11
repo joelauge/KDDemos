@@ -1170,20 +1170,6 @@ textarea.st-text { resize: vertical; }
 
 /* ================================================================== r6 fixes (owner B) */
 
-/* D1: the first turn previews the three steps (desktop); it collapses when the first file lands */
-.st-next { list-style: none; margin: 14px 0 0; padding: 12px 14px; display: grid; gap: 10px; border-radius: 12px; border: 1px dashed var(--line-2); background: color-mix(in srgb, var(--panel-2) 70%, transparent); counter-reset: none; }
-.st-next li { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; font-size: 13px; line-height: 1.4; color: var(--muted); }
-.st-next li > b { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-2); font: 600 11.5px/1 var(--mono); }
-.st-next li > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.st-next strong { color: var(--strong); font-weight: 600; }
-@media (max-width: 899px), (max-height: 640px) { .st-next { display: none; } }
-@media (prefers-reduced-motion: no-preference) {
-  :root:not([data-motion="reduce"]) .st-next li { animation: st-next-in var(--dur-3, 320ms) var(--ease-out, ease-out) both; }
-  :root:not([data-motion="reduce"]) .st-next li:nth-child(2) { animation-delay: 90ms; }
-  :root:not([data-motion="reduce"]) .st-next li:nth-child(3) { animation-delay: 180ms; }
-}
-@keyframes st-next-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-
 /* D1: the map's sample entry is a quiet text link on phones only (desktop: the Builder chip is the one primary) */
 @media (min-width: 900px) { .st-hero { display: none !important; } }
 .st-hero-go.st-hero-link {
@@ -1593,7 +1579,7 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 .st-ftue-x { margin-left: auto; flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; margin-right: -6px; border: 0; border-radius: 8px;
   background: transparent; color: var(--muted); cursor: pointer; }
 .st-ftue-x:hover { background: var(--raise); color: var(--strong); }
-.st-ftue-x:focus-visible, .st-ftue-link:focus-visible, .st-ftue-tab:focus-visible, .st-ftue-tool:focus-visible, .st-ftue-pre:focus-visible, .st-ftue-panel:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
+.st-ftue-x:focus-visible, .st-ftue-link:focus-visible, .st-ftue-tool:focus-visible, .st-ftue-pre:focus-visible { outline: var(--st-focus); outline-offset: 2px; }
 .st-ftue-main { display: grid; gap: 8px; margin-top: 4px; min-width: 0; }
 .st-ftue-h { margin: 0; font: 600 15.5px/1.35 var(--display, var(--font)); color: var(--strong); }
 .st-ftue-h:focus { outline: none; }
@@ -1628,19 +1614,9 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 .st-ftue-note { margin: 0; font: 400 12.5px/1.4 var(--font); color: var(--muted); }
 .st-ftue-note:empty { display: none; }
 .st-ftue-next { display: grid; gap: 8px; min-width: 0; }
-.st-ftue-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
-.st-ftue-tab { flex: none; min-height: 36px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; color: var(--muted);
-  font: 500 13px/1 var(--font); cursor: pointer; white-space: nowrap; }
-.st-ftue-tab:hover { color: var(--strong); }
-.st-ftue-tab[aria-selected="true"] { color: var(--strong); border-bottom-color: var(--accent); }
-.st-ftue-panel { display: grid; gap: 8px; min-width: 0; padding-top: 2px; }
 .st-ftue-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font: 400 13.5px/1.5 var(--font); color: var(--text); }
-.st-ftue-code { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); min-width: 0; }
 .st-ftue-pre { margin: 0; padding: 10px 12px; max-height: 180px; overflow: auto; font: 400 12px/1.55 var(--mono); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
-.st-ftue-codebar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 4px 10px; border-top: 1px solid var(--line); }
 .st-ftue-foot { padding-top: 4px; }
-.st-ftue-stats { margin: 2px 0 0; font: 400 12.5px/1.5 var(--font); color: var(--muted); }
-.st-ftue-stats .st-ftue-link { min-height: 0; font-size: 12.5px; }
 .st-ftue-link.is-inline { padding: 0; }
 @media (max-width: 899px) {
   .st-ftue, .st-ftue[data-step="done"] { margin: 6px var(--st-gutter) 6px; max-height: 56vh; }
@@ -1672,3 +1648,56 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
   :root:not([data-details="on"]) .st-bot:has(#st-bot-banner:not([hidden])) > div:has(> .sh-bar) { position: static; height: auto; padding: 6px var(--st-gutter) 0; overflow: visible; }
 }
 :root:not([data-details="on"]) .st-bothead-right { flex: none; white-space: nowrap; }
+/* ---------------------------------------------------------------------------------------------------------------
+   First-time guide, round 2: while steps 1-4 show (<html data-ftue="on">) the guide is the only source of the next
+   action. Everything that repeats it waits; dismissing or finishing the guide brings it all back. */
+/* Builder chips that repeat the guide's action (ids, never labels: client and server ids) */
+:root[data-ftue="on"] .st-chip:is([data-chip="use_samples"], [data-chip="samples"], [data-chip="upload_files"], [data-chip="upload"],
+  [data-chip="import_store"], [data-chip="store"], [data-chip="ask_starter"], [data-chip="ask-starter"], [data-chip="ask-it"], [data-chip="ask_ready"],
+  [data-chip="ask_probe"], [data-chip="offtopic"], [data-chip="show-refusal"], [data-chip="trick"], [data-chip="run_proof"], [data-chip="proof"],
+  [data-chip="rerun"], [data-chip="channels"], [data-chip="wait"]) { display: none !important; }
+/* the suggestion row, the empty-state line, the example answer, the phone peek and its sample link */
+:root[data-ftue="on"] :is(.sb-empty, .st-ghostpeek, #st-hero) { display: none !important; }
+/* the suggestion row waits for the whole guide (its button stands in for it; on step 5 the card needs the room) */
+:root[data-ftue] #sb-suggest-slot { display: none !important; }
+:root[data-ftue="on"] #sb-thread-slot .sb-ghost { display: none !important; }
+:root[data-ftue="on"] #sb-thread-slot:not(:has(.sb-answer)) { display: grid; place-items: center; }
+:root[data-ftue="on"] #sb-thread-slot:not(:has(.sb-answer))::before { content: 'Ask your bot anything. It answers only from your files.'; display: block; padding: 0 var(--st-gutter);
+  border: 0; background: none; box-shadow: none; color: var(--muted); font: 400 17px/1.4 var(--display, var(--font)); text-align: center; }
+/* reading: one progress indicator (the guide's); the Sources box's tracker and its buttons wait */
+:root[data-ftue="on"] #in-intake-slot :is(.in-eta, .in-rm-samples, .in-btn-add) { display: none !important; }
+/* the bot's name appears once it has one (no "SampleBot" placeholder that flips mid-step) */
+:root[data-ftue="on"] .st-botchip.is-placeholder :is(.st-botchip-name, .st-avatar, .st-botchip-edit) { visibility: hidden; }
+/* Stats & Leads waits until there is something to show; the composer's extra ⋯ waits too */
+:root[data-ftue="on"] #st-leads, :root[data-ftue="on"] #sb-composer-slot .sb-more { display: none !important; }
+/* the card docks right above the composer; the thread above it scrolls, so nothing sits behind the card */
+.st-bot > .st-ftue { margin-top: 8px; margin-bottom: 4px; }
+/* step 5, view B: the line, one Copy, three steps; the other ways behind a quiet disclosure */
+.st-ftue-next .st-ftue-pre { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); max-height: 96px; }
+.st-ftue-other { display: grid; gap: 4px; padding-top: 2px; }
+.st-ftue-other[hidden] { display: none; }
+.st-ftue-row { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; font: 400 13px/1.5 var(--font); color: var(--muted); }
+.st-ftue-chev { display: inline-block; width: 7px; height: 7px; margin-left: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translateY(-2px); }
+.st-ftue-more[aria-expanded="true"] .st-ftue-chev { transform: rotate(225deg) translate(-1px, -1px); }
+.st-ftue-finish { color: var(--muted); margin-left: auto; }
+.st-ftue-foot { justify-content: space-between; }
+/* phones: a bottom sheet over the composer; its action shows without scrolling inside it */
+@media (max-width: 899px) {
+  .st-ftue, .st-ftue[data-step="done"] { margin: 0; border-width: 1px 0 0; border-radius: 16px 16px 0 0; max-height: 60vh; padding: 12px var(--st-gutter) 12px; }
+  .st-ftue-next .st-ftue-pre { max-height: 76px; }
+  /* the sheet keeps its room on step 5 too: no suggestion row or extra ⋯ beside it; the three tools are one row */
+  :root[data-ftue] #sb-suggest-slot, :root[data-ftue] #sb-composer-slot .sb-more { display: none !important; }
+  .st-ftue-tools { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .st-ftue-tool { flex-direction: column; align-items: flex-start; gap: 4px; min-height: 64px; padding: 8px 22px 8px 8px; font-size: 13px; }
+  .st-ftue-tool-t small { display: none; }
+  .st-ftue-steps { font-size: 13px; }
+}
+/* "Free to build" is a plain grey line, not a button outline; Stats & Leads has no border in either theme */
+.st-price[data-level="ghost"], .st-price[data-level="ghost"]:hover { border-color: transparent; background: transparent; color: var(--muted); padding-inline: 6px; }
+.st-hlink:not(.is-guide-pulse) { border: 0 !important; box-shadow: none !important; }
+/* the note form: tags behind "More options" */
+.sb-miss-moreopts { align-self: flex-start; margin-top: 6px; padding: 4px 0; border: 0; background: transparent; color: var(--accent-2); font: 500 13px/1.3 var(--font); cursor: pointer; }
+.sb-miss-moreopts:hover { text-decoration: underline; text-underline-offset: 3px; }
+.sb-miss-moreopts:focus-visible { outline: var(--st-focus); outline-offset: 2px; border-radius: 4px; }
+.sb-miss-more { display: flex; flex-direction: column; gap: 6px; }
+.sb-miss-more[hidden] { display: none; }

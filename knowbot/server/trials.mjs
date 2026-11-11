@@ -3432,10 +3432,10 @@ export function createStudio(o = {}) {
     // fixer r4: with no files nothing can be tested yet: files first, the spec second, never a Proof Run
     if (!files.length) return [C('upload', 'Upload files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } })];
     if (step === 'purpose' || step === 'sources') return [C('samples', 'Use sample files', { kind: 'primary', action: { type: 'attach_samples' } }), C('upload', 'Upload my files', { action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-canonical', "What's a canonical bot?", { send: "What's a canonical bot?" })];
-    if (step === 'learn' && !ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
+    if (step === 'learn' && !ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })];
     if (step === 'launch') return [C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' }), C('what-get', 'What do I get?', { send: 'What do I get?' })];
-    if (!ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })];
-    return [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }), C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('shorter', 'Make answers shorter', { send: 'Make answers shorter' })];
+    if (!ready.length) return [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })];
+    return [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }), C('proof', 'Try to trip it up', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('shorter', 'Make answers shorter', { send: 'Make answers shorter' })];
   }
   /** fixer r4: a pending naming proposal ("Call it Northwind Guide?") stays the first chip until it is answered. */
   function pendingName(T, files) {
@@ -3601,7 +3601,7 @@ export function createStudio(o = {}) {
     if (has('attach_samples')) {
       // fixer r7: this is the one "Loading…" line; the samples_attached turn that follows only adds the draft card
       T.flags.samplesAckTurn = T.setupTurns;
-      return { reply: withNotes(`${diff.length ? `${confirmChanges(diff)} ` : ''}Loading Lumen Bikes' sample docs (warranty, service plans, store FAQ, price list). Watch them learn on the right.`), actions: [{ type: 'attach_samples' }], patch, chips: [C('what-atom', "What's an atom?", { send: "What's an atom?" }), C('upload', 'Upload my files too', { action: { type: 'request_upload' } })] };
+      return { reply: withNotes(`${diff.length ? `${confirmChanges(diff)} ` : ''}Loading Lumen Bikes' sample docs (warranty, service plans, store FAQ, price list). Watch them learn on the right.`), actions: [{ type: 'attach_samples' }], patch, chips: [C('upload', 'Upload my files too', { action: { type: 'request_upload' } })] };
     }
     if (has('run_proof') && !diff.length) {
       if (!ready.length) return { reply: `${name} needs at least one ready file before a Proof Run.`, chips: stepChips(T, files) };
@@ -3664,7 +3664,7 @@ export function createStudio(o = {}) {
       const chips = [];
       if (lastQ && preview?.material) chips.push(C('reask', `Re-ask "${clip(lastQ, 36)}" to compare`, { kind: 'primary', action: { type: 'ask_samplebot', question: lastQ, label: 'Re-ask' } }));
       chips.push(C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } }));
-      if (ready.length) chips.push(C('proof', 'Run the Proof Run', { action: { type: 'run_proof', mini: false } })); else chips.push(C('add-files', 'Add more files', { action: { type: 'request_upload' } }));
+      if (ready.length) chips.push(C('proof', 'Try to trip it up', { action: { type: 'run_proof', mini: false } })); else chips.push(C('add-files', 'Add more files', { action: { type: 'request_upload' } }));
       return { reply: withNotes(`Done: ${lowerFirst(confirmChanges(diff, alreadySet)).replace(/\.$/, '') || words.join(', ')}.${toneNote}${strictNote}`), patch, actions: acts.filter((a) => a.type !== 'show_launch'), chips };
     }
     if (Object.keys(patch).length && !diff.length && preview) {
@@ -3686,7 +3686,7 @@ export function createStudio(o = {}) {
     }
     if (has('ack')) {
       if (!files.length) return { reply: 'Great. Now give it something to know: drop files on the right, or use my samples.', chips: stepChips(T, files) };
-      if (!ready.length) return { reply: `Great. ${name} is still learning: I'll tell you the moment the first file is ready.`, chips: [C('what-atom', "What's an atom?", { send: "What's an atom?" }), C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
+      if (!ready.length) return { reply: `Great. ${name} is still learning: I'll tell you the moment the first file is ready.`, chips: [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
       return { reply: `Great. Ask ${name} anything on the right, or let me test it for you.`, chips: stepChips(T, files) };
     }
     if (/\bkeep the name\b/i.test(msg)) { T.flags.namingDeclined = true; saveSpecSoon(T); return { reply: `Okay, it stays ${name} for now. Rename it anytime: type "call it …".`, chips: stepChips(T, files) }; }
@@ -3779,7 +3779,7 @@ export function createStudio(o = {}) {
     const offLine = off ? ` ${off === 1 ? `"${clip(d.offTopic[0].q, 50)}" was off-topic, and refusing it was right.` : `${off} were off-topic, and refusing them was right.`}` : '';
     const tail = gap ? ` The top gap is "${clip(gap.q, 70)}": add a file that covers it and ${name} answers it next time.${offLine}` : d.refused ? offLine || ' No content gaps so far.' : ' Every one was answered from your files.';
     return { reply: `${lead}${tail}`, card: { type: 'insights', data: d },
-      chips: [gap ? C('add-gap', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }) : C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
+      chips: [gap ? C('add-gap', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }) : C('proof', 'Try to trip it up', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('launch', launchLabel(T), { action: { type: 'show_launch' } })] };
   }
   function inventoryReply(T, files) {
     const name = botName(T);
@@ -3935,7 +3935,7 @@ export function createStudio(o = {}) {
         // fixer r5: only offer to suggest a name while the bot still has the default one
         const then = T.spec.name && T.spec.name !== 'SampleBot' ? `and draft starter questions for ${T.spec.name}` : 'first so I can suggest a name that fits';
         return { reply: n ? `Got ${plural(n, 'file')} (${size}). I'll read them ${then}.` : `Got your files. I'll read them ${then}.`,
-          chips: [C('what-atom', "What's an atom?", { send: "What's an atom?" }), C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
+          chips: [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
       }
       case 'file_atomized': {
         if (T.flags.atomizedSaid) return { reply: '', chips: stepChips(T, files) };
@@ -3957,7 +3957,7 @@ export function createStudio(o = {}) {
           reply += `\n\n${naming.why} Call it **${naming.name}**?`;
           return { reply, chips: [C('name-yes', `Call it ${naming.name}`, { kind: 'primary', send: `Call it ${naming.name}` }), C('rename', 'Suggest another', { send: 'Rename it' }), C('keep-name', 'Not now', { send: 'Keep the name' })] };
         }
-        return { reply, chips: [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('what-atom', "What's an atom?", { send: "What's an atom?" })] };
+        return { reply, chips: [C('formal', 'Make it more formal', { send: 'Make it more formal' }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
       }
       case 'file_ready': {
         const starter = T.questionsCache?.value?.starters?.[0]?.q || (sampleOnly(files) ? 'How long is the frame warranty?' : null);
@@ -3993,7 +3993,7 @@ export function createStudio(o = {}) {
         T.flags.firstAnswerSaid = true;
         const k = a.quotes || 1, f = a.files.length || 1;
         return { reply: `That's your first cited answer: ${plural(k, 'quote')} from ${plural(f, 'file')}. Hover the [1] to see the exact line. Now try to break it.`,
-          chips: [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }), C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('shorter', 'Make answers shorter', { send: 'Make answers shorter' })] };
+          chips: [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }), C('proof', 'Try to trip it up', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('shorter', 'Make answers shorter', { send: 'Make answers shorter' })] };
       }
       case 'close_miss':
       case 'refusal': {
@@ -4009,7 +4009,7 @@ export function createStudio(o = {}) {
           return { reply: `Close miss: best match ${pct(best)}. Add a file about "${clip(q, 60)}"? Your bot won't guess, so the fix is more content.`,
             chips: [C('add-file', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }), C('rephrase', 'Rephrase it for me', { send: `Rephrase: ${q}` })] };
         }
-        if (a?.status === 'guard') return { reply: 'Nice try: that was a trick question, and your bot declined it with its fixed rules instead of improvising. Instructions inside a question never change what it does.', chips: [C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-cover', 'Add a file that covers this', { action: { type: 'request_upload' } })] };
+        if (a?.status === 'guard') return { reply: 'Nice try: that was a trick question, and your bot declined it with its fixed rules instead of improvising. Instructions inside a question never change what it does.', chips: [C('proof', 'Try to trip it up', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-cover', 'Add a file that covers this', { action: { type: 'request_upload' } })] };
         if (a?.status === 'refused' && best != null && best >= floor && !PROBES.includes(q)) {
           return { reply: `Your files mention this (best match ${pct(best)}), but no line answers "${clip(q, 60)}" directly, so it refused instead of stitching a guess. Add a file that says it outright, or ask it another way.`,
             chips: [C('add-file', 'Add a file', { kind: 'primary', action: { type: 'request_upload' } }), C('rephrase', 'Rephrase it for me', { send: `Rephrase: ${q}` })] };
@@ -4017,10 +4017,12 @@ export function createStudio(o = {}) {
         // fixer r8 (D2): an off-topic question (far below the floor, or general knowledge) is praised, never framed as
         // missing content; "add a file" is only offered for a near miss
         const offTopic = refusalReasonOf({ q, status: a?.status, best, floor }) !== 'near_miss';
-        return { reply: `Exactly right: nothing in your files scored above the ${fmtFloor(floor)} floor${best != null ? ` (best was ${pct(best)})` : ''}, so it refused instead of guessing. That refusal is the feature.${offTopic ? ' Off-topic questions should get exactly this answer.' : ''}`,
+        // plain words by default; the floor and the best score only when the owner has "Show details" on
+        const plainWhy = "Nothing in your files covers that, so it said it doesn't know. That's exactly what you want.";
+        return { reply: context?.details ? `Exactly right: nothing in your files scored above the ${fmtFloor(floor)} floor${best != null ? ` (best was ${pct(best)})` : ''}, so it refused instead of guessing. That refusal is the feature.${offTopic ? ' Off-topic questions should get exactly this answer.' : ''}` : plainWhy,
           chips: offTopic
-            ? [C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('trick', 'Try a trick question', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[2], label: null } })]
-            : [C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-cover', 'Add a file that covers this', { action: { type: 'request_upload' } }), C('trick', 'Try a trick question', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[2], label: null } })] };
+            ? [C('proof', 'Try to trip it up', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('trick', 'Try a trick question', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[2], label: null } })]
+            : [C('proof', 'Try to trip it up', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-cover', 'Add a file that covers this', { action: { type: 'request_upload' } }), C('trick', 'Try a trick question', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[2], label: null } })] };
       }
       case 'proof_done': {
         const { passed, total: totalQ } = proofScore(d.score || d);
@@ -4059,7 +4061,7 @@ export function createStudio(o = {}) {
         const lastQ = lastQuestion(T);
         if (!files.length) return { reply: `Saved. ${name} is on v${T.spec.version}. Next, give it something to know.`, chips: stepChips(T, files) };
         return { reply: `Saved. ${name} is on v${T.spec.version}.`, chips: [...(lastQ ? [C('reask', `Re-ask "${clip(lastQ, 36)}" to compare`, { kind: 'primary', action: { type: 'ask_samplebot', question: lastQ, label: 'Re-ask' } })] : []), C('open-spec', 'Open bot spec', { action: { type: 'open_spec' } }),
-          ready.length ? C('proof', 'Run the Proof Run', { action: { type: 'run_proof', mini: false } }) : C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
+          ready.length ? C('proof', 'Try to trip it up', { action: { type: 'run_proof', mini: false } }) : C('add-files', 'Add more files', { action: { type: 'request_upload' } })] };
       }
       default:
         return { reply: '', chips: stepChips(T, files) };

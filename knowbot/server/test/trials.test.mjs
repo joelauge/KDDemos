@@ -921,7 +921,7 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.match(reply, /^Done, meet \*\*Spokes\*\*: a friendly support bot for your bike shop\./);
     assert.doesNotMatch(reply, /Bike shop called/);
     const chips = ev.find((e) => e.event === 'chips').data.chips.map((x) => x.label);
-    assert.ok(!chips.includes('Run the Proof Run'), 'no Proof Run without files');
+    assert.ok(!chips.includes('Try to trip it up'), 'no Proof Run without files');
     assert.equal((await (await c.json(t, '')).json()).spec.org, 'Spokes');
   });
 

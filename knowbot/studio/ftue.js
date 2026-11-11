@@ -5,12 +5,19 @@
 //   1  Add knowledge     sample files / upload / website / a note        → a file exists (milestones.firstFile)
 //   2  Reading           "n of m ready", plain words about the wait      → milestones.firstReady
 //   3  Ask a question    one suggested question from the bot's starters  → milestones.firstCited
-//   4  Try to trip it up an off-topic question (or the full test)        → milestones.firstRefusal or .proofRun
-//   5  Done              a short celebration, "Where should it answer?" (the plan's three tools, saved as
-//                        spec.surfaces like the landing), then "What's next?" (the website line three ways) + Launch
+//   4  Try to trip it up an off-topic question                           → milestones.firstRefusal or .proofRun,
+//                        and only once that reply has fully rendered (the proof is never covered mid-answer)
+//   5  Done              view A: a short celebration (kept above the card, ~1 s), "Your bot is ready" + "Where should
+//                        it answer?" (the plan's three tools, saved as spec.surfaces like the landing). View B: "Put it
+//                        on your site": the website line with Copy as the one action, three steps, and the AI-agent
+//                        prompt / developer e-mail behind a quiet "Other ways"; Stats & Leads gets one gentle pulse.
 //
-// Placement: in the flow of the bot pane, just above the suggested questions and the composer (desktop), or above
-// the composer of whichever pane is showing (phones). State lives in localStorage 'kb-ftue':
+// While steps 1-4 show, the guide is the only source of the next action: <html data-ftue="on"> lets studio.css hide
+// the Builder chips, the suggestion row and the empty-state line that repeat it (and the busy example answer). Step 5
+// sets data-ftue="done"; dismissing or finishing removes the attribute and everything comes back.
+//
+// Placement: docked in the flow of the bot pane just above the composer (desktop), or above the composer of
+// whichever pane is showing (phones: a bottom sheet). The thread above it scrolls. State lives in localStorage 'kb-ftue':
 //   { status: 'active' | 'dismissed' | 'done', phase: 'tools' | 'next', celebrated, tab }
 // A returning visitor who dismissed or finished never sees it again unless they pick ⋯ → "Show the guide".
 //
@@ -89,7 +96,7 @@ export function mountFtue(ctx, hooks = {}) {
     const tab = getState().ui?.tab;
     let parent, before;
     if (isMobile() && tab === 'setup') { parent = document.getElementById('st-setup'); before = parent?.querySelector('.st-composer-wrap'); }
-    else { parent = document.getElementById('st-bot'); before = document.getElementById('sb-suggest-slot'); }
+    else { parent = document.getElementById('st-bot'); before = document.getElementById('sb-composer-slot'); }
     if (!parent) return;
     if (card.parentElement !== parent || card.nextElementSibling !== (before || null)) {
       const hadFocus = card.contains(document.activeElement);
@@ -132,14 +139,37 @@ export function mountFtue(ctx, hooks = {}) {
     return st || (hooks.starters ? hooks.starters()[0] : '') || '';
   }
 
+  // The last step waits until the refusal that earned it has fully rendered (no answer still streaming), plus a beat
+  // to read it: the celebration never lands on top of the proof.
+  let holdSince = 0, holdT = 0;
+  function doneReady() {
+    const busy = !!document.querySelector('#sb-thread-slot .sb-answer[aria-busy="true"]');
+    if (busy) holdSince = 0;
+    else if (!holdSince) holdSince = performance.now();
+    if (holdSince && performance.now() - holdSince >= 900) return true;
+    if (!holdT) holdT = setTimeout(() => { holdT = 0; schedule(); }, 250);
+    return false;
+  }
+  /** After the card changes size, the thread shows the end of the latest answer (nothing sits behind the card). */
+  function keepLatestInView() {
+    const t = document.getElementById('sb-thread-slot');
+    if (!t || card.parentElement !== document.getElementById('st-bot')) return;
+    const down = () => { t.scrollTop = t.scrollHeight; };
+    requestAnimationFrame(down);
+    setTimeout(down, 320);   // again once the card's entrance (and any late layout) has settled
+  }
+
   function render(force = false) {
     raf = 0;
-    if (!visible()) { if (!card.hidden) card.hidden = true; document.documentElement.toggleAttribute('data-ftue', false); return; }
+    const root = document.documentElement;
+    if (!visible()) { if (!card.hidden) card.hidden = true; if (root.hasAttribute('data-ftue')) root.removeAttribute('data-ftue'); return; }
     place();
-    const step = ftueStep(getState());
+    let step = ftueStep(getState());
+    if (step === 'done' && !saved.celebrated && !doneReady()) step = shownStep && shownStep !== 'done' ? shownStep : 'trip';
     const phase = step === 'done' ? (saved.phase || 'tools') : '';
     if (card.hidden) card.hidden = false;
-    document.documentElement.toggleAttribute('data-ftue', true);
+    const flag = step === 'done' ? 'done' : 'on';
+    if (root.getAttribute('data-ftue') !== flag) root.setAttribute('data-ftue', flag);
     card.dataset.step = step;
     if (step === 'reading' && shownStep === 'reading' && !force) { paintReading(); return; }
     if (step === 'ask' && shownStep === 'ask' && !force) { paintAsk(); return; }
@@ -157,6 +187,7 @@ export function mountFtue(ctx, hooks = {}) {
       if (!reduced()) motion?.animate?.(card, [{ opacity: 0.4, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'out' });
       // the step changed because of something the visitor did inside the guide: keep the keyboard with the guide
       if (hadFocus && card.isConnected && document.activeElement !== document.getElementById('sb-input')) card.querySelector('.st-ftue-h')?.focus({ preventScroll: true });
+      keepLatestInView();
     }
     if (step === 'done' && !saved.celebrated) { save({ celebrated: true }); celebrate(); }
     if (step === 'done' && phase === 'next') pulseStats();
@@ -200,11 +231,10 @@ export function mountFtue(ctx, hooks = {}) {
     }
     if (step === 'trip') {
       return frame('trip', {
-        title: 'Now try to trip it up',
+        title: 'Try to trip it up',
         body: 'Ask something your files don’t cover. A good bot says it doesn’t know instead of guessing.',
         actions: h('div', { class: 'st-ftue-acts' },
-          btn('Ask something off-topic', () => probe(), { primary: true, cls: 'st-ftue-probe' }),
-          btn('Run the full test', () => hooks.runTest?.(), { cls: 'is-inline st-ftue-test', attrs: { title: 'Real questions from your files, plus a few it must refuse' } })),
+          btn('Ask something off-topic', () => probe(), { primary: true, cls: 'st-ftue-probe' })),
       });
     }
     // ---- done
@@ -277,63 +307,62 @@ export function mountFtue(ctx, hooks = {}) {
     return [head, main];
   }
 
-  // ---- step 5b: what's next?
-  const TABS = [['agent', 'Ask your AI agent'], ['dev', 'Send to your developer'], ['diy', 'Do it yourself']];
+  // ---- step 5b: put it on your site (one recommended path; the others behind a quiet disclosure)
   function buildNext() {
     const s = getState();
     const on = new Set(normalizeSurfaces(s.spec?.surfaces));
     const website = TOOLS[0].features.some((f) => on.has(f));
     const liveNow = !!hooks.isLive?.();
-    const launch = liveNow ? null : btn('Launch', () => hooks.launch?.(), { primary: true, cls: 'st-ftue-launch' });
-    const stats = h('p', { class: 'st-ftue-stats' }, 'Check your stats any time in ',
-      btn('Stats & Leads', () => hooks.openStats?.(), { cls: 'is-inline st-ftue-statslink' }), isMobile() ? ' (in the ⋯ menu).' : ' at the top.');
-    const finish = btn('Finish the guide', () => finishGuide(), { cls: 'is-inline st-ftue-finish' });
-    const back = btn('Change where it answers', () => { save({ phase: 'tools' }); render(true); }, { cls: 'is-inline' });
-    let body;
+    const done = btn('Done', () => finishGuide(), { cls: 'is-inline st-ftue-finish' });
     if (!website) {
-      body = h('div', { class: 'st-ftue-next' },
-        h('p', { class: 'st-ftue-p' }, 'Your number and inbox are set up from Set up, and they start answering once you launch.'),
-        btn('Open Set up', () => hooks.openSetup?.(), { cls: 'is-inline' }));
-    } else {
-      body = whatsNextTabs();
+      return frame('done', {
+        title: 'Put it to work',
+        body: liveNow ? 'Your number and inbox are set up from Set up.' : 'Your number and inbox are set up from Set up. They start answering once you launch.',
+        actions: h('div', { class: 'st-ftue-acts' }, btn('Open Set up', () => hooks.openSetup?.(), { primary: true }), done),
+      });
     }
-    const [head, main] = frame('done', {
-      title: 'What’s next?',
-      body: liveNow ? 'Your bot is live. Put it on your website one of three ways.' : 'Put it on your website one of three ways. It starts answering visitors once you launch.',
-      extra: body,
-      actions: h('div', { class: 'st-ftue-acts st-ftue-foot' }, launch, finish, back),
+    const holder = h('div', { class: 'st-ftue-next' }, h('p', { class: 'st-ftue-p', role: 'status' }, 'Getting your line…'));
+    const parts = frame('done', {
+      title: 'Put it on your site',
+      body: liveNow ? 'Paste one line into your site and visitors can ask it right away.' : 'Paste one line into your site. It starts answering visitors once you launch.',
+      extra: holder,
     });
-    main.append(stats);
-    return [head, main];
+    snippet().then((line) => {
+      if (!holder.isConnected) return;
+      const real = line && typeof line === 'object' ? line.copy : line;
+      const shown = line && typeof line === 'object' ? line.display : line;
+      if (!real) { holder.replaceChildren(h('p', { class: 'st-ftue-p' }, 'Your website line isn’t available right now. Open Set up to copy it.'), h('div', { class: 'st-ftue-acts' }, btn('Open Set up', () => hooks.openSetup?.(), { primary: true }), done)); return; }
+      holder.replaceChildren(...nextContent(real, shown, done));
+    });
+    return parts;
   }
 
-  function whatsNextTabs() {
-    const wrap = h('div', { class: 'st-ftue-next' });
-    const tl = h('div', { class: 'st-ftue-tabs', role: 'tablist', 'aria-label': 'Ways to add it to your website' });
-    const panel = h('div', { class: 'st-ftue-panel', role: 'tabpanel', id: 'st-ftue-panel', tabindex: '0' });
-    let cur = TABS.some(([k]) => k === saved.tab) ? saved.tab : 'agent';
-    const tabs = TABS.map(([k, label]) => h('button', { type: 'button', role: 'tab', class: 'st-ftue-tab', id: `st-ftue-tab-${k}`, 'aria-controls': 'st-ftue-panel', dataset: { tab: k },
-      onclick: () => select(k, false) }, label));
-    tl.append(...tabs);
-    tl.addEventListener('keydown', (e) => {
-      const i = TABS.findIndex(([k]) => k === cur);
-      let j = null;
-      if (e.key === 'ArrowRight') j = (i + 1) % TABS.length;
-      else if (e.key === 'ArrowLeft') j = (i + TABS.length - 1) % TABS.length;
-      else if (e.key === 'Home') j = 0; else if (e.key === 'End') j = TABS.length - 1;
-      if (j == null) return;
-      e.preventDefault(); select(TABS[j][0], true);
-    });
-    function select(k, focus) {
-      cur = k; save({ tab: k });
-      for (const b of tabs) { const sel = b.dataset.tab === k; b.setAttribute('aria-selected', String(sel)); b.tabIndex = sel ? 0 : -1; }
-      panel.setAttribute('aria-labelledby', `st-ftue-tab-${k}`);
-      if (focus) tabs.find((b) => b.dataset.tab === k)?.focus();
-      paintPanel(panel, k);
-    }
-    wrap.append(tl, panel);
-    select(cur, false);
-    return wrap;
+  function nextContent(real, shown, done) {
+    const status = h('span', { class: 'st-sr', role: 'status' });
+    const copyLine = copyButton(h('button', { type: 'button', class: 'btn btn-primary st-ftue-go st-ftue-copy', dataset: { copy: real } }, h('span', null, 'Copy the line')), real, 'Line copied', status);
+    const agent = agentPrompt(real);
+    const dev = devMessage(real);
+    const mail = `mailto:?subject=${encodeURIComponent('Add our KnowBot chat to the website')}&body=${encodeURIComponent(dev)}`;
+    const otherId = 'st-ftue-other';
+    const other = h('div', { class: 'st-ftue-other', id: otherId, hidden: true },
+      h('p', { class: 'st-ftue-row' }, h('span', null, 'Using an AI coding agent? '),
+        copyButton(h('button', { type: 'button', class: 'st-ftue-link is-inline st-ftue-copy-agent', dataset: { copy: agent } }, h('span', null, 'Copy a prompt for it')), agent, 'Prompt copied', status)),
+      h('p', { class: 'st-ftue-row' }, h('span', null, 'Someone else looks after your site? '),
+        h('a', { class: 'st-ftue-link is-inline st-ftue-mail', href: mail }, h('span', null, 'Email them the steps')), h('span', { 'aria-hidden': 'true' }, ' · '),
+        copyButton(h('button', { type: 'button', class: 'st-ftue-link is-inline st-ftue-copy-dev', dataset: { copy: dev } }, h('span', null, 'Copy the message')), dev, 'Message copied', status)));
+    const more = h('button', { type: 'button', class: 'st-ftue-link is-inline st-ftue-more', 'aria-expanded': 'false', 'aria-controls': otherId,
+      onclick: () => { const open = other.hidden; other.hidden = !open; more.setAttribute('aria-expanded', String(open)); } },
+    h('span', null, 'Other ways'), h('span', { class: 'st-ftue-chev', 'aria-hidden': 'true' }));
+    return [
+      h('pre', { class: 'st-ftue-pre', tabindex: '0', 'aria-label': 'Your website line' }, h('code', null, shown)),
+      h('div', { class: 'st-ftue-acts' }, copyLine, status),
+      h('ol', { class: 'st-ftue-steps' },
+        h('li', null, 'Copy the line.'),
+        h('li', null, 'In your site’s editor, find where you add code to every page. It’s often called “Custom code”, “Footer scripts” or “Code injection”.'),
+        h('li', null, 'Paste it just before </body> and save. Open your site to see the chat bubble.')),
+      h('div', { class: 'st-ftue-acts st-ftue-foot' }, more, done),
+      other,
+    ];
   }
 
   function snippet() {
@@ -341,17 +370,6 @@ export function mountFtue(ctx, hooks = {}) {
     const sig = `${getState().trial.id}|${surf}|${!!getState().trial.converted}`;
     if (!snippetP || snippetFor !== sig) { snippetFor = sig; snippetP = Promise.resolve(hooks.websiteLine?.()).catch(() => null); }
     return snippetP;
-  }
-
-  function paintPanel(panel, k) {
-    panel.replaceChildren(h('p', { class: 'st-ftue-p', role: 'status' }, 'Getting your line…'));
-    snippet().then((line) => {
-      if (!panel.isConnected) return;
-      const real = line && typeof line === 'object' ? line.copy : line;
-      const shown = line && typeof line === 'object' ? line.display : line;
-      if (!real) { panel.replaceChildren(h('p', { class: 'st-ftue-p' }, 'Your website line isn’t available right now. Open Set up to copy it.')); return; }
-      panel.replaceChildren(...panelContent(k, real, shown));
-    });
   }
 
   function agentPrompt(line) {
@@ -383,40 +401,17 @@ export function mountFtue(ctx, hooks = {}) {
     ].join('\n');
   }
 
-  function panelContent(k, real, shown) {
-    if (k === 'agent') {
-      const text = agentPrompt(real);
-      return [h('p', { class: 'st-ftue-p' }, 'Paste this into your AI coding agent. It says exactly where the line goes and how to check it.'),
-        codeBox(agentPrompt(shown), text, 'Copy prompt', 'Prompt copied')];
-    }
-    if (k === 'dev') {
-      const text = devMessage(real);
-      const mail = `mailto:?subject=${encodeURIComponent('Add our KnowBot chat to the website')}&body=${encodeURIComponent(text)}`;
-      return [h('p', { class: 'st-ftue-p' }, 'A short message with the line and the steps.'),
-        codeBox(devMessage(shown), text, 'Copy message', 'Message copied',
-          h('a', { class: 'st-ftue-link is-inline st-ftue-mail', href: mail }, h('span', { 'aria-hidden': 'true', class: 'st-ftue-ico', html: icon('mail', 15) }), h('span', null, 'Open in email')))];
-    }
-    return [h('ol', { class: 'st-ftue-steps' },
-      h('li', null, 'Copy the line below.'),
-      h('li', null, 'In your site’s editor, find where you can add code to every page. It’s often called “Custom code”, “Footer scripts” or “Code injection”.'),
-      h('li', null, 'Paste it just before </body>, save, and open your site to see the chat bubble.')),
-      codeBox(shown, real, 'Copy line', 'Line copied')];
-  }
-
-  function codeBox(display, copy, label, done, extra = null) {
-    const status = h('span', { class: 'st-sr', role: 'status' });
-    const copyBtn = h('button', { type: 'button', class: 'st-ftue-link is-inline st-ftue-copy', dataset: { copy } },
-      h('span', { 'aria-hidden': 'true', class: 'st-ftue-ico', html: icon('copy', 15) }), h('span', null, label));
-    copyBtn.addEventListener('click', async () => {
-      const ok = await copyText(copy);
-      const lab = copyBtn.lastChild;
+  /** Wires a copy button: it copies `text`, says so in words for a moment, and tells screen readers. */
+  function copyButton(el, text, doneMsg, status) {
+    const lab = el.lastChild;
+    const label = lab.textContent;
+    el.addEventListener('click', async () => {
+      const ok = await copyText(text);
       lab.textContent = ok ? 'Copied' : 'Select and copy';
-      status.textContent = ok ? done : 'Copy didn’t work here. Select the text and copy it.';
+      status.textContent = ok ? doneMsg : 'Copy didn’t work here. Select the text and copy it.';
       setTimeout(() => { lab.textContent = label; }, 1800);
     });
-    return h('div', { class: 'st-ftue-code' },
-      h('pre', { class: 'st-ftue-pre', tabindex: '0', 'aria-label': label.replace(/^Copy /, '') }, h('code', null, display)),
-      h('div', { class: 'st-ftue-codebar' }, copyBtn, extra, status));
+    return el;
   }
 
   async function copyText(t) {
@@ -436,7 +431,11 @@ export function mountFtue(ctx, hooks = {}) {
     fireworks(card);
   }
 
+  /** ~1 s of sparks that rise from the card's top edge and stay above it (clipped there), never over its words. */
   function fireworks(anchor) {
+    const r = anchor.getBoundingClientRect();
+    const ceiling = Math.max(0, r.top - 2);
+    if (ceiling < 40) return;
     const cv = h('canvas', { class: 'st-ftue-fireworks', 'aria-hidden': 'true' });
     document.body.append(cv);
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -445,22 +444,22 @@ export function mountFtue(ctx, hooks = {}) {
     const g = cv.getContext('2d');
     if (!g) { cv.remove(); return; }
     g.scale(dpr, dpr);
+    g.beginPath(); g.rect(0, 0, W, ceiling); g.clip();
     const cs = getComputedStyle(document.documentElement);
     const colors = ['--accent', '--f0', '--f2', '--f4', '--f5', '--f7', '--f6'].map((v) => cs.getPropertyValue(v).trim()).filter(Boolean);
     if (!colors.length) colors.push('#6c5ce7');
-    const r = anchor.getBoundingClientRect();
     const origins = [
-      { x: r.left + r.width * 0.5, y: r.top + 10, at: 0 },
-      { x: r.left + r.width * 0.2, y: r.top + 24, at: 260 },
-      { x: r.left + r.width * 0.8, y: r.top + 18, at: 480 },
+      { x: r.left + r.width * 0.5, y: ceiling, at: 0 },
+      { x: r.left + r.width * 0.22, y: ceiling, at: 140 },
+      { x: r.left + r.width * 0.78, y: ceiling, at: 260 },
     ];
     const parts = [];
     const spawn = (o) => {
-      const n = 44;
+      const n = 36;
       for (let i = 0; i < n; i++) {
-        const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
-        const sp = 2.6 + Math.random() * 3.6;
-        parts.push({ x: o.x, y: o.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1.6, life: 0, max: 1000 + Math.random() * 600, c: colors[(i + o.at) % colors.length], s: 2 + Math.random() * 2 });
+        const a = -Math.PI * (0.08 + 0.84 * (i / (n - 1))) + (Math.random() - 0.5) * 0.15;   // upward fan only
+        const sp = 3 + Math.random() * 3.4;
+        parts.push({ x: o.x, y: o.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0, max: 620 + Math.random() * 260, c: colors[(i + o.at) % colors.length], s: 1.8 + Math.random() * 1.8 });
       }
     };
     const t0 = performance.now();
@@ -474,7 +473,7 @@ export function mountFtue(ctx, hooks = {}) {
       const k = dt / 16.7;
       for (const p of parts) {
         p.life += dt;
-        p.vx *= Math.pow(0.97, k); p.vy = p.vy * Math.pow(0.97, k) + 0.06 * k;
+        p.vx *= Math.pow(0.96, k); p.vy = p.vy * Math.pow(0.96, k) + 0.08 * k;
         p.x += p.vx * k; p.y += p.vy * k;
         const a = Math.max(0, 1 - p.life / p.max);
         if (!a) continue;
@@ -482,7 +481,7 @@ export function mountFtue(ctx, hooks = {}) {
         g.fillStyle = p.c;
         g.beginPath(); g.arc(p.x, p.y, p.s, 0, Math.PI * 2); g.fill();
       }
-      if (el < 1900) requestAnimationFrame(tick); else cv.remove();
+      if (el < 1000) requestAnimationFrame(tick); else cv.remove();
     };
     requestAnimationFrame(tick);
   }

@@ -3409,6 +3409,10 @@ export function mount(ctx) {
     api.noteTags?.().then((r) => { known = Array.isArray(r?.tags) ? r.tags : []; paintTags(); }).catch(() => {});
     paintTags();
     const err = h('p', { class: 'sb-miss-err', role: 'alert', hidden: true });
+    const tagsBox = h('div', { class: 'sb-miss-more', id: 'sb-miss-more', hidden: true },
+      h('label', { for: 'sb-miss-t' }, 'Tags ', h('span', { class: 'sb-miss-opt' }, '(optional)')), tagBox, hint, sugg);
+    const moreOpts = h('button', { type: 'button', class: 'sb-miss-moreopts', 'aria-expanded': 'false', 'aria-controls': 'sb-miss-more',
+      onclick: () => { const open = tagsBox.hidden; tagsBox.hidden = !open; moreOpts.setAttribute('aria-expanded', String(open)); if (open) tIn.focus(); } }, 'More options');
     const save = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Save and teach my bot');
     const cancel = h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => missDlg.close() }, 'Cancel');
     const formEl = h('form', { class: 'sb-miss-form', method: 'dialog', novalidate: true },
@@ -3419,7 +3423,8 @@ export function mount(ctx) {
           h('label', { for: 'sb-miss-q' }, 'A question it answers ', h('span', { class: 'sb-miss-opt' }, '(optional)')), qIn]
         : [h('label', { for: 'sb-miss-q' }, 'The question'), qIn,
           h('label', { for: 'sb-miss-a' }, 'The answer your bot should give'), aIn]),
-      h('label', { for: 'sb-miss-t' }, 'Tags ', h('span', { class: 'sb-miss-opt' }, '(optional)')), tagBox, hint, sugg,
+      // tags are an extra: behind a quiet "More options" so the form asks for one thing first
+      moreOpts, tagsBox,
       err, h('div', { class: 'sb-miss-actions' }, cancel, save));
     formEl.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3605,7 +3610,7 @@ export function mount(ctx) {
         el.append(h('hr', { role: 'separator' }));
       }
       if (readiness().ready.length) el.append(menuItem('Didn’t get the answer you needed?', { icoName: 'plus', onSelect: () => { closeMenu(); openMiss({ invoker: moreBtn }); } }));
-      el.append(menuItem('Run the Proof Run', { icoName: 'flask', onSelect: () => { closeMenu(); emit('proof:run', { mini: false }); } }));
+      el.append(menuItem('Try to trip it up', { icoName: 'flask', onSelect: () => { closeMenu(); emit('proof:run', { mini: false }); } }));
       el.append(menuItem(getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Show Proof view', { icoName: 'shieldCheck', onSelect: () => { closeMenu(true); emit('view:set', { view: getState().ui.view === 'proof' ? 'bot' : 'proof' }); } }));
       const last = [...answers.values()].filter((x) => x.final && x.by !== 'proof').pop();
       if (last) el.append(menuItem('Copy last answer with sources', { icoName: 'copy', onSelect: () => { closeMenu(true); copyText(answerAsText(last)); } }));
