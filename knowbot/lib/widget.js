@@ -1,7 +1,7 @@
 // KnowBot UI: floating widget, inline panel, full-page chat. Plain ESM, imports the core library.
-import { KnowBot } from './knowbot.js?v=cac62cd';
+import { KnowBot } from './knowbot.js?v=abbc025';
 
-const CSS_URL = new URL('./knowbot.css?v=cac62cd', import.meta.url).href;
+const CSS_URL = new URL('./knowbot.css?v=abbc025', import.meta.url).href;
 let uid = 0;
 
 /* ---------- tiny safe markdown ---------- */
@@ -143,7 +143,7 @@ class ChatView {
     const bot = encodeURIComponent(v.bot);
     try {
       const [{ openVoiceMode }, orb] = await Promise.all([
-        import('./voice-mode.js?v=cac62cd'),
+        import('./voice-mode.js?v=abbc025'),
         v.orb ? v.orb : fetch(`${api}/v1/channels/${bot}`, { credentials: 'omit' }).then((r) => (r.ok ? r.json() : null)).then((j) => j?.channels?.webVoice?.orb).catch(() => null),
       ]);
       if (this.voiceBox !== box) return;
