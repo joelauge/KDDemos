@@ -24,7 +24,7 @@
 // mountFtue(ctx, hooks) → { show(), dismiss(), active(), step() }. app.js passes the actions as hooks so this module
 // never reaches into the Builder's internals. Customer-facing copy never names a vendor.
 
-import { TOOLS, normalizeSurfaces } from './surfaces.js?v=8bb7c43';
+import { TOOLS, normalizeSurfaces } from './surfaces.js?v=09e5dd0';
 
 export const FTUE_KEY = 'kb-ftue';
 const STEP_KEYS = ['add', 'reading', 'ask', 'trip', 'done'];

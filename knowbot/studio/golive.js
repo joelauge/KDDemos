@@ -21,10 +21,10 @@
 // setup and Try it below; the Website tool also shows its one embed line, which follows the switches. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
 // engine and phone prompt as a real call.
 
-import { mountWidget } from './kdw.js?v=8bb7c43';
-import { mountNumbers, numberCache } from './numbers.js?v=8bb7c43';
-import { siteSettings } from './sitebrand.js?v=8bb7c43';
-import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel } from './surfaces.js?v=8bb7c43';
+import { mountWidget } from './kdw.js?v=09e5dd0';
+import { mountNumbers, numberCache } from './numbers.js?v=09e5dd0';
+import { siteSettings } from './sitebrand.js?v=09e5dd0';
+import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel } from './surfaces.js?v=09e5dd0';
 
 const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -37,7 +37,7 @@ export function ensureCss() {
     if (document.querySelector('link[data-gl-css]')) { resolve(); return; }
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = new URL('./golive.css?v=8bb7c43', import.meta.url).href;
+    link.href = new URL('./golive.css?v=09e5dd0', import.meta.url).href;
     link.dataset.glCss = '1';
     link.onload = () => resolve();
     link.onerror = () => resolve();
@@ -1268,7 +1268,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(note, host);
     let sim = null, stopped = false;
     voices.push({ stop() { stopped = true; try { sim && sim.stop(); } catch { /* ignore */ } sim = null; } });
-    loadDev().then(() => import('./phonesim.js?v=8bb7c43')).then(({ mountPhone }) => {
+    loadDev().then(() => import('./phonesim.js?v=09e5dd0')).then(({ mountPhone }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.remove(); voices.push(voiceTry(el, { mode: 'phone' })); return; }
