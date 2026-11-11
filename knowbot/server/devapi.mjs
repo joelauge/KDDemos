@@ -613,7 +613,8 @@ export function createDevApi(o = {}) {
         similarity: round4(sims.get(c.filename) ?? null) };
     });
     const hits = (refused ? candidates : results).slice(0, 6).map(hitView);
-    // product cards (web surfaces only: the web chat and the Homepage search ask with cards; SMS, voice and phone never)
+    // product cards (web surfaces only: the web chat, the Homepage search and the website's voice mode ask with cards;
+    // SMS and phone calls never)
     let products = [];
     if (cards && !refused && (fin.citations || []).length) {
       const pageUrlOf = (r) => (r ? r.url || storePageHead(r.crumb || r.title, r.text)?.url || null : null);
@@ -1320,8 +1321,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
           if (target.kind === 'live') return { keyId: null };
           throw new ApiError(401, 'missing_api_key', 'A trial bot needs its trial key (kb_trial_…) in the start message.');
         },
-        ask: async (question, { callerKey }) => {
-          const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'voice', callerKey });
+        ask: async (question, { callerKey, cards = false }) => {
+          // cards: the website's voice mode shows the cited products' cards under the spoken answer (like web chat)
+          const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'voice', callerKey, cards });
           a.proofId = a.refused ? null : saveProof(a, 'voice');
           a.proofUrl = proofUrlFor(req, a.proofId);
           rememberAnswer(`${target.id}|voice|${callerKey}`, a, req);

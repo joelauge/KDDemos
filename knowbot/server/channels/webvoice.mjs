@@ -25,8 +25,10 @@
 //   server → {type:'ready', engine, bot:{id,name}, greeting, input:{rate:16000}, output:{rate:24000}, maxSeconds, note?}
 //            {type:'transcript', role:'user'|'agent', text, delta:true}      captions (gemini engine)
 //            binary PCM16 LE 24 kHz mono                                    the model's voice (gemini engine)
-//            {type:'searching', query}  {type:'citations', query, refused, say, citations:[{n,title,file,url?}], proofUrl}
-//            {type:'answer', question, text, spoken, refused, citations, proofUrl}   (text engine)
+//            {type:'searching', query}  {type:'citations', query, refused, say, citations:[{n,title,file,url?}], proofUrl, products?}
+//            {type:'answer', question, text, spoken, refused, citations, proofUrl, products?}   (text engine)
+//            products: the product cards the answer cites (up to 4: {url, title, price, compareAt, currency, availability,
+//            image}), shown under the answer like the web chat's; web sessions only (never the phone simulator), never spoken
 //            {type:'interrupted'}  {type:'turn_complete'}  {type:'error', code, message}  {type:'end', reason}
 //
 // Access: a launched bot is public (like the chat widget) and rate limited per IP by devapi.mjs; a trial bot needs its
@@ -88,6 +90,14 @@ export function webToolDeclarations({ org, sendInfo = null }) {
   ] }];
 }
 
+/** The product cards a browser shows under a voice answer (the web chat's cards; up to 4, http(s) links only); [] on a refusal. */
+export function productList(a) {
+  if (a?.refused || !Array.isArray(a?.products)) return [];
+  return a.products.filter((p) => p && typeof p.url === 'string' && /^https?:\/\//.test(p.url) && p.title).slice(0, 4)
+    .map(({ url, title, price = null, compareAt = null, currency = null, availability = null, image = null }) => ({ url, title, price, compareAt, currency, availability, image }));
+}
+const withProducts = (a) => { const p = productList(a); return p.length ? { products: p } : {}; };
+
 /** The citations a browser shows as chips: number, human title, file, and the source page when there is one. */
 export function citationChips(a) {
   return (a?.refused ? [] : a?.citations || []).slice(0, 6).map((c) => ({ n: c.n, title: humanTitle(c), file: c.file || null, ...(c.url && /^https?:\/\//.test(c.url) ? { url: c.url } : {}) }));
@@ -141,7 +151,8 @@ export function handleWebVoice(ws, cx) {
   async function ask(q) {
     questions += 1;
     if (questions > MAX_QUESTIONS_PER_SESSION) throw Object.assign(new Error('question limit reached'), { limit: true });
-    return cx.ask(String(q || '').slice(0, 1000), { callerKey });
+    // product cards ride along on the website's voice mode (shown, never spoken); the phone simulator stays voice-only
+    return cx.ask(String(q || '').slice(0, 1000), { callerKey, cards: !phone });
   }
   const names = [cx.botName, cx.org].filter(Boolean);
 
@@ -161,7 +172,7 @@ export function handleWebVoice(ws, cx) {
     }
     const spoken = a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false });
     transcript.push({ role: 'user', text: q }, { role: 'agent', text: spoken });
-    sendJson({ type: 'answer', question: q, text: a.refused ? NOT_IN_DATA : a.answer, spoken, refused: !!a.refused, citations: citationChips(a), proofUrl: a.proofUrl || null });
+    sendJson({ type: 'answer', question: q, text: a.refused ? NOT_IN_DATA : a.answer, spoken, refused: !!a.refused, citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a) });
   }
 
   // ---------------------------------------------------------------- gemini engine
@@ -239,7 +250,7 @@ export function handleWebVoice(ws, cx) {
     let note;
     if (engine === 'gemini') {
       runShared = createToolRunner({ ask: (q) => ask(q).then((a) => {
-        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false }), citations: citationChips(a), proofUrl: a.proofUrl || null });
+        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false }), citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a) });
         return a;
       }), sendInfo: cx.sendInfo ? (x) => cx.sendInfo({ ...x, callerKey }) : null, env, botName: cx.botName, org: cx.org, callSid: sid, log, getTranscript: () => transcript });
       try { session = await openGemini(); } catch (e) {

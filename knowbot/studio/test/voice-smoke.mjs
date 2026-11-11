@@ -9,11 +9,15 @@
 //   - the Studio's web chat: the mic opens voice mode over the bot pane in the saved colour; End and Esc close it;
 //   - the Homepage search: the mic opens voice mode in the saved colour, the orb hears the fake mic, a typed question is
 //     answered (thinking → speaking, sources as links, transcript), Esc goes back to the search box, then closes;
-//     light and dark; no page errors; the overlay still leaks no globals.
+//     light and dark; no page errors; the overlay still leaks no globals;
+//   - product cards in the chat bubble's voice mode (lib/embed.js, a bot that imported the fake store), desktop and phone:
+//     a product answer shows the web chat's cards under the spoken answer (new-tab links, named, focusable, inside the
+//     panel), its product page is not repeated as a source chip, nothing spoken holds a URL; a policy answer shows no cards.
 //
 //   node studio/test/voice-smoke.mjs                    # screenshots to studio/test/screens/voice/ (not committed)
 //   VOICE_SHOTS=/some/dir node studio/test/voice-smoke.mjs
 import path from 'node:path';
+import http from 'node:http';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -28,7 +32,8 @@ const PRESETS = ['ocean', 'violet', 'sunset', 'mint', 'ruby', 'midnight', 'silve
 let failed = 0;
 const check = (cell, name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${cell} ${name}${detail ? ` · ${String(detail).slice(0, 300)}` : ''}`); return ok; };
 
-const dev = await startDevServer({ speed: 4, quiet: true });
+// one IP opens more voice sessions here than the default 6 a minute (every check opens its own)
+const dev = await startDevServer({ speed: 4, quiet: true, env: { KNOWBOT_WEBVOICE_RATE_LIMIT: '30' } });
 const api = (p, init = {}) => fetch(`${dev.url}${p}`, init);
 let browser = null;
 try {
@@ -272,6 +277,87 @@ try {
     check('denied', 'a blocked mic is explained in words, the orb rests, typing stays available', /Microphone access is blocked/.test(e.err) && e.state === 'idle' && e.input, JSON.stringify(e));
     await page.screenshot({ path: path.join(SHOTS, 'overlay-voice-mic-denied.png') });
     await ctx.close();
+  }
+
+  // ------------------------------------------------------------------ product cards in the chat bubble's voice mode
+  {
+    const s = await (await api('/api/studio/trials', { method: 'POST' })).json();
+    const SH = { authorization: `Bearer ${s.token}`, 'content-type': 'application/json' };
+    await (await api(`/api/studio/trials/${s.trialId}/store`, { method: 'POST', headers: SH, body: JSON.stringify({ url: dev.shopUrl, owner: true }) })).text();
+    for (let i = 0; i < 480; i++) {
+      const f = await (await api(`/api/studio/trials/${s.trialId}/files`, { headers: SH })).json();
+      if (f.files?.length >= 5 && f.files.every((x) => x.stage === 'ready')) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const key = (await (await api(`/api/studio/trials/${s.trialId}/devkey`, { headers: SH })).json()).key;
+    check('cards', 'a store bot with a trial key', /^kb_trial_/.test(key || ''));
+    const home = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lumen Bikes</title></head><body><h1>Ride further.</h1>
+<script type="module" src="${dev.url}/lib/embed.js" data-api="${dev.url}" data-bot="${s.trialId}" data-key="${key}" data-chat="on" data-voice="on" data-homepage="off"></script></body></html>`);
+    });
+    await new Promise((r) => home.listen(0, '127.0.0.1', r));
+    const homeUrl = `http://127.0.0.1:${home.address().port}/`;
+    try {
+      for (const v of [{ name: 'desktop', viewport: { width: 1280, height: 860 } }, { name: 'phone', viewport: { width: 390, height: 844 }, mobile: true }]) {
+        const cell = `cards-${v.name}`;
+        const ctx = await browser.newContext({ viewport: v.viewport, colorScheme: 'light', deviceScaleFactor: 2, ...(v.mobile ? { isMobile: true, hasTouch: true } : {}) });
+        // every utterance handed to the browser's speech synthesis, to check nothing spoken holds a URL
+        await ctx.addInitScript(() => {
+          window.__spoken = [];
+          const S = window.SpeechSynthesis?.prototype;
+          if (S?.speak) { const orig = S.speak; S.speak = function (u) { window.__spoken.push(String(u?.text || '')); return orig.call(this, u); }; }
+        });
+        const page = await ctx.newPage();
+        const errors = [];
+        page.on('pageerror', (e) => errors.push(e.message));
+        await page.goto(homeUrl, { waitUntil: 'load' });
+        await page.waitForSelector('.kb-launcher', { timeout: 20000 });
+        await page.click('.kb-launcher');
+        await page.waitForSelector('.kb-mic', { timeout: 10000 });
+        await page.click('.kb-mic');
+        await page.waitForSelector('.kb-voice .kbvm[data-engine]', { state: 'attached', timeout: 20000 })
+          .catch(async (e) => { throw new Error(`${cell}: voice mode did not connect (${await page.locator('.kb-voice').innerText().catch(() => '?')})`, { cause: e }); });
+        const input = page.locator('.kb-voice .kbvm-type input');
+        await input.fill('How much is the Commuter Lite?');
+        await input.press('Enter');
+        const got = await page.waitForFunction(() => {
+          const vm = document.querySelector('.kb-voice .kbvm');
+          const a = vm?.querySelector('.kbvm-prods .kb-products .kb-prod');
+          if (!a || vm.querySelectorAll('.kbvm-log li').length < 2 || !window.__spoken.length) return null;
+          const ul = a.closest('.kb-products'), panel = vm.closest('.kb-root') || vm, pr = panel.getBoundingClientRect(), ur = ul.getBoundingClientRect();
+          a.focus();
+          return {
+            href: a.href, target: a.target, rel: a.rel, label: a.getAttribute('aria-label') || '', title: a.querySelector('.kb-prod-t')?.textContent, price: a.querySelector('.kb-prod-p')?.textContent || '',
+            focused: (a.getRootNode().activeElement || document.activeElement) === a, display: getComputedStyle(ul).display, ox: getComputedStyle(ul).overflowX,
+            inPanel: ur.left >= pr.left - 1 && ur.right <= pr.right + 1, pageOverflow: document.scrollingElement.scrollWidth > innerWidth + 1,
+            underCaption: !!(vm.querySelector('.kbvm-cap').compareDocumentPosition(ul) & Node.DOCUMENT_POSITION_FOLLOWING),
+            chipLinks: [...vm.querySelectorAll('a.kbvm-chip')].map((x) => x.href), chipText: [...vm.querySelectorAll('.kbvm-chip')].map((x) => x.textContent),
+            orbTop: vm.querySelector('.kbvm-stage').getBoundingClientRect().top >= (vm.closest('.kb-voice') || vm).getBoundingClientRect().top - 1, spoken: window.__spoken.slice(), cap: vm.querySelector('.kbvm-cap').textContent,
+          };
+        }, null, { timeout: 30000 }).then((x) => x.jsonValue()).catch(() => null);
+        check(cell, 'a product answer shows the web chat’s card under the spoken answer: new-tab link, named, focusable',
+          !!got && got.href === `${dev.shopUrl}/products/commuter-lite` && got.target === '_blank' && /noopener/.test(got.rel) && /Commuter Lite/.test(got.label) && /opens in a new tab/.test(got.label)
+          && got.title === 'Commuter Lite' && /799/.test(got.price) && got.focused && got.underCaption, JSON.stringify(got));
+        check(cell, 'the cards use the shared styles, scroll sideways inside the panel, no page overflow', !!got && got.display === 'flex' && /auto|scroll/.test(got.ox) && got.inPanel && !got.pageOverflow, JSON.stringify(got && { display: got.display, ox: got.ox, inPanel: got.inPanel, pageOverflow: got.pageOverflow }));
+        check(cell, 'the product page is not repeated as a source chip', !!got && !got.chipLinks.some((h) => /\/products\/commuter-lite/.test(h)) && !got.chipText.some((t) => /Commuter Lite|https?:/.test(t)), JSON.stringify(got && [got.chipLinks, got.chipText]));
+        check(cell, 'the orb is not clipped at the top of the panel', !!got && got.orbTop);
+        check(cell, 'nothing spoken or captioned holds a URL', !!got && got.spoken.length > 0 && got.spoken.every((t) => !/https?:|www\./i.test(t)) && !/https?:|www\./i.test(got.cap), JSON.stringify(got && { spoken: got.spoken, cap: got.cap }));
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: path.join(SHOTS, `bubble-voice-cards-${v.name}.png`) });
+        // a policy answer: sources as chips, no cards
+        await input.fill('Can I return a bike?');
+        await input.press('Enter');
+        const pol = await page.waitForFunction(() => {
+          const vm = document.querySelector('.kb-voice .kbvm');
+          return vm && vm.querySelectorAll('.kbvm-log li').length >= 4 && vm.dataset.state !== 'thinking'
+            ? { cards: vm.querySelectorAll('.kb-prod').length, chips: vm.querySelectorAll('.kbvm-chip').length, prods: vm.querySelector('.kbvm-prods').children.length } : null;
+        }, null, { timeout: 30000 }).then((x) => x.jsonValue()).catch(() => null);
+        check(cell, 'a policy answer shows its sources as chips and no product cards', !!pol && pol.cards === 0 && pol.prods === 0 && pol.chips >= 1, JSON.stringify(pol));
+        check(cell, 'no page errors', !errors.length, errors.join(' | '));
+        await ctx.close();
+      }
+    } finally { await new Promise((r) => home.close(() => r())); }
   }
 } catch (e) {
   failed++;

@@ -1,5 +1,8 @@
 // KnowBot voice mode: talk to a bot hands-free, with an audio-reactive orb (./voice-orb.js) that shows it is hearing you
 // and speaking back, live captions, a transcript, the sources as links, and one clear way out (End, or Esc).
+// An answer that cites products shows their cards under the captions: the web chat's own cards (lib/widget.js
+// productCardsHtml and its .kb-products styles from lib/knowbot.css, loaded the first time a product answer arrives);
+// the other sources stay a plain line of chips. Cards are shown, never read aloud (nor are any URLs).
 // It is a mode of the Homepage search (site/overlay.js) and of web chat (KnowBot Studio's chat, lib/widget.js): those
 // surfaces show a mic button that opens it in place.
 //
@@ -60,6 +63,11 @@ a.kbvm-chip:hover{border-color:var(--vm-acc)}
 .kbvm-log li.user{align-self:flex-end;background:var(--vm-soft);border-color:transparent;max-width:85%}
 .kbvm-who{display:block;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--vm-mute)}
 .kbvm-hint{margin:0;font-size:13px;color:var(--vm-mute)}
+.kbvm-prods{width:100%;max-width:36em;min-width:0;text-align:left}
+.kbvm-prods:empty{display:none}
+.kbvm .kb-products{--kb-line:var(--vm-line);--kb-panel:var(--vm-bg);--kb-bg:var(--vm-soft);--kb-raise:var(--vm-soft);--kb-text:var(--vm-text);--kb-head:var(--vm-ink);--kb-mute:var(--vm-mute);--kb-dim:var(--vm-mute);--kb-accent:var(--vm-acc);--kb-accent-line:var(--vm-acc);--kb-font:inherit;
+  width:fit-content;max-width:100%;margin:0 auto}
+.kbvm .kb-products li{flex-basis:116px;width:116px}
 `;
 
 const ICONS = {
@@ -69,6 +77,10 @@ const ICONS = {
 };
 const icon = (n, size = 20) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
+// a URL is never read aloud or captioned (the cards and the source chips carry the links)
+const noUrls = (s) => String(s || '').replace(/\(\s*(?:https?:\/\/|www\.)[^\s)]*\s*\)/gi, '').replace(/\b(?:https?:\/\/|www\.)[^\s)\]]+/gi, '').replace(/\s+([.,;:!?])/g, '$1').replace(/[ \t]{2,}/g, ' ').trim();
+/** The page a link points at (host without www, path without a trailing slash): a product card and its source chip match on it. */
+const pageKey = (u) => { try { const x = new URL(String(u)); return `${x.hostname.toLowerCase().replace(/^www\./, '')}${decodeURIComponent(x.pathname).toLowerCase().replace(/\/+$/, '')}`; } catch { return null; } };
 const plain = (s) => String(s || '').replace(/\[(\d{1,3})\]/g, '').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1').replace(/[*_`#]/g, '').replace(/^\s*[-•]\s+/gm, '').replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
@@ -99,7 +111,7 @@ function el(tag, attrs, ...kids) {
  * @param {string} [o.lang]
  * @param {number|string} [o.size]  the orb's CSS size (default min(240px, 62vw))
  * @param {() => void} [o.onClose]   after End / Esc / stop()
- * @param {(t: {question: string, answer: string, citations: object[], proofUrl: string|null, refused: boolean}) => void} [o.onTurn]
+ * @param {(t: {question: string, answer: string, citations: object[], proofUrl: string|null, refused: boolean, products: object[]}) => void} [o.onTurn]
  */
 export function openVoiceMode(host, o = {}) {
   const name = String(o.name || 'KnowBot');
@@ -115,6 +127,7 @@ export function openVoiceMode(host, o = {}) {
   const caption = el('p', { class: 'kbvm-cap', 'aria-live': 'off', 'data-empty': 'Start talking whenever you are ready.' });
   const err = el('p', { class: 'kbvm-err', role: 'alert', hidden: true });
   const chips = el('ul', { class: 'kbvm-chips', 'aria-label': 'Sources for this answer' });
+  const prods = el('div', { class: 'kbvm-prods' });
   const muteLabel = el('span', { text: 'Mute' });
   const muteBtn = el('button', { type: 'button', class: 'kbvm-btn kbvm-mute', 'aria-pressed': 'false', html: icon('mic') }, muteLabel);
   const endBtn = el('button', { type: 'button', class: 'kbvm-btn kbvm-end', 'aria-label': 'End voice mode', 'aria-keyshortcuts': 'Escape', html: icon('end') }, el('span', { text: 'End' }));
@@ -124,7 +137,7 @@ export function openVoiceMode(host, o = {}) {
   const trCount = el('span', { text: '' });
   const tr = el('details', { class: 'kbvm-tr', hidden: true }, el('summary', null, 'Transcript', trCount), log);
   const root = el('section', { class: 'kbvm', role: 'region', 'aria-label': `Voice mode with ${name}`, tabindex: '-1', 'data-theme': o.theme === 'dark' || o.theme === 'light' ? o.theme : 'auto', 'data-state': 'connecting' },
-    el('style', { text: CSS }), stage, status, caption, err, chips,
+    el('style', { text: CSS }), stage, status, caption, err, prods, chips,
     el('div', { class: 'kbvm-ctrl' }, muteBtn, endBtn),
     el('p', { class: 'kbvm-hint', text: 'Speak naturally. Press End or Esc to stop.' }),
     typeForm, tr);
@@ -156,12 +169,44 @@ export function openVoiceMode(host, o = {}) {
     tr.hidden = false;
     return li;
   }
-  function showChips(list, proofUrl, refused) {
+  // the web chat's product cards (lib/widget.js) and their styles (lib/knowbot.css), loaded once, on the first product answer
+  let cardsKit = null, prodSeq = 0;
+  const loadCards = () => (cardsKit ||= Promise.all([
+    import('./widget.js?v=0fea08e'),
+    new Promise((resolve) => {
+      const link = el('link', { rel: 'stylesheet', href: new URL('./knowbot.css?v=0fea08e', import.meta.url).href });
+      const t = setTimeout(resolve, 2500);
+      const ok = () => { clearTimeout(t); resolve(); };
+      link.addEventListener('load', ok); link.addEventListener('error', ok);
+      root.prepend(link);
+    }),
+  ]).then(([w]) => w.productCardsHtml));
+  const productsOf = (list, refused) => (refused || !Array.isArray(list) ? [] : list.filter((p) => p && typeof p.url === 'string' && /^https?:\/\//.test(p.url) && p.title).slice(0, 4));
+  function showProducts(list) {
+    const seq = ++prodSeq;
+    prods.textContent = '';
+    if (!list.length) return;
+    loadCards().then((html) => {
+      if (seq !== prodSeq || stopped) return;
+      prods.innerHTML = html(list);
+      prods.querySelectorAll('.kb-prod-media img').forEach((img) => img.addEventListener('error', () => img.remove(), { once: true }));
+    }).catch(() => { /* no cards: the source chips still link the products */ if (seq === prodSeq) showChips(lastShown.list, lastShown.proofUrl, false, []); });
+  }
+  let lastShown = { list: [], proofUrl: null };
+  /** Source chips; a source that is one of the product cards is left out (its card links it). */
+  function showChips(list, proofUrl, refused, products = []) {
     chips.textContent = '';
     if (refused) { chips.append(el('li', null, el('span', { class: 'kbvm-chip', text: 'Not in the sources' }))); return; }
+    lastShown = { list: list || [], proofUrl };
+    const carded = new Set(products.map((p) => pageKey(p.url)).filter(Boolean));
+    const cardTitles = new Set(products.map((p) => String(p.title).trim().toLowerCase()));
     for (const c of list || []) {
+      // a product page's source is often titled "Title · https://…/products/…" with no url of its own
+      const inTitle = /\bhttps?:\/\/[^\s)]+/i.exec(String(c.title || ''))?.[0];
+      const bare = noUrls(String(c.title || '')).replace(/\s*[·|–-]\s*$/, '').trim();
+      if (carded.size && ((typeof c.url === 'string' && carded.has(pageKey(c.url))) || (inTitle && carded.has(pageKey(inTitle))) || cardTitles.has(bare.toLowerCase()))) continue;
       const href = (typeof c.url === 'string' && /^https?:\/\//.test(c.url) && c.url) || (typeof proofUrl === 'string' && /^https?:\/\//.test(proofUrl) && proofUrl) || null;
-      const kids = [el('b', { text: String(c.n) }), document.createTextNode(c.title || c.file || 'Source')];
+      const kids = [el('b', { text: String(c.n) }), document.createTextNode(noUrls(String(c.title || '')).replace(/\s*[·|–-]\s*$/, '').trim() || c.file || 'Source')];
       chips.append(el('li', null, href ? el('a', { class: 'kbvm-chip', href, target: '_blank', rel: 'noopener noreferrer' }, ...kids, el('span', { class: 'kbvm-sr', text: ' (opens in a new tab)' })) : el('span', { class: 'kbvm-chip' }, ...kids)));
     }
   }
@@ -314,7 +359,7 @@ export function openVoiceMode(host, o = {}) {
   function stopRec() { clearTimeout(recTimer); if (rec) { const r = rec; rec = null; r.onend = null; try { r.abort(); } catch { /* ignore */ } } }
 
   // ------------------------------------------------------------------------------------------------ the session
-  let userText = '', agentText = '', lastCites = { citations: [], proofUrl: null, refused: false }, pendingQ = '';
+  let userText = '', agentText = '', lastCites = { citations: [], proofUrl: null, refused: false, products: [] }, pendingQ = '';
   const sendJson = (m) => { if (ws?.readyState === 1) ws.send(JSON.stringify(m)); };
   function connect() {
     let s;
@@ -368,18 +413,23 @@ export function openVoiceMode(host, o = {}) {
         }
         break;
       case 'searching': setState('thinking'); break;
-      case 'citations':
-        lastCites = { citations: m.citations || [], proofUrl: m.proofUrl || null, refused: !!m.refused };
-        showChips(lastCites.citations, lastCites.proofUrl, lastCites.refused);
+      case 'citations': {
+        const products = productsOf(m.products, m.refused);
+        lastCites = { citations: m.citations || [], proofUrl: m.proofUrl || null, refused: !!m.refused, products };
+        showChips(lastCites.citations, lastCites.proofUrl, lastCites.refused, products);
+        showProducts(products);
         break;
+      }
       case 'answer': {
         const text = plain(m.text);
-        showChips(m.citations, m.proofUrl, m.refused);
+        const products = productsOf(m.products, m.refused);
+        showChips(m.citations, m.proofUrl, m.refused, products);
+        showProducts(products);
         caption.classList.remove('is-user');
-        caption.textContent = plain(m.spoken || m.text);
+        caption.textContent = noUrls(plain(m.spoken || m.text));
         addLog('agent', text);
-        o.onTurn?.({ question: m.question || '', answer: text, citations: m.citations || [], proofUrl: m.proofUrl || null, refused: !!m.refused });
-        speak(m.spoken || text);
+        o.onTurn?.({ question: m.question || '', answer: text, citations: m.citations || [], proofUrl: m.proofUrl || null, refused: !!m.refused, products });
+        speak(noUrls(m.spoken || text));
         break;
       }
       case 'interrupted': stopSpeaking(); if (state === 'speaking') settle(); break;
@@ -388,7 +438,7 @@ export function openVoiceMode(host, o = {}) {
           if (userText.trim()) addLog('user', userText.trim());
           addLog('agent', agentText.trim());
           o.onTurn?.({ question: userText.trim(), answer: agentText.trim(), ...lastCites });
-          userText = ''; agentText = ''; lastCites = { citations: [], proofUrl: null, refused: false };
+          userText = ''; agentText = ''; lastCites = { citations: [], proofUrl: null, refused: false, products: [] };
         }
         if (!playing.size && state !== 'listening') settle();
         break;
@@ -406,6 +456,7 @@ export function openVoiceMode(host, o = {}) {
     caption.classList.add('is-user');
     caption.textContent = q;
     chips.textContent = '';
+    prodSeq++; prods.textContent = '';
     if (engine === 'text' || !spoken) addLog('user', q);
     if (engine === 'gemini') { userText = ''; agentText = ''; } // the server echoes typed text; the log already has it
     sendJson({ type: 'text', text: q });
