@@ -687,3 +687,26 @@
 .st-bot:not([data-asked="1"]) > #in-intake-slot[data-pstate="files"]:not([data-pcollapsed="yes"]) { contain: strict; }
 .st-bot:not([data-asked="1"]) > #in-map-slot[data-files="yes"]:not([data-mode="ribbon"]) { contain: size layout style; }
 .in-rows > .in-row { contain: layout style; }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Simple view (the default). The owner sees files, a plain status and what to do next; the pipeline readout
+   (atom counts, stage words, gauges, sizes, the extraction preview, Table view / Pin) waits behind
+   "Show details" in the ⋯ menu (html[data-details="on"]). */
+:root:not([data-details="on"]) :is(.map-countwrap, .map-stagel, .map-scale, .map-legend .map-note, .map-hud-r > .map-btn:not(.map-fold, .map-expand)) { display: none !important; }
+:root:not([data-details="on"]) :is(.in-head-meta, .in-replay, .in-read, .in-size, .in-gauge, .in-cap, .in-card-m, .in-card-fa, .in-card-sum .in-card-gauge, .st-sgp-gauge, .in-chip-m, .map-chip-c, #st-kbd) { display: none !important; }
+:root:not([data-details="on"]) .in-row:is([data-reading="yes"], [data-reading="done"]) .in-namewrap { flex: 1 1 auto; }
+:root:not([data-details="on"]) .in-row:not([data-phase="failed"], [data-phase="rejected"]) .in-status { width: auto; min-width: 12ch; }
+/* the include box only appears on hover / focus, or when the file is switched off (pointer devices only) */
+@media (hover: hover) {
+  :root:not([data-details="on"]) .in-row:not(:hover, :focus-within, [data-off="off"]) .in-inc { opacity: 0; }
+  :root:not([data-details="on"]) .in-inc { transition: opacity var(--dur-2, .15s) var(--ease-out, ease); }
+}
+
+/* Simple view, round 1 (vs Claude.ai): the conversation is the hero. The map shows only while files are being
+   read; file rows are icon + name; one quiet accent; no system chrome under the composer. */
+:root:not([data-details="on"]):not([data-learning]) .map-band { display: none !important; }
+:root:not([data-details="on"]) :is(.in-tag, .in-ftags, .in-row[data-phase="ready"] .in-status, .sb-scope, .sb-foot-hint, .sb-logged, .in-card-sum .in-topics, .in-card-sum .in-card-f:not(:first-child) .in-card-ask, .st-diff-v) { display: none !important; }
+:root:not([data-details="on"]) .in-row::before { display: none; }
+@media (hover: hover) {
+  :root:not([data-details="on"]) .in-row:not(:hover, :focus-within) .row-actions-trigger:not([aria-expanded="true"]) { opacity: 0; }
+}

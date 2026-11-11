@@ -1488,3 +1488,27 @@ a.st-sgp-a { color: var(--accent); text-decoration: underline; text-underline-of
 .ss-compact .ss-logo-tile { width: 156px; height: 72px; }
 .st-spec-site { padding-top: 14px; border-top: 1px solid var(--line); }
 .st-spec-site > .st-label { font-weight: 700; color: var(--strong); margin-bottom: 4px; }
+
+/* Simple view: Start over, theme and motion live in the ⋯ menu (always shown), so the header holds only the bot,
+   its saved state, Leads and Launch. */
+.st-menu-only { display: none !important; }
+
+/* Simple view, round 1: one band of chrome. The Builder guides the steps, so the stepper, the "See it as" eyebrow,
+   the indicator dots, the duplicate bot name and the trial pill wait behind "Show details". */
+:root:not([data-details="on"]) .st-spine { height: 0; min-height: 0; padding-block: 0; border: 0; overflow: hidden; visibility: hidden; }
+:root:not([data-details="on"]) :is(.sh-sel-label, .sh-mine, .st-bothead-id, #st-trialpill) { display: none !important; }
+:root:not([data-details="on"]) .st-botchip { border-color: transparent; background: transparent; }
+/* one filled primary per view: Builder suggestion chips are soft, not filled */
+:root:not([data-details="on"]) .st-chip.st-chip-primary { background: color-mix(in srgb, var(--accent, #5b5bd6) 10%, transparent); color: var(--accent, #5b5bd6); border-color: transparent; box-shadow: none; }
+:root:not([data-details="on"]) .st-diff-rows :is(dt, .st-mono) { font-family: inherit; text-transform: none; letter-spacing: normal; }
+/* the stepper's row collapses with it; the map's slot goes with the map once files are read; the preview header
+   keeps only the Bot / Proof / Set up switch (the bot's name is already in the app header) */
+:root:not([data-details="on"]) .st-app { grid-template-rows: var(--st-header-h) 0 minmax(0, 1fr); }
+@media (max-width: 899px) { :root:not([data-details="on"]) .st-app { grid-template-rows: var(--st-header-h) 0 minmax(0, 1fr) auto; } }
+:root:not([data-details="on"]):not([data-learning]) #in-map-slot { display: none !important; }
+:root:not([data-details="on"]) .st-bothead > .st-avatar { display: none; }
+/* the composer placeholder already invites the first question; the Builder's file card is one line per file;
+   "Keep this bot" is a quiet offer, not a second filled primary */
+:root:not([data-details="on"]) #sb-thread-slot[data-prompt="1"]::before { content: none; display: none; }
+:root:not([data-details="on"]) :is(.in-card-sum .in-card-fl, .in-card-sum .in-card-ask) { display: none !important; }
+:root:not([data-details="on"]) .st-email .btn-primary { background: transparent; color: var(--accent); border: 1px solid var(--line); box-shadow: none; }

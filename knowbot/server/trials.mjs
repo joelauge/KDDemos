@@ -3862,7 +3862,7 @@ export function createStudio(o = {}) {
         if (!a) return { reply: 'Ask your bot a question on the right and I will walk you through the answer.', chips: stepChips(T, files) };
         T.flags.firstAnswerSaid = true;
         const k = a.quotes || 1, f = a.files.length || 1;
-        return { reply: `That's your first cited answer: ${plural(k, 'quote')} from ${plural(f, 'file')}, top match ${pct(a.top)}. Hover the [1] to see the exact line. Now try to break it.`,
+        return { reply: `That's your first cited answer: ${plural(k, 'quote')} from ${plural(f, 'file')}. Hover the [1] to see the exact line. Now try to break it.`,
           chips: [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }), C('proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('shorter', 'Make answers shorter', { send: 'Make answers shorter' })] };
       }
       case 'close_miss':

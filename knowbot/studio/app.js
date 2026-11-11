@@ -198,14 +198,14 @@ function renderHeader() {
   const dash = h('a', { id: 'st-dash', class: 'st-dash', href: 'https://knowdrive.ai/', target: '_blank', rel: 'noopener', hidden: true },
     h('span', null, 'Dashboard'), h('span', { class: 'st-dash-ico', 'aria-hidden': 'true', html: icon('external', 13) }), h('span', { class: 'st-sr' }, ' (opens in a new tab)'));
   // the Leads report (studio/leads.js): contacts visitors gave the bot, links it sent, clicks, CSV export
-  const leadsBtn = h('button', { type: 'button', id: 'st-leads', class: 'st-restart st-hide-mobile', 'aria-haspopup': 'dialog', onclick: () => openLeads() },
+  const leadsBtn = h('button', { type: 'button', id: 'st-leads', class: 'st-restart st-menu-only', 'aria-haspopup': 'dialog', onclick: () => openLeads() },
     h('span', { html: icon('users', 14), 'aria-hidden': 'true' }), h('span', null, 'Leads'));
-  const restart = h('button', { type: 'button', id: 'st-restart', class: 'st-restart st-hide-mobile', 'aria-haspopup': 'dialog', onclick: () => confirmStartOver() },
+  const restart = h('button', { type: 'button', id: 'st-restart', class: 'st-restart st-menu-only', 'aria-haspopup': 'dialog', onclick: () => confirmStartOver() },
     h('span', { html: icon('refresh', 14), 'aria-hidden': 'true' }), h('span', null, 'Start over'));
-  const theme = h('button', { type: 'button', id: 'st-theme', class: 'st-iconbtn st-hide-mobile', onclick: toggleTheme });
-  const mot = h('button', { type: 'button', id: 'st-motion', class: 'st-iconbtn st-motion-btn st-hide-mobile', onclick: toggleMotion });
+  const theme = h('button', { type: 'button', id: 'st-theme', class: 'st-iconbtn st-menu-only', onclick: toggleTheme });
+  const mot = h('button', { type: 'button', id: 'st-motion', class: 'st-iconbtn st-motion-btn st-menu-only', onclick: toggleMotion });
   const dbg = DEBUG ? h('span', { id: 'st-debug', class: 'st-pill st-pill-debug' }, 'debug') : null;
-  const more = h('button', { type: 'button', id: 'st-more', class: 'st-iconbtn st-only-mobile', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+  const more = h('button', { type: 'button', id: 'st-more', class: 'st-iconbtn', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
     'aria-label': 'More options', html: icon('more', 18), onclick: (e) => openMoreMenu(e.currentTarget) });
   el.append(
     h('h1', { class: 'st-sr' }, 'KnowBot Studio: build a bot that answers only from your files'),
@@ -231,6 +231,17 @@ function updateThemeButtons() {
     m.innerHTML = `${icon(red ? 'motionOff' : 'motion', 16)}<span class="st-motion-lbl">Motion</span><span class="st-motion-state" aria-hidden="true">${red ? 'off' : 'on'}</span>`;
     m.title = red ? 'Motion is reduced. Turn full motion back on' : 'Reduce motion';
   }
+}
+
+/** Simple view is the default; "Show details" brings back the technical readout (atoms, pipeline stages, gauges). */
+function detailsOn() { return document.documentElement.getAttribute('data-details') === 'on'; }
+function toggleDetails() {
+  const on = !detailsOn();
+  document.documentElement.setAttribute('data-details', on ? 'on' : 'off');
+  try { localStorage.setItem('kb-studio-details', on ? 'on' : 'off'); } catch {}
+  document.dispatchEvent(new CustomEvent('kb:details', { detail: { on } }));
+  updatePrice();
+  announce(on ? 'Showing details: atoms, stages and file gauges.' : 'Hiding details.');
 }
 
 function toggleTheme() {
@@ -402,6 +413,8 @@ function updatePrice() {
   // owner rule: no price before the visitor has tested; the button still says where launching lives
   if (!testedBot()) setText(label, isMobile() ? 'Launch' : (level === 'ghost' ? 'Free to build' : 'Launch'));
   else if (isMobile()) setText(label, p);   // SPEC 1.2: the 48 px header shows the price only
+  // simple view: the header says only 'Launch'; the price lives on the Launch step (details view keeps it)
+  else if (!detailsOn()) setText(label, 'Launch');
   else setText(label, level === 'ghost' ? `${p} when you launch` : `Launch · ${p}`);
   // name = visible text (WCAG 2.5.3); the tooltip (aria-describedby) carries "Build and test free, no card."
   setAttr(b, 'aria-label', null);
@@ -1069,7 +1082,7 @@ function polishCopy(text) {
   t = t.replace(/\*\*([^*]+)\*\*: ([\d,]+) atoms so far\./g, (all, name, n) => {
     const f = Object.values(getState().files).find((x) => x && x.name === name);
     // r5: a finished file reports its final count (the line is re-polished in place when the file becomes Ready)
-    return f && f.phase === 'ready' ? `**${name}** is ready: ${f.atoms ? motion.fmtNum(f.atoms) : n} atoms.` : all;
+    return f && f.phase === 'ready' ? (detailsOn() ? `**${name}** is ready: ${f.atoms ? motion.fmtNum(f.atoms) : n} atoms.` : `**${name}** is ready.`) : all;
   });
   // r5 (D2): "Hover the [1]" names the chip the answer actually shows ("1a" when one file is quoted twice), and says
   // Tap on a touch screen
@@ -1764,7 +1777,7 @@ function fallbackFor(input, err) {
     }
     case 'file_failed': return { text: `**${d.name || 'A file'}** couldn't be processed. ${d.error?.message || d.message || 'Try it again, or replace it.'}`,
       chips: [L('show_files', 'Show my files', { run: () => { emit('intake:open', {}); if (isMobile()) setTab('bot'); } }), L('upload', 'Upload another file', { action: { type: 'request_upload' } })] };
-    case 'first_answer': return { text: `That's your first cited answer: ${d.k ?? 1} quote${(d.k ?? 1) === 1 ? '' : 's'} from ${d.f ?? 1} file${(d.f ?? 1) === 1 ? '' : 's'}${d.top != null ? `, top match ${Math.round((d.top > 1 ? d.top : d.top * 100))}` : ''}. Hover the [1] to see the exact line. Now try to break it.`,
+    case 'first_answer': return { text: `That's your first cited answer: ${d.k ?? 1} quote${(d.k ?? 1) === 1 ? '' : 's'} from ${d.f ?? 1} file${(d.f ?? 1) === 1 ? '' : 's'}${d.top != null && detailsOn() ? `, top match ${Math.round((d.top > 1 ? d.top : d.top * 100))}` : ''}. Hover the [1] to see the exact line. Now try to break it.`,
       chips: [L('ask_probe', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBE_Q } }), L('run_proof', 'Run the Proof Run', { action: { type: 'run_proof' } }), L('shorter', 'Make answers shorter', { send: 'Make answers shorter', local: false })] };
     case 'refusal': return { text: `Exactly right: nothing in your files scored above the ${pct(d.floor ?? s.spec.floor)} floor${d.best != null ? ` (best was ${pctBelow(d.best, d.floor ?? s.spec.floor)})` : ''}, so it refused instead of guessing. That refusal is the feature.`,
       chips: [L('run_proof', 'Run the Proof Run', { kind: 'primary', action: { type: 'run_proof' } }),
@@ -2511,8 +2524,9 @@ function openMoreMenu(anchor) {
     item(dark ? 'sun' : 'moon', dark ? 'Light theme' : 'Dark theme', toggleTheme),
     item('motion', motion.reduced() ? 'Full motion' : 'Reduce motion', toggleMotion),
     item('command', 'Command palette', () => openPalette()),
+    item('table', detailsOn() ? 'Hide details' : 'Show details', toggleDetails),
     t.converted ? null : item('refresh', 'Start over', () => confirmStartOver()),
-    t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, icon('checkCircle', 14), ` Saved until ${new Date(t.expiresAt).toLocaleDateString()}`) : null);
+    t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, h('span', { html: icon('checkCircle', 14) }), ` Saved until ${new Date(t.expiresAt).toLocaleDateString()}`) : null);
   openMenu(anchor, list);
 }
 
@@ -2881,6 +2895,7 @@ function paletteCommands() {
     { id: 'channels', label: 'Set up: Website, KnowBot number, Email', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
     { id: 'leads', label: 'Leads report · contacts, links sent, clicks, CSV download', ico: 'users', run: () => openLeads() },
+    { id: 'details', label: detailsOn() ? 'Hide details (atoms, stages, gauges)' : 'Show details (atoms, stages, gauges)', ico: 'table', run: () => toggleDetails() },
     ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
     { id: 'motion', label: motion.reduced() ? 'Full motion' : 'Reduce motion', ico: 'motion', run: toggleMotion },
@@ -4086,6 +4101,8 @@ function queueReady(file) {
 function scheduleLearning(ms = 250) { clearTimeout(learnTimer); learnTimer = setTimeout(renderLearning, ms); }
 function isLatestAssistant(rec) { return [...messages].reverse().find((m) => m.role === 'assistant') === rec; }
 const atomsTxt = (n) => `${motion.fmtNum(Number(n || 0))} atom${n === 1 ? '' : 's'}`;
+// simple view: "is ready."; details view adds how many atoms the bot can quote
+const quotable = (n) => (detailsOn() ? `: ${atomsTxt(n)} your bot can quote` : '');
 function learningCopy() {
   const s = getState(); const m = s.milestones;
   const all = s.fileOrder.map((id) => s.files[id]).filter((f) => f && f.phase !== 'rejected');
@@ -4096,9 +4113,9 @@ function learningCopy() {
   const failNote = failed.length ? ` ${failed.length === 1 ? `${failed[0].name} couldn't be read` : `${failed.length} files couldn't be read`}; the others work.` : '';
   let text;
   if (!ready.length) text = `Learning your files…${failNote}`;
-  else if (done && ready.length === 1 && !failed.length) text = `**${ready[0].name}** is ready: ${atomsTxt(atoms)} your bot can quote.${m.firstCited ? '' : ' Ask it anything on the right.'}`;
+  else if (done && ready.length === 1 && !failed.length) text = `**${ready[0].name}** is ready${quotable(atoms)}.${m.firstCited ? '' : ' Ask it anything on the right.'}`;
   // r5 (D7): about as long as the "can already answer" line it replaces in place, so no empty band is left behind
-  else if (done) text = `All ${ready.length} file${ready.length === 1 ? '' : 's'} ready: ${atomsTxt(atoms)} your bot can quote.${failNote}${m.firstCited ? ' Ask it more on the right, or run the Proof Run to test it.' : ' Ask it anything on the right and watch where each answer comes from.'}`;
+  else if (done) text = `All ${ready.length} file${ready.length === 1 ? '' : 's'} ready${quotable(atoms)}.${failNote}${m.firstCited ? ' Ask it more on the right, or run the Proof Run to test it.' : ' Ask it anything on the right and watch where each answer comes from.'}`;
   else if (m.firstCited) text = `${ready.length} of ${all.length} files ready · ${atomsTxt(atoms)}. The rest are still learning.${failNote}`;
   else text = `Your bot can already answer: ${ready.length} of ${all.length} files ready. Tap a question on the right and watch where the answer comes from.${failNote}`;
   return { text, done, ready, all };
@@ -4167,7 +4184,7 @@ async function createLearning(summaries) {
     const L = learn = { rec: host, holder: null, inst: null, files: new Map(), complete: true, text: '', typing: false, dirty: false };
     const tail = String(host.text || '').split(/\n\n+/).slice(1).join('\n\n').trim();
     const topics = ((String(host.text || '').split(/\n\n+/)[0].match(/\batoms?(?: so far)?\.\s+([\s\S]+)$/) || [])[1] || '').trim();
-    const lead = `**${ready[0].name}** is ready: ${atomsTxt(ready[0].atoms || 0)} your bot can quote.`;
+    const lead = `**${ready[0].name}** is ready${quotable(ready[0].atoms || 0)}.`;
     const merged = tail ? `${lead}${topics ? ` ${topics}` : ''}\n\n${tail}` : `${text}${topics ? ` ${topics}` : ''}`;
     L.text = merged; host.text = merged; host.textEl.innerHTML = md(merged); host.srEl.textContent = plain(merged);
     host.el.dataset.anchor = `${host.el.dataset.anchor || ''} learn`.trim();

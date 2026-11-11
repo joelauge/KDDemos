@@ -2281,7 +2281,22 @@ export function mount(ctx) {
   }
   const fmtDur = (ms) => { const t = Math.floor(ms / 1000), mm = Math.floor(t / 60), ss = t % 60; return mm ? `${mm}m ${ss}s` : `${ss}s`; };
   const STAGE_WORD = { uploaded: 'Extracting', extracted: 'Chunking', chunked: 'Atomizing', atomized: 'Encoding your knowledge', vectorizing: 'Encoding your knowledge' };
+  // simple view (the default): plain words for the owner; "Show details" (⋯ menu) brings back the pipeline readout
+  const detailsOn = () => document.documentElement.getAttribute('data-details') === 'on';
+  function plainLabel(f) {
+    const m = rowMeta.get(f.localId) || {};
+    if (unreachable && f.id && !TERMINAL.has(f.phase) && f.phase !== 'uploading' && f.phase !== 'queued') return 'Waiting for connection';
+    switch (f.phase) {
+      case 'queued': return 'Waiting';
+      case 'rejected': return 'Not added';
+      case 'uploading': return m.retryAt ? 'Waiting to retry' : `Uploading · ${f.bytes ? Math.floor((f.sent || 0) / f.bytes * 100) : 0}%`;
+      case 'ready': return 'Ready';
+      case 'failed': return 'Failed';
+      default: return 'Reading…';
+    }
+  }
   function phaseLabel(f) {
+    if (!detailsOn()) return plainLabel(f);
     const m = rowMeta.get(f.localId) || {};
     if (unreachable && f.id && !TERMINAL.has(f.phase) && f.phase !== 'uploading' && f.phase !== 'queued') return 'Waiting for connection';
     const st = stallElapsed(f);
@@ -2913,7 +2928,17 @@ export function mount(ctx) {
     }).finally(() => { polling = false; });
   }
   function reconnectNow() { lastPollAt = 0; pollIfSilent(true); say('Trying to reach Studio…', 'ingest'); }
+  // the details switch repaints every row's status in the chosen voice
+  listen(document, 'kb:details', () => {
+    for (const f of listFiles()) { const r = rowEls.get(f.localId); if (r) { const t = phaseLabel(f); if (r.status.textContent !== t) r.status.textContent = t; } }
+  });
+  // html[data-learning] while any file is still being read: the simple view shows the knowledge map only then
+  const paintLearning = () => {
+    const busy = listFiles().some((f) => !TERMINAL.has(f.phase));
+    if (document.documentElement.hasAttribute('data-learning') !== busy) document.documentElement.toggleAttribute('data-learning', busy);
+  };
   const clock = setInterval(() => {
+    paintLearning();
     pollIfSilent();
     for (const f of listFiles()) {
       if (TERMINAL.has(f.phase)) continue;
