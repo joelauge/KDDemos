@@ -2426,7 +2426,12 @@ export function createStudio(o = {}) {
     res.on('close', () => { if (!res.writableFinished) ac.abort(); });
     res.writeHead(200, SSE_HEADERS);
     let n = 0;
-    const emit = (event, data) => { if (!ac.signal.aborted) writeFrame(res, ++n, event, data); };
+    // the step the answer is on (status events), so a failure can say where it happened
+    let stage = 'start';
+    const emit = (event, data) => {
+      if (event === 'status' && data?.step) { stage = data.step; if (o.faultAt === stage) throw new Error(`injected fault at ${stage}`); }   // tests only
+      if (!ac.signal.aborted) writeFrame(res, ++n, event, data);
+    };
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, pingMs); ping.unref?.();
     const ms = () => Math.round(performance.now() - t0);
     const spec = T.spec;
@@ -2567,7 +2572,14 @@ export function createStudio(o = {}) {
       // 6. quote
       emit('status', { step: 'quote', t: ms() });
       const tQ0 = ms();
-      const fin = citeQuotedLines(fin0, kbLib.requireCitations);
+      let fin = citeQuotedLines(fin0, kbLib.requireCitations);
+      // the answer verdict (does it answer the core question?): sets the closing follow-up, never removes a cited fact
+      let verdict = null;
+      if (!fin.refused && kbLib.judgeAnswer) {
+        verdict = await kbLib.judgeAnswer({ complete: (m, st) => selectComplete(m, st), question, text: fin.text });
+        if (ac.signal.aborted) { clearInterval(ping); return; }
+        fin = kbLib.applyVerdict(fin, verdict);
+      }
       if (fin.refused) {
         const cands = r.vector.slice(0, 5).map((h) => ({ file: fileName(h.fileId), similarity: round4(h.similarity ?? 0), match: pct(h.similarity), excerpt: clip(oneLine(h.text), 200) }));
         return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: lines.length, ...(receipt ? { receipt } : {}) },
@@ -2578,6 +2590,7 @@ export function createStudio(o = {}) {
         const line = lines[L - 1];
         if (!line) continue;
         const h = srcHit[line.source], src = sources[line.source];
+        if (!h || !src) continue;   // a line whose passage lost its search hit is never quoted (never a crash)
         const c = fin.citations.find((x) => x.file_id === src.file_id);
         if (!c) continue;
         const lv = lineView(line);
@@ -2629,14 +2642,24 @@ export function createStudio(o = {}) {
       // answer can never earn a "passed" stamp.
       const check = answerCheck(question, quotes.map((q) => q.text), await expectedFor(T, files, question));
       const products = await productsP;
-      return finish({ ...base, text: fin.text, refused: false, status: 'grounded', citations, check, ...(products.length ? { products } : {}),
+      return finish({ ...base, text: fin.text, refused: false, status: 'grounded', citations, check, ...(verdict ? { verdict } : {}), ...(products.length ? { products } : {}),
         proof: { quotedLines, claims, verified: { claims: claims.length, verified: claims.filter((c) => c.verified).length }, unsupported, candidates: lines.length, picked: fin0.selected || [], floor, ...(receipt ? { receipt } : {}) },
         why: null, guard: null, latencyMs: { retrieve: tRet, select: tSel, quote: tQ, total: ms() } });
     } catch (e) {
+      if (ac.signal.aborted) { clearInterval(ping); return; }
+      // every failure is logged with its step and a short reference the Studio shows, so it can be traced
+      const ref = randomBytes(4).toString('hex');
+      log(`[studio] ask failed ref=${ref} trial=${T.id} step=${stage}: ${e?.stack || e?.message || e}`);
+      // past the search, a failure means the matches couldn't be turned into an answer: the honest result for the
+      // visitor is "not in my files" (what a weak match gets anyway), with the reference for the owner
+      if (!(e instanceof StudioError) && (stage === 'rank' || stage === 'select' || stage === 'quote')) {
+        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: emptyProof(spec.floor ?? 0), why: null, guard: null,
+          failure: { step: stage, ref, recovered: true }, latencyMs: { total: ms() } });
+      }
       clearInterval(ping);
-      if (ac.signal.aborted) return;
       const code = e instanceof StudioError ? e.code : 'upstream';
-      emit('error', { code, message: e instanceof StudioError ? e.message : "Couldn't reach your bot. Your question wasn't lost." });
+      const STEP_COPY = { start: 'Your bot couldn’t start answering.', embed: 'Your bot couldn’t read the question.', search: 'Your files couldn’t be searched just now.' };
+      emit('error', { code, step: stage, ref, message: e instanceof StudioError ? e.message : (STEP_COPY[stage] || 'Your bot hit an error answering this.') + " Your question wasn't lost." });
       emit('done', { latencyMs: ms(), error: true });
       try { res.end(); } catch {}
     }

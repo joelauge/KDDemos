@@ -454,7 +454,8 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     const first = final.text.split('\n').find((l) => /\[\d+\]/.test(l)); // the first cited line (a courtesy opener may precede it)
     assert.match(first, /lifetime/i, final.text);
     assert.doesNotMatch(final.text, /We build bikes to be ridden hard|This page explains/, 'never the document intro');
-    for (const l of final.text.split('\n')) assert.doesNotMatch(l.replace(/\s*\[\d+\]\s*$/, ''), /\?\s*$/, `a question is never a claim: ${l}`);
+    for (const l of final.text.split('\n').filter((x) => /\[\d+\]/.test(x))) assert.doesNotMatch(l.replace(/\s*\[\d+\]\s*$/, ''), /\?\s*$/, `a question is never a claim: ${l}`);
+    assert.match(final.text.split('\n').pop(), /\?$/, 'the answer ends by checking it helped (a follow-up question, uncited)');
     // a matching FAQ pair still answers its own question
     const faq = (await c.stream(t, '/ask', { question: 'Does servicing my bike elsewhere void the warranty?' })).find((e) => e.event === 'final').data;
     assert.match(faq.text, /as long as the work is done properly/);
@@ -2538,4 +2539,35 @@ describe('Start over with many files', () => {
       assert.equal((await c.json(t, '/files')).status === 200, false, 'the trial is gone');
     } finally { await S.close(); }
   });
+});
+
+// ------------------------------------------------------------------------------------------------ answer failures
+describe('answer failures say where they happened (step + reference); past the search they answer "not found"', () => {
+  for (const [step, recovered] of [['select', true], ['quote', true], ['search', false]]) {
+    test(`a fault at "${step}" → ${recovered ? 'a not-found answer with failure {step, ref}' : 'an error event naming the step, with a ref'}`, async () => {
+      const S = await boot({ studio: { faultAt: step } });
+      try {
+        const c = client(S);
+        const t = await c.trial();
+        await (await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' })).json();
+        await c.waitReady(t, 4);
+        const ev = await c.stream(t, '/ask', { question: 'How long is the frame warranty?' });
+        if (recovered) {
+          const fin = ev.find((e) => e.event === 'final')?.data;
+          assert.ok(fin, 'a final answer, not an error');
+          assert.equal(fin.refused, true);
+          assert.equal(fin.text, "I can't seem to find an answer to that in any of my current data sources.");
+          assert.equal(fin.failure.step, step);
+          assert.match(fin.failure.ref, /^[0-9a-f]{8}$/);
+          assert.ok(!ev.some((e) => e.event === 'error'));
+        } else {
+          const err = ev.find((e) => e.event === 'error')?.data;
+          assert.ok(err, 'an error event');
+          assert.equal(err.step, 'search');
+          assert.match(err.ref, /^[0-9a-f]{8}$/);
+          assert.match(err.message, /couldn’t be searched just now/);
+        }
+      } finally { await S.close(); }
+    });
+  }
 });

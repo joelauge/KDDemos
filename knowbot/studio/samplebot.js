@@ -1783,7 +1783,11 @@ export function mount(ctx) {
         ico('layers', 13), h('span', { class: 'sb-foot-bot' }, `Sources (${n})`), h('span', { class: 'sb-foot-proof' }, 'Bot view')),
       h('span', { class: 'sb-foot-hint sb-foot-bot' }, 'Your visitors see this view.'),
       h('span', { class: 'sb-foot-hint sb-foot-proof' }, 'Proof view · only you see this.'),
-      A.by === 'proof' ? null : h('span', { class: 'sb-logged' }, ico('trending', 12), h('span', null, 'Logged to ', h('span', { class: 'sb-hide-m' }, 'question '), 'insights'))].filter(Boolean));
+      A.by === 'proof' ? null : h('span', { class: 'sb-logged' }, ico('trending', 12), h('span', null, 'Logged to ', h('span', { class: 'sb-hide-m' }, 'question '), 'insights')),
+      // the answer check (server verdict): only you see it; a gap is one note away
+      !f.refused && (f.verdict === 'partial' || f.verdict === 'no') ? h('span', { class: 'sb-verdict' },
+        f.verdict === 'partial' ? 'Check: this nearly answers it. ' : 'Check: this may not answer it. ',
+        h('button', { type: 'button', class: 'sb-verdict-add', onclick: () => openMiss() }, 'Add what’s missing')) : null].filter(Boolean));
     foot.hidden = false;
     if (!(A.fast || reduced())) anim(foot, [{ opacity: 0 }, { opacity: 1 }], aOpts(A, { duration: 220, delay: 120 }));
   }
@@ -1832,6 +1836,11 @@ export function mount(ctx) {
       renderTrace(A);
       renderFoot(A);
       if (!isGuard && !A.restored) learnNote(A);
+      // the server recovered from an error past the search and answered "not found": say so to the owner, with the
+      // reference it logged (visitors only ever see the refusal sentence)
+      if (f.failure && f.failure.ref && !A.el.body.querySelector('.sb-err-ref')) {
+        A.el.body.append(h('p', { class: 'sb-err-ref' }, `Something went wrong while matching this to your files, so your bot answered “not found”. Reference ${f.failure.ref} · step: ${f.failure.step}.`));
+      }
     };
     // the strip always opens on its first candidate (never a few px in, under the left fade)
     afterPaint(() => { if (A.el.strip.scrollLeft) A.el.strip.scrollLeft = 0; A.stripEdges && A.stripEdges(); });
@@ -2227,10 +2236,13 @@ export function mount(ctx) {
       // r6: a server error is not a network problem: an HTTP 5xx (or a stream 'error' event) says the bot failed
       // while answering; only status 0 (no response) says it could not be reached
       const server = !offline && err && (err.status >= 500 || (err.status >= 400 && err.code !== 'network') || err.code === 'upstream');
+      // the server names the step that failed and gives a reference (logged with the real error), so it can be traced
+      const det = (err && err.detail) || {};
       A.errText = offline ? 'You’re offline. Your question wasn’t lost: it’s asked again when you reconnect.'
-        : server ? 'Your bot hit an error answering this. Your question wasn’t lost.'
+        : server ? (det.message || 'Your bot hit an error answering this. Your question wasn’t lost.')
           : 'Couldn’t reach your bot. Your question wasn’t lost.';
-      card = mountStatusCard(box, { tone: 'neutral', title: A.errText, actions: h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: retry }, ico('refresh', 13), 'Retry') });
+      const refLine = server && det.ref ? h('span', { class: 'sb-err-ref' }, `Reference ${det.ref}${det.step ? ` · step: ${det.step}` : ''}. Retry usually works; if it keeps happening, send us this reference.`) : null;
+      card = mountStatusCard(box, { tone: 'neutral', title: A.errText, children: refLine, actions: h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', onclick: retry }, ico('refresh', 13), 'Retry') });
       A.retry = retry;   // the 'online' event re-runs it when this is still the latest thing in the thread
     }
     A.el.status.innerHTML = '';

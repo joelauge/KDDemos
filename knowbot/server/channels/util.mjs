@@ -124,7 +124,7 @@ export function splitSentences(line) {
   return out.filter(Boolean);
 }
 // A friendly opener or closer with no fact in it (the only uncited sentences lib/knowbot.js's citation gate lets through).
-const COURTESY_LEAD = /^(?:i think i(?:'ve| have)? found|good news|great news|here(?:'s| is) what i found|i(?:'ve| have)? found (?:what|it|this|that|the answer|something|a few|a couple|some)|i hope|hope (?:this|that) helps|feel free|(?:i'm |i am )?happy to help|glad|let me know|thanks for|(?:good|great) question)/i;
+const COURTESY_LEAD = /^(?:i'm not sure that answers it|can you tell me a bit more|did (?:you find|that answer|this answer)|was (?:that|this) helpful|does that cover|that covers part of it|what else would you like|i think i(?:'ve| have)? found|good news|great news|here(?:'s| is) what i found|i(?:'ve| have)? found (?:what|it|this|that|the answer|something|a few|a couple|some)|i hope|hope (?:this|that) helps|feel free|(?:i'm |i am )?happy to help|glad|let me know|thanks for|(?:good|great) question)/i;
 export const isCourtesyLine = (s) => { const t = String(s || '').replace(/[‘’]/g, "'").trim(); return !!t && t.length <= 140 && !/\[\d{1,3}\]|\d|[$€£@“”"]|https?:/.test(t) && COURTESY_LEAD.test(t); };
 const stripMarks = (s) => String(s || '').replace(/\s*\[\d{1,3}\]/g, '').replace(/\s+([.,;:!?])/g, '$1').trim();
 const SMALL_WORDS = new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'but', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with', 'from', 'vs', 'via', 'per']);

@@ -323,7 +323,7 @@ test('select mode: the model only names lines; KnowBot quotes them with citation
     engine: { type: 'stub', complete: async (m, o) => { assert.equal(o.settings.max_tokens, 24); return 'L3'; } } });
   const r = await bot.ask('Can I return a gift card?');
   // KnowBot.ask speaks in the guide voice: opener, where it was found, the quoted lines (headline first), a closer
-  assert.equal(r.text.split('\n').slice(1).join('\n'), '- “Returns are accepted within 30 days of receipt” [1]\n- “Sale items and gift cards cannot be returned” [1]\nFeel free to open the link for the full details.', 'the card headline leads');
+  assert.equal(r.text.split('\n').slice(1).join('\n'), '- “Returns are accepted within 30 days of receipt” [1]\n- “Sale items and gift cards cannot be returned” [1]\nFeel free to open the link for the full details. Did that answer your question?', 'the card headline leads');
   assert.match(r.text.split('\n')[0], /^(?:I found a few things that will help!|Good news, I found a few things that will help!) Here's what \[“Returns”\]\(https:\/\/example\.com\/1\) says \[1\]:$/);
   assert.equal(r.grounded, true);
   const plain = new KnowBot({ telemetry: false, voice: false, retriever: { type: 'custom', search: async () => src }, engine: { type: 'stub', complete: async () => 'L3' } });
@@ -470,20 +470,20 @@ test('select mode voice: opener, "In “Title”, page N, it says: “…” [1]
   const q = 'How do I change the oil filter on the 1234 lawnmower?';
   const a = finalizeSelection('L1', candidateLines([man]), [man], { question: q, voice: true });
   assert.match(a.text, OPEN1);
-  assert.equal(a.text.replace(OPEN1, ''), 'In [“MasterCraft Manual for the 1234 Lawnmower”](https://cdn.example/manuals/mc-1234.pdf), page 17, under “Oil filter”, it says: “Pull the bottom oil spout out before changing the filter” [1]. Feel free to download it if that\'s helpful.');
+  assert.equal(a.text.replace(OPEN1, ''), 'In [“MasterCraft Manual for the 1234 Lawnmower”](https://cdn.example/manuals/mc-1234.pdf), page 17, under “Oil filter”, it says: “Pull the bottom oil spout out before changing the filter” [1]. Feel free to download it if that\'s helpful. Did you find what you were looking for?', 'a manual (a document) asks if they found it');
   assert.deepEqual([a.citations[0].page, a.citations[0].section], [17, 'Oil filter']);
   assert.equal(requireCitations(a).text, a.text, 'the citation gate keeps the whole voiced answer');
   assert.deepEqual(finalizeSelection('L1', candidateLines([man]), [man], { question: q, voice: true }), a, 'deterministic: same question, same words');
   // no page, no section, no link: none is invented
   const faq = S(1, { title: 'Shipping & Returns', url: null, text: 'If you return the package within 30 days with the original packaging, a full refund will be issued.' });
   const b = finalizeSelection('L1', candidateLines([faq]), [faq], { question: 'What is the return policy?', voice: true });
-  assert.match(b.text, /^.+! In “Shipping & Returns”, it says: “If you return the package within 30 days with the original packaging, a full refund will be issued” \[1\]\. (?:Hope this helps!|Feel free to ask if you have any other questions\.)$/);
+  assert.match(b.text, /^.+! In “Shipping & Returns”, it says: “If you return the package within 30 days with the original packaging, a full refund will be issued” \[1\]\. Did that answer your question\?$/);
   assert.doesNotMatch(b.text, /page|https?:/);
   assert.deepEqual(Object.keys(b.citations[0]).sort(), ['file_id', 'filename', 'n', 'score', 'snippet', 'title', 'url'], 'no page/section keys when absent');
   // a web page link is offered to open, not to download
   const web = finalizeSelection('L1', candidateLines([S(1, { title: 'FAQ', url: 'https://shop.example/pages/faq', text: 'Returns are free within 30 days.' })]),
     [S(1, { title: 'FAQ', url: 'https://shop.example/pages/faq', text: 'Returns are free within 30 days.' })], { question: 'Are returns free?', voice: true });
-  assert.match(web.text, /In \[“FAQ”\]\(https:\/\/shop\.example\/pages\/faq\), it says: “Returns are free within 30 days” \[1\]\. Feel free to open the link for the full details\.$/);
+  assert.match(web.text, /In \[“FAQ”\]\(https:\/\/shop\.example\/pages\/faq\), it says: “Returns are free within 30 days” \[1\]\. Feel free to open the link for the full details\. Did that answer your question\?$/);
   // a quoted line with its own sentence stops stays whole through the gate (no "In “…”, it says: “No." fragment)
   const w = S(1, { title: 'Warranty', url: null, text: 'No. The store publishes no product warranty.' });
   const wf = requireCitations(finalizeSelection('L1', candidateLines([w]), [w], { question: 'Is there a warranty?', voice: true }));
@@ -503,7 +503,7 @@ test('select mode voice: list answers give an intro and one cited bullet per ite
   assert.match(lines[0], OPENN); assert.equal(lines[0].includes('['), false, 'the intro is courtesy only');
   assert.deepEqual(lines.slice(1, 4), ['- From [“R v Smith”](https://law.example/smith): “The court considered child abuse allegations” [1]',
     '- From “R v Jones”: “The appeal concerned child abuse by a caregiver” [2]', '- From [“Doe v CAS”](https://law.example/doe), page 4: “Child abuse reporting duties of a society” [3]']);
-  assert.equal(lines[4], 'Feel free to open the links for the full details.');
+  assert.equal(lines[4], 'Feel free to open the links for the full details. Did you find what you were looking for?', 'legal sources: did you find it');
   assert.deepEqual(a.citations.map((c) => c.title), ['R v Smith', 'R v Jones', 'Doe v CAS']);
   // one document: the location once, then one cited bullet per item
   const box = [S(1, { filename: 'canonical/bundle.md', title: 'Ultimate Bundle contents', url: null, text: '# x\nThe bundle contains the screen and nine accessories.\n- Large pouch\n- Small pouch' })];
@@ -808,4 +808,26 @@ test('answer selection r2: one fact is quoted once; quotes from one place share 
     assert.doesNotMatch(opener, /\bI think\b|\bmight\b|\bmaybe\b|\bprobably\b/i, opener);
     assert.equal(isCourtesy(opener), true, opener);
   }
+});
+
+test('follow-ups walk to resolution: product → helpful?, legal/manual → found it?, else → answered?; the verdict sets nearly / not', async () => {
+  const m = await import('../knowbot.js');
+  assert.equal(m.followUpKind([{ filename: 'site/shop.example/product/e-city.md', title: 'E-City' }]), 'product');
+  assert.equal(m.followUpKind([{ title: 'E-City', url: 'https://shop.example/products/e-city' }]), 'product');
+  assert.equal(m.followUpKind([{ title: 'R v Smith', url: 'https://law.example/smith' }]), 'document');
+  assert.equal(m.followUpKind([{ title: 'Residential Tenancies Act', filename: 'rta.md' }]), 'document');
+  assert.equal(m.followUpKind([{ title: 'Owner manual', url: 'https://cdn.example/m.pdf' }]), 'document');
+  assert.equal(m.followUpKind([{ title: 'Shipping & Returns', filename: 'policies/returns.md' }]), 'general');
+  for (const t of Object.values(m.FOLLOW_UPS)) for (const sen of t.split(/(?<=[.?])\s+/)) assert.ok(m.isCourtesy(sen), `courtesy: ${sen}`);
+  assert.deepEqual(['A', ' P.', 'N', 'L3', ''].map(m.parseJudge), ['answers', 'partial', 'no', null, null]);
+  const fin = { text: 'Good news!\n- “A” [1]\nFeel free to open the link for the full details. Did that answer your question?', refused: false };
+  assert.equal(m.applyVerdict(fin, 'answers').text, fin.text, 'answers: unchanged');
+  assert.equal(m.applyVerdict(fin, null), fin, 'no verdict: unchanged');
+  assert.match(m.applyVerdict(fin, 'partial').text, /\n- “A” \[1\]\nFeel free to open the link for the full details\. That covers part of it\. What else would you like to know\?$/);
+  assert.match(m.applyVerdict(fin, 'no').text, /\[1\]\nFeel free.*I'm not sure that answers it\./s, 'not: cited facts kept, follow-up asks for more');
+  assert.equal(m.applyVerdict({ text: 'x', refused: true }, 'no').text, 'x', 'a refusal is never changed');
+  // the judge never waits long and never throws
+  assert.equal(await m.judgeAnswer({ complete: () => new Promise(() => {}), question: 'q', text: 'a [1]', timeoutMs: 30 }), null);
+  assert.equal(await m.judgeAnswer({ complete: async () => { throw new Error('down'); }, question: 'q', text: 'a [1]' }), null);
+  assert.equal(await m.judgeAnswer({ complete: async () => ({ raw: 'P' }), question: 'q', text: 'a [1]' }), 'partial');
 });

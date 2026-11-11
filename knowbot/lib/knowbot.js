@@ -360,7 +360,14 @@ const COURTESY_RE = new RegExp(`^(?:${[
   "let me know if you need (?:anything else|more (?:detail|details|help))",
   '(?:good|great) question',
   'thanks for asking',
-].join('|')})[.!]*$`, 'i');
+  // follow-ups that walk the person to resolution (FOLLOW_UPS below)
+  'did (?:you find|that answer|this answer) (?:what you were looking for|your question)',
+  "was (?:that|this) helpful,? or is there something else (?:you(?:'re| are) looking for|you need)",
+  "does that cover (?:it|what you need),? or (?:is there something|what) else (?:should i look up|do you need)",
+  "that covers part of it\\. what else would you like to know",
+  "i'm not sure that answers it\\. can you tell me a bit more about what you need",
+  'that covers part of it', 'what else would you like to know', "i'm not sure that answers it", 'can you tell me a bit more about what you need',
+].join('|')})[.!?]*$`, 'i');
 const FACTY = /\d|[$€£¥₹¢]|@|https?:|www\.|[a-z0-9]\.[a-z]{2,}|[“”"«»]|(?:^|\s)'[^']*'/i;
 /** True for a pure-courtesy sentence ("I think I found what you're looking for!", "Hope this helps!"). Pure. */
 export function isCourtesy(sentence) {
@@ -1028,6 +1035,28 @@ const OPENERS = ["Good news, I found what you're looking for!", "Here's what I f
 // (never "Here's what I found!": a one-file list goes on "Here's what “Title” says [1]:")
 const LIST_OPENERS = ['I found a few things that will help!', 'Good news, I found a few things that will help!'];
 const CLOSERS = ['Hope this helps!', 'Feel free to ask if you have any other questions.'];
+// The closer walks the person to resolution: a product → was it helpful or what else; a document, policy or legal
+// source → did you find it; otherwise → did that answer it. Each is one courtesy sentence (no facts, never cited).
+const PRODUCT_SRC = /(?:^|\/)(?:product|products)\/|\/products?\//i;
+const DOC_SRC = /\b(?:agreements?|contracts?|regulations?|statutes?|acts?|laws?|legal|legislation|by-?laws?|forms?|manuals?|handbooks?|guidelines?|judg(?:e)?ments?|decisions?|rulings?|case law)\b/i;
+const CASE_NAME = /\b[A-Z][\w.'-]* v\.? [A-Z]/;   // case law: "R v Smith", "Doe v. CAS"
+const OFFER_RE = /^\s*feel free to (?:download|open)\b/i;
+const isFollowUp = (t) => Object.values(FOLLOW_UPS).includes(String(t || '').trim());
+export const FOLLOW_UPS = Object.freeze({
+  product: "Was that helpful, or is there something else you're looking for?",
+  document: 'Did you find what you were looking for?',
+  general: 'Did that answer your question?',
+  partial: 'That covers part of it. What else would you like to know?',
+  unsure: "I'm not sure that answers it. Can you tell me a bit more about what you need?",
+});
+/** The follow-up kind for an answer's sources: 'product' | 'document' | 'general'. Pure. */
+export function followUpKind(sources = [], question = '') {
+  const s = sources.filter(Boolean);
+  const where = (x) => [x.filename, x.path, x.url, linkOf(x)].filter(Boolean).join(' ');
+  if (s.some((x) => PRODUCT_SRC.test(where(x)))) return 'product';
+  if (s.some((x) => DOWNLOADABLE.test(linkOf(x) || '') || CASE_NAME.test(String(x.title || '')) || /\.pdf$/i.test(String(x.filename || '')) || DOC_SRC.test(`${x.title || ''} ${x.filename || ''}`))) return 'document';
+  return 'general';
+}
 const DOWNLOADABLE = /\.(?:pdf|docx?|xlsx?|pptx?|csv|epub|zip|txt|rtf|odt)(?:[?#]|$)/i;
 /** FNV-1a of the normalised question: the same question always gets the same opener and closer. */
 function voiceHash(seed) {
@@ -1051,8 +1080,10 @@ function whereOf(s, at) {
 export function guideText(items, sources, seed = '') {
   const h = voiceHash(seed);
   const links = [...new Set(items.map((x) => linkOf(sources[x.si])).filter(Boolean))];
-  const closer = links.length && links.every((u) => DOWNLOADABLE.test(u)) ? `Feel free to download ${links.length > 1 ? 'them' : 'it'} if that's helpful.`
-    : links.length ? `Feel free to open the link${links.length > 1 ? 's' : ''} for the full details.` : CLOSERS[(h >>> 4) % CLOSERS.length];
+  const offer = links.length && links.every((u) => DOWNLOADABLE.test(u)) ? `Feel free to download ${links.length > 1 ? 'them' : 'it'} if that's helpful.`
+    : links.length ? `Feel free to open the link${links.length > 1 ? 's' : ''} for the full details.` : '';
+  const follow = FOLLOW_UPS[followUpKind(items.map((x) => sources[x.si]))];
+  const closer = offer ? `${offer} ${follow}` : follow;
   if (items.length === 1) {
     const [x] = items;
     return `${OPENERS[h % OPENERS.length]} In ${whereOf(sources[x.si], x.section)}, it says: “${quoteText(x.text)}” [${x.n}]. ${closer}`;
@@ -1166,9 +1197,11 @@ export function requireCitations(fin) {
   const first = segs.findIndex((x) => x.cited);
   if (first < 0) return { ...fin, ...refusal }; // courtesy alone is never an answer
   const last = segs.length - 1 - [...segs].reverse().findIndex((x) => x.cited);
-  // Uncited: only one courtesy opener (the very first sentence, before any fact) and one courtesy closer (the very last).
+  // Uncited: only one courtesy opener (the very first sentence, before any fact) and a courtesy close after the last
+  // fact of at most two sentences (an offer to open the source, then the follow-up that checks it helped).
   const keep = (x, i) => x.cited || (i === 0 && i < first && isCourtesy(x.text.replace(/^\s*[-*•]\s+/, '')))
-    || (i === segs.length - 1 && i > last && isCourtesy(x.text.replace(/^\s*[-*•]\s+/, '')));
+    || (i === segs.length - 1 && i > last && isCourtesy(x.text.replace(/^\s*[-*•]\s+/, '')))
+    || (i === segs.length - 2 && i > last && OFFER_RE.test(x.text) && isCourtesy(x.text) && isFollowUp(segs[i + 1].text));
   const byLine = new Map();
   segs.forEach((x, i) => { if (keep(x, i)) byLine.set(x.li, [...(byLine.get(x.li) || []), x.text]); });
   const kept = [...byLine.values()].map((parts) => parts.join(' '));
@@ -1726,3 +1759,43 @@ export class KnowBot {
 }
 
 export default KnowBot;
+
+
+// ------------------------------------------------------------------------------------------------ answer verdict
+// A quick check on a grounded answer before it goes out: does it answer the core question (A), nearly (P), or not (N)?
+// It only changes the closing follow-up (the cited facts are never removed on its word): nearly → "That covers part of
+// it. What else…?", not → "I'm not sure that answers it…". No verdict (slow, unclear, no model) changes nothing.
+export const JUDGE_SETTINGS = Object.freeze({ max_tokens: 3, temperature: 0 });
+export function buildJudgeMessages(question, answerText) {
+  const body = String(answerText || '').split('\n').map((l) => l.replace(/\s*\[\d{1,3}\](?!\()/g, '').trim()).filter((l) => l && !isCourtesy(l)).join('\n');
+  return [
+    { role: 'system', content: 'You grade one answer to one question. Reply with a single letter and nothing else.\nA = it answers the core question.\nP = it nearly answers it: related and useful, but part of what was asked is missing.\nN = it does not answer the question.' },
+    { role: 'user', content: `Question: ${String(question || '').slice(0, 500)}\n\nAnswer:\n${body.slice(0, 3000)}\n\nGrade (A, P or N):` },
+  ];
+}
+/** The verdict in a judge reply: 'answers' | 'partial' | 'no' | null (anything else). Pure. */
+export function parseJudge(raw) {
+  const m = /^\s*["'*(]*\s*([APN])\b/i.exec(String(raw ?? ''));
+  return m ? ({ A: 'answers', P: 'partial', N: 'no' })[m[1].toUpperCase()] : null;
+}
+/** Asks the model for a verdict within timeoutMs; null on a timeout, an error or an unclear reply. */
+export async function judgeAnswer({ complete, question, text, timeoutMs = 3500 } = {}) {
+  if (typeof complete !== 'function' || !text) return null;
+  let timer;
+  try {
+    const out = await Promise.race([complete(buildJudgeMessages(question, text), { ...JUDGE_SETTINGS }), new Promise((r) => { timer = setTimeout(() => r(null), timeoutMs); })]);
+    return parseJudge(typeof out === 'string' ? out : out?.raw ?? out?.text ?? '');
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+/** The answer with its closing follow-up set by the verdict (partial / no); unchanged otherwise. Pure. */
+export function applyVerdict(fin, verdict) {
+  if (!fin || fin.refused || !verdict || verdict === 'answers') return verdict && fin ? { ...fin, verdict } : fin;
+  const want = verdict === 'partial' ? FOLLOW_UPS.partial : FOLLOW_UPS.unsure;
+  const ups = Object.values(FOLLOW_UPS);
+  let text = String(fin.text || '');
+  const hit = ups.find((u) => text.trimEnd().endsWith(u));
+  text = hit ? text.trimEnd().slice(0, -hit.length).trimEnd() : text.trimEnd();
+  const lastLine = text.split('\n').pop();
+  text = OFFER_RE.test(lastLine) || !hit ? `${text}${hit ? ' ' : '\n'}${want}` : `${text} ${want}`.replace(/\n\s+/g, '\n');
+  return { ...fin, text, verdict };
+}

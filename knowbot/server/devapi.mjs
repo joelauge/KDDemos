@@ -526,6 +526,8 @@ export function createDevApi(o = {}) {
           history: Array.isArray(history) ? history : [], mode, settings, voice: target.inst?.voice ?? true, evidenceOnly: !!sel,
           ...(mode === 'select' && researchAgent ? { research: researchAgent, onResearch: (e) => { if (e.type === 'error') log(`[api] research failed: ${e.message}`); } } : {}) });
         fin = r.fin;
+        // the answer verdict (lib judgeAnswer): only the closing follow-up changes ("That covers part of it…")
+        if (fin && !fin.refused && mode === 'select' && lib.judgeAnswer) fin = lib.applyVerdict(fin, await lib.judgeAnswer({ complete: safeComplete, question: q, text: fin.text }));
       }
     } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
 

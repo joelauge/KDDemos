@@ -1024,3 +1024,7 @@ details.pf-dspan > span { display: block; margin-top: 4px; }
 }
 .sb-prod.is-out .sb-prod-media img { opacity: .72; }
 @media (max-width: 599px) { .sb-prod-li { flex-basis: 132px; width: 132px; } }
+.sb-err-ref { display: block; margin-top: 2px; font-size: 12.5px; color: var(--muted); }
+/* the answer check: a quiet owner-only note under an answer that only nearly answers (or may not answer) the question */
+.sb-verdict { display: inline-flex; align-items: baseline; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.sb-verdict-add { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
