@@ -246,7 +246,7 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
     host.append(note);
     let sim = null, stopped = false;
     st.live = { stop() { stopped = true; try { sim?.stop(); } catch { /* ignore */ } } };
-    Promise.all([loadDev(), import('./phonesim.js?v=75ddc38')]).then(([d, m]) => {
+    Promise.all([loadDev(), import('./phonesim.js?v=138122b')]).then(([d, m]) => {
       if (stopped) return;
       if (!d) { note.textContent = 'Your bot is still getting ready. Try again in a moment.'; return; }
       note.textContent = 'Call it the way your customers will. Allow the microphone when asked, or tap Type during the call.';
@@ -265,7 +265,7 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
     host.append(mount, note);
     let widget = null, stopped = false;
     st.live = { stop() { stopped = true; try { widget?.destroy?.(); } catch { /* ignore */ } } };
-    Promise.all([loadDev(), import('../lib/voice-widget.js?v=75ddc38')]).then(([d, m]) => {
+    Promise.all([loadDev(), import('../lib/voice-widget.js?v=138122b')]).then(([d, m]) => {
       if (stopped) return;
       if (!d) { note.textContent = 'Your bot is still getting ready. Try again in a moment.'; return; }
       const ws = d.channels?.webVoice?.socket || `${apiRoot(d).replace(/^http/, 'ws')}/v1/bots/${encodeURIComponent(d.botId)}/voice/live`;

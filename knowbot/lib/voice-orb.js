@@ -2,7 +2,7 @@
 // Plain ES module, no dependencies. Used by voice mode (lib/voice-mode.js) in the Homepage search overlay and in web
 // chat, and by the Studio's colour picker preview.
 //
-//   import { createOrb, createMeter, ORB_PRESETS } from './voice-orb.js';
+//   import { createOrb, createMeter, ORB_PRESETS } from './voice-orb.js?v=138122b';
 //   const orb = createOrb(canvas, { preset: 'ocean' });
 //   orb.setState('listening');                  // 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking'
 //   orb.setLevelSource(createMeter(analyser));   // called once per frame: a number 0..1 or {level, bands:[low,mid,high]}

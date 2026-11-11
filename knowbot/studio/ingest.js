@@ -37,7 +37,7 @@
 // CONTRACT-GAP (B, studio.css): once an answer exists the intake slot gets max 22% and the thread min 55%, so a
 //   user-expanded Sources panel shows ~1 row. D marks that state with #in-intake-slot[data-open="user"].
 
-import { mountWidget, mountRowMenu, gaugeProps } from './kdw.js?v=75ddc38';
+import { mountWidget, mountRowMenu, gaugeProps } from './kdw.js?v=138122b';
 
 const RANK = { rejected: -2, failed: -1, queued: 0, uploading: 1, uploaded: 2, extracted: 3, chunked: 4, atomized: 5, vectorizing: 6, ready: 7 };
 const TERMINAL = new Set(['ready', 'failed', 'rejected']);
