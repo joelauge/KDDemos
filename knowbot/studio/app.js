@@ -23,17 +23,17 @@
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
 
-import * as store from './store.js?v=93c5afa';
-import * as api from './api.js?v=93c5afa';
-import * as motion from './motion.js?v=93c5afa';
-import * as icons from './icons.js?v=93c5afa';
-import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=93c5afa';
-import { mountShapes } from './shapes.js?v=93c5afa';
-import { mountBuilderPane } from './builderpane.js?v=93c5afa';
-import { siteSettings } from './sitebrand.js?v=93c5afa';
-import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=93c5afa';
-import { openLeads } from './leads.js?v=93c5afa';
-import { mountFtue } from './ftue.js?v=93c5afa';
+import * as store from './store.js?v=09c299f';
+import * as api from './api.js?v=09c299f';
+import * as motion from './motion.js?v=09c299f';
+import * as icons from './icons.js?v=09c299f';
+import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=09c299f';
+import { mountShapes } from './shapes.js?v=09c299f';
+import { mountBuilderPane } from './builderpane.js?v=09c299f';
+import { siteSettings } from './sitebrand.js?v=09c299f';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=09c299f';
+import { openLeads } from './leads.js?v=09c299f';
+import { mountFtue } from './ftue.js?v=09c299f';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
@@ -758,7 +758,7 @@ function initFtue(fresh) {
       openStats: () => openLeads(),
       openSetup: () => openSetup({}),
       saveSurfaces: (list) => updateSpec({ surfaces: normalizeSurfaces(list) }, { by: 'user', source: 'landing', quiet: true }),
-      websiteLine: () => import('./golive.js?v=93c5afa').then((m) => m.websiteLine(ctx)),
+      websiteLine: () => import('./golive.js?v=09c299f').then((m) => m.websiteLine(ctx)),
       isLive,
       onDismiss: () => toast({ kind: 'info', text: 'Guide hidden. Bring it back any time from ⋯ → Show the guide.' }),
     });
