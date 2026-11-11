@@ -1232,7 +1232,11 @@ async function answerUnchecked({ question, results = [], complete, search, perso
   // may add a verified summary. A failure of the agent falls back to the select path below.
   if (typeof research === 'function') {
     const fin = await researchAnswer({ question, sources: relevant, search, agent: research, persona, voice, minScore, k, signal, onEvent: onResearch, searchTool: !evidenceOnly }).catch(() => null);
-    if (fin) { const { lines: _l, allLines: _a, sources: _s, ...rest } = fin; return { fin: rest, generated: true, research: true }; }
+    if (fin) {
+      const { lines: _l, allLines, sources: rs, ...rest } = fin;
+      const out = rest.summary ? rest : await interpretTabular({ fin: rest, lines: allLines || [], sources: rs || [], question, persona, complete: typeof complete === 'function' ? (m, st) => complete(m, { signal, settings: st }) : null });
+      return { fin: out, generated: true, research: true };
+    }
   }
   // Non-English questions are selected against an English rendering (lines in the question's language still count).
   let questionEn = '';
@@ -1262,6 +1266,7 @@ async function answerUnchecked({ question, results = [], complete, search, perso
     return cards.length && cards.length < p.length ? [cards, p.filter((s) => !cards.includes(s))] : [p];
   };
   let fin = finalizeSelection('', [], pool0), uncovered = [], unmet = [];
+  let lastLines = [], lastPool = [];
   const run = async (passes) => {
     for (const pool of passes) {
       // coarse atoms (150-500 tokens) hold more lines than the model sees: keep the ones that best answer the question
@@ -1271,6 +1276,7 @@ async function answerUnchecked({ question, results = [], complete, search, perso
       const ask = questionEn ? `${questionEn} (${cleanLine(question)})` : question;
       const raw = await complete(buildSelectMessages(ask, lines, persona), { onProgress, signal, settings: { ...SELECT_SETTINGS } });
       fin = finalizeSelection(raw, lines, pool, { question, questionEn, voice });
+      lastLines = lines; lastPool = pool;
       if (fin.uncovered?.length) uncovered = fin.uncovered;
       if (!fin.refused) {
         const cov = answerCoverage(questionEn || question, lines, fin.selected || []);
@@ -1308,6 +1314,8 @@ async function answerUnchecked({ question, results = [], complete, search, perso
     } catch { fin = before; }
   }
   if (fin.uncovered) { const { uncovered: _u, ...rest } = fin; fin = rest; }
+  // table rows (CSV / spreadsheet / JSON fields): a plain, verified sentence instead of the raw cells
+  if (!fin.refused) fin = await interpretTabular({ fin, lines: lastLines, sources: lastPool, question, persona, complete: (m, st) => complete(m, { signal, settings: st }) });
   return { fin, generated: true };
 }
 
@@ -1798,4 +1806,65 @@ export function applyVerdict(fin, verdict) {
   const lastLine = text.split('\n').pop();
   text = OFFER_RE.test(lastLine) || !hit ? `${text}${hit ? ' ' : '\n'}${want}` : `${text} ${want}`.replace(/\n\s+/g, '\n');
   return { ...fin, text, verdict };
+}
+
+// ------------------------------------------------------------------------------------------------ tabular answers
+// When the lines an answer quotes are fields of a table (CSV / spreadsheet rows, JSON records, "key: value" lists,
+// markdown table rows), the bullets read like a data dump. The model then writes one or two plain sentences that
+// interpret the row for the question ("There are 194 Brown initiative trackers available at the 2Fold Supply
+// Warehouse [1]."), and that answer is kept only when verifySummary finds every number, quoted phrase and name in the
+// cited cells. Anything else keeps the quoted cells as they were: never an unverified claim.
+const TAB_KV = /^\s*["“']?[^"“”:=|\n]{1,48}["”']?\s*[:=]\s*\S/;
+const TAB_ROW = /^\s*\|.*\|\s*$/;
+const TAB_CSV = /^(?:[^,\n]*,){3,}[^,\n]*$/;
+const TAB_FILE = /\.(?:csv|tsv|xlsx?|ods|json|jsonl|ndjson|parquet)$/i;
+/** The share of lines that look like table fields or rows (0..1). Pure. */
+export function tabularShare(texts = []) {
+  const t = texts.map((x) => String(x || '').trim()).filter(Boolean);
+  return t.length ? t.filter((x) => TAB_KV.test(x) || TAB_ROW.test(x) || TAB_CSV.test(x)).length / t.length : 0;
+}
+export const INTERPRET_SETTINGS = Object.freeze({ max_tokens: 160, temperature: 0 });
+export function buildInterpretMessages(question, lines, persona = {}) {
+  return [
+    { role: 'system', content: `You are ${persona.name || 'a helpful assistant'}${persona.org ? ` for ${persona.org}` : ''}. The numbered lines are fields or rows from a table (a spreadsheet, CSV or JSON record). Answer the question in one or two short, plain sentences, the way a helpful person would explain it: pick the fields that answer the question and add useful context (for example what, how many, where). Do not list every field. Use ONLY values that appear in the lines, copied exactly (numbers, names, codes). End each sentence with the marker of a line it relies on, like [L12]. Reply with the sentences only.` },
+    { role: 'user', content: `Question: ${cleanLine(question).slice(0, 400)}\n\n${lines.map((l) => `L${l.n}: ${cleanLine(l.text).slice(0, 300)}`).join('\n')}` },
+  ];
+}
+/**
+ * fin (a finished, cited answer) → the same answer interpreted in plain sentences when its quoted lines are table
+ * fields, else fin unchanged. lines: the candidate lines ({n, source, text}) fin.selected points at; sources: their
+ * passages. complete(messages, settings) → string | {raw}. Never throws; never waits longer than timeoutMs.
+ */
+export async function interpretTabular({ fin, lines = [], sources = [], question = '', persona = {}, complete, timeoutMs = 6000 } = {}) {
+  if (!fin || fin.refused || fin.summary || typeof complete !== 'function') return fin;
+  const byN = new Map(lines.map((l) => [l.n, l]));
+  const chosen = (fin.selected || []).map((n) => byN.get(n)).filter(Boolean);
+  if (!chosen.length) return fin;
+  const fromTable = chosen.some((l) => TAB_FILE.test(String(sources[l.source]?.filename || sources[l.source]?.title || '')));
+  if (!(fromTable || (chosen.length >= 3 && tabularShare(chosen.map((l) => l.text)) >= 0.6))) return fin;
+  // the row's context: the chosen lines and their neighbours in the same passage (the variant name, the location …)
+  const keep = new Set(chosen.map((l) => l.n));
+  for (const l of chosen) for (let d = -6; d <= 6; d++) { const x = byN.get(l.n + d); if (x && x.source === l.source) keep.add(x.n); }
+  const ctx = [...keep].sort((a, b) => a - b).slice(0, 40).map((n) => byN.get(n));
+  const citeBySource = new Map();
+  for (const c of fin.citations || []) {
+    const si = sources.findIndex((s) => (s.file_id && s.file_id === c.file_id) || (!s.file_id && s.filename === c.filename));
+    if (si >= 0 && !citeBySource.has(si)) citeBySource.set(si, c.n);
+  }
+  const usable = ctx.filter((l) => citeBySource.has(l.source));
+  if (!usable.length) return fin;
+  let timer;
+  try {
+    const out = await Promise.race([complete(buildInterpretMessages(question, usable, persona), { ...INTERPRET_SETTINGS }), new Promise((r) => { timer = setTimeout(() => r(null), timeoutMs); })]);
+    const raw = typeof out === 'string' ? out : out?.raw ?? out?.text ?? '';
+    // a real interpretation: words, and its own line markers (a bare "L3, L5" selection reply never counts)
+    if (!raw || !/\[L\d{1,3}\]/.test(raw) || (String(raw).match(/[A-Za-z]{3,}/g) || []).length < 4) return fin;
+    const v = verifySummary(raw, { quotedLines: usable.map((l) => l.text), picks: usable.map((l) => l.n), citeOf: (n) => citeBySource.get(byN.get(n)?.source) ?? 1, question,
+      titles: [...new Set(usable.map((l) => String(sources[l.source]?.title || '')))] });
+    if (!v.ok) return fin;
+    // the closing courtesy (the follow-up) stays; the interpreted sentences replace the quoted cells
+    const tail = String(fin.text || '').split('\n').filter((l) => l.trim()).pop() || '';
+    const closer = !/\[\d{1,3}\]/.test(tail) && tail.split(/(?<=[.!?])\s+/).every((x) => isCourtesy(x)) ? tail : '';
+    return { ...fin, text: closer ? `${v.text}\n${closer}` : v.text, summary: v.text, tabular: true };
+  } catch { return fin; } finally { clearTimeout(timer); }
 }

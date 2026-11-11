@@ -831,3 +831,30 @@ test('follow-ups walk to resolution: product → helpful?, legal/manual → foun
   assert.equal(await m.judgeAnswer({ complete: async () => { throw new Error('down'); }, question: 'q', text: 'a [1]' }), null);
   assert.equal(await m.judgeAnswer({ complete: async () => ({ raw: 'P' }), question: 'q', text: 'a [1]' }), 'partial');
 });
+
+test('table rows are interpreted in plain words (verified against the cells), never a data dump, never an unverified claim', async () => {
+  const m = await import('../knowbot.js');
+  const src = [{ file_id: 'f1', filename: 'ugm_inventory_2fold_2026-11-11.csv', title: 'ugm_inventory_2fold_2026-11-11.csv', text: '' }];
+  const cells = ['"Product": "Initiative Trackers"', '"Variant": "Brown"', '"SKU": "UGMS-INTTRK-4-BRN"', '"Location": "2Fold Supply Warehouse"', '"Committed": "1"', '"Available": "194"', '"On hand": "195"'];
+  const lines = cells.map((text, i) => ({ n: i + 1, source: 0, text }));
+  const fin = { text: 'I found a few things that will help!\n' + cells.slice(1).map((c) => `- ${c} [1]`).join('\n') + '\nDid that answer your question?', citations: [{ n: 1, file_id: 'f1', filename: src[0].filename }], refused: false, selected: [2, 3, 4, 5, 6, 7] };
+  const q = "So what's the stock of the brown initiative trackers?";
+  const good = await m.interpretTabular({ fin, lines, sources: src, question: q, complete: async () => 'There are 194 Brown Initiative Trackers available at the 2Fold Supply Warehouse, with 195 on hand and 1 committed [L6].' });
+  assert.equal(good.tabular, true);
+  assert.equal(good.text, 'There are 194 Brown Initiative Trackers available at the 2Fold Supply Warehouse, with 195 on hand and 1 committed [1].\nDid that answer your question?');
+  // a number that is not in the cells: the quoted cells stay
+  assert.equal((await m.interpretTabular({ fin, lines, sources: src, question: q, complete: async () => 'There are 250 Brown trackers available [L6].' })).text, fin.text);
+  // a name that is not in the cells: the quoted cells stay
+  assert.equal((await m.interpretTabular({ fin, lines, sources: src, question: q, complete: async () => 'Brown trackers ship from Toronto, 194 available [L6].' })).text, fin.text);
+  // slow, failing or empty model: unchanged
+  assert.equal(await m.interpretTabular({ fin, lines, sources: src, question: q, complete: () => new Promise(() => {}), timeoutMs: 30 }), fin);
+  assert.equal(await m.interpretTabular({ fin, lines, sources: src, question: q, complete: async () => { throw new Error('x'); } }), fin);
+  // prose (not a table): unchanged, no model call
+  let called = false;
+  const prose = [{ file_id: 'f2', filename: 'faq.md', title: 'FAQ' }];
+  const pl = ['Test rides last 30 minutes.', 'Bring a photo ID.', 'We set the saddle height for you.'].map((text, i) => ({ n: i + 1, source: 0, text }));
+  const pf = { text: 'x [1]', citations: [{ n: 1, file_id: 'f2' }], refused: false, selected: [1, 2, 3] };
+  assert.equal(await m.interpretTabular({ fin: pf, lines: pl, sources: prose, question: 'test ride?', complete: async () => { called = true; return 'y [L1].'; } }), pf);
+  assert.equal(called, false);
+  assert.equal(m.tabularShare(['| SKU | Price |', '| A1 | 9.99 |']), 1);
+});

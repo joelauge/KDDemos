@@ -2573,6 +2573,12 @@ export function createStudio(o = {}) {
       emit('status', { step: 'quote', t: ms() });
       const tQ0 = ms();
       let fin = citeQuotedLines(fin0, kbLib.requireCitations);
+      // table rows (CSV / spreadsheet / JSON fields): one plain, verified sentence instead of the raw cells
+      if (!fin.refused && !fin0.summary && kbLib.interpretTabular) {
+        const t = await kbLib.interpretTabular({ fin: { ...fin, selected: fin0.selected }, lines, sources, question, persona, complete: (m, st) => selectComplete(m, st) });
+        if (ac.signal.aborted) { clearInterval(ping); return; }
+        if (t.tabular) { fin = t; fin0 = { ...fin0, summary: t.summary, tabular: true }; }
+      }
       // the answer verdict (does it answer the core question?): sets the closing follow-up, never removes a cited fact
       let verdict = null;
       if (!fin.refused && kbLib.judgeAnswer) {
@@ -2602,7 +2608,8 @@ export function createStudio(o = {}) {
       // proof claims: the cited lines only (a courtesy opener/closer is not a claim, and a "Here's what “X” says [1]:"
       // pointer line only names the place), each matched to its quote by marker and quoted text, never by position
       const claimLines = outLines.map((l) => quotedLineParts(l)).filter((x) => !x.courtesyOnly && /\[\d{1,3}\]/.test(x.body) && !/\[\d{1,3}\]:\s*$/.test(x.body));
-      const unsupported = Math.max(0, (fin0.selected || []).length - claimLines.length);
+      // an interpreted table answer states the row in its own words (verified), so its cells are not unsupported claims
+      const unsupported = fin0.tabular ? 0 : Math.max(0, (fin0.selected || []).length - claimLines.length);
       // server-paced presentation of the real final text (40 ms per line), not generation
       for (const l of outLines) {
         if (ac.signal.aborted) break;
