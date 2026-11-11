@@ -77,7 +77,7 @@
 //   Its check "06-popover · Proof view is now on" after a hover also needs to move after the 07 Enter (r6 critic:
 //   hover must show only the popover; the view turns on at the first click / Enter).
 
-import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=14ad5a2';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=93c5afa';
 
 const NOT_IN_DATA = "I can't seem to find an answer to that in any of my current data sources.";
 const STEP_ORDER = ['embed', 'search', 'rank', 'select', 'quote'];
@@ -3333,7 +3333,7 @@ export function mount(ctx) {
     voiceLayer = layer;
     host.append(layer);
     try {
-      const [m, d] = await Promise.all([import('../lib/voice-mode.js?v=14ad5a2'), api.devKey()]);
+      const [m, d] = await Promise.all([import('../lib/voice-mode.js?v=93c5afa'), api.devKey()]);
       if (voiceLayer !== layer) return;
       const wv = d?.channels?.webVoice || {};
       const endpoint = typeof wv.socket === 'string' && /^wss?:\/\//.test(wv.socket) ? wv.socket : null;

@@ -23,16 +23,16 @@
 // Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
 // The lazily mounted owner modules carry the stamp (?v=V).
 
-import * as store from './store.js?v=14ad5a2';
-import * as api from './api.js?v=14ad5a2';
-import * as motion from './motion.js?v=14ad5a2';
-import * as icons from './icons.js?v=14ad5a2';
-import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=14ad5a2';
-import { mountShapes } from './shapes.js?v=14ad5a2';
-import { mountBuilderPane } from './builderpane.js?v=14ad5a2';
-import { siteSettings } from './sitebrand.js?v=14ad5a2';
-import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=14ad5a2';
-import { openLeads } from './leads.js?v=14ad5a2';
+import * as store from './store.js?v=93c5afa';
+import * as api from './api.js?v=93c5afa';
+import * as motion from './motion.js?v=93c5afa';
+import * as icons from './icons.js?v=93c5afa';
+import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=93c5afa';
+import { mountShapes } from './shapes.js?v=93c5afa';
+import { mountBuilderPane } from './builderpane.js?v=93c5afa';
+import { siteSettings } from './sitebrand.js?v=93c5afa';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=93c5afa';
+import { openLeads } from './leads.js?v=93c5afa';
 
 const V = '1';
 const { getState, setState, on, emit, mark } = store;
