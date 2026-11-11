@@ -7,7 +7,8 @@
 // <script type="module" src=".../lib/embed.js" data-api="https://host" data-bot="acme"
 //         data-chat="on|off" data-voice="on|off" data-homepage="on|off" data-key="kb_trial_…"></script>
 //   data-chat      the chat bubble (the widget above)
-//   data-voice     voice mode with the orb: a mic button in the chat bubble, or (chat off) the round voice button
+//   data-voice     voice mode with the orb: the chat bubble always has a mic (data-voice="off" removes it); with the chat
+//                  off, data-voice="on" (or the saved Voice switch) shows the round voice button
 //   data-homepage  the homepage search over this page (../site/overlay.js)
 // A feature attribute left out follows the bot's saved switches (GET <api>/api/v1/channels/:bot → website), so the
 // owner can switch features on and off in the Studio without touching the page. Without data-mode and without any of
@@ -114,15 +115,17 @@ const start = async () => {
   // data-key for a trial bot, data-orb="ocean|violet|sunset|mint|ruby|midnight|silver" (else the bot's own choice from the Studio).
   const voiceOpts = { apiBase: v1Base, bot: botId || '', key: d.key || undefined, orb: d.orb || undefined };
   const want = { chat: flag(d.chat), voice: flag(d.voice), homepage: flag(d.homepage) };
-  // an explicit mode (inline, fullpage, widget) is the chat, as before; data-voice="on" adds the mic in it
-  if (d.mode) return startChat({ voice: want.voice ? voiceOpts : null });
+  // the chat bubble always offers voice mode (a mic beside Send) unless the page says data-voice="off"; it needs the bot id
+  const chatVoice = flag(d.voice) === false || !voiceOpts.bot ? null : voiceOpts;
+  // an explicit mode (inline, fullpage, widget) is the chat, as before, with its mic
+  if (d.mode) return startChat({ voice: chatVoice });
   if (want.chat == null || want.voice == null || want.homepage == null) {
     const saved = await savedSwitches();
     if (saved) { for (const k of Object.keys(want)) if (want[k] == null) want[k] = saved[k]; }
   }
   // switches unreadable (an old one-line snippet, a bot without saved switches): the chat bubble, as before
   if (want.chat == null) want.chat = want.homepage !== true;
-  if (want.chat) await startChat({ voice: want.voice ? voiceOpts : null });
+  if (want.chat) await startChat({ voice: chatVoice });
   else if (want.voice) {
     const { mountVoiceLauncher } = await import('./voice-launcher.js?v=14ad5a2');
     window.knowbotVoice = mountVoiceLauncher(d.target || null, { apiBase: v1Base, bot: botId || '', key: d.key || undefined, orb: d.orb || undefined,

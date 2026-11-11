@@ -446,7 +446,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         configs: [
           { label: 'Inbound webhook', lang: 'text', code: `Your mail service → Inbound → Webhook\n  URL:     ${ch('email')}?key=YOUR_INBOX_KEY\n  Method:  POST\n  Raw MIME message:  off` },
         ] },
-      { id: 'text', name: 'Chat bubble', blurb: 'A floating chat bubble, an inline panel or a full-page chat on your site. It comes with your one website line; it goes live after launch. Try it here now.', provider: 'On your website', hue: 0, url: null, status: 'Try it now', tryLabel: 'Try the chat bubble',
+      { id: 'text', name: 'Chat bubble', blurb: 'A floating chat bubble, an inline panel or a full-page chat on your site, with voice mode built in: visitors can type or talk. It comes with your one website line; it goes live after launch. Try it here now.', provider: 'On your website', hue: 0, url: null, status: 'Try it now', tryLabel: 'Try the chat bubble',
         needs: ['Access to your site\'s HTML (or your CMS\'s custom code box)'],
         steps: ['Switch Chat bubble on above and paste your one website line before </body>.', 'Want it inline instead? Use the Inline panel line below (data-mode="inline" and data-target="#help").', 'It answers with [n] citations and the canonical refusal, like here.'],
         configs: [
@@ -1168,9 +1168,30 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if (!motion.reduced()) motion.stagger([...exHold.children], [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[2], easing: 'out', fill: 'backwards' }, 80);
     });
     const af = askForm({ placeholder: 'Ask a question…', onAsk, label: 'Ask the widget' });
-    panel.append(af.form);
+    // voice mode in the bubble (lib/voice-mode.js, the same orb the embed opens from its mic): talk instead of typing
+    const micBtn = h('button', { type: 'button', class: 'gl-wmic', 'aria-label': 'Talk instead (voice mode)', title: 'Voice mode', html: icon('mic', 16) });
+    af.form.insertBefore(micBtn, af.form.querySelector('.gl-send'));
+    let vm = null;
+    const vbox = h('div', { class: 'gl-wvoice', hidden: true });
+    const endVoice = () => { const v = vm; vm = null; try { v && v.stop?.(); } catch { /* ignore */ } vbox.hidden = true; vbox.replaceChildren(); msgs.hidden = false; af.form.hidden = false; micBtn.focus(); };
+    voices.push({ stop() { const v = vm; vm = null; try { v && v.stop?.(); } catch { /* ignore */ } } });
+    micBtn.addEventListener('click', async () => {
+      if (vm) return;
+      msgs.hidden = true; af.form.hidden = true; vbox.hidden = false; vbox.textContent = 'Starting voice mode…';
+      try {
+        const [d, { openVoiceMode }] = await Promise.all([loadDev(), import(`${siteBase}lib/voice-mode.js?v=e3d6fc1`)]);
+        if (vbox.hidden) return;
+        if (d.status !== 'ok' || !d.key) { vbox.textContent = 'Voice mode needs your trial key; it is not available right now.'; setTimeout(endVoice, 2500); return; }
+        const view = await (api.getSite?.() || Promise.resolve(null)).catch(() => null);
+        vbox.textContent = '';
+        vm = openVoiceMode(vbox, { endpoint: webVoiceUrl(), key: d.key, name: botName(), orb: view?.site?.orb, size: 'min(120px, 26vh)', theme: 'auto', onClose: endVoice });
+        vm.focus?.();
+      } catch { vbox.textContent = "Voice mode couldn't start here."; setTimeout(endVoice, 2500); }
+    });
+    vbox.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !vm) endVoice(); });
+    panel.append(vbox, af.form);
     el.append(h('div', { class: 'gl-widget-stage' }, h('div', { class: 'gl-site-skel', 'aria-hidden': 'true' }, h('b'), h('i'), h('i'), h('i')), panel), af.row,
-      h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), 'This is your trial bot in widget form. After launch, the snippet on the left shows the same widget on your site.'));
+      h('p', { class: 'gl-note' }, h('span', { html: icon('info', 13) }), 'This is your trial bot in widget form. Tap the mic to talk to it instead. After launch, the snippet on the left shows the same widget on your site.'));
     async function onAsk(q) {
       if (!asked) { asked = true; if (!exHold.querySelector('.is-user')) exHold.remove(); }
       af.setBusy(true);

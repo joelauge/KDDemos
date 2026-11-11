@@ -697,3 +697,11 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @media (max-width: 899px) { .gl-toolgrid { grid-template-columns: minmax(0, 1fr); } .gl-feat { min-height: 44px; } .gl-ftab { min-height: 44px; } }
 @container (max-width: 820px) { .gl-inline .gl-toolgrid { grid-template-columns: minmax(0, 1fr); } }
 @media (forced-colors: active) { .gl-tool.is-sel { outline: 2px solid Highlight; } }
+
+/* voice mode in the chat bubble preview: a mic beside Send, and the orb in place of the conversation */
+.gl-widget .gl-askform:has(.gl-wmic) { grid-template-columns: minmax(0, 1fr) auto auto; }
+.gl-wmic { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 11px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.gl-wmic:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.gl-wvoice { flex: 1; min-height: 260px; overflow: hidden; position: relative; padding-top: 28px !important; display: flex; flex-direction: column; justify-content: center; padding: 12px; color: var(--muted); text-align: center; }
+.gl-wvoice[hidden] { display: none; }
+.gl-wvoice { justify-content: flex-start !important; overflow-y: auto !important; padding-top: 16px !important; }

@@ -58,6 +58,8 @@ try {
     await page.goto(homeUrl, { waitUntil: 'load' });
     await page.waitForTimeout(2500);
     const got = await page.evaluate(() => ({ chat: !!document.querySelector('.kb-launcher'), homepage: !!document.querySelector('knowbot-overlay'), voice: !!document.querySelector('knowbot-voice') }));
+    // the chat bubble carries voice mode: a mic beside Send once it opens (unless data-voice="off")
+    if (got.chat) { await page.click('.kb-launcher').catch(() => {}); await page.waitForTimeout(600); got.mic = await page.evaluate(() => !!document.querySelector('.kb-mic')); }
     await ctx.close();
     return { ...got, errors };
   };
@@ -69,6 +71,9 @@ try {
   check('embed: data-chat="off" data-voice="on" → the voice button only', !r.chat && !r.homepage && r.voice, JSON.stringify(r));
   r = await probe('');
   check('embed: no feature attributes → the bot\'s saved switches (chat bubble + homepage search)', r.chat && r.homepage && !r.voice, JSON.stringify(r));
+  check('embed: the chat bubble has a voice-mode mic by default', r.mic === true, JSON.stringify(r));
+  r = await probe('data-chat="on" data-voice="off" data-homepage="off"');
+  check('embed: data-voice="off" removes the mic from the chat bubble', r.chat && r.mic === false, JSON.stringify(r));
   line = `<script type="module" src="${dev.url}/lib/embed.js" data-instance="nobot" data-api="${dev.url}"></script>`;
   r = await probe(null);
   check('embed: an old one-line snippet (no saved switches) is the chat bubble, as before', r.chat && !r.homepage && !r.voice, JSON.stringify(r));
