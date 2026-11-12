@@ -11,14 +11,14 @@
 <!-- r5 (D1): the web fonts never block the first paint (the static Builder turn below paints with the system stack, then swaps) -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"></noscript>
 <!-- KnowDrive design system (vendored, see ../vendor/README.md): tokens, then the shared widgets, then the Studio's own CSS -->
-<link rel="stylesheet" href="../vendor/kd-theme/tokens.css?v=c521a23"><link rel="stylesheet" href="../vendor/knowdrive-widgets/0.4.1/widgets.css?v=c521a23">
-<script type="importmap">{"imports":{"react":"../vendor/react/19.2.9/react.mjs?v=c521a23","react/jsx-runtime":"../vendor/react/19.2.9/jsx-runtime.mjs?v=c521a23","react-dom":"../vendor/react/19.2.9/react-dom.mjs?v=c521a23","react-dom/client":"../vendor/react/19.2.9/react-dom-client.mjs?v=c521a23","@recourse-software/knowdrive-widgets/react":"../vendor/knowdrive-widgets/0.4.1/dist/react.js?v=c521a23"}}</script>
-<link rel="stylesheet" href="./studio.css?v=c521a23"><link rel="stylesheet" href="./ingest.css?v=c521a23">
+<link rel="stylesheet" href="../vendor/kd-theme/tokens.css?v=b9d9901"><link rel="stylesheet" href="../vendor/knowdrive-widgets/0.4.1/widgets.css?v=b9d9901">
+<script type="importmap">{"imports":{"react":"../vendor/react/19.2.9/react.mjs?v=b9d9901","react/jsx-runtime":"../vendor/react/19.2.9/jsx-runtime.mjs?v=b9d9901","react-dom":"../vendor/react/19.2.9/react-dom.mjs?v=b9d9901","react-dom/client":"../vendor/react/19.2.9/react-dom-client.mjs?v=b9d9901","@recourse-software/knowdrive-widgets/react":"../vendor/knowdrive-widgets/0.4.1/dist/react.js?v=b9d9901"}}</script>
+<link rel="stylesheet" href="./studio.css?v=b9d9901"><link rel="stylesheet" href="./ingest.css?v=b9d9901">
 <!-- r7 (D1): the answer and checkout styles never block the first paint (their modules mount after app.js waits for them) -->
-<link rel="stylesheet" href="./proof.css?v=c521a23" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><link rel="stylesheet" href="./checkout.css?v=c521a23" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><noscript><link rel="stylesheet" href="./proof.css?v=c521a23"><link rel="stylesheet" href="./checkout.css?v=c521a23"></noscript>
-<link rel="stylesheet" href="./landing.css?v=c521a23"><link rel="stylesheet" href="./showcase.css?v=c521a23"><link rel="stylesheet" href="./shapes.css?v=c521a23">
-<link rel="modulepreload" href="./store.js?v=c521a23"><link rel="modulepreload" href="./motion.js?v=c521a23"><link rel="modulepreload" href="./api.js?v=c521a23">
-<link rel="modulepreload" href="./app.js?v=c521a23"><link rel="modulepreload" href="./builderpane.js?v=c521a23">
+<link rel="stylesheet" href="./proof.css?v=b9d9901" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><link rel="stylesheet" href="./checkout.css?v=b9d9901" media="print" onload="this.media='all';this.dataset.ready=''" data-kb-async><noscript><link rel="stylesheet" href="./proof.css?v=b9d9901"><link rel="stylesheet" href="./checkout.css?v=b9d9901"></noscript>
+<link rel="stylesheet" href="./landing.css?v=b9d9901"><link rel="stylesheet" href="./showcase.css?v=b9d9901"><link rel="stylesheet" href="./shapes.css?v=b9d9901">
+<link rel="modulepreload" href="./store.js?v=b9d9901"><link rel="modulepreload" href="./motion.js?v=b9d9901"><link rel="modulepreload" href="./api.js?v=b9d9901">
+<link rel="modulepreload" href="./app.js?v=b9d9901"><link rel="modulepreload" href="./builderpane.js?v=b9d9901">
 </head><body>
 <!-- First view (landing.css / landing.js): shown only to first-time visitors (html[data-landing], set before paint). -->
 <div id="kl-landing" class="kl" data-kd-mode="expressive">
@@ -108,8 +108,8 @@
 <div id="st-live-ingest" class="st-sr" aria-live="polite"></div>
 <div id="st-live-assert" class="st-sr" aria-live="assertive"></div>
 <!-- async + last: the static Builder turn above paints and DOMContentLoaded fires without waiting for the module graph -->
-<script src="./landing.js?v=c521a23" defer></script>
-<script src="./showcase.js?v=c521a23" defer></script>
-<script type="module" async src="./app.js?v=c521a23"></script>
+<script src="./landing.js?v=b9d9901" defer></script>
+<script src="./showcase.js?v=b9d9901" defer></script>
+<script type="module" async src="./app.js?v=b9d9901"></script>
 <noscript><p class="st-noscript">KnowBot Studio needs JavaScript to build and test your bot.</p></noscript>
 </body></html>
