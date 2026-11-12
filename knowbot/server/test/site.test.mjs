@@ -203,6 +203,7 @@ async function boot() {
   const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, trustProxy: true, env: {
     KNOWDRIVE_BASE_URL: kd.url, KNOWDRIVE_API_KEY: 'fake-key', KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials', KNOWBOT_STUDIO_SAMPLE_MODE: 'live',
     KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen',
+    RESEND_API_KEY: 'fake-resend', // this server can email (nothing is sent: no test gives an address)
   }, studio: { sweep: false, pollMs: 40, pollSlowMs: 150, pollIdleMs: 400 } });
   await new Promise((r) => kb.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${kb.server.address().port}`;
@@ -359,7 +360,7 @@ describe('Homepage search over HTTP', () => {
     assert.ok(logged.length >= 1, 'channel:site question logged');
   });
 
-  test('voice mode: the site key opens the bot’s voice session and asks (never "send me this"); the orb colour is the owner’s', async () => {
+  test('voice mode: the site key opens the bot’s voice session, asks, and offers "send me this" like the typed search; the orb colour is the owner’s', async () => {
     assert.equal((await (await site('POST', { orb: 'violet' })).json()).site.orb, 'violet');
     const pub = await (await fetch(`${S.base}/api/site/${t.trialId}`)).json();
     assert.equal(pub.orb, 'violet');
@@ -374,18 +375,24 @@ describe('Homepage search over HTTP', () => {
       ws.addEventListener('message', (ev) => {
         const m = JSON.parse(String(ev.data));
         got.push(m);
-        if (m.type === 'ready') ws.send(JSON.stringify({ type: 'text', text: 'Can you email me how many days I have to return an unused item?' }));
+        if (m.type === 'ready') ws.send(JSON.stringify({ type: 'text', text: 'How many days do I have to return an unused item?' }));
+        if (m.type === 'answer' && got.filter((x) => x.type === 'answer').length === 1) { ws.send(JSON.stringify({ type: 'text', text: 'Can you email me that?' })); return; }
         if (m.type === 'answer' || m.type === 'error') { clearTimeout(timer); ws.close(); resolve(got); }
       });
       ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('socket failed')); });
     });
     const got = await session(pub.key);
     assert.equal(got[0].type, 'ready', JSON.stringify(got[0]));
-    const a = got.find((m) => m.type === 'answer');
+    const [a, ask] = got.filter((m) => m.type === 'answer');
     assert.ok(a, JSON.stringify(got.slice(-1)));
-    assert.equal(a.sendInfo, undefined, 'the site key never offers to send anything');
+    assert.equal(a.sendInfo, undefined);
     assert.match(a.text, /30 days/);
     assert.ok(a.citations.length >= 1);
+    // "email me that" in voice mode on the Homepage search asks for the address (it used to fall through to a refusal)
+    assert.ok(ask, JSON.stringify(got.slice(-1)));
+    assert.equal(ask.refused, false, JSON.stringify(ask));
+    assert.equal(ask.sendInfo?.status, 'ask', JSON.stringify(ask));
+    assert.match(ask.text, /email address/i);
     // a key for another bot is still refused
     const other = await session(pub.key.replace(/^kb_trial_[A-Za-z0-9_-]+/, 'kb_trial_x'));
     assert.equal(other.find((m) => m.type === 'error')?.code, 'unauthorized');

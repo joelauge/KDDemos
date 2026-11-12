@@ -1252,16 +1252,16 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       try { target = await resolveTarget(botId); } catch { return rejectUpgrade(socket, 404, 'No such bot.'); }
       const ws = acceptWebSocket(req, socket, head, { maxMessage: 512 * 1024 });
       if (!ws) return;
-      // the Homepage search's key (scope "site", GET /api/site/:id) opens voice mode too, and only asks questions: no
-      // "send me this" (no email or text goes out on it), and each visitor keeps their own caller key (their address)
-      let siteOnly = false;
+      // the Homepage search's key (scope "site", GET /api/site/:id) opens voice mode too. "Send me this" works there
+      // like the typed search and the chat bubble (only when the bot can email or text; sendinfo.mjs rate limits apply),
+      // and each visitor keeps their own caller key (their address)
       const media = sendInfo.media(botFromNumber(target));
       handleWebVoice(ws, {
         env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, callerKey: `ip:${ip}`, ip,
         authorize: async (key) => {
           if (key) {
             const who = await authKey({ headers: { authorization: `Bearer ${key}` } }, target.id, { site: true });
-            if (who.scope === 'site') { siteOnly = true; return { keyId: null }; }
+            if (who.scope === 'site') return { keyId: null };
             return who;
           }
           if (target.kind === 'live') return { keyId: null };
@@ -1276,9 +1276,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
           return a;
         },
         // "send me this": typed turns (text engine) and the send_info tool (live engine; the visitor confirms out loud)
-        get sendInfoMedia() { return siteOnly ? null : media; },
-        get maybeSendInfo() { return siteOnly ? null : (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }); },
-        get sendInfo() { return siteOnly ? null : ({ via, to, answer: ans, answers, transcript, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, answers, transcript, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice'), trackLink: trackerFor(req, target, 'voice') }); },
+        get sendInfoMedia() { return media; },
+        get maybeSendInfo() { return (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }); },
+        get sendInfo() { return ({ via, to, answer: ans, answers, transcript, callerKey }) => sendInfo.send({ ...siOf(target), channel: 'voice', via, to, answer: ans, answers, transcript, callerKey, proofUrlFor: proofLinkFor(req, target, 'voice'), trackLink: trackerFor(req, target, 'voice') }); },
         onEnd: ({ sid, engine, questions }) => log(`[webvoice] ${sid} ended (${engine || 'not started'}, ${questions} questions)`),
       });
     })().catch((e) => { log(`[webvoice] upgrade failed: ${e.message}`); try { socket.destroy(); } catch {} });
