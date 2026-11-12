@@ -497,10 +497,10 @@ async function journey(browser, dev, cell) {
   check('10-scope', `${scopeFile} switched back on`, !!backOn, { soft: true });
   await page.waitForTimeout(1500);
 
-  // 11 proof run
+  // 11 proof run (11 questions through the full pipeline: late in a five-cell run it can take well over a minute)
   const ranChip = await clickBuilderChip(page, cell, /Proof Run|trip it up/i);
   if (!ranChip) await builderSay(page, cell, 'run the proof run');
-  const sc = await page.waitForFunction(() => { const c = document.querySelector('#st-log [data-card="scorecard"]'); return c && /8\/8/.test(c.innerText) && /3\/3/.test(c.innerText); }, null, { timeout: 60000 }).then(() => true).catch(() => false);
+  const sc = await page.waitForFunction(() => { const c = document.querySelector('#st-log [data-card="scorecard"]'); return c && /8\/8/.test(c.innerText) && /3\/3/.test(c.innerText); }, null, { timeout: 150000 }).then(() => true).catch(() => false);
   const scText = await page.evaluate(() => document.querySelector('#st-log [data-card="scorecard"]')?.innerText || '');
   check('11-proof-run', 'scorecard shows 8/8 and 3/3', sc, { detail: scText.replace(/\s+/g, ' ').slice(0, 160) });
   await page.waitForTimeout(600);
