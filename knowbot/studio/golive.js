@@ -23,11 +23,11 @@
 // the free daily limit and paid access (spec.agents.paid, metered), and a Try it over the plain HTTP ask. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
 // engine and phone prompt as a real call.
 
-import { mountWidget } from './kdw.js?v=5e1c008';
-import { apiForScriptHost } from '../lib/site-config.js?v=5e1c008';
-import { mountNumbers, numberCache } from './numbers.js?v=5e1c008';
-import { siteSettings } from './sitebrand.js?v=5e1c008';
-import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE, sendInfoSwitches, SEND_INFO_HELP } from './surfaces.js?v=5e1c008';
+import { mountWidget } from './kdw.js?v=2114138';
+import { apiForScriptHost } from '../lib/site-config.js?v=2114138';
+import { mountNumbers, numberCache } from './numbers.js?v=2114138';
+import { siteSettings } from './sitebrand.js?v=2114138';
+import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE, sendInfoSwitches, SEND_INFO_HELP } from './surfaces.js?v=2114138';
 
 const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -40,7 +40,7 @@ export function ensureCss() {
     if (document.querySelector('link[data-gl-css]')) { resolve(); return; }
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = new URL('./golive.css?v=5e1c008', import.meta.url).href;
+    link.href = new URL('./golive.css?v=2114138', import.meta.url).href;
     link.dataset.glCss = '1';
     link.onload = () => resolve();
     link.onerror = () => resolve();
@@ -1475,7 +1475,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(note, host);
     let sim = null, stopped = false;
     voices.push({ stop() { stopped = true; try { sim && sim.stop(); } catch { /* ignore */ } sim = null; } });
-    loadDev().then(() => import('./phonesim.js?v=5e1c008')).then(({ mountPhone }) => {
+    loadDev().then(() => import('./phonesim.js?v=2114138')).then(({ mountPhone }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.remove(); voices.push(voiceTry(el, { mode: 'phone' })); return; }
