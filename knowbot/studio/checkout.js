@@ -11,7 +11,7 @@
 // SampleBot composer to focus it for "Keep testing" (the same affordance B uses).
 
 const NBSP = ' ';
-import { normalizeSurfaces, planTotals, toolSwitches, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=80bf7c3';
+import { normalizeSurfaces, planTotals, toolSwitches, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=c521a23';
 const DEFAULT_ANCHORS = { asOf: '2026-11', items: ['CustomGPT Premium $499/mo', 'Chatbase Business $500/mo (40 MB cap)', 'Botpress Team $939/mo', 'Intercom Fin $0.99 per resolution'] };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -1664,7 +1664,7 @@ export function mount(ctx) {
       }
       return null;
     }
-    if (!goLiveMod) goLiveMod = import('./golive.js?v=80bf7c3').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
+    if (!goLiveMod) goLiveMod = import('./golive.js?v=c521a23').then((m) => { m.ensureCss?.(); return m; }).catch((err) => { console.error('[studio] golive.js failed to load', err); goLiveMod = null; return null; });
     return goLiveMod;
   }
   async function openGoLive({ tab = 'channels', channel = null, invoker = null } = {}) {
