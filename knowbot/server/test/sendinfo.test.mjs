@@ -11,7 +11,7 @@ import { createKnowBotServer } from '../server.mjs';
 import { startFakeKnowDrive } from './fake-knowdrive.mjs';
 import { startFakeLLM } from './fake-llm.mjs';
 import { flushQuestions, _resetQuestions } from '../questions.mjs';
-import { twilioSignature } from '../channels/util.mjs';
+import { twilioSignature, smsInfo } from '../channels/util.mjs';
 import { createToolRunner, systemInstruction, toolDeclarations } from '../channels/voice-live.mjs';
 import { webToolDeclarations } from '../channels/webvoice.mjs';
 import {
@@ -80,17 +80,20 @@ describe('sendinfo: intent, addresses and messages', () => {
     assert.equal(emailFrom({ KNOWBOT_EMAIL_FROM: 'Answers <hi@mail.example>' }, 'Acme, Inc'), '"Acme, Inc" <hi@mail.example>');
     assert.ok(isStopWord('STOP') && isStopWord(' unsubscribe ') && !isStopWord('stop sending me texts about returns?'));
   });
-  test('the text fits one message with the proof link and the opt-out line; the e-mail has the answer, quotes, sources and proof', () => {
+  test('the text fits 3 segments with the bot\'s name, the proof link and the opt-out line; the e-mail has the answer, quotes, sources and proof', () => {
     const long = { ...ANSWER, answer: Array.from({ length: 10 }, (_, i) => `- Line ${i} says something useful about returns and refunds for every order. [1]`).join('\n') };
     for (const a of [ANSWER, long]) {
       const t = textMessage(normalizeAnswer(a), { botName: 'Waterdown Village Chiropractic', proofUrl: a.proofUrl });
       assert.ok(t.length <= TEXT_MAX, `${t.length}`);
-      assert.match(t, /Proof: https:\/\/kb\.example\.test\/p\/abc123/);
-      assert.match(t, /You asked Waterdown Village Chiropractic to send this\. Reply STOP to opt out\.$/);
+      assert.ok(smsInfo(t).segments <= 3 && smsInfo(t).encoding === 'GSM-7', JSON.stringify(smsInfo(t)));
+      assert.match(t, /^Waterdown Village Chiropractic:\n/);
+      assert.match(t, /\nhttps:\/\/kb\.example\.test\/p\/abc123\n/, 'the proof link on its own line');
+      assert.match(t, /Reply STOP to opt out\.$/);
+      assert.doesNotMatch(t, /\[\d+\]|Good news/);
     }
     const m = emailMessage(normalizeAnswer(ANSWER), { botName: 'Front Desk', to: 'jo@example.com', proofUrl: ANSWER.proofUrl });
-    assert.match(m.subject, /^Front Desk: How many days/);
-    for (const body of [m.text, m.html]) {
+    assert.match(m.subject, /^Your answer from Front Desk: How many days/);
+    for (const body of [m.text, m.html].map((x) => x.replace(/\s+/g, ' '))) { // the text part is wrapped at 72 columns
       assert.match(body, /within 30 days of delivery/);
       assert.match(body, /Returns Policy/);
       assert.match(body, /\/p\/abc123/);
@@ -132,20 +135,21 @@ describe('sendinfo: the conversation seam (createSendInfo)', () => {
     assert.equal(e.scope, 'conversation');
     assert.match(e.reply, /transcript of our conversation and the sources/);
     const mail = JSON.parse(calls[0].body);
-    assert.match(mail.subject, /Your conversation with Front Desk: transcript and sources/);
-    assert.match(mail.text, /Transcript\nYou: .*\nFront Desk: You can return it within 30 days\./);
+    assert.equal(mail.subject, 'Your call with Front Desk: How many days do I have to return an unused item? + 1 more');
+    assert.match(mail.text, /Transcript\n=+\nYou: .*\nFront Desk: You can return it within 30 days\./);
     assert.match(mail.text, /1\. .*return/i);
     assert.match(mail.text, /2\. Do you ship to Canada\?/);
     assert.match(mail.text, /\/p\/ret1/);
     assert.match(mail.text, /\/p\/ship1/);
-    assert.match(mail.html, /Sources for what we covered/);
-    assert.equal((mail.text.match(/answers only from its own files/g) || []).length, 1, 'said once, not after every answer');
+    assert.match(mail.html, />Transcript</);
+    assert.ok(mail.html.indexOf('Do you ship to Canada?') < mail.html.indexOf('>Transcript<'), 'the answers come first, the transcript after');
+    assert.equal((mail.text.match(/answers only from documents/g) || []).length, 1, 'said once, not after every answer');
     const t = await si.send({ ...base, channel: 'phone', via: 'text', to: '+1 415 555 0134', answer: A2, answers: [{ ...ANSWER, proofUrl: null }, A2], transcript, proofUrlFor, fromNumber: LINE });
     assert.equal(t.status, 'sent');
     const sms = new URLSearchParams(calls[1].body).get('Body');
-    assert.match(sms, /^Sources from your chat with Front Desk:/);
-    assert.match(sms, /1\) .*\/p\/ret1/);
-    assert.match(sms, /2\) Do you ship to Canada\? https:\/\/kb\.example\.test\/p\/ship1/);
+    assert.match(sms, /^Front Desk: the answers from our call, with their sources\./);
+    assert.match(sms, /\n1\) .*\nhttps:\/\/kb\.example\.test\/p\/ret1\n/);
+    assert.match(sms, /\n2\) Do you ship to Canada\?\nhttps:\/\/kb\.example\.test\/p\/ship1\n/);
     assert.ok(sms.length <= TEXT_MAX);
     assert.match(sms, /Reply STOP to opt out\.$/);
   });
@@ -266,8 +270,8 @@ describe('sendinfo: every surface through the server (fake mail + texting APIs)'
     assert.equal(m.body.from, 'Front Desk <answers@knowbot.knowdrive.ai>');
     assert.deepEqual(m.body.to, ['jo@example.com']);
     assert.ok(!('reply_to' in m.body), 'no Reply-To unless the owner set one');
-    assert.match(m.body.subject, /^Front Desk: How many days/);
-    for (const body of [m.body.html, m.body.text]) {
+    assert.match(m.body.subject, /^Your answer from Front Desk: How many days/);
+    for (const body of [m.body.html, m.body.text].map((x) => x.replace(/\s+/g, ' '))) {
       assert.match(body, /30 days/);
       assert.match(body, /Returns Policy/);
       assert.match(body, /https:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+/, 'the proof link is a tracked short link');
@@ -280,7 +284,7 @@ describe('sendinfo: every surface through the server (fake mail + texting APIs)'
     assert.deepEqual([to.searchParams.get('utm_source'), to.searchParams.get('utm_medium'), to.searchParams.get('utm_campaign'), to.searchParams.get('utm_content')], ['knowbot', 'webchat', 'front-desk', 'proof_email']);
     assert.equal((await api(to.pathname + to.search)).status, 200, 'the proof link resolves');
   });
-  test('API chat: a mobile number in the same message → ONE text (≤ 320, proof link, STOP line); a refused answer is never sent', async () => {
+  test('API chat: a mobile number in the same message → ONE text (≤ 3 segments, proof link, STOP line); a refused answer is never sent', async () => {
     F.reset();
     await chat(Q, 'u2');
     const r = await chat('text me that at (415) 555-0123', 'u2');
@@ -289,9 +293,10 @@ describe('sendinfo: every surface through the server (fake mail + texting APIs)'
     assert.equal(F.texts.length, 1);
     assert.equal(F.texts[0].To, '+14155550123');
     assert.equal(F.texts[0].From, LINE);
-    assert.ok(F.texts[0].Body.length <= 320);
-    assert.match(F.texts[0].Body, /Proof: https:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+/);
-    assert.match(F.texts[0].Body, /You asked Front Desk to send this\. Reply STOP to opt out\./);
+    assert.ok(smsInfo(F.texts[0].Body).segments <= 3);
+    assert.match(F.texts[0].Body, /^Front Desk:\n/);
+    assert.match(F.texts[0].Body, /\nhttps:\/\/kb\.example\.test\/r\/[A-Za-z0-9]+\n/);
+    assert.match(F.texts[0].Body, /Reply STOP to opt out\.$/);
     F.reset();
     const off = await chat(OFF, 'u3');
     assert.equal(off.refused, true);

@@ -2550,7 +2550,8 @@ export function createStudio(o = {}) {
     if (o.sendInfo && source === 'visitor') {
       // tracked links (server/leads.mjs) unless the owner turned them off; the address becomes a lead of this bot
       const trackLink = o.linkTracker ? await Promise.resolve(o.linkTracker(req, T.id, 'studio')).catch(() => null) : null;
-      const si = await o.sendInfo.maybeSendInfo({ key: `trial:${T.id}`, botId: T.id, botName: spec.name || 'Your bot', replyTo: spec.replyTo || null, question, channel: 'studio',
+      const si = await o.sendInfo.maybeSendInfo({ key: `trial:${T.id}`, botId: T.id, botName: spec.name || 'Your bot', org: spec.org || '', site: T.flags?.storeLast?.url || null,
+        storeUrl: T.flags?.storeLast?.url || null, replyTo: spec.replyTo || null, question, channel: 'studio',
         callerKey: T.id, scopeTags: [`trial:${T.id}`], proofUrlFor: (a) => (o.proofLink ? o.proofLink(req, T.id, a) : null), trackLink, leadId: T.id,
         allow: sendInfoAllow(spec.sendInfo) }).catch((e) => { log(`[studio] send-info failed: ${e.message}`); return null; });
       if (si) {

@@ -269,6 +269,22 @@ function smsBody(items) {
 }
 
 /**
+ * Which smsItems() item best answers the question (ties keep the answer's own order): the most question words, a direct
+ * statement over a caveat ("… but not by the lifetime frame warranty"), a quote that fits one segment on a tie.
+ */
+export function smsLeadIndex(items, question) {
+  const qt = qTokens(question);
+  const score = (x) => { const it = qTokens(x.quote ?? x.text); let n = 0; for (const w of qt) if (it.has(w)) n++; return n; };
+  let lead = 0;
+  if (qt.size) {
+    let best = -1;
+    const caveat = (x) => /\b(?:not|never|except|excluding|unless)\b|n't\b/i.test(x.quote ?? x.text);
+    items.forEach((x, i) => { const sc = score(x) - (caveat(x) ? 0.75 : 0) + (smsBody([x]).length <= 160 ? 0.25 : 0); if (sc > best) { best = sc; lead = i; } });
+  }
+  return lead;
+}
+
+/**
  * SMS: GSM-7 only (straight quotes, '-' for dashes) and at most two segments (306 characters, never above `max`).
  * The answer's facts, never its courtesy opener or closer: each verbatim quote as '"quote" [n].', whole items packed
  * until the budget is reached (the item that best matches the question first), then " Proof: <link>". An item is only
@@ -281,16 +297,7 @@ export function formatSms(r, proofUrl, max = 320) {
   const limit = Math.min(max, 306);
   const budget = Math.max(60, limit - suffix.length);
   if (!items.length) return toGsm7(clipWords(stripMarks(r.answer), budget).replace(/…$/, '...')) + suffix;
-  // the item that best answers the question leads (ties keep the answer's own order); the rest follow in order
-  const qt = qTokens(r.question);
-  const score = (x) => { const it = qTokens(x.quote ?? x.text); let n = 0; for (const w of qt) if (it.has(w)) n++; return n; };
-  let lead = 0;
-  if (qt.size) {
-    let best = -1;
-    // a direct statement beats a caveat ("… but not by the lifetime frame warranty"); a quote that fits one segment wins ties
-    const caveat = (x) => /\b(?:not|never|except|excluding|unless)\b|n't\b/i.test(x.quote ?? x.text);
-    items.forEach((x, i) => { const sc = score(x) - (caveat(x) ? 0.75 : 0) + (smsBody([x]).length <= 160 ? 0.25 : 0); if (sc > best) { best = sc; lead = i; } });
-  }
+  const lead = smsLeadIndex(items, r.question);
   const order = [items[lead], ...items.filter((_, i) => i !== lead)];
   const picked = [];
   for (const x of order) {

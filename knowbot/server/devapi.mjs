@@ -734,7 +734,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     const m = sendInfo.media(botFromNumber(target), siAllow(target));
     return { ...m, ...(!m.email && !m.text && (server.email || server.text) ? { off: true } : {}) };
   };
-  const siOf = (target) => ({ botId: target.id, botName: target.name || 'KnowBot', replyTo: target.inst?.replyTo || target.spec?.replyTo || null, fromNumber: botFromNumber(target),
+  /** The bot's website / store (the "on lumenbikes.test" and "Shop the store" of a sent message), or null. */
+  const siteOf = (target) => shopDomainFor(target, env) || (target?.T?.flags || target?.flags)?.storeLast?.url || null;
+  const siOf = (target) => ({ botId: target.id, botName: target.name || 'KnowBot', org: target.spec?.org || target.inst?.org || '', site: siteOf(target), storeUrl: siteOf(target), replyTo: target.inst?.replyTo || target.spec?.replyTo || null, fromNumber: botFromNumber(target),
     scopeTags: target.kind === 'trial' ? [`trial:${target.id}`] : [`bot:${target.id}`], leadId: leadBotOf(target), allow: siAllow(target) });
   // ---------------------------------------------------------------- leads report (server/leads.mjs)
   /** The id a bot's leads are kept under: its Studio bot (a launched bot linked to one through numberTrial reports there). */

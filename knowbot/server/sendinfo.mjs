@@ -1,6 +1,8 @@
 // "Send me this information": on every answer surface a visitor can ask the bot to send them its answer, by e-mail or
 // by text, and the bot asks for an e-mail address or mobile number, sends its LAST grounded answer (the answer text, the
-// quoted lines with their sources, and the proof link) and confirms with the address masked ("Sent to j***@example.com.").
+// quoted lines with their sources, its product cards, and the proof link) and confirms with the address masked ("Sent to
+// j***@example.com."). What the visitor receives (the e-mail's HTML and text parts, the text) is laid out by
+// sendinfo-render.mjs.
 //
 // One seam for every text surface (Studio chat, developer API chat + preview, SMS, WhatsApp, e-mail, web voice text):
 //
@@ -25,13 +27,15 @@
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { formatEmail, formatSms, toGsm7, clipWords } from './channels/util.mjs';
+import { productCard, safeHttpUrl } from '../lib/knowbot.js';
+import { emailMessage, textMessage, conversationEmail, conversationText, hostOf, isPdf } from './sendinfo-render.mjs';
 import { toE164, countryCodeOf, textableNumber } from './channels/shop.mjs';
 import { logSendEvent, hashCaller } from './questions.mjs';
 import { trackAnswer, newClickId } from './leads.mjs';
 
 export const DEFAULT_EMAIL_FROM = 'KnowBot <answers@knowbot.knowdrive.ai>';
-export const TEXT_MAX = 320;
+/** The longest text sent: 3 GSM-7 segments (sendinfo-render.mjs keeps every text within 3 segments, GSM-7 or not). */
+export const TEXT_MAX = 459;
 export const PENDING_TTL_MS = 15 * 60 * 1000;
 const HOUR = 3600 * 1000, DAY = 24 * HOUR;
 
@@ -202,8 +206,8 @@ export async function sendText(env, { from = null, to, body }, fetchImpl = fetch
 
 // ------------------------------------------------------------------ the answer that goes out
 /**
- * Any surface's answer → the one shape the formatters take: { question, answer, refused, citations:[{n,file,title,url?,
- * page?,section?,excerpt}], proof:{quoted:[{n,text}]}, proofUrl? }. Accepts the developer API's answer object, its public
+ * Any surface's answer → the one shape the renderers take: { question, answer, refused, citations:[{n,file,title,url?,
+ * page?,section?,excerpt,host,pdf}], proof:{quoted:[{n,text}]}, products?:[card], proofUrl? }. Accepts the developer API's answer object, its public
  * JSON, and the Studio's SSE final ({text, status, citations[].quotes, proof.quotedLines}).
  */
 export function normalizeAnswer(a) {
@@ -213,78 +217,17 @@ export function normalizeAnswer(a) {
   const citations = (Array.isArray(a.citations) ? a.citations : []).filter((c) => c && Number.isInteger(Number(c.n))).map((c) => ({
     n: Number(c.n), file: c.file || c.filename || '', title: c.title || '', ...(c.url ? { url: c.url } : {}), ...(c.page ? { page: c.page } : {}),
     ...(c.section ? { section: c.section } : {}), excerpt: c.excerpt || c.quotes?.[0]?.text || '',
+    // read from the original link: once tracked, the link is a short link on our own domain
+    host: hostOf(c.url), pdf: isPdf(c.url) || /\.pdf$/i.test(String(c.file || c.filename || '')),
   }));
+  const products = (Array.isArray(a.products) ? a.products : []).map(productCard).filter(Boolean).slice(0, 4);
   const quoted = (a.proof?.quoted || a.proof?.quotedLines || []).filter((q) => q && q.text).map((q) => ({ n: Number(q.n), text: String(q.text), ...(q.file ? { file: q.file } : {}) }));
   if (!quoted.length) for (const c of a.citations || []) for (const q of c?.quotes || []) if (q?.text) quoted.push({ n: Number(c.n), text: String(q.text) });
   return { question: oneLine(a.question || ''), answer: text, refused: refused || !citations.length, citations, proof: { quoted, hits: a.proof?.hits || [] },
-    ...(a.proofUrl ? { proofUrl: a.proofUrl } : {}), ...(a.bot ? { bot: a.bot } : {}), ...(a.botName ? { botName: a.botName } : {}) };
+    ...(products.length ? { products } : {}), ...(a.proofUrl ? { proofUrl: a.proofUrl } : {}), ...(a.bot ? { bot: a.bot } : {}), ...(a.botName ? { botName: a.botName } : {}) };
 }
-/** The e-mail: the bot's answer, its quoted lines and sources, the proof link, and a one-line "you asked for this" note. */
-export function emailMessage(answer, { botName = 'KnowBot', to = '', proofUrl = null } = {}) {
-  const r = { ...answer, refused: false };
-  const { text, html } = formatEmail(r, { proofUrl, botName, question: answer.question });
-  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const note = `You asked ${botName} to send this to ${to}. Nothing else will be sent unless you ask again, so there is nothing to unsubscribe from. If this wasn't you, you can ignore it.`;
-  const asked = answer.question ? `You asked: "${answer.question}"\n\n` : '';
-  return {
-    subject: clipWords(answer.question ? `${botName}: ${answer.question}` : `Your answer from ${botName}`, 140).replace(/[\r\n]+/g, ' '),
-    text: `${asked}${text}\n\n--\n${note}\n`,
-    html: `<div style="font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111;max-width:600px">${answer.question ? `<p style="margin:0 0 14px;color:#555">You asked: “${esc(answer.question)}”</p>` : ''}${html}<p style="margin:24px 0 0;padding-top:12px;border-top:1px solid #e5e7eb;color:#888;font-size:12px">${esc(note)}</p></div>`,
-  };
-}
-/** The text: the answer's facts packed into one message with the proof link and the opt-out line (≤ 320 characters). */
-export function textMessage(answer, { botName = 'KnowBot', proofUrl = null } = {}) {
-  const footer = toGsm7(`You asked ${clipWords(botName, 40).replace(/…$/, '')} to send this. Reply STOP to opt out.`);
-  const body = formatSms({ ...answer, refused: false }, proofUrl, TEXT_MAX - footer.length - 1);
-  return `${body}\n${footer}`.slice(0, TEXT_MAX);
-}
-
-/**
- * The end-of-call send (voice bots): the transcript of the conversation, then each answer from the files with its quoted
- * lines, sources and proof link. items: [{answer (normalized), proofUrl}], transcript: [{role: 'caller'|'user'|'agent', text}].
- */
-export function conversationEmail(items, transcript = [], { botName = 'KnowBot', to = '' } = {}) {
-  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const lines = (transcript || []).filter((t) => t && String(t.text || '').trim()).slice(-200)
-    .map((t) => ({ who: t.role === 'agent' ? botName : 'You', text: oneLine(t.text).slice(0, 2000) }));
-  const note = `You asked ${botName} to send this to ${to}. Nothing else will be sent unless you ask again, so there is nothing to unsubscribe from. If this wasn't you, you can ignore it.`;
-  // each answer as formatEmail writes it, minus its closing "answers only from its own files" line (said once below)
-  const closer = `${botName} answers only from its own files, and cites every line.`;
-  const parts = items.map(({ answer, proofUrl }) => {
-    const m = formatEmail({ ...answer, refused: false }, { proofUrl, botName, question: answer.question });
-    return { q: answer.question, text: m.text.replace(`\n${closer}`, '').trimEnd(), html: m.html.split(esc(closer)).join('').replace(/<p[^>]*>\s*<\/p>/g, '') };
-  });
-  const text = [
-    `Your conversation with ${botName}`, '',
-    ...(lines.length ? ['Transcript', ...lines.map((l) => `${l.who}: ${l.text}`), ''] : []),
-    'Sources for what we covered', '',
-    ...parts.flatMap((x, i) => [`${i + 1}. ${x.q || 'Answer'}`, x.text, '']),
-    closer, '', '--', note,
-  ].join('\n');
-  const h2 = (t) => `<p style="margin:24px 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#666">${esc(t)}</p>`;
-  const html = `<div style="font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111;max-width:600px">`
-    + `<p style="margin:0 0 4px;font-size:18px;font-weight:600">Your conversation with ${esc(botName)}</p>`
-    + (lines.length ? h2('Transcript') + lines.map((l) => `<p style="margin:0 0 6px"><strong style="color:${l.who === 'You' ? '#111' : '#4f46e5'}">${esc(l.who)}:</strong> ${esc(l.text)}</p>`).join('') : '')
-    + h2('Sources for what we covered')
-    + parts.map((x, i) => `<div style="margin:0 0 18px;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px"><p style="margin:0 0 8px;color:#555">${i + 1}. ${esc(x.q || 'Answer')}</p>${x.html}</div>`).join('')
-    + `<p style="margin:16px 0 0;color:#555;font-size:13px">${esc(closer)}</p>`
-    + `<p style="margin:24px 0 0;padding-top:12px;border-top:1px solid #e5e7eb;color:#888;font-size:12px">${esc(note)}</p></div>`;
-  return { subject: clipWords(`Your conversation with ${botName}: transcript and sources`, 140).replace(/[\r\n]+/g, ' '), text, html };
-}
-/** The end-of-call text: one proof link per answer (each opens the answer with its sources), as many as fit in 320 characters. */
-export function conversationText(items, { botName = 'KnowBot' } = {}) {
-  const footer = toGsm7(`You asked ${clipWords(botName, 40).replace(/…$/, '')} to send this. Reply STOP to opt out.`);
-  let body = toGsm7(`Sources from your chat with ${clipWords(botName, 40).replace(/…$/, '')}:`);
-  let shown = 0;
-  for (const { answer, proofUrl } of items) {
-    if (!proofUrl) continue;
-    const line = toGsm7(`\n${shown + 1}) ${clipWords(answer.question || 'Answer', 48).replace(/…$/, '…')} ${proofUrl}`);
-    if ((body + line).length + footer.length + 1 > TEXT_MAX) break;
-    body += line; shown++;
-  }
-  if (!shown) return null;
-  return `${body}\n${footer}`.slice(0, TEXT_MAX);
-}
+// What the visitor receives (the e-mail's HTML and text parts, the text message) is rendered in sendinfo-render.mjs.
+export { emailMessage, textMessage, conversationEmail, conversationText };
 
 // ------------------------------------------------------------------ the conversation seam
 const ASK_RE = /\bwhat (?:e-?mail address|mobile number|e-?mail address or mobile number)\b[^?]*\?|doesn'?t look like (?:a valid|an?) |reply with (?:that|your) (?:e-?mail|address)|I can (?:also )?(?:e-?mail|text) it to you/i;
@@ -360,7 +303,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
    * null/absent to send links as they are (tracking off). Every link of one send shares one click id (`cid`), which is
    * also on the lead recorded through onLead, so a click is tied back to who asked.
    */
-  async function send({ botId, botName = 'KnowBot', replyTo = null, channel = 'api', via = null, to, answer, answers = null, transcript = null, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null, allow = null }) {
+  async function send({ botId, botName = 'KnowBot', org = '', site = null, storeUrl = null, replyTo = null, channel = 'api', via = null, to, answer, answers = null, transcript = null, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null, allow = null }) {
     const server = sendInfoMedia(env, fromNumber);
     const media = sendInfoMedia(env, fromNumber, allow);
     // the bot's owner switched sending off (both media, or the one asked for): nothing is sent, no lead is recorded
@@ -390,20 +333,29 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     const proofUrl = ta.proofUrl || null;
     const items = convo.length ? await Promise.all(convo.map(async (x) => { const t = x === a ? ta : tracked(x, await proofOf(x)); return { answer: t, proofUrl: t.proofUrl || null }; })) : null;
     const aOut = ta;
-    const convoText = items && via === 'text' ? conversationText(items, { botName }) : null;
+    // the store's own address ("Shop the store", under product cards), tracked like the other links
+    const storeRaw = safeHttpUrl(storeUrl);
+    let storeOut = storeRaw;
+    if (storeRaw && cid) { try { storeOut = trackLink(storeRaw, { kind: 'store', cid, via }) || storeRaw; } catch { storeOut = storeRaw; } }
+    const reply = replyTo && validEmail(replyTo) ? validEmail(replyTo) : null;
+    // what the renderers say about who it is from and why the visitor got it
+    const ctx = { botName, org, to: dest, site: site || storeRaw, channel, replyTo: reply, storeUrl: storeOut };
+    const convoText = items && via === 'text' ? conversationText(items, ctx) : null;
     let sentLength = 0;
     try {
       if (items && via === 'email') {
-        const m = conversationEmail(items, transcript || [], { botName, to: dest });
-        await sendEmail(env, { from: emailFrom(env, botName), to: dest, subject: m.subject, html: m.html, text: m.text, replyTo: replyTo && validEmail(replyTo) ? validEmail(replyTo) : null }, fetchImpl);
+        const m = conversationEmail(items, transcript || [], ctx);
+        await sendEmail(env, { from: emailFrom(env, botName), to: dest, subject: m.subject, html: m.html, text: m.text, replyTo: reply }, fetchImpl);
       } else if (convoText) {
         await sendText(env, { from: fromNumber || null, to: dest, body: convoText }, fetchImpl);
         sentLength = convoText.length;
       } else if (via === 'email') {
-        const m = emailMessage(aOut, { botName, to: dest, proofUrl });
-        await sendEmail(env, { from: emailFrom(env, botName), to: dest, subject: m.subject, html: m.html, text: m.text, replyTo: replyTo && validEmail(replyTo) ? validEmail(replyTo) : null }, fetchImpl);
+        const m = emailMessage(aOut, { ...ctx, proofUrl });
+        await sendEmail(env, { from: emailFrom(env, botName), to: dest, subject: m.subject, html: m.html, text: m.text, replyTo: reply }, fetchImpl);
       } else {
-        await sendText(env, { from: fromNumber || null, to: dest, body: textMessage(aOut, { botName, proofUrl }) }, fetchImpl);
+        const body = textMessage(aOut, { ...ctx, proofUrl });
+        await sendText(env, { from: fromNumber || null, to: dest, body }, fetchImpl);
+        sentLength = body.length;
       }
     } catch (e) {
       log(`[sendinfo] bot ${botId}: send by ${via} failed: ${e.message}`);
@@ -411,7 +363,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     }
     hit(ck, lim.caller, HOUR); hit(dk, lim.dest, HOUR); hit(bk, lim.bot, DAY);
     log(`[sendinfo] bot ${botId}: sent by ${via} (${channel}) to:${hash8(dest)}`);
-    try { onSent?.({ botId, via, channel, callerKey, scopeTags, to: hash8(dest), fromNumber: via === 'text' ? (fromNumber || null) : null, length: via === 'text' ? (sentLength || textMessage(aOut, { botName, proofUrl }).length) : 0 }); } catch (e) { log(`[sendinfo] insights event failed: ${e.message}`); }
+    try { onSent?.({ botId, via, channel, callerKey, scopeTags, to: hash8(dest), fromNumber: via === 'text' ? (fromNumber || null) : null, length: via === 'text' ? sentLength : 0 }); } catch (e) { log(`[sendinfo] insights event failed: ${e.message}`); }
     // the leads report (server/leads.mjs): the address they asked us to send to, with what they asked and the click id
     try {
       onLead?.({ botId: leadId || botId, channel, type: via === 'email' ? 'email' : 'phone', value: dest, via, cid, consent: 'asked_to_send', scopeTags,
@@ -462,7 +414,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
    * @param {object} [o.lastAnswer]  the conversation's last answer when the surface knows it (else the remembered one)
    * @param {(q: string) => Promise<object>} [o.answerFor]  answers a referenced question (logged like any question)
    */
-  async function maybeSendInfo({ key, botId, botName = 'KnowBot', replyTo = null, question, history = [], lastAnswer = null, channel = 'api', caller = null,
+  async function maybeSendInfo({ key, botId, botName = 'KnowBot', org = '', site = null, storeUrl = null, replyTo = null, question, history = [], lastAnswer = null, channel = 'api', caller = null,
     callerKey = null, proofUrlFor = null, answerFor = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null, allow = null }) {
     const q = oneLine(question).slice(0, 1000);
     if (!q || !key) return null;
@@ -522,7 +474,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
       }
       return { status: 'ask', via: want, reply: askFor(want, media, server) };
     }
-    const r = await send({ botId, botName, replyTo, channel, via: valid[0].via, to: valid[0].to, answer, proofUrlFor, callerKey: callerKey || caller || key, fromNumber, scopeTags, trackLink, leadId, allow });
+    const r = await send({ botId, botName, org, site, storeUrl, replyTo, channel, via: valid[0].via, to: valid[0].to, answer, proofUrlFor, callerKey: callerKey || caller || key, fromNumber, scopeTags, trackLink, leadId, allow });
     if (r.status === 'sent' || r.status === 'nothing') pending.delete(key);
     else pending.set(key, { at: now(), via: pend?.via || null, answer });
     return r;

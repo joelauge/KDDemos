@@ -88,7 +88,8 @@ export function appendTracking(url, { source = UTM_SOURCE, medium = 'webchat', c
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'\])]+[^\s<>"'\]).,;:!?”’]/g;
 /**
  * An answer (sendinfo.mjs normalizeAnswer / devapi answer shape) with every outbound link replaced by track(url, kind):
- * the proof link ('proof'), the citations' urls and the links inside the answer text ('source'). Returns a copy.
+ * the proof link ('proof'), the citations' urls and the links inside the answer text ('source'), and the product cards'
+ * links ('product'; their photos are never rewritten). Returns a copy.
  */
 export function trackAnswer(a, track) {
   if (!a || typeof track !== 'function') return a;
@@ -101,6 +102,7 @@ export function trackAnswer(a, track) {
     ...(typeof a.text === 'string' && a.answer === undefined ? { text: inText(a.text) } : {}),
     ...(Array.isArray(a.citations) ? { citations: a.citations.map((c) => (c && isHttpUrl(c.url) ? { ...c, url: t(c.url, 'source') } : c)) } : {}),
     ...(a.proofUrl && isHttpUrl(a.proofUrl) ? { proofUrl: t(a.proofUrl, 'proof') } : {}),
+    ...(Array.isArray(a.products) ? { products: a.products.map((p) => (p && isHttpUrl(p.url) ? { ...p, url: t(p.url, 'product') } : p)) } : {}),
   };
 }
 
