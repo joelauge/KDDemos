@@ -53,7 +53,7 @@ Safety
 Style
 - Warm, plain and concrete. 1 to 3 short sentences. No headings, no lists, no emoji. Use the bot's name. Use the middle dot · as a separator when listing settings.
 - Prices, trial length and plan details are only ever stated with a [n] citation, and you quote only figures that appear in the kb_search results.
-- The plan has three tools the visitor switches features on and off in: Website (one embed line: chat bubble = webchat, voice = webvoice, homepage search = site), KnowBot number (one phone number: texts = sms, calls = phone, whatsapp) and Email (one inbox address: email). bot.answer_surfaces lists the features that are on; change them with update_bot surfaces when asked ("add WhatsApp", "just the chat bubble", "replace my homepage" = add site) and confirm them in plain words. Every feature is included in the one plan, so switching one never changes the price. Never bring up the price on your own; if the visitor asks, answer truthfully from kb_search with the citation.
+- The plan has three tools the visitor switches features on and off in: Website (one embed line: chat bubble = webchat, voice = webvoice, homepage search = site), KnowBot number (one phone number: texts = sms, calls = phone, whatsapp) and Email (one inbox address: email). bot.answer_surfaces lists the features that are on; change them with update_bot surfaces when asked ("add WhatsApp", "just the chat bubble", "replace my homepage" = add site) and confirm them in plain words. Every feature is included in the one plan, so switching one never changes the price. "Send me this" (bot.send_me_this) is separate from those: visitors ask the bot to email or text them an answer with its sources; switch it with update_bot send_info ("turn off texting answers" = {text:false}, never the sms surface). Never bring up the price on your own; if the visitor asks, answer truthfully from kb_search with the citation.
 - Offer the obvious next steps as buttons with offer_choices when no other tool already offered them.`;
 }
 
@@ -69,7 +69,8 @@ export function summarizeState(state = {}) {
   const answers = (Array.isArray(state.answers) ? state.answers : []).slice(-3).map((a) => ({ question_untrusted: dataText(a.question, 120), status: a.status || null }));
   return {
     step: state.step || null,
-    bot: { name: spec.name || null, org: spec.org || '', purpose: spec.purpose || '', audience: spec.audience || null, tone: spec.tone || null, length: spec.length || null, greeting: spec.greeting || '', answer_surfaces: Array.isArray(spec.surfaces) && spec.surfaces.length ? spec.surfaces : ['webchat'], strictness: spec.floor ?? null, version: spec.version ?? null, sample_files: !!spec.sampleSet },
+    bot: { name: spec.name || null, org: spec.org || '', purpose: spec.purpose || '', audience: spec.audience || null, tone: spec.tone || null, length: spec.length || null, greeting: spec.greeting || '', answer_surfaces: Array.isArray(spec.surfaces) && spec.surfaces.length ? spec.surfaces : ['webchat'],
+      send_me_this: (({ on, email, text }) => ({ on, email, text }))({ on: spec.sendInfo?.on !== false, email: spec.sendInfo?.email !== false, text: spec.sendInfo?.text !== false }), strictness: spec.floor ?? null, version: spec.version ?? null, sample_files: !!spec.sampleSet },
     files, files_total: Array.isArray(state.files) ? state.files.length : 0, ready_files: readyFiles(state).length,
     space: { used_mb: Math.round(q.used / 1048576 * 10) / 10, total_mb: Math.round(q.total / 1048576) },
     last_answers: answers, grounded_answers: Number(state.grounded) || 0, refusals: Number(state.refusals) || 0,
@@ -191,7 +192,8 @@ function describe(results, state) {
     }
     if (name === 'update_bot') {
       const p = r.res.patch || {};
-      const bits = [p.name && `name ${p.name}`, p.tone && `tone ${p.tone}`, p.purpose && `purpose “${p.purpose}”`, p.org && `for ${p.org}`, p.audience && `for ${p.audience}`, p.length && `${p.length} answers`, p.greeting && "a new greeting", p.sources && 'answers only from the files you named', p.surfaces && `answers on ${p.surfaces.map((x) => SURFACE_WORD[x] || x).join(', ')}`].filter(Boolean);
+      const bits = [p.name && `name ${p.name}`, p.tone && `tone ${p.tone}`, p.purpose && `purpose “${p.purpose}”`, p.org && `for ${p.org}`, p.audience && `for ${p.audience}`, p.length && `${p.length} answers`, p.greeting && "a new greeting", p.sources && 'answers only from the files you named', p.surfaces && `answers on ${p.surfaces.map((x) => SURFACE_WORD[x] || x).join(', ')}`,
+        p.sendInfo && `Send me this: ${Object.entries(p.sendInfo).map(([k, v]) => `${k === 'on' ? 'the feature' : k === 'text' ? 'texting answers' : 'emailing answers'} ${v ? 'on' : 'off'}`).join(', ')}`].filter(Boolean);
       parts.push(`Saved: ${bits.join(' · ')}.`);
     } else if (name === 'import_website') parts.push(`Opening the website import for ${r.res.data?.host || 'that site'}. Confirm you own or manage it and I'll read its pages.`);
     else if (name === 'attach_samples') parts.push('Loading the sample files now. Watch them learn on the right.');

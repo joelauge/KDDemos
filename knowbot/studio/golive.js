@@ -27,7 +27,7 @@ import { mountWidget } from './kdw.js?v=5e1c008';
 import { apiForScriptHost } from '../lib/site-config.js?v=5e1c008';
 import { mountNumbers, numberCache } from './numbers.js?v=5e1c008';
 import { siteSettings } from './sitebrand.js?v=5e1c008';
-import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE } from './surfaces.js?v=5e1c008';
+import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE, sendInfoSwitches, SEND_INFO_HELP } from './surfaces.js?v=5e1c008';
 
 const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -436,7 +436,8 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         const res = await fetch(`${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/devkey`, { headers: t.token ? { authorization: `Bearer ${t.token}` } : {}, credentials: 'omit' });
         if (res.ok) r = await res.json(); else info.httpStatus = res.status;
         if (r && typeof r.key === 'string' && /^kb_(trial|live)_/.test(r.key)) info = { status: 'ok', trial: t.id, key: r.key, botId: r.botId || null, expiresAt: r.expiresAt || t.expiresAt || null, voice: r.voice || null, endpoints: r.endpoints || null,
-          rateLimit: r.rateLimit || null, channels: r.channels && typeof r.channels === 'object' ? r.channels : null, agents: r.agents && typeof r.agents === 'object' ? r.agents : null };
+          rateLimit: r.rateLimit || null, channels: r.channels && typeof r.channels === 'object' ? r.channels : null, agents: r.agents && typeof r.agents === 'object' ? r.agents : null,
+          sendInfo: r.sendInfo && typeof r.sendInfo === 'object' ? r.sendInfo : null };
       } catch { /* network: unavailable */ }
       devCache.info = info; devCache.at = Date.now(); devCache.promise = null;
       syncRoot(info);
@@ -582,7 +583,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         feats);
       chGrid.append(h('div', { role: 'listitem', class: 'gl-toolitem' }, card));
     });
-    panel.append(intro, chGrid, h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
+    panel.append(intro, chGrid, sendInfoCard(), h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
     motion.stagger($$('.gl-tool', chGrid), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring', fill: 'backwards' }, 60);
     paintSwitches();
     paintCardStatus();
@@ -591,9 +592,76 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if (!d?.patch || closing) return;
       if ('surfaces' in d.patch) { paintSwitches(); if (toolOfCh(cur.channel).id === 'website') paintWebsiteLine(); }
       if ('agents' in d.patch) { paintSwitches(); paintAgentAccess(); }
+      if ('sendInfo' in d.patch) paintSendInfo();
     });
     cleanups.push(off);
-    loadDev().then(() => { if (!closing && cur.tab === 'channels') { idPill.querySelector('code').textContent = botId(); paintCardStatus({ animate: true }); renderDetail(cur.channel, { quiet: true }); } });
+    loadDev().then(() => { if (!closing && cur.tab === 'channels') { idPill.querySelector('code').textContent = botId(); paintCardStatus({ animate: true }); paintSendInfo(); renderDetail(cur.channel, { quiet: true }); } });
+  }
+
+  // ------------------------------------------------------------ "Send me this" (server/sendinfo.mjs; spec.sendInfo)
+  // One switch for the feature and one per way of sending (Email, Text). On unless the owner turns it off. A way this
+  // server can't send yet (GET …/devkey → sendInfo.server) shows its switch disabled with a short reason; the server
+  // only ever sends what the bot allows AND it can send. Customer-facing copy never names a mail or texting vendor.
+  let siCard = null;
+  const siSpec = () => sendInfoSwitches(getState().spec?.sendInfo);
+  /** What this server can send for this bot; unknown (no dev key yet) = assume yes, the server decides anyway. */
+  const siServer = () => { const sv = dev().sendInfo?.server; return { email: sv ? sv.email !== false : true, text: sv ? sv.text !== false : true, known: !!sv }; };
+  function setSendInfo(patch) {
+    const next = { ...siSpec(), ...patch };
+    setState({ spec: { ...getState().spec, sendInfo: next } }, 'spec:plan');
+    emit('spec:request', { patch: { sendInfo: next }, by: 'user', quiet: true });
+    paintSendInfo();
+    const sv = siServer();
+    const em = next.on && next.email && sv.email, tx = next.on && next.text && sv.text;
+    announce(!next.on ? 'Send me this is off. If a visitor asks, your bot says it doesn\'t send messages.'
+      : em && tx ? 'Visitors can ask for an answer by email or text.' : em ? 'Visitors can ask for an answer by email.' : tx ? 'Visitors can ask for an answer by text.'
+      : 'Send me this is on, but no way of sending is switched on.', 'polite');
+  }
+  function siSwitch({ id, label, sub, cls = '', onChange }) {
+    const input = h('input', { type: 'checkbox', role: 'switch', class: 'gl-switch-in', id, 'aria-describedby': `${id}-d` });
+    input.addEventListener('change', () => onChange(input.checked));
+    return h('div', { class: `gl-si-row ${cls}`.trim(), dataset: { si: id } },
+      h('label', { class: 'gl-switch', for: id }, input, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), h('span', { class: 'gl-feat-name' }, label)),
+      h('p', { class: 'gl-si-sub', id: `${id}-d` }, sub));
+  }
+  function sendInfoCard() {
+    siCard = h('section', { class: 'card gl-si', id: 'gl-si', 'aria-labelledby': 'gl-si-t' },
+      h('div', { class: 'gl-si-head' },
+        h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: icon('mail', 18) }),
+        h('div', { class: 'gl-si-text' }, h('h3', { class: 'gl-si-t', id: 'gl-si-t' }, 'Send me this'), h('p', { class: 'gl-si-help', id: 'gl-si-help' }, SEND_INFO_HELP)),
+        h('span', { class: 'chip gray is-label gl-si-state', 'aria-hidden': 'true' })),
+      h('div', { class: 'gl-si-body' },
+        siSwitch({ id: 'gl-si-on', label: 'Visitors can ask for a copy', sub: '', cls: 'is-main', onChange: (v) => setSendInfo({ on: v }) }),
+        h('div', { class: 'gl-si-media', role: 'group', 'aria-label': 'Ways to send' },
+          siSwitch({ id: 'gl-si-email', label: 'Email', sub: '', onChange: (v) => setSendInfo({ email: v }) }),
+          siSwitch({ id: 'gl-si-text', label: 'Text', sub: '', onChange: (v) => setSendInfo({ text: v }) }))));
+    paintSendInfo();
+    return siCard;
+  }
+  function paintSendInfo() {
+    if (!siCard) return;
+    const s = siSpec(), sv = siServer();
+    const em = s.on && s.email && sv.email, tx = s.on && s.text && sv.text;
+    const main = $('#gl-si-on', siCard), email = $('#gl-si-email', siCard), text = $('#gl-si-text', siCard);
+    main.checked = s.on;
+    $('#gl-si-on-d', siCard).textContent = !s.on ? 'Off: if a visitor asks, your bot says it doesn\'t send messages. Nothing is sent and no lead is added.'
+      : em && tx ? 'Your bot asks for their email address or mobile number, then sends the answer with its sources.'
+      : em ? 'Your bot asks for their email address, then sends the answer with its sources.'
+      : tx ? 'Your bot asks for their mobile number, then texts the answer with a link to its sources.'
+      : 'No way of sending is on, so your bot says it doesn\'t send messages.';
+    for (const [el, k, can, why] of [[email, 'email', sv.email, 'Email sending isn\'t set up on this server yet.'], [text, 'text', sv.text, 'Texting isn\'t set up on this server yet.']]) {
+      el.checked = s[k] && can;
+      el.disabled = !s.on || !can;
+      const row = el.closest('.gl-si-row');
+      row.classList.toggle('is-unavailable', !can);
+      row.classList.toggle('is-dim', !s.on);
+      $(`#${el.id}-d`, siCard).textContent = !can ? why : k === 'email' ? (s[k] ? 'On: sends the answer, quoted lines and sources.' : 'Off: your bot offers a text instead.') : (s[k] ? 'On: one text with a link to the sources.' : 'Off: your bot offers an email instead.');
+    }
+    const st = $('.gl-si-state', siCard);
+    const n = (em ? 1 : 0) + (tx ? 1 : 0);
+    st.textContent = !s.on || !n ? 'Off' : n === 2 ? 'Email and text' : em ? 'Email only' : 'Text only';
+    st.className = `chip ${s.on && n ? 'green' : 'gray'} is-label gl-si-state`;
+    siCard.classList.toggle('is-off', !s.on || !n);
   }
   /** Every switch shows the saved (or optimistic) spec.surfaces; the last feature on can't be switched off. */
   function paintSwitches() {

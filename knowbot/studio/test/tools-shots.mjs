@@ -154,7 +154,62 @@ try {
   check('AI agents: the paid switch saves spec.agents.paid', saved.spec?.agents?.paid === true && saved.spec?.agents?.public === true, JSON.stringify(saved.spec?.agents));
   await page.click('label[for="gl-ag-paid"]');
   await page.waitForTimeout(500);
-  const mcp = (msg) => api(`/api/mcp/bots/${t.trialId}`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', ...msg }) }).then((x) => x.json());
+  // ------------------------------------------------------------------ "Send me this" (spec.sendInfo)
+  // the dev server can email (a fake mail key) but has no texting line: Text shows disabled with a short reason
+  await page.locator('#gl-si').scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector('#gl-si-text')?.disabled === true, null, { timeout: 15000 }).catch(() => {});
+  const siState = () => page.evaluate(() => {
+    const q = (s) => document.querySelector(s);
+    const sw = (id) => ({ on: q(`#${id}`).checked, disabled: q(`#${id}`).disabled, role: q(`#${id}`).getAttribute('role'), name: q(`label[for="${id}"]`)?.textContent.trim(), sub: q(`#${id}-d`)?.textContent.trim() });
+    return { help: q('#gl-si-help')?.textContent, chip: q('.gl-si-state')?.textContent, main: sw('gl-si-on'), email: sw('gl-si-email'), text: sw('gl-si-text'), card: q('#gl-si')?.textContent || '' };
+  });
+  let si = await siState();
+  check('Send me this: one switch plus Email / Text, plain-language help', si.help === 'Visitors can ask the bot to text or email them an answer and its sources. Each request adds them to Stats & Leads.'
+    && si.main.role === 'switch' && si.email.role === 'switch' && si.text.role === 'switch' && si.email.name === 'Email' && si.text.name === 'Text', JSON.stringify(si));
+  check('Send me this: on by default; a medium the server can\'t send is disabled with a reason', si.main.on && si.email.on && !si.email.disabled && !si.text.on && si.text.disabled
+    && /Texting isn't set up on this server yet\./.test(si.text.sub) && si.chip === 'Email only', JSON.stringify(si));
+  check('Send me this: no vendor names', !/\b(?:Resend|Twilio|SendGrid|Postmark|Mailgun|Meta)\b/.test(si.card), si.card);
+  const siBox = await page.locator('#gl-si').boundingBox();
+  const siShot = async (name) => { const b = await page.locator('#gl-si').boundingBox(); if (b) await page.screenshot({ path: path.join(SHOTS, name), clip: { x: Math.max(0, b.x - 16), y: Math.max(0, b.y - 16), width: b.width + 32, height: b.height + 32 } }); };
+  if (siBox) await siShot('setup-send-me-this.png');
+  await page.click('label[for="gl-si-on"]');
+  await page.waitForTimeout(900);
+  let savedSi = (await (await api(`/api/studio/trials/${t.trialId}`, { headers: H() })).json()).spec?.sendInfo;
+  si = await siState();
+  check('Send me this: the main switch saves spec.sendInfo.on and dims Email / Text', savedSi?.on === false && si.email.disabled && si.text.disabled && si.chip === 'Off' && /doesn't send messages/.test(si.main.sub), JSON.stringify({ savedSi, si }));
+  await siShot('setup-send-me-this-off.png');
+  const offAsk = (await (await api(`/api/studio/trials/${t.trialId}/ask`, { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: JSON.stringify({ question: 'Can you email me that?' }) })).text())
+    .split('\n\n').find((f) => /^event: final$/m.test(f));
+  const offFin = JSON.parse(/^data: (.*)$/m.exec(offAsk)[1]);
+  check('Send me this off: the bot says it doesn\'t send messages (not the refusal)', offFin.sendInfo?.status === 'off' && /^This bot doesn't send messages/.test(offFin.text) && !offFin.refused, offFin.text);
+  await page.click('label[for="gl-si-on"]');
+  await page.waitForTimeout(500);
+  await page.click('label[for="gl-si-email"]');
+  await page.waitForTimeout(900);
+  savedSi = (await (await api(`/api/studio/trials/${t.trialId}`, { headers: H() })).json()).spec?.sendInfo;
+  check('Send me this: the Email switch saves spec.sendInfo.email', savedSi?.on === true && savedSi?.email === false, JSON.stringify(savedSi));
+  await page.click('label[for="gl-si-email"]');
+  await page.waitForTimeout(600);
+  savedSi = (await (await api(`/api/studio/trials/${t.trialId}`, { headers: H() })).json()).spec?.sendInfo;
+  check('Send me this: back on', savedSi?.on === true && savedSi?.email === true, JSON.stringify(savedSi));
+  {
+    // phone width: the card stacks, no sideways scroll, 44 px touch targets
+    const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: 'light', deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    const pp = await pctx.newPage();
+    await pp.goto(`${dev.studioUrl}?t=${t.trialId}&k=${encodeURIComponent(t.restoreKey)}`, { waitUntil: 'load' });
+    await pp.waitForTimeout(1500);
+    await pp.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
+    await pp.waitForSelector('#gl-si', { timeout: 20000 }).catch(() => {});
+    await pp.locator('#gl-si').scrollIntoViewIfNeeded().catch(() => {});
+    await pp.waitForTimeout(800);
+    const m = await pp.evaluate(() => { const c = document.querySelector('#gl-si'); const r = c?.getBoundingClientRect(); const l = document.querySelector('label[for="gl-si-email"]')?.getBoundingClientRect();
+      return c ? { right: r.right, vw: innerWidth, over: c.scrollWidth - c.clientWidth, tap: l ? l.height : 0 } : null; });
+    check('Send me this: fits a phone (no overflow, 44 px switches)', m && m.right <= m.vw + 1 && m.over <= 1 && m.tap >= 43, JSON.stringify(m));
+    const b = await pp.locator('#gl-si').boundingBox().catch(() => null);
+    if (b) await pp.screenshot({ path: path.join(SHOTS, 'setup-send-me-this-phone.png'), clip: { x: 0, y: Math.max(0, b.y - 12), width: 390, height: Math.min(b.height + 24, 844) } });
+    await pctx.close();
+  }
+  const mcp =(msg) => api(`/api/mcp/bots/${t.trialId}`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', ...msg }) }).then((x) => x.json());
   const init = await mcp({ id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'tools-shots', version: '1' } } });
   const list = await mcp({ id: 2, method: 'tools/list' });
   const call = await mcp({ id: 3, method: 'tools/call', params: { name: 'ask', arguments: { question: 'How long is the frame warranty?' } } });

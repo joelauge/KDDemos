@@ -66,7 +66,7 @@ function cleanMask(m) {
 }
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
-const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'shopDomain', 'numberTrial', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
+const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'shopDomain', 'numberTrial', 'sendInfo', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
 const BUCKET_KEYS = ['id', 'flow', 'name', 'tag', 'builtin', 'createdAt', 'updatedAt'];
 const now = () => new Date().toISOString();
 
@@ -134,6 +134,20 @@ function cleanBot(body, { partial = false, models = [] } = {}) {
     const v = String(body.numberTrial ?? '').trim().toLowerCase();
     if (v && !/^tr_[a-z2-7]{16}$/.test(v)) throw new InstanceError(400, 'numberTrial must be a Studio bot id (tr_…)');
     out.numberTrial = v || undefined;
+  }
+  // "Send me this" (server/sendinfo.mjs): {on, email, text}; absent = on. Set at launch from the Studio bot's spec.sendInfo.
+  if (body.sendInfo !== undefined) {
+    if (body.sendInfo === null) out.sendInfo = undefined;
+    else {
+      const v = body.sendInfo;
+      if (!v || typeof v !== 'object' || Array.isArray(v)) throw new InstanceError(400, 'sendInfo must be {on?, email?, text?} (true or false)');
+      const cur = {};
+      for (const [k, x] of Object.entries(v)) {
+        if (!['on', 'email', 'text'].includes(k) || typeof x !== 'boolean') throw new InstanceError(400, 'sendInfo must be {on?, email?, text?} (true or false)');
+        cur[k] = x;
+      }
+      out.sendInfo = { on: cur.on !== false, email: cur.email !== false, text: cur.text !== false };
+    }
   }
   if (body.starters !== undefined) {
     if (!Array.isArray(body.starters)) throw new InstanceError(400, 'starters must be an array of strings');

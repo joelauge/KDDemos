@@ -398,6 +398,43 @@ describe('Homepage search over HTTP', () => {
     assert.equal(other.find((m) => m.type === 'error')?.code, 'unauthorized');
   });
 
+  test('"Send me this" switched off: typed and voice search say the bot doesn\'t send messages (never the refusal), nothing asked or sent', async () => {
+    const patch = (sendInfo) => fetch(`${S.base}/api/studio/trials/${t.trialId}`, { method: 'PATCH', headers: tok({ 'content-type': 'application/json' }), body: JSON.stringify({ sendInfo }) });
+    const off = await patch({ on: false });
+    assert.equal(off.status, 200);
+    assert.deepEqual((await off.json()).spec.sendInfo, { on: false, email: true, text: true });
+    const pub = await (await fetch(`${S.base}/api/site/${t.trialId}`)).json();
+    const auth = { authorization: `Bearer ${pub.key}`, 'content-type': 'application/json' };
+    const ask = (question) => fetch(`${S.base}/api/v1/bots/${t.trialId}/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ question, user: 'si-off' }) }).then((r) => r.json());
+    assert.match((await ask('How many days do I have to return an unused item?')).answer, /30 days/);
+    const typed = await ask('Can you email me that?');
+    assert.equal(typed.refused, false);
+    assert.equal(typed.sendInfo.status, 'off');
+    assert.match(typed.answer, /^This bot doesn't send messages/);
+    assert.doesNotMatch(typed.answer, /doesn't seem to be in my files/);
+    // voice mode (text engine here): the same plain reply, and the greeting never offers to send
+    const got = await new Promise((resolve, reject) => {
+      const ws = new WebSocket(pub.endpoints.voice);
+      const seen = [];
+      const timer = setTimeout(() => { ws.close(); reject(new Error(`timed out: ${JSON.stringify(seen)}`)); }, 20000);
+      ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'start', key: pub.key })));
+      ws.addEventListener('message', (ev) => {
+        const m = JSON.parse(String(ev.data));
+        seen.push(m);
+        if (m.type === 'ready') ws.send(JSON.stringify({ type: 'text', text: 'Can you email me that?' }));
+        if (m.type === 'answer' || m.type === 'error') { clearTimeout(timer); ws.close(); resolve(seen); }
+      });
+      ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('socket failed')); });
+    });
+    assert.doesNotMatch(got[0].greeting || '', /send you the sources/);
+    const v = got.find((m) => m.type === 'answer');
+    assert.equal(v.refused, false);
+    assert.equal(v.sendInfo?.status, 'off', JSON.stringify(v));
+    assert.match(v.text, /^This bot doesn't send messages/);
+    assert.equal((await patch({ on: true })).status, 200);
+    assert.equal((await ask('Can you email me that?')).sendInfo.status, 'ask', 'back on: it asks for the address again');
+  });
+
   test('a question that is not in the files gets the refusal sentence, no sources', async () => {
     const pub = await (await fetch(`${S.base}/api/site/${t.trialId}`)).json();
     const r = await fetch(`${S.base}/api/v1/bots/${t.trialId}/chat`, { method: 'POST', headers: { authorization: `Bearer ${pub.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ question: 'What is the capital of Australia?' }) });

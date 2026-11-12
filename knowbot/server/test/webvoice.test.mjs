@@ -347,6 +347,45 @@ describe('webvoice: phone mode (the Studio phone simulator)', () => {
   });
 });
 
+describe('webvoice: "Send me this" switched per bot (Gemini Live engine)', () => {
+  let S, G;
+  before(async () => {
+    _resetQuestions();
+    G = await startFakeGemini(async () => {}); // records the setup only
+    S = await boot({ GEMINI_API_KEY: 'gkey', GEMINI_LIVE_URL: G.url, RESEND_API_KEY: 're_fake', TWILIO_ACCOUNT_SID: 'AC1', TWILIO_AUTH_TOKEN: 't', TWILIO_FROM_NUMBER: '+14155550100' });
+  });
+  after(async () => { _resetQuestions(); await S.close(); await G.close(); });
+  const setBot = async (sendInfo) => assert.equal((await S.api('/api/instances/front-desk', { method: 'PATCH', headers: { authorization: 'Bearer dev-admin', 'content-type': 'application/json' }, body: JSON.stringify({ sendInfo }) })).status, 200);
+  const session = async () => {
+    const at = G.sessions.length;
+    const b = browser(`${S.wsBase}/api/v1/bots/front-desk/voice/live`);
+    await b.opened;
+    b.send({ type: 'start' });
+    const ready = await b.wait('ready');
+    await until(() => G.sessions[at]?.setup, 5000, 'setup');
+    b.send({ type: 'stop' });
+    await b.closed;
+    const setup = G.sessions[at].setup;
+    return { ready, tools: setup.tools[0].functionDeclarations.map((f) => f.name), prompt: setup.systemInstruction.parts[0].text };
+  };
+  test('on by default: the tool and the offer; off: neither, and a plain "doesn\'t send messages"; email only: the tool, email only', async () => {
+    const on = await session();
+    assert.deepEqual(on.tools, ['search_knowledge_base', 'send_info']);
+    assert.match(on.ready.greeting, /send you the sources/);
+    await setBot({ on: false });
+    const off = await session();
+    assert.deepEqual(off.tools, ['search_knowledge_base']);
+    assert.doesNotMatch(off.ready.greeting, /send you the sources/);
+    assert.match(off.prompt, /This bot doesn't send messages/);
+    assert.doesNotMatch(off.prompt, /send_info/);
+    await setBot({ on: true, text: false });
+    const mail = await session();
+    assert.deepEqual(mail.tools, ['search_knowledge_base', 'send_info']);
+    assert.match(mail.prompt, /Texts aren't available here; offer an email instead/);
+    await setBot({ on: true, email: true, text: true });
+  });
+});
+
 describe('webvoice: Gemini unreachable', () => {
   let S;
   before(async () => { S = await boot({ GEMINI_API_KEY: 'gkey', GEMINI_LIVE_URL: 'ws://127.0.0.1:9/live' }); });

@@ -700,6 +700,31 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @container (max-width: 820px) { .gl-inline .gl-toolgrid { grid-template-columns: minmax(0, 1fr); } }
 @media (forced-colors: active) { .gl-tool.is-sel { outline: 2px solid Highlight; } }
 
+/* ------------------------------------------------------------------ "Send me this" (server/sendinfo.mjs; spec.sendInfo) */
+.gl-si { display: grid; gap: 12px; padding: 14px; min-width: 0; transition: border-color var(--dur-2), background-color var(--dur-2); }
+.gl-si-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; }
+.gl-si-head .gl-chcard-ico { grid-row: auto; color: var(--f2, var(--accent)); }
+.gl-si-text { display: grid; gap: 2px; min-width: 0; }
+.gl-si-t { margin: 0; font: 700 15px/1.25 var(--display); color: var(--strong); }
+.gl-si-help { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); max-width: 62ch; }
+.gl-si-state { padding: 2px 8px; font-size: 11px; line-height: 1.5; white-space: nowrap; }
+.gl-si-body { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 10px 20px; padding-top: 10px; border-top: 1px solid var(--line); }
+.gl-si-media { display: grid; gap: 8px; padding-left: 14px; border-left: 1px solid var(--line); }
+.gl-si-row { display: grid; gap: 2px; min-width: 0; }
+.gl-si-row .gl-switch { font-weight: 500; color: var(--strong); }
+.gl-si-row.is-main .gl-switch { font-weight: 600; }
+.gl-si-row .gl-switch input:disabled, .gl-si-row .gl-switch input:disabled ~ * { cursor: not-allowed; }
+.gl-si-row .gl-switch input:disabled + .gl-switch-ui { opacity: .55; }
+.gl-si-row.is-dim .gl-feat-name, .gl-si-row.is-unavailable .gl-feat-name { color: var(--dim); }
+.gl-si-sub { margin: 0 0 0 42px; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.gl-si-row.is-unavailable .gl-si-sub { color: var(--amber, #b45309); }
+@media (max-width: 899px) {
+  .gl-si-body { grid-template-columns: minmax(0, 1fr); }
+  .gl-si-media { padding-left: 0; border-left: 0; padding-top: 8px; border-top: 1px dashed var(--line); }
+  .gl-si-row .gl-switch { min-height: 44px; }
+}
+@container (max-width: 820px) { .gl-inline .gl-si-body { grid-template-columns: minmax(0, 1fr); } .gl-inline .gl-si-media { padding-left: 0; border-left: 0; } }
+
 /* ------------------------------------------------------------------ AI agents (the fourth tool; server/agents.mjs) */
 .gl-ag-copy { display: flex; margin: 8px 0 2px; }
 .gl-ag-url { grid-template-columns: auto minmax(0, 1fr); }

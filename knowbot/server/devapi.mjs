@@ -50,7 +50,7 @@ import { handleEmail } from './channels/email.mjs';
 import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
 import { createResearchAgent } from './research.mjs';
 import { createEvidenceSelector, selectForRetriever, isRefusal, hashFor } from './evidence.mjs';
-import { createSendInfo } from './sendinfo.mjs';
+import { createSendInfo, sendInfoAllow } from './sendinfo.mjs';
 import { orbOf } from './site.mjs';
 import { campaignOf, contactOf, newClickId, LINK_ID_RE, trackAnswer } from './leads.mjs';
 import { storePageHead } from './trials.mjs';
@@ -719,8 +719,23 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     return rec && rec.state === 'active' ? rec.phoneNumber || null : null;
   };
   const botFromNumber = (target) => provisionedNumber(target) || target?.inst?.smsNumber || target?.inst?.phoneNumber || target?.spec?.smsNumber || target?.spec?.phoneNumber || null;
+  /** The owner's "Send me this" switch (spec.sendInfo): a Studio bot's own spec; a launched bot's linked Studio bot, else
+   * inst.sendInfo. Absent = on (email and text), so existing bots keep sending. → { email, text } the bot allows. */
+  const siAllow = (target) => {
+    if (!target) return sendInfoAllow(null);
+    if (target.kind === 'trial') return sendInfoAllow(target.spec?.sendInfo);
+    const linked = target.inst?.numberTrial ? studio?.trials?.get?.(target.inst.numberTrial)?.spec : null;
+    return sendInfoAllow(linked?.sendInfo ?? target.inst?.sendInfo);
+  };
+  /** What a voice bot may offer: the server's media AND the bot's switch; off:true when only the owner's switch stops it
+   * (the voice prompt then says plainly that this bot doesn't send messages, instead of saying nothing). */
+  const siMedia = (target) => {
+    const server = sendInfo.media(botFromNumber(target));
+    const m = sendInfo.media(botFromNumber(target), siAllow(target));
+    return { ...m, ...(!m.email && !m.text && (server.email || server.text) ? { off: true } : {}) };
+  };
   const siOf = (target) => ({ botId: target.id, botName: target.name || 'KnowBot', replyTo: target.inst?.replyTo || target.spec?.replyTo || null, fromNumber: botFromNumber(target),
-    scopeTags: target.kind === 'trial' ? [`trial:${target.id}`] : [`bot:${target.id}`], leadId: leadBotOf(target) });
+    scopeTags: target.kind === 'trial' ? [`trial:${target.id}`] : [`bot:${target.id}`], leadId: leadBotOf(target), allow: siAllow(target) });
   // ---------------------------------------------------------------- leads report (server/leads.mjs)
   /** The id a bot's leads are kept under: its Studio bot (a launched bot linked to one through numberTrial reports there). */
   const leadBotOf = (target) => (target?.kind === 'trial' ? target.id : target?.inst?.numberTrial || target?.id);
@@ -1255,7 +1270,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       // the Homepage search's key (scope "site", GET /api/site/:id) opens voice mode too. "Send me this" works there
       // like the typed search and the chat bubble (only when the bot can email or text; sendinfo.mjs rate limits apply),
       // and each visitor keeps their own caller key (their address)
-      const media = sendInfo.media(botFromNumber(target));
+      const media = siMedia(target);
       handleWebVoice(ws, {
         env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, callerKey: `ip:${ip}`, ip,
         authorize: async (key) => {
@@ -1317,7 +1332,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
           return a;
         },
         // "send me this" on a call: the send_info tool (texts default to the verified caller ID; the caller confirms first)
-        sendInfoMedia: sendInfo.media(botFromNumber(target)),
+        sendInfoMedia: siMedia(target),
         sendInfo: ({ via, to, answer: ans, answers, transcript }) => sendInfo.send({ ...siOf(target), channel: 'phone', via, to, answer: ans, answers, transcript, callerKey: ws.callerKey || null, proofUrlFor: proofLinkFor(req, target, 'phone'), trackLink: trackerFor(req, target, 'phone') }),
         // texted product / checkout links (shop.mjs): tagged knowbot / phone / <bot>, sent as a tracked short link, and
         // recorded as "checkout link sent" once the text went out
@@ -1370,7 +1385,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         ? { chat: target.spec.surfaces.includes('webchat'), voice: target.spec.surfaces.includes('webvoice'), homepage: target.spec.surfaces.includes('site') }
         : null,
       // "send me this": which media a visitor can ask to be sent this bot's answers by (both false: never offered)
-      sendInfo: sendInfo.media(botFromNumber(target)),
+      sendInfo: sendInfo.media(botFromNumber(target), siAllow(target)),
     };
   }
 
@@ -1547,7 +1562,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, ...(tgt ? { agents: await agentInfo(req, tgt) } : {}), expiresAt: new Date(Number(data.e)).toISOString(), scope: 'trial',
         rateLimit: { perMinute: limits.trial }, voice: { google: g.stt && g.tts, stt: g.stt ? 'google' : 'browser', tts: g.tts ? 'google' : 'browser' },
         endpoints: { chat: `${base}/v1/bots/${id}/chat`, completions: `${base}/v1/chat/completions`, voice: `${base}/v1/bots/${id}/voice`, channels: `${base}/v1/channels/${id}` },
-        channels: channelsInfo(req, id, tgt).channels });
+        channels: channelsInfo(req, id, tgt).channels,
+        // "Send me this" (Studio Set up): which media this server can send for this bot, before the owner's switch
+        sendInfo: { server: sendInfo.media(tgt ? botFromNumber(tgt) : null) } });
     }
     // the Homepage search (server/site.mjs): its public view and a key that can only ask questions. Published sites
     // only; the owner's own trial key (the Studio's preview) also opens a site that is not published yet.

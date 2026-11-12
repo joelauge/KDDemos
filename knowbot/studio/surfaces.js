@@ -60,6 +60,13 @@ export const surfaceLabel = (id) => byId.get(id)?.label || String(id);
 export const featureLabel = (id) => (id === AGENTS_FEATURE ? AGENTS_LABEL : byId.get(id)?.feature || surfaceLabel(id));
 /** spec.agents → {public, paid}: public unless turned off, paid off unless turned on. */
 export const agentSwitches = (a) => ({ public: !(a && a.public === false), paid: !!(a && a.paid === true) });
+/**
+ * "Send me this" (spec.sendInfo, server/sendinfo.mjs sendInfoSwitches): visitors ask the bot to email or text them an
+ * answer with its sources. {on, email, text}, each on unless the owner turned it off (absent = on), so existing bots
+ * keep sending. Not a spec.surfaces id and never a price change; the server sends only what it can AND the bot allows.
+ */
+export const sendInfoSwitches = (v) => { const o = v && typeof v === 'object' && !Array.isArray(v) ? v : {}; return { on: o.on !== false, email: o.email !== false, text: o.text !== false }; };
+export const SEND_INFO_HELP = 'Visitors can ask the bot to text or email them an answer and its sources. Each request adds them to Stats & Leads.';
 export const toolOf = (id) => toolById.get(byId.get(id)?.tool) || null;
 export const toolLabel = (id) => toolById.get(id)?.label || String(id);
 

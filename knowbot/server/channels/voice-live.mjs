@@ -130,6 +130,10 @@ const canSend = (sendInfo) => !!(sendInfo && (sendInfo.email || sendInfo.text));
  * the caller's own number is known); null or neither medium → nothing (the assistant never offers).
  */
 export function sendInfoInstruction(sendInfo, { who = 'caller' } = {}) {
+  // the bot's owner switched "Send me this" off (sendInfo.off): never offer, and say so plainly when asked
+  if (sendInfo?.off && !sendInfo.email && !sendInfo.text) {
+    return `\n\nSending the answer:\n- This bot doesn't send messages. If the ${who} asks you to text or email them anything, say plainly and kindly that this bot doesn't send messages, and that you're happy to repeat anything or answer another question. That is not a missing answer: never use the "not in my files" line for it. Never offer to send anything.`;
+  }
   if (!sendInfo || (!sendInfo.email && !sendInfo.text)) return '';
   const lines = [`- If the ${who} asks you to send, text or email them the information, you can send your last answer from the files, with its sources and a link to them. Don't offer it unprompted more than once.`];
   if (sendInfo.text && sendInfo.callerKnown) lines.push(`- For a text, offer: "I can text that to the number you're calling from." Confirm using the last four digits you were given ("to the number ending in 0378?") and get a yes. If they give a different mobile number, read it back digit by digit and get a yes.`);

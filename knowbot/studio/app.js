@@ -2034,7 +2034,7 @@ function withPurpose(rows, specHint = null) {
   return rows;
 }
 
-const FIELD_LABEL = { name: 'Name', org: 'Org', purpose: 'Purpose', audience: 'Audience', tone: 'Tone', length: 'Length', greeting: 'Greeting', surfaces: 'Answers on', agents: 'AI agents',
+const FIELD_LABEL = { name: 'Name', org: 'Org', purpose: 'Purpose', audience: 'Audience', tone: 'Tone', length: 'Length', greeting: 'Greeting', surfaces: 'Answers on', agents: 'AI agents', sendInfo: 'Send me this',
   starters: 'Starters', floor: 'Strictness', sources: 'Sources', avatar: 'Avatar', refusal: 'Refusal', email: 'Email', sampleSet: 'Sample files' };
 const MATERIAL = ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar'];
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -2091,7 +2091,7 @@ const diffVersions = (rows) => (rows && rows.version ? { fromVersion: rows.fromV
 /** PATCHes the server, applies the returned spec, posts a ConfigDiffCard. by: 'user'|'setup'|'scope'. */
 async function updateSpec(patch, { by = 'user', source = 'chat', quiet = false } = {}) {
   const clean = {};
-  for (const [k, v] of Object.entries(patch || {})) if (MATERIAL.includes(k) || k === 'email' || k === 'surfaces' || k === 'agents') clean[k] = v;
+  for (const [k, v] of Object.entries(patch || {})) if (MATERIAL.includes(k) || k === 'email' || k === 'surfaces' || k === 'agents' || k === 'sendInfo') clean[k] = v;
   if (!Object.keys(clean).length) return null;
   await trialP;
   const prev = getState().spec;

@@ -1813,7 +1813,7 @@ export function mount(ctx) {
     A.el.body.append(h('p', { class: 'sb-sendinfo' }, String(f.text || '')));
     A.el.srcRow.innerHTML = ''; A.el.strip.innerHTML = '';
     const sent = f.sendInfo?.status === 'sent';
-    const pill = h('div', { class: 'sb-pill is-sendinfo' }, ico('mail', 14), h('span', null, h('b', null, sent ? 'Sent' : 'Send this to you'), sent && f.sendInfo?.to ? ` · ${f.sendInfo.to}` : ''));
+    const pill = h('div', { class: 'sb-pill is-sendinfo' }, ico('mail', 14), h('span', null, h('b', null, sent ? 'Sent' : f.sendInfo?.status === 'off' ? 'Not sent' : 'Send this to you'), sent && f.sendInfo?.to ? ` · ${f.sendInfo.to}` : ''));
     A.el.status.innerHTML = ''; A.el.status.append(pill); A.el.pill = pill; A.el.ticker = null;
   }
 

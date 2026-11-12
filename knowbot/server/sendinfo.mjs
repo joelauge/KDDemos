@@ -122,10 +122,48 @@ export const maskPhone = (p) => `the number ending in ${String(p || '').replace(
 const maskOf = (via, to) => (via === 'email' ? maskEmail(to) : maskPhone(to));
 
 // ------------------------------------------------------------------ delivery
-/** Which media this server can send: { email, text }. A bot's own number (fromNumber) also turns texting on. */
-export function sendInfoMedia(env = {}, fromNumber = '') {
-  return { email: !!env.RESEND_API_KEY, text: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && (fromNumber || env.TWILIO_FROM_NUMBER)) };
+/**
+ * Which media this server can send: { email, text }. A bot's own number (fromNumber) also turns texting on.
+ * allow: the bot's own switch (sendInfoAllow(spec.sendInfo)); a medium is available only when the server can send it AND
+ * the bot allows it.
+ */
+export function sendInfoMedia(env = {}, fromNumber = '', allow = null) {
+  const server = { email: !!env.RESEND_API_KEY, text: !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && (fromNumber || env.TWILIO_FROM_NUMBER)) };
+  if (!allow) return server;
+  return { email: server.email && allow.email !== false, text: server.text && allow.text !== false };
 }
+
+// ------------------------------------------------------------------ the bot's switch (spec.sendInfo)
+/**
+ * The owner's "Send me this" switch, per bot: spec.sendInfo = { on, email, text } (Studio Set up; a launched bot's linked
+ * Studio bot, else inst.sendInfo). Absent or partial = on: every bot sends by email and text unless the owner turns it
+ * off, so existing bots keep today's behaviour. → { on, email, text } (all booleans).
+ */
+export function sendInfoSwitches(v) {
+  const o = v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  return { on: o.on !== false, email: o.email !== false, text: o.text !== false };
+}
+/** The media the bot allows → { email, text }: the main switch AND each medium's own switch. */
+export function sendInfoAllow(v) {
+  const s = sendInfoSwitches(v);
+  return { email: s.on && s.email, text: s.on && s.text };
+}
+/** Validates a { on?, email?, text? } patch (booleans only) onto the current value → the full switches, or throws Error. */
+export function cleanSendInfo(patch, current = null) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('must be {on?: boolean, email?: boolean, text?: boolean}');
+  const out = sendInfoSwitches(current);
+  for (const [k, v] of Object.entries(patch)) {
+    if (!['on', 'email', 'text'].includes(k)) throw new Error(`unknown setting ${JSON.stringify(k).slice(0, 30)}: use on, email or text`);
+    if (typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
+    out[k] = v;
+  }
+  return out;
+}
+/** The reply when the bot's owner switched sending off (never a refusal: the visitor asked the bot to do something). */
+export const OFF_REPLY = "This bot doesn't send messages, so I can't email or text that to you. Everything I shared is right here in our conversation.";
+const offOne = (via, media) => (via === 'email'
+  ? `This bot doesn't send email${media.text ? ', but I can text it to you. What mobile number should I use?' : '.'}`
+  : `This bot doesn't send texts${media.email ? ', but I can email it to you. What email address should I use?' : '.'}`);
 /** "Waterdown Village Chiropractic <answers@knowbot.knowdrive.ai>": the bot's name on the configured sending address. */
 export function emailFrom(env = {}, botName = '') {
   const conf = oneLine(env.KNOWBOT_EMAIL_FROM || DEFAULT_EMAIL_FROM);
@@ -322,8 +360,11 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
    * null/absent to send links as they are (tracking off). Every link of one send shares one click id (`cid`), which is
    * also on the lead recorded through onLead, so a click is tied back to who asked.
    */
-  async function send({ botId, botName = 'KnowBot', replyTo = null, channel = 'api', via = null, to, answer, answers = null, transcript = null, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null }) {
-    const media = sendInfoMedia(env, fromNumber);
+  async function send({ botId, botName = 'KnowBot', replyTo = null, channel = 'api', via = null, to, answer, answers = null, transcript = null, proofUrlFor = null, callerKey = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null, allow = null }) {
+    const server = sendInfoMedia(env, fromNumber);
+    const media = sendInfoMedia(env, fromNumber, allow);
+    // the bot's owner switched sending off (both media, or the one asked for): nothing is sent, no lead is recorded
+    if (allow && !media.email && !media.text && (server.email || server.text)) return { status: 'off', ...(via ? { via } : {}), reply: OFF_REPLY };
     // answers[] (+ transcript): the whole conversation (the voice bots' end-of-call offer); else the one answer
     const convo = Array.isArray(answers) ? answers.map(normalizeAnswer).filter((x) => x && !x.refused).slice(-12) : [];
     const a = convo.length ? convo[convo.length - 1] : normalizeAnswer(answer);
@@ -332,6 +373,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     via = via || (/@/.test(raw) ? 'email' : 'text');
     const dest = via === 'email' ? validEmail(raw) : normalizePhone(raw, fromNumber || env.TWILIO_FROM_NUMBER);
     if (!dest) return { status: 'invalid', via, reply: via === 'email' ? "That doesn't look like a valid email address. Could you send it again?" : "That doesn't look like a mobile number I can text. Could you send it again, with the area code?" };
+    if (!media[via] && server[via]) return { status: 'off', via, reply: offOne(via, media) };
     if (!media[via]) return { status: 'unavailable', via, reply: via === 'email' ? `I can't send email from here${media.text ? ', but I can text it to you. What mobile number should I use?' : '.'}` : `I can't send texts from here${media.email ? ', but I can email it to you. What email address should I use?' : '.'}` };
     if (via === 'text' && await isOptedOut(botId, dest)) return { status: 'opted_out', via, reply: `That number has opted out of texts, so I can't text it.${media.email ? ' I can email it instead: what email address should I use?' : ''}` };
     const ck = `c:${botId}|${hash8(callerKey || dest)}`, dk = `d:${hash8(dest)}`, bk = `b:${botId}`;
@@ -402,9 +444,9 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     }
     return null;
   }
-  const askFor = (via, media) => {
-    if (via === 'email' && !media.email) return `I can't send email from here, but I can text it to you. What mobile number should I use?`;
-    if (via === 'text' && !media.text) return `I can't send texts from here, but I can email it to you. What email address should I use?`;
+  const askFor = (via, media, server = media) => {
+    if (via === 'email' && !media.email) return server.email ? offOne('email', media) : `I can't send email from here, but I can text it to you. What mobile number should I use?`;
+    if (via === 'text' && !media.text) return server.text ? offOne('text', media) : `I can't send texts from here, but I can email it to you. What email address should I use?`;
     if (via === 'email' || !media.text) return 'Sure. What email address should I send it to?';
     if (via === 'text' || !media.email) return 'Sure. What mobile number should I text it to?';
     return 'Sure. What email address or mobile number should I send it to?';
@@ -421,10 +463,11 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
    * @param {(q: string) => Promise<object>} [o.answerFor]  answers a referenced question (logged like any question)
    */
   async function maybeSendInfo({ key, botId, botName = 'KnowBot', replyTo = null, question, history = [], lastAnswer = null, channel = 'api', caller = null,
-    callerKey = null, proofUrlFor = null, answerFor = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null }) {
+    callerKey = null, proofUrlFor = null, answerFor = null, fromNumber = null, scopeTags = [], trackLink = null, leadId = null, allow = null }) {
     const q = oneLine(question).slice(0, 1000);
     if (!q || !key) return null;
-    const media = sendInfoMedia(env, fromNumber);
+    const server = sendInfoMedia(env, fromNumber);
+    const media = sendInfoMedia(env, fromNumber, allow);
     const intent = detectSendIntent(q);
     let pend = fresh(pending, key, PENDING_TTL_MS);
     if (!pend && Array.isArray(history)) {
@@ -434,7 +477,19 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     if (!intent && !pend) return null;
     if (!media.email && !media.text) {
       if (!intent) { pending.delete(key); return null; }
+      pending.delete(key);
+      // the owner switched sending off for this bot: say so plainly (never the refusal line, never a lead)
+      if (server.email || server.text) return { status: 'off', reply: OFF_REPLY };
       return { status: 'unavailable', reply: "Sorry, I can't send messages from here." };
+    }
+    // one medium switched off and that is the one they asked for: offer the other (asked for the address next)
+    if (intent?.via && !media[intent.via] && server[intent.via]) {
+      const c0 = findContacts(q, fromNumber || env.TWILIO_FROM_NUMBER || '');
+      if (!(c0.emails.length + c0.phones.length) || (intent.via === 'email' ? c0.emails.length : c0.phones.length)) {
+        pending.set(key, { at: now(), via: null, answer: pend?.answer || null });
+        cap(pending, 5000);
+        return { status: 'off', via: intent.via, reply: offOne(intent.via, media) };
+      }
     }
     const fromNo = fromNumber || env.TWILIO_FROM_NUMBER || '';
     const c = findContacts(q, fromNo);
@@ -443,7 +498,7 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     if (!intent) {
       // a pending request: the next message should be the address
       if (CANCEL.test(q)) { pending.delete(key); return { status: 'cancelled', reply: "No problem, I won't send it." }; }
-      if (!tried && !/@/.test(q) && YES.test(q) && pend.answer) return { status: 'ask', via: pend.via, reply: askFor(pend.via, media) };
+      if (!tried && !/@/.test(q) && YES.test(q) && pend.answer) return { status: 'ask', via: pend.via, reply: askFor(pend.via, media, server) };
       if (!tried && !/@/.test(q)) { pending.delete(key); return null; } // a new question: answer it normally
     }
     if (valid.length > 1 || tried > 1) { pending.set(key, { at: now(), via: pend?.via || intent?.via || null, answer: pend?.answer || null }); return { status: 'ask', reply: 'I can only send it to one address at a time. Which one should I use?' }; }
@@ -465,15 +520,15 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
       if (channel === 'email' && caller && want !== 'text') {
         return { status: 'here', reply: `My replies already come to you by email at ${maskEmail(caller)}, so the answer is in this thread. To send it somewhere else, reply with that email address${media.text ? ' or a mobile number' : ''}.` };
       }
-      return { status: 'ask', via: want, reply: askFor(want, media) };
+      return { status: 'ask', via: want, reply: askFor(want, media, server) };
     }
-    const r = await send({ botId, botName, replyTo, channel, via: valid[0].via, to: valid[0].to, answer, proofUrlFor, callerKey: callerKey || caller || key, fromNumber, scopeTags, trackLink, leadId });
+    const r = await send({ botId, botName, replyTo, channel, via: valid[0].via, to: valid[0].to, answer, proofUrlFor, callerKey: callerKey || caller || key, fromNumber, scopeTags, trackLink, leadId, allow });
     if (r.status === 'sent' || r.status === 'nothing') pending.delete(key);
     else pending.set(key, { at: now(), via: pend?.via || null, answer });
     return r;
   }
 
-  return { maybeSendInfo, send, remember, lastFor, optOut, optIn, isOptedOut, media: (fromNumber) => sendInfoMedia(env, fromNumber), _pending: pending };
+  return { maybeSendInfo, send, remember, lastFor, optOut, optIn, isOptedOut, media: (fromNumber, allow = null) => sendInfoMedia(env, fromNumber, allow), _pending: pending };
 }
 
 export const NOTHING = "There's nothing to send yet. Ask me a question first, and I can send you the answer with its sources.";

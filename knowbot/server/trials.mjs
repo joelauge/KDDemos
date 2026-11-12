@@ -40,6 +40,7 @@ import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
 import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
 import { agentLimits, agentSettings, priceText as agentPriceText } from './agents.mjs';
+import { sendInfoSwitches, sendInfoAllow, cleanSendInfo } from './sendinfo.mjs';
 import { createKdAccount, KdError } from './kdaccount.mjs';
 import { publicBase } from './channels/util.mjs';
 
@@ -414,7 +415,10 @@ export const isDerivedLine = (t) => /;\s/.test(t) && (String(t).match(/[^;:]{1,6
 
 // ------------------------------------------------------------------------------------------- spec
 const TONES = ['friendly', 'neutral', 'formal'], LENGTHS = ['short', 'normal'], AUDIENCES = ['customers', 'employees', 'students'];
-const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces', 'agents']);
+const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces', 'agents', 'sendInfo']);
+// sendInfo: "Send me this" (server/sendinfo.mjs): {on, email, text}. A visitor may ask the bot to email or text them an
+// answer with its sources (each request is a lead). On unless the owner turns it off (absent = on, both media), and only
+// for the media the server can send. Not material: the answers never change with it.
 // agents: the AI agents tool (server/agents.mjs): {public, paid}. Public answers are on unless the owner turns them off
 // (absent = on); paid agent access is off unless turned on (metered, it replaces the free daily limit). Not material.
 // answer surfaces: where the bot answers (studio/surfaces.js SURFACE_IDS, same order): the features of the plan's three tools
@@ -528,6 +532,10 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
         next.agents = out;
         break;
       }
+      case 'sendInfo': {
+        try { next.sendInfo = cleanSendInfo(patch.sendInfo, next.sendInfo); } catch (e) { bad('sendInfo', e.message); }
+        break;
+      }
       case 'email': {
         const e = String(patch.email ?? '').trim();
         if (e && (e.length > 254 || !EMAIL_RE.test(e))) bad('email', 'is not a valid email address');
@@ -538,8 +546,8 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
     }
   }
   const diff = [];
-  const dflt = (k, v) => v ?? (k === 'surfaces' ? ['webchat'] : k === 'agents' ? { public: true, paid: false } : undefined);
-  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar', 'surfaces', 'agents']) {
+  const dflt = (k, v) => (k === 'sendInfo' ? sendInfoSwitches(v) : v ?? (k === 'surfaces' ? ['webchat'] : k === 'agents' ? { public: true, paid: false } : undefined));
+  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar', 'surfaces', 'agents', 'sendInfo']) {
     if (JSON.stringify(dflt(k, spec[k])) !== JSON.stringify(dflt(k, next[k]))) diff.push({ field: k, from: spec[k], to: next[k] });
   }
   const material = diff.some((d) => MATERIAL.includes(d.field));
@@ -651,8 +659,12 @@ export function parseIntent(message, ctx = {}) {
     if (phrase && !/^(?:upload|make|call|name|test|run|launch|sample|use the sample)/i.test(phrase)) { scope = phrase.slice(0, 120); intents.push('set_scope'); }
   }
   if (!scope && /\b(?:use|search|enable|turn on|answer from)\s+(?:all|every)\s+(?:of\s+)?(?:my\s+|the\s+)?(?:files|docs|sources)\b|\banswer about everything\b/i.test(msg)) { scope = '*'; intents.push('set_scope'); }
+  // "Send me this" ("turn off texting answers", "stop emailing answers", "turn send me this back on"): spec.sendInfo. Read
+  // before the answer surfaces, so "texting answers" never switches the SMS feature off.
+  const si = sendInfoIntentOf(msg, spec.sendInfo);
+  if (si) { patch.sendInfo = si; intents.push('send_info'); }
   // answer surfaces ("add WhatsApp", "just web chat", "drop SMS"): where the bot answers, never which files it searches
-  const surf = surfacesIntentOf(msg, spec.surfaces);
+  const surf = si ? null : surfacesIntentOf(msg, spec.surfaces);
   if (surf) {
     intents.push('surfaces');
     if (surf.surfaces) patch.surfaces = surf.surfaces; else intents.push('surfaces_empty');
@@ -671,6 +683,32 @@ export function parseIntent(message, ctx = {}) {
   const meta = intents.filter((x) => !['ack'].includes(x));
   if (isQuestion && anyReady && !meta.length && !Object.keys(patch).length) { actions.push({ type: 'ask_samplebot', question: clip(msg, 500) }); intents.push('ask_question'); }
   return { patch, actions, intents, scope, customTone, business };
+}
+// "Send me this" named in a Builder message: sending answers by text or email (never the SMS / Email answer surfaces)
+const SI_WHO = '(?:me|us|them|visitors?|customers?|clients?|people|users?|callers?|folks)';
+const SI_THING = '(?:answers?|sources?|info|information|links?|copies|a\\s+copy|replies)';
+const SI_RES = [
+  /\bsend[- ]me[- ](?:this|that)\b/i,
+  new RegExp(`\\b(?:texting|txting|e-?mailing|texted|e-?mailed|sending)\\s+(?:out\\s+)?(?:${SI_WHO}\\s+)?(?:the(?:ir)?\\s+|an?\\s+)?${SI_THING}`, 'i'),
+  new RegExp(`\\b(?:text|e-?mail|send)\\s+${SI_WHO}\\s+(?:the(?:ir)?\\s+|an?\\s+)?(?:${SI_THING}|this|that)\\b`, 'i'),
+  new RegExp(`\\b(?:get|have)\\s+(?:the(?:ir)?\\s+)?${SI_THING}\\s+(?:texted|e-?mailed|sent)\\b`, 'i'),
+  new RegExp(`\\b${SI_THING}\\s+(?:by|via|over|as)\\s+(?:an?\\s+)?(?:text|sms|e-?mail)s?\\b`, 'i'),
+];
+/**
+ * A request to switch "Send me this" (pure): the spec.sendInfo patch ({on?, email?, text?}), or null when the message is
+ * not about sending answers or has no on/off verb. Text or email named alone switches that medium; neither or both, the
+ * whole feature.
+ */
+export function sendInfoIntentOf(msg, current = null) {
+  const s = String(msg || '').replace(/\S+@\S+/g, ' ');
+  if (!SI_RES.some((re) => re.test(s))) return null;
+  const off = /\b(?:turn(?:ing)?\s+(?:it\s+|that\s+)?off|switch(?:ing)?\s+(?:it\s+|that\s+)?off|off\b|disable|stop|no\s+more|don'?t|do\s+not|never|remove|block|without|kill|no\s+longer|can'?t|cannot|shouldn'?t)\b/i.test(s);
+  const on = /\b(?:turn(?:ing)?\s+(?:it\s+|that\s+)?on|switch(?:ing)?\s+(?:it\s+|that\s+)?on|on\b|enable|allow|let|start|add|back)\b/i.test(s);
+  if (off === on) return null;
+  const text = /\b(?:text(?:s|ing|ed)?|txt(?:ing)?|sms)\b/i.test(s), email = /\be-?mail(?:s|ing|ed)?\b/i.test(s);
+  if (text && !email) return off ? { text: false } : { on: true, text: true };
+  if (email && !text) return off ? { email: false } : { on: true, email: true };
+  return off ? { on: false } : { on: true, email: true, text: true };
 }
 // answer surfaces named in a Builder message (order matters: web voice before phone, web chat before plain "chat")
 const SITE_WORD_RE = /\b(?:(?:single|one)[- ]page\s+(?:web\s*)?site|home\s?page|landing\s+page|search\s+page|front[- ]page(?:\s+of\s+(?:my|our|the)\s+(?:web\s*)?site)?|(?:build|make|create|generate|turn\s+(?:it|this|my\s+files|them)\s+into)\s+(?:me\s+)?(?:a|an|my|our)\s+(?:new\s+|simple\s+|clean\s+|ai\s+|search\s+)?(?:web\s*site|site))\b/i;
@@ -2513,7 +2551,8 @@ export function createStudio(o = {}) {
       // tracked links (server/leads.mjs) unless the owner turned them off; the address becomes a lead of this bot
       const trackLink = o.linkTracker ? await Promise.resolve(o.linkTracker(req, T.id, 'studio')).catch(() => null) : null;
       const si = await o.sendInfo.maybeSendInfo({ key: `trial:${T.id}`, botId: T.id, botName: spec.name || 'Your bot', replyTo: spec.replyTo || null, question, channel: 'studio',
-        callerKey: T.id, scopeTags: [`trial:${T.id}`], proofUrlFor: (a) => (o.proofLink ? o.proofLink(req, T.id, a) : null), trackLink, leadId: T.id }).catch((e) => { log(`[studio] send-info failed: ${e.message}`); return null; });
+        callerKey: T.id, scopeTags: [`trial:${T.id}`], proofUrlFor: (a) => (o.proofLink ? o.proofLink(req, T.id, a) : null), trackLink, leadId: T.id,
+        allow: sendInfoAllow(spec.sendInfo) }).catch((e) => { log(`[studio] send-info failed: ${e.message}`); return null; });
       if (si) {
         emit('final', { ...base, text: si.reply, refused: false, status: 'send_info', sendInfo: { status: si.status, ...(si.via ? { via: si.via } : {}), ...(si.to ? { to: si.to } : {}) },
           citations: [], proof: emptyProof(spec.floor), why: null, guard: null, latencyMs: { retrieve: 0, select: 0, quote: 0, total: ms() } });
@@ -3459,6 +3498,13 @@ export function createStudio(o = {}) {
     const diff = preview?.diff || [];
     const step = stepOf(T, files);
     if (has('show_launch')) return { ...launchFlow(T, files), patch };
+    // "Send me this" (spec.sendInfo): said back in plain words, with where to find the switch
+    if (has('send_info') && diff.every((d) => d.field === 'sendInfo')) {
+      const chips = [C('open-setup', 'Open Set up', { action: { type: 'open_setup' } }), ...stepChips(T, files).filter((c) => c.id !== 'open-setup')].slice(0, 3);
+      const changed = diff.some((d) => d.field === 'sendInfo');
+      const now = sendInfoWords(preview?.next?.sendInfo ?? T.spec.sendInfo);
+      return { reply: withNotes(changed ? `Done: ${now}. Change it anytime in Set up, under Send me this.` : `Already set: ${now}.`), patch, chips };
+    }
     // answer surfaces: said back in plain words; the price is never volunteered here (it shows at launch, after testing)
     if (has('surfaces') && diff.every((d) => d.field === 'surfaces' || d.field === 'greeting')) {
       const now = surfacesWords(patch.surfaces || T.spec.surfaces);
@@ -3628,6 +3674,7 @@ export function createStudio(o = {}) {
         case 'purpose': return 'a new purpose';
         case 'surfaces': return `it answers on ${surfacesWords(d.to)}`;
         case 'agents': return agentsWords(d.to);
+        case 'sendInfo': return sendInfoWords(d.to);
         case 'sources': case 'avatar': case 'starters': return null;
         default: return `${d.field} updated`;
       }
@@ -3778,8 +3825,17 @@ export function createStudio(o = {}) {
       case 'greeting': return 'greeting updated';
       case 'surfaces': return `it answers on ${surfacesWords(d.to)}`;
       case 'agents': return agentsWords(d.to);
+      case 'sendInfo': return sendInfoWords(d.to);
       default: return `${d.field} updated`;
     }
+  }
+  /** The "Send me this" switches in words (what a visitor can ask for). */
+  function sendInfoWords(v) {
+    const a = sendInfoAllow(v);
+    if (a.email && a.text) return 'visitors can ask it to email or text them an answer with its sources';
+    if (a.email) return 'visitors can ask it to email them an answer with its sources (texting answers is off)';
+    if (a.text) return 'visitors can ask it to text them an answer with its sources (emailing answers is off)';
+    return '"Send me this" is off: if a visitor asks for an answer by text or email, it says it doesn\'t send messages';
   }
   /** The AI agents switches in words. */
   function agentsWords(a) {
@@ -4704,7 +4760,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     // the launched bot's storefront: a Shopify store import keeps texted checkout links working after launch (the launch
     // caller passes it on as the bot's shopDomain, POST /api/instances; the converted trial keeps its flags anyway)
     const shop = T.flags?.storeLast?.platform === 'shopify' && T.flags.storeLast.url ? { shopDomain: String(T.flags.storeLast.url) } : {};
-    if (T.converted) return { converted: true, files: T.convertedFiles ?? 0, ...shop };
+    if (T.converted) return { converted: true, files: T.convertedFiles ?? 0, ...shop, ...(T.spec.sendInfo ? { sendInfo: sendInfoSwitches(T.spec.sendInfo) } : {}) };
     let files;
     if (T.kdLink?.moved) files = await convertLinked(T, { account, bucketId }); // the customer's own store: no re-tag here
     else {
@@ -4745,12 +4801,18 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         if (o.registry?.update) await o.registry.update(String(body.bot), { numberTrial: T.id });
       } catch (e) { log(`[studio] convert ${T.id}: could not move the KnowBot number to bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
     }
+    // "Send me this" (spec.sendInfo) moves with the bot: the launched bot keeps the owner's switch (absent = on)
+    const sendInfoOut = T.spec.sendInfo ? { sendInfo: sendInfoSwitches(T.spec.sendInfo) } : {};
+    if (sendInfoOut.sendInfo && body.bot && o.registry?.update) {
+      try { await o.registry.update(String(body.bot), { sendInfo: sendInfoOut.sendInfo }); }
+      catch (e) { log(`[studio] convert ${T.id}: could not set "Send me this" on bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
+    }
     // convert may name the launched bot (body.bot): it gets the storefront at once
     if (shop.shopDomain && body.bot && o.registry?.update) {
       try { await o.registry.update(String(body.bot), { shopDomain: shop.shopDomain }); shop.bot = String(body.bot).toLowerCase(); }
       catch (e) { log(`[studio] convert ${T.id}: could not set the storefront on bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
     }
-    return { converted: true, files, ...shop, ...(T.kdLink?.home ? { kd: { account: T.kdLink.account, store: T.kdLink.store, bucket: T.convertedBucket } } : {}) };
+    return { converted: true, files, ...shop, ...sendInfoOut, ...(T.kdLink?.home ? { kd: { account: T.kdLink.account, store: T.kdLink.store, bucket: T.convertedBucket } } : {}) };
   }
   async function sweep() {
     if (!enabled) return { deleted: 0, scanned: 0 };

@@ -86,6 +86,17 @@ function mirrorValidate(patch, spec) {
         next.surfaces = SURFACES.filter((x) => patch.surfaces.includes(x));
         break;
       }
+      case 'sendInfo': {
+        if (!isObj(patch.sendInfo)) bad('sendInfo', 'must be {on?, email?, text?}');
+        const cur = isObj(spec.sendInfo) ? spec.sendInfo : {};
+        const out = { on: cur.on !== false, email: cur.email !== false, text: cur.text !== false };
+        for (const [kk, vv] of Object.entries(patch.sendInfo)) {
+          if (!['on', 'email', 'text'].includes(kk) || typeof vv !== 'boolean') bad('sendInfo', 'must be {on?, email?, text?} with true or false');
+          out[kk] = vv;
+        }
+        next.sendInfo = out;
+        break;
+      }
       case 'sources': {
         if (!isObj(patch.sources)) bad('sources', 'must be a map of file id to true/false');
         for (const [id, on] of Object.entries(patch.sources)) if (!/^[\w.:@-]{1,120}$/.test(id) || typeof on !== 'boolean') bad('sources', 'must map file ids to true or false');
@@ -97,7 +108,7 @@ function mirrorValidate(patch, spec) {
     }
   }
   const diff = [];
-  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'sources', 'surfaces']) if (JSON.stringify(spec[k]) !== JSON.stringify(next[k])) diff.push({ field: k, from: spec[k], to: next[k] });
+  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'sources', 'surfaces', 'sendInfo']) if (JSON.stringify(spec[k]) !== JSON.stringify(next[k])) diff.push({ field: k, from: spec[k], to: next[k] });
   return { next, diff };
 }
 
@@ -133,6 +144,8 @@ export const TOOL_DEFS = [
       length: { type: 'string', enum: LENGTHS },
       scope_files: { type: 'array', items: { type: 'string' }, description: 'File names (or ids) the bot may answer from; every other file is switched off.' },
       surfaces: { type: 'array', items: { type: 'string', enum: SURFACES }, description: 'The complete list of features switched on, across the three tools of the plan: Website (one embed line: webchat = chat bubble, webvoice = voice, site = homepage search, a simple search box built from the files that hovers over the homepage), KnowBot number (one phone number: sms = texts, phone = calls, whatsapp) and Email (one inbox address: email). Every feature is included in the one plan, so switching never changes the price. Send the full new list: "add WhatsApp" = current list + whatsapp.' },
+      send_info: { type: 'object', description: '"Send me this": visitors can ask the bot to email or text them an answer with its sources (each request adds them to Stats & Leads). on switches the whole feature; email and text switch each way of sending. Only the settings the visitor asked to change: "turn off texting answers" = {text:false}, "turn send me this off" = {on:false}, "turn it back on" = {on:true}. Never the SMS or Email answer surfaces.',
+        properties: { on: { type: 'boolean' }, email: { type: 'boolean' }, text: { type: 'boolean' } }, additionalProperties: false },
     }, additionalProperties: false } },
   { name: 'ask_bot', description: "Ask the visitor's bot a test question, as if the visitor typed it on the right. run=true asks it now; run=false only offers it as a button. Needs at least one ready file.",
     input_schema: { type: 'object', properties: { question: { type: 'string' }, run: { type: 'boolean' } }, required: ['question'], additionalProperties: false } },
@@ -210,6 +223,7 @@ export function createBuilderTools(o = {}) {
       const patch = {};
       for (const k of ['name', 'tone', 'purpose', 'org', 'audience', 'greeting', 'length']) if (input[k] != null) patch[k] = typeof input[k] === 'string' ? oneLine(input[k]) : input[k];
       if (Array.isArray(input.surfaces)) patch.surfaces = [...new Set(input.surfaces.map((x) => String(x)))];
+      if (isObj(input.send_info)) patch.sendInfo = Object.fromEntries(Object.entries(input.send_info).filter(([k]) => ['on', 'email', 'text'].includes(k)));
       if (Array.isArray(input.scope_files)) {
         const files = filesOf(state);
         if (!files.length) return fail('there are no files to choose from yet');

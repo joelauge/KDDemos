@@ -721,6 +721,32 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     assert.equal(phoneSessions().byBot['front-desk'], undefined, 'closed calls are counted down');
   });
 
+  test('"Send me this" switched off for the bot: no send_info tool, no offer in the greeting, and the prompt says it plainly', async () => {
+    const admin = { authorization: 'Bearer dev-admin', 'content-type': 'application/json' };
+    const setBot = async (sendInfo) => assert.equal((await S.api('/api/instances/front-desk', { method: 'PATCH', headers: admin, body: JSON.stringify({ sendInfo }) })).status, 200);
+    mode.current = 'idle';
+    try {
+      await setBot({ on: false });
+      const at = G.sessions.length;
+      const c = await startCall(S, 'front-desk', 'CA50');
+      await until(() => G.sessions[at]?.setup, 5000, 'setup');
+      c.send({ event: 'stop', streamSid: 'MZ1' });
+      await c.closed;
+      const setup = G.sessions[at].setup;
+      assert.ok(!setup.tools[0].functionDeclarations.some((f) => f.name === 'send_info'));
+      const p = setup.systemInstruction.parts[0].text;
+      assert.match(p, /This bot doesn't send messages/);
+      assert.doesNotMatch(p, /happy to send you the sources/);
+      // texts only off (this line can only text): the same, the bot never offers
+      await setBot({ on: true, text: false });
+      const c2 = await startCall(S, 'front-desk', 'CA51');
+      await until(() => G.sessions[at + 1]?.setup, 5000, 'setup 2');
+      c2.send({ event: 'stop', streamSid: 'MZ1' });
+      await c2.closed;
+      assert.ok(!G.sessions[at + 1].setup.tools[0].functionDeclarations.some((f) => f.name === 'send_info'));
+    } finally { await setBot({ on: true, email: true, text: true }); mode.current = 'full'; }
+  });
+
   test('launch: a Shopify-imported trial keeps texted links on its launched bot; SHOP_DOMAIN never reaches an unrelated bot', async () => {
     const admin = { authorization: 'Bearer dev-admin', 'content-type': 'application/json' };
     for (const name of ['Shop Bot', 'Clinic']) assert.equal((await S.api('/api/instances', { method: 'POST', headers: admin, body: JSON.stringify({ name, buckets: ['acme'] }) })).status, 201);
