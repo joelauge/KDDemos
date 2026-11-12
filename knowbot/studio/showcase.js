@@ -1,8 +1,8 @@
 /* KnowBot Studio landing: the floating showcase. The visitor sees their bot in the shape they picked under "Where should
- * it answer?" — a website chat, a text message, WhatsApp, an email, a phone call or the web voice assistant — on a
+ * it answer?" — a website chat, a text message, WhatsApp, an email, a phone call, the web voice assistant or another AI assistant asking it — on a
  * gently hovering device beside the hero. A small selector on top previews any shape; with two or more picked, arrows
  * and dots slide between the picked ones. Classic deferred script: no imports, no network. Mounts into #kl-show and
- * follows the [data-surface] buttons in #kl-surf (aria-pressed). Motion respects html[data-motion="reduce"] and
+ * follows the tool buttons in #kl-surf ([data-surfaces], aria-pressed). Motion respects html[data-motion="reduce"] and
  * prefers-reduced-motion (no hover, no slide, the conversation is shown already answered).
  */
 (function () {
@@ -23,6 +23,7 @@
     { id: 'phone', label: 'Phone' },
     { id: 'webvoice', label: 'Web voice' },
     { id: 'site', label: 'Homepage search' },
+    { id: 'agents', label: 'AI agents' },
   ];
   var ICON = {
     webchat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -32,6 +33,7 @@
     phone: '<path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/>',
     webvoice: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
     site: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 8.5h18"/><circle cx="11" cy="14" r="2.6"/><path d="m13 16 2.2 2.2"/>',
+    agents: '<rect x="4.5" y="7.5" width="15" height="11" rx="3"/><path d="M12 7.5V4.5"/><circle cx="12" cy="3.6" r="1"/><circle cx="9.3" cy="12.5" r="1.1"/><circle cx="14.7" cy="12.5" r="1.1"/><path d="M9.5 15.8h5"/>',
   };
   var svg = function (id, s) { return '<svg width="' + (s || 16) + '" height="' + (s || 16) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[id] + '</svg>'; };
   var Q = 'How long is the warranty?';
@@ -71,6 +73,15 @@
         '<div class="ks-site ks-onepage"><div class="ks-site-top"><i></i><i></i><i></i><span>lumenbikes.com</span></div><div class="ks-op-body">' +
         '<b class="ks-op-h">' + BOT + '</b><p class="ks-op-box ks-step1">' + Q + '</p><p class="ks-op-chips" aria-hidden="true"><i>Warranty</i><i>Returns</i><i>Shipping</i></p>' +
         '<p class="ks-cap ks-bot ks-step3">' + A + ' <span class="ks-n">1</span></p><span class="ks-chip ks-step3">Sources · 1 · ' + SRC + '</span></div></div>';
+      // another AI assistant (any brand) asks the bot through its agent link and repeats the cited answer
+      case 'agents': return '' +
+        '<div class="ks-ai"><div class="ks-ai-top"><span class="ks-ai-logo">' + svg('agents', 15) + '</span><b>Your AI assistant</b><small>Connected: ' + BOT + ' Help</small></div>' +
+        '<div class="ks-ai-thread"><p class="ks-b ks-me ks-step1">Is my Lumen e-bike battery still under warranty? I bought it 18 months ago.</p>' +
+        '<div class="ks-ai-tool ks-step1 ks-late"><span class="ks-ai-tool-ico">' + svg('agents', 13) + '</span><div><b>Asked ' + BOT + ' Help</b><code>ask("' + Q + '")</code></div><span class="ks-ai-ok ks-step3">Answered · 1 source</span></div>' +
+        '<p class="ks-dots ks-step2" aria-hidden="true"><i></i><i></i><i></i></p>' +
+        '<p class="ks-ai-ans ks-step3">Yes. ' + BOT + ' says e-bike batteries are covered for 2 years or 800 charge cycles <span class="ks-n">1</span>, so at 18 months you are still covered.</p>' +
+        '<span class="ks-chip ks-step3">1 · ' + BOT + ' · ' + SRC + '</span></div>' +
+        '<div class="ks-ai-bar"><span>Ask anything</span><i></i></div></div>';
       default: return '' +
         '<div class="ks-site"><div class="ks-site-top"><i></i><i></i><i></i><span>lumenbikes.com</span></div><div class="ks-site-body"><span></span><span></span><span class="short"></span>' +
         '<div class="ks-chat"><div class="ks-chat-head"><span class="ks-av">LB</span><b>' + BOT + ' Help</b><small>Answers from our docs</small></div>' +
@@ -105,6 +116,7 @@
     phone: 'Callers ask out loud; it answers and names the source.',
     webvoice: 'A talk button on your website: it answers out loud.',
     site: 'A simple search box over your homepage. Answers link to your pages.',
+    agents: 'Other AI assistants ask your bot and pass on the same cited answer.',
   };
 
   SHAPES.forEach(function (s) {
@@ -125,7 +137,11 @@
   // ------------------------------------------------------------ the visitor's picks (#kl-surf)
   var surfEl = document.getElementById('kl-surf');
   function picked() {
-    var on = surfEl ? [].slice.call(surfEl.querySelectorAll('[data-surface][aria-pressed="true"]')).map(function (b) { return b.getAttribute('data-surface'); }) : [];
+    // each ticked tool (data-tool) shows all of its features (data-surfaces: Website = chat, voice and homepage search)
+    var on = [];
+    if (surfEl) [].forEach.call(surfEl.querySelectorAll('[data-surfaces][aria-pressed="true"]'), function (b) {
+      String(b.getAttribute('data-surfaces') || '').split(',').forEach(function (f) { if (f && on.indexOf(f) < 0) on.push(f); });
+    });
     var order = SHAPES.map(function (s) { return s.id; });
     on = on.filter(function (x) { return order.indexOf(x) >= 0; }).sort(function (a, b) { return order.indexOf(a) - order.indexOf(b); });
     return on.length ? on : ['webchat'];

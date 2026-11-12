@@ -113,13 +113,33 @@
 .ks-mail-msg p { margin: 4px 0; } .ks-mail-msg sup { color: #4f46e5; font-weight: 700; }
 .ks-mail-msg.is-bot { background: #fafaff; } .ks-src { color: #475467; font-size: 11.5px; }
 
+/* AI agents: another AI assistant asks the bot through its agent link (a neutral, unbranded assistant app) */
+.ks-ai { width: 100%; height: 440px; border-radius: 16px; overflow: hidden; background: #15161c; border: 1px solid #2a2c36; box-shadow: 0 22px 44px rgba(15,23,42,.28); display: flex; flex-direction: column; color: #e8e9ef; font-family: var(--font-sans, system-ui); }
+.ks-ai-top { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 9px; align-items: center; padding: 12px 14px; border-bottom: 1px solid #262833; }
+.ks-ai-logo { grid-row: span 2; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, #6366f1, #a855f7); }
+.ks-ai-top b { font: 600 13px/1.2 var(--font-sans, system-ui); } .ks-ai-top small { font-size: 10.5px; color: #8d93a6; }
+.ks-ai-thread { flex: 1; display: flex; flex-direction: column; gap: 9px; padding: 14px; overflow: hidden; }
+.ks-ai .ks-me { background: #2b2e3b; color: #f1f2f7; border-bottom-right-radius: 5px; }
+.ks-ai .ks-dots { background: #23252f; } .ks-ai .ks-dots i { background: #8d93a6; }
+.ks-ai-tool { align-self: stretch; display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; padding: 9px 11px; border-radius: 12px; border: 1px solid #343748; background: #1c1e27; }
+.ks-ai-tool-ico { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: #2c2f62; color: #c7d2fe; }
+.ks-ai-tool b { display: block; font: 600 12px/1.3 var(--font-sans, system-ui); color: #e8e9ef; }
+.ks-ai-tool code { display: block; margin-top: 2px; font: 11px/1.35 var(--font-mono, ui-monospace, monospace); color: #a5b4fc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ks-ai-ok { grid-column: 2; margin-top: 5px; justify-self: start; padding: 2px 8px; border-radius: 999px; background: rgba(34,197,94,.14); color: #86efac; font: 600 10.5px/1.4 var(--font-sans, system-ui); }
+.ks-ai-ans { margin: 0; font: 13px/1.5 var(--font-sans, system-ui); color: #e8e9ef; }
+.ks-ai .ks-n { background: #312e81; color: #c7d2fe; }
+.ks-ai .ks-chip { border-color: #3f3f8a; color: #c7d2fe; background: #1e1f3d; }
+.ks-ai-bar { display: flex; align-items: center; gap: 8px; margin: 10px; padding: 0 6px 0 14px; height: 36px; border-radius: 18px; border: 1px solid #2f3240; color: #6b7185; font-size: 12px; }
+.ks-ai-bar span { flex: 1; } .ks-ai-bar i { width: 24px; height: 24px; border-radius: 50%; background: #6366f1; }
+.ks-slide.is-play .ks-late { animation: ks-pop .35s .9s ease-out both; }
+
 /* the landing in two columns when there is room: the hero left, the showcase floating right */
 @media (min-width: 1100px) {
   .kl-main.has-show { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 440px); align-items: center; column-gap: clamp(32px, 5vw, 88px); max-width: 1320px; margin: 0 auto; }
   .kl-main.has-show .kl-proof { display: none; }
 }
 @media (max-width: 1099px) { .kl-main.has-show .kl-proof { display: none; } .kl-show { margin-top: 28px; } .ks-stage { height: 440px; } }
-@media (max-width: 480px) { .ks-stage { height: 430px; } .ks-site, .ks-mail { height: 420px; } .ks-chat, .ks-vw { width: 86%; } }
+@media (max-width: 480px) { .ks-stage { height: 430px; } .ks-site, .ks-mail, .ks-ai { height: 420px; } .ks-chat, .ks-vw { width: 86%; } }
 @media (prefers-reduced-motion: reduce) { .ks-float, .ks-shadow, .ks-dots i, .ks-wave i { animation: none !important; } }
 html[data-motion="reduce"] .ks-float, html[data-motion="reduce"] .ks-shadow, html[data-motion="reduce"] .ks-dots i, html[data-motion="reduce"] .ks-wave i { animation: none !important; }
 /* hold still while the visitor points at or tabs into it (easier to aim at the selector, arrows and dots) */
