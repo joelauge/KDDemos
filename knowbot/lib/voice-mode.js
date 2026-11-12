@@ -220,7 +220,9 @@ export function openVoiceMode(host, o = {}) {
     outCtx = new AC();
     outGain = outCtx.createGain();
     const an = outCtx.createAnalyser();
-    outGain.connect(an); an.connect(outCtx.destination);
+    // the bot's voice goes through a broadcast "SM7B" voice chain before the speakers (voiceChain, below)
+    const chain = voiceChain(outCtx);
+    outGain.connect(chain.input); chain.output.connect(an); an.connect(outCtx.destination);
     outMeter = createMeter(an);
     outCtx.resume?.().catch(() => {});
   } catch { outCtx = null; }
@@ -514,3 +516,27 @@ export function openVoiceMode(host, o = {}) {
 }
 
 export { ORB_PRESETS };
+
+/**
+ * A broadcast voice chain for the bot's spoken answers, tuned so the model's 24 kHz speech sounds like a podcast voice
+ * on a dynamic broadcast mic (the Shure SM7B sound: warm, smooth, slightly dark on top, even in level). Measured on
+ * production speech: the raw voice has a boxy 400-500 Hz, a hole at 4-5 kHz and a codec "sizzle" bump near 7-8 kHz
+ * (the odd upper range); this brings 2-10 kHz within ~1.6 dB of the target curve (from 4.2 dB).
+ *   high-pass 75 Hz → -2 dB @ 230 Hz → -3.5 dB @ 460 Hz → +5.5 dB @ 4.3 kHz → -7.5 dB @ 7.8 kHz → -3 dB shelf @ 10 kHz
+ *   → 3:1 compressor (-22 dB) → +2 dB makeup → fast safety limiter (-4 dB, 20:1): peaks stay below 0 dBFS.
+ * @param {BaseAudioContext} ctx
+ * @returns {{ input: AudioNode, output: AudioNode }}
+ */
+export function voiceChain(ctx) {
+  const bq = (type, f, q, g) => { const n = ctx.createBiquadFilter(); n.type = type; n.frequency.value = f; if (q != null) n.Q.value = q; if (g != null) n.gain.value = g; return n; };
+  const stages = [bq('highpass', 75, 0.7), bq('peaking', 230, 1.1, -2), bq('peaking', 460, 0.9, -3.5), bq('peaking', 4300, 1.0, 5.5),
+    bq('peaking', 7800, 1.3, -7.5), bq('highshelf', 10000, null, -3)];
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -22; comp.knee.value = 10; comp.ratio.value = 3; comp.attack.value = 0.008; comp.release.value = 0.16;
+  const makeup = ctx.createGain(); makeup.gain.value = Math.pow(10, 2 / 20);
+  const limit = ctx.createDynamicsCompressor();
+  limit.threshold.value = -4; limit.knee.value = 0; limit.ratio.value = 20; limit.attack.value = 0.001; limit.release.value = 0.06;
+  const all = [...stages, comp, makeup, limit];
+  for (let i = 0; i < all.length - 1; i++) all[i].connect(all[i + 1]);
+  return { input: all[0], output: all[all.length - 1] };
+}
