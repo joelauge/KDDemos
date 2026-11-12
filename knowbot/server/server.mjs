@@ -149,6 +149,10 @@ export function createKnowBotServer(opts = {}) {
     // a Studio answer's public proof link (/p/<id>) for what it sends, made by the developer API (created below)
     proofLink: (req, trialId, a) => devapi.proofLink(req, trialId, a), ...(opts.studio || {}) });
 
+  // a launched bot whose files live in its customer's own KnowDrive store (server/kdaccount.mjs): the registry's owned
+  // buckets search that store through the customer's sign-in, which the Studio holds (sealed) for that bot
+  if (registry && typeof studio?.kdFetchFor === 'function') registry.kdOwnedFetch = (trial, p, init) => studio.kdFetchFor(trial, p, init);
+
   // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
   const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, evidence, resolver, haiku, queryVariants, readRaw, readJson, clientIp, requireAdmin,
     logger: log, dataDir, llmModel, canonical: CANONICAL, sendInfo, leads, ...(opts.devapi || {}) });

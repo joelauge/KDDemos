@@ -23,7 +23,8 @@ const SHOTS = process.env.TOOLS_SHOTS || path.join(__dirname, 'screens', 'tools'
 let failed = 0;
 const check = (name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${name}${detail ? ` · ${String(detail).slice(0, 200)}` : ''}`); return ok; };
 
-const dev = await startDevServer({ speed: 4 });
+// the checkout plan is shot here; the KnowDrive account step before it has its own smoke (kd-smoke.mjs)
+const dev = await startDevServer({ speed: 4, env: { KNOWBOT_KD_ACCOUNTS: 'off' } });
 const api = (p, init = {}) => fetch(`${dev.url}${p}`, init);
 let home = null, browser = null;
 try {

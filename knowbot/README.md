@@ -160,6 +160,22 @@ max_tokens 400, seed 7.
 - **Deploy:** `.github/workflows/deploy-cloudflare.yml` runs on push to `main` (or manually) once the repo secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `KNOWDRIVE_API_KEY` exist. Locally: `cd cloudflare && npm install && npx wrangler deploy` (needs Docker).
 - **Wire the pages to it:** put the deployed Worker URL in `lib/site-config.js` (`HOSTED_APIS['knowbot.knowdrive.ai']`). The dashboard and demos then use it by default.
 
+## Launch with a KnowDrive account (`server/kdaccount.mjs`, `studio/kdaccount.js`)
+
+Launch → the visitor creates (or signs in to) their own KnowDrive account in a popup (OAuth 2.0 authorization code +
+PKCE S256, the KnowBot client registered dynamically and cached) → the bot's ready, enabled, non-sample files are copied
+into the store that account owns (idempotent: each copy is tagged `knowbot:<trial>` and `kbsrc:<shared file id>`) →
+checkout, whose link carries the signed `kd_account` → convert removes KnowBot's shared copies and the bot answers from
+the customer's store through their sign-in on every surface. The refresh token is sealed (AES-GCM, `KNOWBOT_SECRET_KEY`)
+in the bot's state doc; access tokens live in memory only; nothing token-shaped reaches the browser or the logs.
+
+Env (all optional): `KNOWBOT_KD_AUTH_URL` (default `https://knowdrive.ai`; `https://dev.knowdrive.ai` for dev),
+`KNOWBOT_KD_API_URL` (default: the auth URL), `KNOWBOT_KD_REDIRECT_URI` (default `<public API base>/api/studio/kd/callback`;
+production: `https://agent.knowbot.app/api/studio/kd/callback` in `wrangler.jsonc`), `KNOWBOT_KD_ACCOUNTS=off` (skip the
+step), `KNOWBOT_MODE=owner` (the owner's own deployment: skip it too), `KNOWBOT_KD_SCOPE` (default
+`openid email profile entitlements`), `KNOWBOT_KD_CLIENT_ID` / `KNOWBOT_KD_CLIENT_SECRET` (a pre-registered client instead
+of DCR). Offline: `npm run studio:dev` runs the whole flow against the fake authorization server; `npm run kd:smoke`.
+
 ## Bots and buckets
 
 A **bucket** is a tag: every file carrying `bucket:<id>` belongs to it, wherever knowDrive stores it. A **bot** (chat instance) is linked to any number of buckets, and each link can be switched on or off. A bot answers **only** from its enabled buckets. Each bucket is searched on its own, filtered to its tag (plus the link's mask), and any hit whose tags don't match is dropped before it can be quoted or cited. Several bots can share a bucket, and a bot with no enabled links answers nothing. Wire them on the dashboard's **Bots & buckets** canvas.

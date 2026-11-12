@@ -80,7 +80,9 @@ async function boot({ env = {}, studio = {}, speed = 3, kdKey = true, kdOpts = {
   const clock = { skew: 0 };
   const fullEnv = {
     KNOWDRIVE_BASE_URL: kd.url, ...(kdKey ? { KNOWDRIVE_API_KEY: 'fake-key' } : {}), KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials', KNOWBOT_STUDIO_SAMPLE_MODE: 'live',
-    KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen', ...env,
+    KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen',
+    KNOWBOT_KD_ACCOUNTS: 'off', // the checkout and convert tests here are the unlinked path; server/test/kdaccount.test.mjs covers the linked one
+    ...env,
   };
   const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, trustProxy: true, env: fullEnv,
     studio: { sweep: false, now: () => Date.now() + clock.skew, pingMs: 200, pollMs: 40, pollSlowMs: 150, pollIdleMs: 400, ...studio } });

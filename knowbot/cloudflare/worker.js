@@ -40,6 +40,10 @@ export class KnowBotContainer extends Container {
       // Recall and engine (plain vars, optional): the hidden query expansion's searches per question (default 4, 0 off),
       // the website widget's engine (haiku | local; haiku needs ANTHROPIC_API_KEY), the research step's effort (low|medium|high)
       ...pick(env, ['KNOWBOT_QUERY_VARIANTS', 'KNOWBOT_WIDGET_ENGINE', 'KNOWBOT_RESEARCH_EFFORT']),
+      // KnowDrive accounts at launch (server/kdaccount.mjs; plain vars, optional): the authorization server and API
+      // (default https://knowdrive.ai), the sign-in callback on this API host, off|required, the scopes, a pinned client
+      // (else registered dynamically), and KNOWBOT_MODE=owner (skips the account step)
+      ...pick(env, ['KNOWBOT_KD_AUTH_URL', 'KNOWBOT_KD_API_URL', 'KNOWBOT_KD_REDIRECT_URI', 'KNOWBOT_KD_ACCOUNTS', 'KNOWBOT_KD_SCOPE', 'KNOWBOT_KD_CLIENT_ID', 'KNOWBOT_KD_CLIENT_SECRET', 'KNOWBOT_MODE']),
     };
   }
 

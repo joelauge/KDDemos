@@ -513,6 +513,21 @@ export class InstanceRegistry {
   /** A bucket's retriever, narrowed by the link's mask. Scope is the bucket tag (enforced by knowDrive's filter). */
   bucketRetriever(b, minSimilarity, mask) {
     if (b.builtin) return this.builtinRetriever.withMask ? this.builtinRetriever.withMask(mask || {}) : this.builtinRetriever;
+    if (b.kd) {
+      // a launched bot's own KnowDrive store: searched through its customer's sign-in (server.mjs sets kdOwnedFetch from the
+      // Studio); a sign-in that no longer works is a failed search, so the bot refuses instead of answering
+      if (typeof this.kdOwnedFetch !== 'function') throw new InstanceError(503, "this bucket lives in a customer's KnowDrive account and needs the Studio");
+      const key = `${b.id}@kd@${b.kd.trial}@${b.kd.store}@${minSimilarity}`;
+      if (!this.retrievers.has(key)) {
+        const trial = b.kd.trial;
+        this.retrievers.set(key, new KnowDriveRetriever({
+          baseUrl: 'https://kd.invalid', apiKey: null, store: b.kd.store, tag: b.tag, prefix: b.root || '', dirFilter: false, prefixFilter: false,
+          local: null, minSimilarity, exclude: ['kind:config', 'questions'], cards: false, logger: this.log, resolver: null,
+          fetchVia: (p, init) => this.kdOwnedFetch(trial, p, init),
+        }));
+      }
+      return this.retrievers.get(key).withMask(mask || {});
+    }
     if (!this.kd) throw new InstanceError(503, 'bucket search needs a knowDrive key (KNOWDRIVE_API_KEY)');
     const key = `${b.id}@${b.tag}@${minSimilarity}`;
     if (!this.retrievers.has(key)) {
@@ -575,6 +590,31 @@ export class InstanceRegistry {
   }
 
   // ---------------------------------------------------------------- buckets
+  /**
+   * The bucket of a launched bot whose files live in its customer's own KnowDrive store (server/trials.mjs convert):
+   * created, or re-pointed when it exists. Its files are managed in KnowDrive, never through the shared store.
+   */
+  async ensureOwnedBucket({ id, name, trial, store, tag, root }) {
+    this.needWrite();
+    const bid = String(id || '').toLowerCase();
+    if (!ID_RE.test(bid) || bid === this.builtinBucket.id) throw new InstanceError(400, `bucket id "${id}" is not valid`);
+    const t = now();
+    const cur = this.buckets.get(bid);
+    const kd = { trial: String(trial), store: String(store) };
+    if (cur) return this.commit(() => { const b = { ...cur, kd, tag: tag || cur.tag, root: root || cur.root, updatedAt: t }; this.buckets.set(bid, b); this.retrievers.clear(); return pick(b, BUCKET_KEYS); });
+    const [flow, newFlow] = this.flowFor({}, cleanName(name || bid));
+    const b = { id: bid, flow, name: cleanName(name || bid), tag: tag || `bucket:${bid}`, root: root || '', kd, createdAt: t, updatedAt: t };
+    this.migrated[bid] = t;
+    return this.commit(() => { if (newFlow) this.flows.set(newFlow.id, newFlow); this.buckets.set(bid, b); return pick(b, BUCKET_KEYS); });
+  }
+
+  /** A bucket whose files are in KnowBot's shared store (an owned bucket's files are managed in KnowDrive). */
+  sharedBucket(id) {
+    const b = this.bucket(id);
+    if (b.kd) throw new InstanceError(409, "this bot's files live in its owner's KnowDrive account; manage them there");
+    return b;
+  }
+
   async createBucket(body) {
     this.needWrite();
     const name = cleanName(body.name);
@@ -672,7 +712,7 @@ export class InstanceRegistry {
 
   async listFiles(bucketId) {
     this.needKd();
-    const b = this.bucket(bucketId);
+    const b = this.sharedBucket(bucketId);
     await this.migration;
     const rows = await this.listRows({ tags_all: b.tag });
     return rows.filter((r) => !(r.tags || []).includes('kind:config')).map((r) => ({
@@ -687,7 +727,7 @@ export class InstanceRegistry {
   /** The tags in a bucket with their file counts: what a mask can require or exclude. Folders come back as f1:…/f2:…. */
   async bucketTags(bucketId) {
     this.needKd();
-    const b = this.bucket(bucketId);
+    const b = this.sharedBucket(bucketId);
     await this.migration;
     const out = [];
     let after = '';
@@ -707,7 +747,7 @@ export class InstanceRegistry {
   /** The first atoms of a file in this bucket: what knowDrive actually extracted and will cite. */
   async fileAtoms(bucketId, fileId, limit = 5) {
     this.needKd();
-    const b = this.bucket(bucketId);
+    const b = this.sharedBucket(bucketId);
     const f = await this.memberFile(b, fileId);
     const n = Math.max(1, Math.min(20, Number(limit) || 5));
     const ar = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}/atoms?limit=${n}`);
@@ -720,7 +760,7 @@ export class InstanceRegistry {
   /** name may carry folders ("menus/lunch/specials.md"): they become folder tags. */
   async upload(bucketId, name, contentType, bytes) {
     this.needKd();
-    const b = this.bucket(bucketId);
+    const b = this.sharedBucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
     const rel = safeRelPath(name);
     if (!bytes?.length) throw new InstanceError(400, 'empty file');
@@ -743,7 +783,7 @@ export class InstanceRegistry {
   /** Moving a file between folders only changes its folder tags. */
   async moveFile(bucketId, fileId, folders) {
     this.needKd();
-    const b = this.bucket(bucketId);
+    const b = this.sharedBucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
     if (!Array.isArray(folders) || folders.length > 12) throw new InstanceError(400, 'folders must be a list of folder names');
     const clean = folders.map((x) => String(x).trim()).filter(Boolean);
@@ -757,7 +797,7 @@ export class InstanceRegistry {
 
   async deleteFile(bucketId, fileId) {
     this.needKd();
-    const b = this.bucket(bucketId);
+    const b = this.sharedBucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
     const f = await this.memberFile(b, fileId); // only files carrying this bucket's tag
     const del = await this.kdFetch(`/api/v1/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });

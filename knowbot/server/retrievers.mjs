@@ -328,8 +328,11 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true, resolver = null, botId = null }) {
+  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true, resolver = null, botId = null, fetchVia = null }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
+    // fetchVia(path, init) → Response: a store reached through someone else's sign-in (a launched bot's customer store,
+    // server/kdaccount.mjs), which brings its own Authorization and refreshes it; apiKey is then unused
+    this.fetchVia = typeof fetchVia === 'function' ? fetchVia : null;
     this.apiKey = apiKey; this.store = store; this.local = local; this.timeoutMs = timeoutMs; this.log = logger;
     this.minSimilarity = Number(minSimilarity) || 0; this.canonicalMargin = Number(canonicalMargin) || 0; this.rescueMargin = Number(rescueMargin) || 0; this.cards = cards !== false;
     this.exclude = (Array.isArray(exclude) ? exclude : String(exclude || '').split(',')).map((t) => t.trim()).filter(Boolean);
@@ -387,10 +390,12 @@ export class KnowDriveRetriever {
         return w.docs.filter((d) => d.distance != null).map((d) => ({ ...d, score: 1 - d.distance / 2 })).sort((a, b) => b.score - a.score).slice(0, k);
       }
     }
-    const res = await fetch(`${this.baseUrl}/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`, {
+    const p = `/api/v1/vector_stores/${encodeURIComponent(this.store)}/search`;
+    const body = JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.prefixFilter ? {} : { fields: 'tags,uri,score,text,file_id,metadata' }), ...(this.allOf.length || this.exclude.length || extraAllOf.length ? { filter: { ...(this.allOf.length || extraAllOf.length ? { all_of: [...this.allOf, ...extraAllOf] } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) });
+    const res = this.fetchVia ? await this.fetchVia(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body, timeout: this.timeoutMs }) : await fetch(`${this.baseUrl}${p}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${typeof this.apiKey === 'function' ? this.apiKey() : this.apiKey}` },
-      body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', ...(this.prefixFilter ? {} : { fields: 'tags,uri,score,text,file_id,metadata' }), ...(this.allOf.length || this.exclude.length || extraAllOf.length ? { filter: { ...(this.allOf.length || extraAllOf.length ? { all_of: [...this.allOf, ...extraAllOf] } : {}), ...(this.exclude.length ? { none_of: this.exclude } : {}) } } : {}) }),
+      body,
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new Error(`knowDrive HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);

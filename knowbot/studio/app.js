@@ -161,6 +161,7 @@ let isReady = false;
 readyP.then(() => { isReady = true; });
 const whenReady = (fn) => (isReady ? fn() : readyP.then(fn));
 const mods = { samplebot: null, ingest: null, checkout: null };
+ctx.mods = mods;   // smoke-test hook: the mounted modules' public calls (e.g. mods.checkout.open())
 
 // ------------------------------------------------------------------ header
 

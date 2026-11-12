@@ -302,6 +302,13 @@ export function mount(ctx) {
 
   const launchCards = new Set();   // live instances (all reflect the store)
   let sheet = null;   // CheckoutSheet {layer, dialog, invoker, prevInert, redirecting, dismissed} (declared early: syncCtaFlag reads it)
+  // The KnowDrive account step (owner decisions 1-4, ./kdaccount.js, loaded on first use): Launch opens it before the
+  // checkout until the bot's files are in the visitor's own KnowDrive account. Off (owner's deployment, or a server
+  // without it): config.kd.required is false and Launch goes straight to the checkout, as before.
+  let kdStepP = null, kdEmail = null;
+  const kdStep = () => (kdStepP ||= import('./kdaccount.js?v=c521a23').then((m) => m.createKdStep(ctx, { h, $$ })));
+  const kdNeeded = () => !!cfg().kd?.required && !converted();
+  setTimeout(() => { if (cfg().kd?.available && getState().trial?.id) kdStep().then((k) => k.check()).catch(() => {}); }, 2500);
   let stage = null;   // LaunchStage {layer, panel, inst, opener, cleanup[]}
   let focusNextCard = false;       // set by a user-initiated launch:open: the next summary takes focus (D9)
   let pickFocus = null;            // fixer r7 (D9): what had focus when that launch was picked
@@ -1165,8 +1172,17 @@ export function mount(ctx) {
       ex);
   }
 
-  async function openSheet({ source = 'card', from = null, invoker = null } = {}) {
+  async function openSheet({ source = 'card', from = null, invoker = null, kdChecked = false } = {}) {
     if (sheet) { sheet.email?.focus(); return; }
+    if (kdNeeded() && !kdChecked) {
+      let k = null;
+      try { k = await kdStep(); if (!k.isReady()) await k.status(); } catch { k = null; }
+      if (k && !k.isReady()) {
+        k.open({ invoker: invoker || document.activeElement, onContinue: ({ email } = {}) => { kdEmail = email || kdEmail; openSheet({ source, from: null, invoker, kdChecked: true }); } });
+        return;
+      }
+      kdEmail = k?.last?.email || kdEmail;
+    }
     preloadGoLive();
     // fixer r4 (D8, blocker): desktop checkout is a 440 px sheet on the right, over the SampleBot pane, with the bot thread
     // unblurred beside it (a light, blur-free scrim). The receipt panel closes first, so the receipt exists once.
@@ -1187,7 +1203,7 @@ export function mount(ctx) {
     const receipt = sheetReceipt();
     const emailIn = h('input', { type: 'email', id: 'co-email', name: 'email', class: 'input co-input', autocomplete: 'email', inputmode: 'email', spellcheck: 'false', required: true,
       'aria-describedby': 'co-email-hint', placeholder: 'you@company.com' });
-    emailIn.value = t.email || '';
+    emailIn.value = t.email || kdEmail || '';
     const emailErr = h('p', { class: 'form-error co-field-err', id: 'co-email-err', hidden: true });
     const submit = h('button', { type: 'submit', class: 'co-cta co-cta-lg' }, h('span', { class: 'co-spin', 'aria-hidden': 'true' }), h('span', { class: 'co-cta-label', dataset: { coPrice: 'submit' } }, `Continue to secure checkout · ${pr.text}`), h('span', { class: 'co-cta-ico', html: icon('lock', 15) }));
     const errBox = h('div', { class: 'co-err', role: 'alert', hidden: true });
@@ -1337,6 +1353,8 @@ export function mount(ctx) {
         sheet.redirecting = false;
         submit.disabled = false; submit.removeAttribute('aria-busy'); submit.classList.remove('is-busy');
         $('.co-cta-label', submit).textContent = PRICE_KINDS.submit(price());
+        // the KnowDrive step is not finished (signed out, sign-in expired): back to it
+        if (err && /^kd_/.test(err.code || '')) { closeSheet('kd'); setTimeout(() => kdStep().then((k) => k.open({ onContinue: () => openSheet({ source: 'card', kdChecked: true }) })).catch(() => {}), motion.reduced() ? 60 : 480); return; }
         if (err && err.status === 400 && /email/i.test(err.message || '')) { emailErr.textContent = err.message; emailErr.hidden = false; emailIn.setAttribute('aria-invalid', 'true'); emailIn.focus(); return; }
         const retry = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small' }, h('span', { html: icon('refresh', 14) }), 'Try again');
         retry.addEventListener('click', () => go());
@@ -1413,7 +1431,7 @@ export function mount(ctx) {
       const inv = [s.invoker, [...launchCards].filter((c) => c.el.isConnected && c.kind === 'summary').pop()?.cta, document.getElementById('st-price'), document.getElementById('st-setup-composer')].find(usable);
       if (inv) { try { inv.focus({ preventScroll: false }); } catch { /* ignore */ } }
     }
-    if (reason !== 'redirect' && reason !== 'proof' && reason !== 'addfiles' && reason !== 'destroy') {
+    if (reason !== 'redirect' && reason !== 'proof' && reason !== 'addfiles' && reason !== 'destroy' && reason !== 'kd') {
       announce(`${botName()} is saved for ${cfg().quota?.ttlDays || 7} days.`, 'polite');
       // One Builder "no problem, it's saved" turn per visit, not one per close (repeat closes read as nagging). It is
       // posted once the sheet has left, so the new turn's layout never lands in the exit animation's frames.

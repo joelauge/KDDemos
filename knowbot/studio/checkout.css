@@ -694,3 +694,43 @@
 .co-tool b { color: var(--strong); font-weight: 600; }
 .co-tool .co-incl-ico { flex: none; margin-top: 2px; }
 .co-tool-state { color: var(--text); }
+
+/* ------------------------------------------------------------------ KnowDrive account step of Launch (kdaccount.js) */
+.kda-layer { z-index: 85; }
+.kda-dialog { position: relative; width: min(460px, 100%); max-height: calc(100dvh - 48px); overflow: auto; overscroll-behavior: contain; display: grid; gap: 14px; padding: 26px 26px 24px;
+  border-radius: 22px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 40px 80px -24px rgb(2 6 23 / .55); outline: none; }
+.kda-dialog::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; pointer-events: none; background: linear-gradient(90deg, transparent, var(--accent), transparent); }
+.kda-title { margin: 0; padding-right: 40px; font: 700 23px/1.2 var(--display); letter-spacing: -.02em; color: var(--strong); overflow-wrap: anywhere; }
+.kda-desc { margin: 0; font-size: 14.5px; line-height: 1.55; color: var(--text); }
+.kda-steps { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); }
+.kda-steps li { display: inline-flex; align-items: center; gap: 6px; }
+.kda-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--line-2); background: transparent; }
+.kda-steps li.is-current { color: var(--strong); font-weight: 600; }
+.kda-steps li.is-current .kda-dot { border-color: var(--accent); background: var(--accent); }
+.kda-steps li.is-done .kda-dot { border-color: var(--good); background: var(--good); }
+.kda-body { display: grid; gap: 12px; min-width: 0; }
+.kda-body > * { margin: 0; }
+.kda-cta { text-decoration: none; }
+.kda-cta.is-busy .co-spin { display: inline-block; }
+.kda-alt { font-size: 14px; color: var(--muted); text-align: center; }
+.kda-fine { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.kda-note { font-size: 14px; line-height: 1.5; color: var(--text); }
+.kda-who, .kda-done { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.kda-who b, .kda-done b { color: var(--strong); font-weight: 600; }
+.kda-ok { display: inline-flex; flex: none; color: var(--good); }
+.kda-wait { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text); }
+.kda-spin { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); animation: co-spin .8s linear infinite; }
+:root[data-motion="reduce"] .kda-spin { animation-duration: 2.4s; }
+.kda-bar { height: 8px; border-radius: 999px; background: var(--raise); overflow: hidden; }
+.kda-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--dur-3) var(--ease-out); }
+.kda-failed { list-style: none; padding: 0; display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.kda-failed b { color: var(--strong); font-weight: 600; overflow-wrap: anywhere; }
+.kda-err { margin: 0; }
+.kda-notice { position: fixed; z-index: 70; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 10px 14px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); background: var(--panel); box-shadow: var(--st-shadow-2); font-size: 13.5px; color: var(--text); }
+.kda-notice > span:nth-child(2) { flex: 1; min-width: 180px; }
+@media (max-width: 560px) {
+  .kda-layer { place-items: end stretch; padding: 0; }
+  .kda-dialog { width: 100%; max-height: 92dvh; border-radius: 20px 20px 0 0; padding: 22px 16px calc(20px + env(safe-area-inset-bottom, 0px)); }
+  .kda-title { font-size: 21px; }
+}

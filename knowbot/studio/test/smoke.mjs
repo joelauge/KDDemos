@@ -859,7 +859,8 @@ try {
     // One dev server per cell: the per-IP rate limits (6 trials/h, 20 Builder turns/min) are real, and every cell
     // comes from 127.0.0.1, so sharing a server would test the limiter instead of the journey.
     // storeRowsShown 2: the fake store's 4 products exceed the server's row cap, so the Sources group's own search runs
-    const dev = await startDevServer({ speed, studio: { storeRowsShown: 2 } });
+    // the checkout sheet is what step 13 checks; the KnowDrive account step before it has its own smoke (kd-smoke.mjs)
+    const dev = await startDevServer({ speed, studio: { storeRowsShown: 2 }, env: { KNOWBOT_KD_ACCOUNTS: 'off' } });
     log(`  ${dev.studioUrl}`);
     try { await journey(browser, dev, cell); await storeJourney(browser, dev, cell); }
     catch (e) { results.push({ cell: cell.name, step: 'crash', name: e.message, ok: false, soft: false, detail: '' }); log(`  [FAIL] crash ${e.stack}`); }

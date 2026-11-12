@@ -30,7 +30,7 @@ import * as kbLib from '../lib/knowbot.js';
 import { createResearchAgent } from './research.mjs';
 import { runAnswer, emptyProof } from './answer.mjs';
 import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAnswerable } from './evidence.mjs';
-import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
+import { fileStage, safeRelPath, slugify, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS, queryVariantsOf } from './providers.mjs';
 import { createImageFinder, indexFromJson, indexToJson, indexAdd, within } from './products.mjs';
 import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS, createStoreFetcher, readPageHtml, renderMarkdown, slugOf, titleOfHtml } from './storeimport.mjs';
@@ -40,6 +40,8 @@ import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
 import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
 import { agentLimits, agentSettings, priceText as agentPriceText } from './agents.mjs';
+import { createKdAccount, KdError } from './kdaccount.mjs';
+import { publicBase } from './channels/util.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -1157,6 +1159,10 @@ export function createStudio(o = {}) {
   };
   let secret = env.KNOWBOT_SECRET_KEY || env.KNOWBOT_ADMIN_TOKEN || '';
   if (!secret) { secret = randomBytes(32).toString('hex'); if (enabled) log('[studio] warning: no KNOWBOT_SECRET_KEY or admin token; trial tokens use a per-process key and will not survive a restart'); }
+  // KnowDrive accounts (server/kdaccount.mjs): before launch the visitor signs in to (or creates) their own KnowDrive
+  // account, the bot's files are copied into the store that account owns, and the launched bot answers from there
+  const kdAcct = o.kdAccount !== undefined ? o.kdAccount : (enabled ? createKdAccount({ env, secret, log, now, dataDir: o.dataDir }) : null);
+  const kdRequired = !!(kdAcct && kdAcct.required);
 
   // Studio provider for the Builder, summaries, starters and select (key from the registry, else scripted/local).
   const studioProvider = String(env.KNOWBOT_STUDIO_PROVIDER || '').toLowerCase() || null;
@@ -1231,7 +1237,9 @@ export function createStudio(o = {}) {
   // ------------------------------------------------------------------------- knowDrive client
   const apiKey = () => (typeof kd?.apiKey === 'function' ? kd.apiKey() : kd?.apiKey);
   async function kdFetch(p, init = {}) {
-    const { timeout = 30000, signal, ...rest } = init;
+    const { timeout = 30000, signal, via, ...rest } = init;
+    // via: the customer's own KnowDrive store (kdClientOf), with their delegated sign-in
+    if (via) return via.fetch(p, { ...rest, timeout, signal });
     const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
     return fetch(`${kd.baseUrl}${p}`, { ...rest, headers: { authorization: `Bearer ${apiKey()}`, ...(rest.headers || {}) }, signal: sig });
   }
@@ -1239,6 +1247,7 @@ export function createStudio(o = {}) {
     let res;
     try { res = await kdFetch(p, init); } catch (e) {
       if (init.signal?.aborted) throw e;
+      if (e instanceof KdError) fail(e.code === 'reconnect' ? 502 : e.status || 502, e.code === 'reconnect' ? 'kd_reconnect' : 'upstream', `KnowDrive ${what}: ${e.message}`);
       fail(502, 'upstream', `knowDrive ${what} failed: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`);
     }
     const text = await res.text();
@@ -1246,20 +1255,20 @@ export function createStudio(o = {}) {
     if (!res.ok) { const e = new StudioError(res.status === 404 ? 404 : 502, res.status === 404 ? 'not_found' : 'upstream', `knowDrive ${what}: HTTP ${res.status} ${clip(j.error?.message || text, 200)}`); e.upstreamStatus = res.status; throw e; }
     return j;
   }
-  async function listRows(params) {
+  async function listRows(params, via = null) {
     const rows = [];
     let after = '';
     for (let page = 0; page < 100; page++) {
       const qs = new URLSearchParams({ limit: '500', ...params });
       if (after) qs.set('after', after);
-      const j = await kdJson(`/api/v1/vector_stores/${encodeURIComponent(store)}/files?${qs}`, { timeout: 30000 }, 'listing files');
+      const j = await kdJson(`/api/v1/vector_stores/${encodeURIComponent(via ? via.store : store)}/files?${qs}`, { timeout: 30000, via }, 'listing files');
       rows.push(...(j.data || []));
       after = j.next_after || j.last_id || (j.data?.length ? j.data[j.data.length - 1].id : '');
       if (!j.has_more || !after) break;
     }
     return rows;
   }
-  async function ingest({ storePath, tags, mime, bytes, signal }) {
+  async function ingest({ storePath, tags, mime, bytes, signal, via = null }) {
     const fd = new FormData();
     // knowDrive /ingest is a batch endpoint: every text part after mime_type counts as a file part (a `path` part
     // would be stored as its own file), and mime_type must precede the file parts. The store path rides on the
@@ -1268,8 +1277,8 @@ export function createStudio(o = {}) {
     if (mime) fd.append('mime_type', mime);
     fd.append('file', new Blob([bytes], { type: mime || 'application/octet-stream' }), storePath);
     let res;
-    try { res = await kdFetch('/api/v1/ingest', { method: 'POST', headers: { 'x-vector-store-id': store }, body: fd, timeout: 120000, signal }); }
-    catch (e) { fail(502, 'upstream', `knowDrive ingest failed: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`); }
+    try { res = await kdFetch('/api/v1/ingest', { method: 'POST', headers: { 'x-vector-store-id': via ? via.store : store }, body: fd, timeout: 120000, signal, via }); }
+    catch (e) { if (e instanceof KdError) throw e; fail(502, 'upstream', `knowDrive ingest failed: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`); }
     const text = await res.text();
     let j = {}; try { j = JSON.parse(text); } catch {}
     if (!res.ok) {
@@ -1308,8 +1317,8 @@ export function createStudio(o = {}) {
     }
     return n;
   }
-  async function deleteRow(id) {
-    const res = await kdFetch(`/api/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch((e) => fail(502, 'upstream', `knowDrive delete failed: ${e.message}`));
+  async function deleteRow(id, via = null) {
+    const res = await kdFetch(`/api/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE', via }).catch((e) => fail(502, 'upstream', `knowDrive delete failed: ${e.message}`));
     if (!res.ok && res.status !== 404) fail(502, 'upstream', `knowDrive delete: HTTP ${res.status}`);
   }
 
@@ -1363,8 +1372,9 @@ export function createStudio(o = {}) {
   // (rate-limited), and is exchanged there for the trial bearer. It expires with the trial.
   const restoreSig = (payload) => createHmac('sha256', `knowbot-restore\n${secret}`).update(payload).digest().subarray(0, 18).toString('base64url');
   /** Checkout plan params signature (domain-separated from trial and restore tokens), so a tampered total is detectable. */
-  const checkoutSig = (trialId, surfaces, interval, price, total) =>
-    createHmac('sha256', `knowbot-checkout\n${secret}`).update([trialId, surfaces.join(','), interval, price, total].join('|')).digest('base64url');
+  // kdAccount (the linked KnowDrive account id) is signed too, appended only when present (unlinked bots keep the old form)
+  const checkoutSig = (trialId, surfaces, interval, price, total, kdAccount = null) =>
+    createHmac('sha256', `knowbot-checkout\n${secret}`).update([trialId, surfaces.join(','), interval, price, total, ...(kdAccount ? [kdAccount] : [])].join('|')).digest('base64url');
   function signRestore(trialId, expiresAt) {
     const payload = b64u(JSON.stringify({ t: trialId, e: Number(expiresAt) }));
     return `${payload}.${restoreSig(payload)}`;
@@ -1388,6 +1398,22 @@ export function createStudio(o = {}) {
   // ------------------------------------------------------------------------- trials
   const trials = new Map();
   const rootOf = (id) => `knowbot/trials/${id}/`;
+  // Once a linked bot launches (T.kdLink.home), its files live only in the customer's own KnowDrive store, under
+  // kdLink.root and tagged knowbot:<trial id>; every read and write of them goes through the customer's sign-in.
+  const kdTagOf = (T) => `knowbot:${T.id}`;
+  const homeRootOf = (T) => (T.kdLink?.home && T.kdLink.root ? T.kdLink.root : rootOf(T.id));
+  const kdClients = new Map(); // trial id → { link, client }
+  function kdClientOf(T) {
+    if (!kdAcct || !T?.kdLink?.sealed) return null;
+    let c = kdClients.get(T.id);
+    if (!c || c.link !== T.kdLink) {
+      c = { link: T.kdLink, client: kdAcct.client(T.id, T.kdLink, { onRotate: (sealed) => { if (T.kdLink) { T.kdLink.sealed = sealed; saveSpecSoon(T); } }, onReconnect: (e) => kdNeedsReconnect(T, e) }) };
+      kdClients.set(T.id, c);
+    }
+    return c.client;
+  }
+  /** The customer's store for a launched, linked bot; null while the bot still lives in KnowBot's shared store. */
+  const viaOf = (T) => (T?.kdLink?.home ? kdClientOf(T) : null);
   const specPath = (id) => `${rootOf(id)}_spec.json`;
   function newTrialState(id, expiresAt) {
     return { id, expiresAt, createdAt: now(), spec: defaultSpec(floorDefault), specLoaded: false, specLoading: null, email: null, converted: false, convertedFiles: null, convertedBucket: null,
@@ -1430,6 +1456,8 @@ export function createStudio(o = {}) {
               if (!T.expiresAt && doc.expiresAt) T.expiresAt = Date.parse(doc.expiresAt) || null;
               if (doc.answers) { T.grounded = doc.answers.grounded || 0; T.refusals = doc.answers.refusals || 0; }
               if (doc.proofDone) T.proofDone = doc.proofDone;
+              if (doc.kd && typeof doc.kd === 'object' && doc.kd.sealed) T.kdLink = { ...doc.kd };
+              if (doc.kdMove && typeof doc.kdMove === 'object') T.kdMove = { ...doc.kdMove, items: doc.kdMove.items || {} };
             }
           }
         } catch (e) { log(`[studio] spec doc read failed for ${T.id}: ${e.message}`); }
@@ -1440,7 +1468,9 @@ export function createStudio(o = {}) {
   }
   function specDoc(T) {
     return JSON.stringify({ v: 1, id: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: T.spec, email: T.email, converted: T.converted, convertedFiles: T.convertedFiles, convertedBucket: T.convertedBucket,
-      checkoutStartedAt: T.checkoutStartedAt, flags: T.flags, answers: { grounded: T.grounded, refusals: T.refusals }, proofDone: T.proofDone, savedAt: new Date(now()).toISOString() }, null, 2);
+      checkoutStartedAt: T.checkoutStartedAt, flags: T.flags, answers: { grounded: T.grounded, refusals: T.refusals }, proofDone: T.proofDone,
+      // the KnowDrive link: the refresh token only ever sealed (AES-GCM under the server secret); the move's summary
+      ...(T.kdLink ? { kd: T.kdLink } : {}), ...(T.kdMove ? { kdMove: kdMoveDoc(T) } : {}), savedAt: new Date(now()).toISOString() }, null, 2);
   }
   async function flushSpec(T) {
     if (T.deleted || closed) return;
@@ -1594,7 +1624,8 @@ export function createStudio(o = {}) {
   // ------------------------------------------------------------------------- files
   function rowToFile(T, r) {
     const tags = r.tags || [];
-    const rel = String(r.filename || '').startsWith(rootOf(T.id)) ? String(r.filename).slice(rootOf(T.id).length) : String(r.filename || '').split('/').pop();
+    const root = homeRootOf(T);
+    const rel = String(r.filename || '').startsWith(root) ? String(r.filename).slice(root.length) : String(r.filename || '').split('/').pop();
     // a website-import page (site/<host>/<kind>/<slug>.md) is shown by its page title ("Lumen Bikes · Refund policy.md")
     const storePage = tags.includes('src:store') ? (tags.find((t) => t.startsWith('page:'))?.slice(5) || null) : null;
     const man = storePage ? T.storeManifest?.get(r.id) : null;
@@ -1671,7 +1702,11 @@ export function createStudio(o = {}) {
       T.rowsLoading = (async () => {
         try {
           // after convert the files carry bucket:<b> instead of trial:<id>: list them there, still only under this trial's root
-          const rows = T.converted && T.convertedBucket
+          const via = viaOf(T);
+          // a launched bot whose KnowDrive sign-in stopped working still opens in the Studio (its last known files), so
+          // the owner can reconnect; its answers fail safe in the search itself
+          const rows = via ? (await listRows({ tags_all: kdTagOf(T) }, via).catch((e) => { if (e?.code === 'kd_reconnect') return T.rows || []; throw e; })).filter(isTrialFileRow)
+            : T.converted && T.convertedBucket
             ? (await listRows({ tags_all: `bucket:${T.convertedBucket}`, prefix: rootOf(T.id) })).filter((r) => isTrialFileRow(r) && String(r.filename || '').startsWith(rootOf(T.id)) && !(r.tags || []).some((t) => t.startsWith('sample:')))
             : (await listRows({ tags_all: `trial:${T.id}` })).filter(isTrialFileRow);
           T.rows = rows; T.rowsAt = now();
@@ -1697,12 +1732,14 @@ export function createStudio(o = {}) {
     rel = dedupeName(rel, taken);
     const key = randB32(10);
     const ext = extOf(rel);
-    const tags = ['knowbot', 'kind:trial', `trial:${T.id}`, `tfile:${key}`, `expires:${yyyymmdd(T.expiresAt)}`, ...extraTags];
-    const f = await ingest({ storePath: `${rootOf(T.id)}${rel}`, tags, mime: mime || MIME_OF[ext], bytes, signal });
+    const via = viaOf(T);
+    // a launched, linked bot: new files go straight into the customer's own store
+    const tags = via ? ['knowbot', kdTagOf(T), `tfile:${key}`, ...extraTags] : ['knowbot', 'kind:trial', `trial:${T.id}`, `tfile:${key}`, `expires:${yyyymmdd(T.expiresAt)}`, ...extraTags];
+    const f = await ingest({ storePath: `${homeRootOf(T)}${rel}`, tags, mime: mime || MIME_OF[ext], bytes, signal, via });
     const id = f.id || f.file_id;
     if (!id) fail(502, 'upstream', 'knowDrive did not return a file id');
     T.keys.set(id, key);
-    const row = { id, filename: `${rootOf(T.id)}${rel}`, bytes: bytes.length, mime_type: mime || MIME_OF[ext], status: f.status || 'in_progress', phase: f.phase || 'pending',
+    const row = { id, filename: `${homeRootOf(T)}${rel}`, bytes: bytes.length, mime_type: mime || MIME_OF[ext], status: f.status || 'in_progress', phase: f.phase || 'pending',
       atom_count: f.atom_count ?? 0, atoms_vectorized: f.atoms_vectorized ?? 0, chunk_count: f.chunk_count ?? 0, tags, created_at: f.created_at || new Date(now()).toISOString() };
     T.stageAt.set(id, { uploaded: now() });
     T.rows = [...(T.rows || []).filter((r) => r.id !== id), row]; T.rowsAt = now();
@@ -1843,7 +1880,7 @@ export function createStudio(o = {}) {
 
   // ------------------------------------------------------------------------- atoms
   async function fileAtomsRaw(T, fileId, { limit = 12, offset = 0 } = {}) {
-    const j = await kdJson(`/api/v1/files/${encodeURIComponent(fileId)}/atoms?limit=${limit}&offset=${offset}`, { timeout: 15000 }, 'reading atoms');
+    const j = await kdJson(`/api/v1/files/${encodeURIComponent(fileId)}/atoms?limit=${limit}&offset=${offset}`, { timeout: 15000, via: viaOf(T) }, 'reading atoms');
     return (j.data || j.atoms || []).map((a, i) => ({
       id: a.id ?? a.atom_id ?? `${fileId}#${offset + i}`, seq: Number(a.sequence_index ?? a.seq ?? offset + i), text: String(a.text ?? (Array.isArray(a.content) ? a.content.map((c) => c.text).join('\n') : a.content ?? '')),
       tokens: a.metadata?.text_tokens ?? a.text_tokens ?? null, kind: a.metadata?.node_kind ?? a.node_kind ?? null,
@@ -1886,7 +1923,9 @@ export function createStudio(o = {}) {
 
   // ------------------------------------------------------------------------- retrieval
   /** trial:<id> while a trial; bucket:<b> once converted (convert swaps the tags through batch_tags). */
-  const scopeTagOf = (T) => (T.converted && T.convertedBucket ? `bucket:${T.convertedBucket}` : `trial:${T.id}`);
+  const scopeTagOf = (T) => (T.kdLink?.home ? kdTagOf(T) : T.converted && T.convertedBucket ? `bucket:${T.convertedBucket}` : `trial:${T.id}`);
+  /** A launched, linked bot: its tag in the customer's own store, none of the excluded tags. */
+  const kdHitOk = (T, h, exclude) => !!(T.kdLink?.home && h?.tags && h.fileId && h.tags.includes(kdTagOf(T)) && ![...ALWAYS_EXCLUDE, ...exclude].some((t) => h.tags.includes(t)));
   /** Fail closed after convert too: the bucket tag AND a path under this trial's root, none of the excluded tags. */
   const convertedHitOk = (T, h, exclude) => !!(T.converted && T.convertedBucket && h?.tags && h.fileId && h.tags.includes(`bucket:${T.convertedBucket}`)
     && (!h.filename || h.filename.startsWith(rootOf(T.id))) && ![...ALWAYS_EXCLUDE, ...exclude].some((t) => h.tags.includes(t)) && !h.tags.some((t) => t.startsWith('sample:')));
@@ -1897,9 +1936,9 @@ export function createStudio(o = {}) {
     const disabled = [...new Set(files.filter((f) => !f.enabled && f.key && !live.has(f.key)).map((f) => `tfile:${f.key}`))];
     return { all_of: [scopeTagOf(T)], none_of: [...ALWAYS_EXCLUDE, ...disabled] };
   }
-  async function rawSearch(query, mode, k, filter, signal) {
-    const j = await kdJson(`/api/v1/vector_stores/${encodeURIComponent(store)}/search`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 8000, signal,
+  async function rawSearchVia(query, mode, k, filter, signal, via = null) {
+    const j = await kdJson(`/api/v1/vector_stores/${encodeURIComponent(via ? via.store : store)}/search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 8000, signal, via,
       body: JSON.stringify({ query, max_num_results: k, mode, text: 'raw', filter, fields: 'tags,uri,score,text,file_id,metadata' }),
     }, `${mode} search`);
     return Array.isArray(j.data) ? j.data : [];
@@ -1907,6 +1946,8 @@ export function createStudio(o = {}) {
   /** Vector (+ optional hybrid) search, normalized, joined and tag-checked. */
   async function retrieve(T, query, { files, vectorK = 12, hybridK = 8, hybrid = true, signal, variant = false } = {}) {
     files = files || await filesOf(T);
+    const via = viaOf(T);
+    const rawSearch = (q, mode, k, f, s) => rawSearchVia(q, mode, k, f, s, via);
     const filter = scopeFilter(T, files);
     const disabledTags = filter.none_of.filter((t) => t.startsWith('tfile:'));
     const disabledIds = new Set(files.filter((f) => !f.enabled).map((f) => f.id));
@@ -1915,7 +1956,7 @@ export function createStudio(o = {}) {
     // shared sample copies count only once the trial's replay has reached them (the replay never runs ahead of the data)
     const searchable = new Set(files.filter((f) => f.replay && ['vectorizing', 'ready'].includes(f.stage)).map((f) => f.id));
     const sharedOk = (h) => !!h.tags && h.tags.includes(`sample-set:${sharedSet}`) && h.tags.includes('kind:trial-sample') && !ALWAYS_EXCLUDE.some((t) => h.tags.includes(t)) && searchable.has(h.fileId);
-    const ok = (h) => (hitAllowed(h, T.id, disabledTags) || convertedHitOk(T, h, disabledTags) || (sharedSet && sharedOk(h))) && !disabledIds.has(h.fileId);
+    const ok = (h) => (via ? kdHitOk(T, h, disabledTags) : (hitAllowed(h, T.id, disabledTags) || convertedHitOk(T, h, disabledTags) || (sharedSet && sharedOk(h)))) && !disabledIds.has(h.fileId);
     // a hidden alternative phrasing (server/answer.mjs): one hybrid search per scope (one knowDrive call: hybrid hits carry
     // their vector distance even under a narrow filter), scored by that distance, never by RRF; the same fences
     if (variant) {
@@ -1926,7 +1967,7 @@ export function createStudio(o = {}) {
     }
     // resolve mode: the sidecar's ranked windows replace the searches below (an answer's search, not a starter's
     // vector-only check); the same fences apply. null (off, down, an error): today's searches.
-    if (resolver && store && hybrid) {
+    if (resolver && store && hybrid && !via) {
       const rr = await resolvedRetrieve(T, query, { files, filter, sharedFilter, ok, signal });
       if (rr) return rr;
     }
@@ -2508,11 +2549,12 @@ export function createStudio(o = {}) {
     const fileName = (id) => files.find((f) => f.id === id)?.name || '';
     const titleOf = (h) => (h.crumb ? h.crumb.split(' > ')[0] : '') || titleFromName(fileName(h.fileId));
     return {
-      expandable: !(resolver && store),
+      expandable: !(resolver && store) || !!T.kdLink?.home,
       fileName,
       searched: () => ({ atoms: files.filter((f) => f.enabled).reduce((s, f) => s + (f.vectorized || 0), 0), files: files.filter((f) => f.enabled && f.stage === 'ready').length }),
       retrieve: (q, { signal, variant = false } = {}) => retrieve(T, q, { files, signal, ...(variant ? { variant: true, vectorK: 8 } : {}) }),
-      evidence: evidence && store ? (q, signal) => evidenceSelect(T, q, files, signal) : null,
+      // the evidence sidecar reads KnowBot's shared store only: a bot answering from the customer's store skips it
+      evidence: evidence && store && !T.kdLink?.home ? (q, signal) => evidenceSelect(T, q, files, signal) : null,
       resolveAtoms: (hits) => resolveAtoms(T, hits),
       sources: (hits) => answerSources(T, hits, { titleOf, fileName }),
       products: ({ text, cites }) => productsFor(T, { text, cites }),
@@ -4352,6 +4394,299 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     });
   }
 
+  // ------------------------------------------------------------------------- KnowDrive account (launch, owner decisions 1-4)
+  // Launch → sign in to (or create) a KnowDrive account in a popup → the bot's files are copied into the store that
+  // account owns → checkout, tied to that account → convert. After convert the bot answers only from the customer's
+  // store, through their delegated sign-in (kdClientOf), on every surface; KnowBot's shared copies are removed.
+  //   GET    /api/studio/kd/callback?code&state      the sign-in popup lands here (the code is exchanged server side)
+  //   GET    /api/studio/trials/:id/kd               status { required, status, email, move, movable, ready }
+  //   POST   /api/studio/trials/:id/kd/start {mode}  → { url } the KnowDrive sign-in page (mode signup | signin)
+  //   POST   /api/studio/trials/:id/kd/move          copies the files (idempotent, resumable; retries failed files)
+  //   DELETE /api/studio/trials/:id/kd               signs out (before launch only)
+  // Progress rides the trial's events stream as `kd` (the same body as GET /kd, without `movable`).
+  const kdMoveWaitMs = Math.max(1000, Number(o.kdMoveWaitMs ?? 20 * 60000));
+  const kdPollMs = Math.max(20, Number(o.kdPollMs ?? 1500));
+  const KD_FAILED_MAX = 50;
+  function kdMoveDoc(T) {
+    const m = T.kdMove;
+    if (!m) return null;
+    const items = Object.values(m.items || {});
+    const failed = Object.entries(m.items || {}).filter(([, it]) => it.status === 'failed').slice(0, KD_FAILED_MAX).map(([id, it]) => ({ id, name: it.name, error: it.error || null }));
+    return { state: m.state, total: items.length || m.total || 0, copied: items.filter((it) => it.status === 'copied' || it.status === 'ready').length || m.copied || 0,
+      ready: items.filter((it) => it.status === 'ready').length || m.ready || 0, failed: items.length ? failed : (m.failed || []), startedAt: m.startedAt || null, finishedAt: m.finishedAt || null, ...(m.ref ? { ref: m.ref } : {}) };
+  }
+  const kdReady = (T) => !!(T.kdLink && T.kdLink.status === 'linked' && T.kdLink.moved);
+  function kdPublic(T) {
+    const L = T.kdLink;
+    return { available: !!kdAcct, required: kdRequired, status: L ? (L.status === 'reconnect' ? 'reconnect' : 'linked') : 'none', email: L?.email || null, account: L?.account || null,
+      linkedAt: L?.linkedAt || null, live: !!L?.home, ready: kdReady(T), move: kdMoveDoc(T), ...(L?.status === 'reconnect' && L.reconnectRef ? { ref: L.reconnectRef } : {}) };
+  }
+  const kdEventSoon = (T) => {
+    if (T.kdEventTimer) return;
+    T.kdEventTimer = setTimeout(() => { T.kdEventTimer = null; pushEvent(T, 'kd', kdPublic(T)); }, 200);
+    T.kdEventTimer.unref?.();
+  };
+  /** The customer's sign-in no longer works (revoked, expired beyond refresh): the owner sees "Reconnect KnowDrive". */
+  function kdNeedsReconnect(T, e) {
+    if (!T.kdLink || T.kdLink.status === 'reconnect') return;
+    const ref = randomBytes(4).toString('hex');
+    T.kdLink.status = 'reconnect'; T.kdLink.reconnectRef = ref;
+    log(`[kd] reconnect needed for ${T.id} ref=${ref}: ${clip(e?.message || 'sign-in refused', 120)}`);
+    saveSpecSoon(T);
+    pushEvent(T, 'kd', kdPublic(T));
+  }
+  const movableOf = (files) => files.filter((f) => !f.sample && !f.replay && f.enabled && f.stage === 'ready');
+  async function kdStatus(T) {
+    const out = kdPublic(T);
+    if (T.kdLink?.home) return out;
+    try {
+      const files = await filesOf(T);
+      const own = files.filter((f) => !f.sample && !f.replay && f.enabled);
+      out.movable = movableOf(files).length; out.learning = own.filter((f) => !TERMINAL.has(f.stage)).length; out.samplesOnly = !own.length && files.some((f) => f.sample || f.replay);
+    } catch { /* status still answers */ }
+    // a move a restart interrupted goes on as soon as the Studio looks at it
+    if (T.kdMove?.state === 'moving' && !T.kdMoving && T.kdLink?.status === 'linked') kdMove(T);
+    return out;
+  }
+  const kdErrorText = (e) => (e instanceof KdError && e.code === 'reconnect' ? 'Your KnowDrive sign-in expired.' : e?.code === 'file_too_large' ? 'This file is too large for your KnowDrive plan.'
+    : e?.code === 'type' ? 'KnowDrive does not accept this file type.' : /quota|413/i.test(String(e?.message)) ? 'Your KnowDrive storage is full.' : "Couldn't copy this file just now.");
+  function kdMove(T) {
+    if (T.kdMoving) return T.kdMoving;
+    T.kdMoving = kdMoveRun(T).catch((e) => {
+      const ref = randomBytes(4).toString('hex');
+      const reconnect = (e instanceof KdError && e.code === 'reconnect') || e?.code === 'kd_reconnect';
+      log(`[kd] move ${T.id} stopped ref=${ref}: ${clip(e?.message || e, 160)}`);
+      if (T.kdMove) { T.kdMove.state = reconnect ? 'paused' : 'error'; T.kdMove.ref = ref; T.kdMove.finishedAt = new Date(now()).toISOString(); }
+      if (reconnect) kdNeedsReconnect(T, e);
+      saveSpecSoon(T); pushEvent(T, 'kd', kdPublic(T));
+    }).finally(() => { T.kdMoving = null; });
+    return T.kdMoving;
+  }
+  async function kdMoveRun(T) {
+    const via = kdClientOf(T);
+    if (!via) throw new KdError('reconnect', 'KnowDrive is not connected', 401);
+    const files = movableOf(await filesOf(T, { maxAgeMs: 0 }));
+    const rowsById = new Map((T.rows || []).map((r) => [r.id, r]));
+    T.kdLink.root ||= `KnowBot/${slugify(botName(T)) || 'bot'}-${T.id.slice(-6)}/`;
+    const prev = T.kdMove?.items || {};
+    const items = {};
+    for (const f of files) items[f.id] = { name: f.name, status: prev[f.id]?.status === 'ready' ? 'ready' : 'pending', copyId: prev[f.id]?.copyId || null };
+    T.kdMove = { state: 'moving', total: files.length, items, startedAt: new Date(now()).toISOString(), finishedAt: null };
+    T.kdLink.moved = false;
+    pushEvent(T, 'kd', kdPublic(T));
+    await flushSpec(T);
+    // idempotent and resumable: every copy carries kbsrc:<shared file id>; a live copy is reused, a failed one replaced
+    const bySrc = new Map();
+    for (const r of await listRows({ tags_all: kdTagOf(T) }, via)) {
+      const src = (r.tags || []).find((t) => t.startsWith('kbsrc:'))?.slice(6);
+      if (src && (!bySrc.has(src) || deriveStage(r) !== 'failed')) bySrc.set(src, r);
+    }
+    const queue = files.slice();
+    let stop = null;
+    const worker = async () => {
+      while (queue.length && !stop) {
+        const f = queue.shift();
+        const it = items[f.id];
+        const have = bySrc.get(f.id);
+        if (have && deriveStage(have) !== 'failed') { it.copyId = have.id; it.status = deriveStage(have) === 'ready' ? 'ready' : 'copied'; it.error = null; kdEventSoon(T); continue; }
+        try {
+          if (have) await deleteRow(have.id, via).catch(() => {});
+          const row = rowsById.get(f.id) || {};
+          // the original bytes, read from KnowBot's shared store with KnowBot's own key
+          const res = await kdFetch(`/api/v1/files/${encodeURIComponent(f.id)}/content`, { timeout: 120000 });
+          if (!res.ok) throw new Error(`reading ${f.name}: HTTP ${res.status}`);
+          const bytes = Buffer.from(await res.arrayBuffer());
+          const fn = String(row.filename || '');
+          const rel = fn.startsWith(rootOf(T.id)) ? fn.slice(rootOf(T.id).length) : safeRelPath(f.name);
+          const tags = [...new Set([...(row.tags || []).filter((t) => t !== 'kind:trial' && !t.startsWith('trial:') && !t.startsWith('expires:')), 'knowbot', kdTagOf(T), `kbsrc:${f.id}`])];
+          const out = await ingest({ storePath: `${T.kdLink.root}${rel}`, tags, mime: row.mime_type || f.mime, bytes, via });
+          it.copyId = out.id || out.file_id || null; it.status = it.copyId ? 'copied' : 'failed'; it.error = it.copyId ? null : "Couldn't copy this file just now.";
+        } catch (e) {
+          if ((e instanceof KdError && e.code === 'reconnect') || e?.code === 'kd_reconnect') { stop = e; it.status = 'pending'; break; }
+          it.status = 'failed'; it.error = kdErrorText(e);
+          log(`[kd] move ${T.id}: ${f.id} failed: ${clip(e?.message || e, 160)}`);
+        }
+        kdEventSoon(T);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, Math.max(1, queue.length)) }, worker));
+    if (stop) throw stop;
+    // wait until every copy is ready (KnowDrive reads, chunks and embeds it in the customer's store)
+    const deadline = now() + kdMoveWaitMs;
+    while (Object.values(items).some((it) => it.status === 'copied')) {
+      if (now() > deadline) { for (const it of Object.values(items)) if (it.status === 'copied') { it.status = 'failed'; it.error = 'Still processing in KnowDrive. Try again in a minute.'; } break; }
+      await sleep(kdPollMs);
+      if (closed || T.deleted) return;
+      const rows = new Map((await listRows({ tags_all: kdTagOf(T) }, via)).map((r) => [r.id, r]));
+      for (const [id, it] of Object.entries(items)) {
+        if (it.status !== 'copied') continue;
+        const r = rows.get(it.copyId);
+        if (!r) continue;
+        const st = deriveStage(r);
+        if (st === 'ready') it.status = 'ready';
+        else if (st === 'failed') { it.status = 'failed'; it.error = "KnowDrive couldn't read this copy."; log(`[kd] move ${T.id}: copy of ${id} failed in KnowDrive`); }
+      }
+      kdEventSoon(T);
+    }
+    const failed = Object.values(items).filter((it) => it.status !== 'ready').length;
+    T.kdMove.state = failed ? 'partial' : 'done';
+    T.kdMove.finishedAt = new Date(now()).toISOString();
+    T.kdLink.moved = !failed && files.length > 0;
+    log(`[kd] move ${T.id}: ${files.length - failed}/${files.length} files in the customer's store`);
+    await flushSpec(T);
+    clearTimeout(T.kdEventTimer); T.kdEventTimer = null;
+    pushEvent(T, 'kd', kdPublic(T));
+  }
+  async function kdUnlink(T) {
+    if (T.kdLink?.home) fail(409, 'kd_live', 'This bot is live and answers from your KnowDrive files. Reconnect KnowDrive instead of signing out.');
+    if (T.kdMoving) fail(409, 'kd_busy', 'Your files are moving. Wait for it to finish, then sign out.');
+    const L = T.kdLink;
+    if (L) await kdAcct.revoke(L);
+    kdAcct.forget(T.id); kdClients.delete(T.id);
+    T.kdLink = null; T.kdMove = null;
+    await flushSpec(T);
+    pushEvent(T, 'kd', kdPublic(T));
+    return kdPublic(T);
+  }
+  const kdRedirectUri = (req) => env.KNOWBOT_KD_REDIRECT_URI || `${publicBase(req, env)}/api/studio/kd/callback`;
+  async function kdRoute(req, res, T, action, m) {
+    if (!kdAcct) fail(404, 'not_found', 'KnowDrive accounts are not available on this server.');
+    if (!action) {
+      if (m === 'GET') return sendJson(res, 200, await kdStatus(T));
+      if (m === 'DELETE') return sendJson(res, 200, await kdUnlink(T));
+      fail(405, 'not_found', `method ${m} not allowed`);
+    }
+    if (action === 'start') {
+      if (m !== 'POST') fail(405, 'not_found', `method ${m} not allowed`);
+      limitTrialAndIp(T, req, 'kdstart', 20, 60, 'sign-in attempts');
+      const body = await readBody(req).catch(() => ({}));
+      const r = await kdAcct.start({ trialId: T.id, bearer: bearer(req), origin: req.headers.origin, redirectUri: kdRedirectUri(req), mode: body?.mode === 'signin' ? 'signin' : 'signup', expiresAt: T.expiresAt });
+      return sendJson(res, 200, { url: r.url });
+    }
+    if (action === 'move') {
+      if (m !== 'POST') fail(405, 'not_found', `method ${m} not allowed`);
+      if (!T.kdLink) fail(409, 'kd_required', 'Sign in to KnowDrive first.');
+      if (T.kdLink.status === 'reconnect') fail(409, 'kd_reconnect', 'Reconnect KnowDrive, then try again.', { ref: T.kdLink.reconnectRef || null });
+      if (T.kdLink.home) return sendJson(res, 200, kdPublic(T));
+      if (!T.kdMoving) {
+        const st = await kdStatus(T);
+        if (st.learning) fail(409, 'files_learning', 'Some files are still learning. Wait a moment, then continue.');
+        if (!st.movable && !st.samplesOnly) fail(409, 'no_files', 'Add at least one file first.');
+        if (!st.movable) {
+          // "Launch with samples anyway": sample files are never moved, so there is nothing to copy; the bot launches
+          // empty in the customer's account and they add their own files after launch
+          T.kdMove = { state: 'done', total: 0, items: {}, startedAt: new Date(now()).toISOString(), finishedAt: new Date(now()).toISOString() };
+          T.kdLink.root ||= `KnowBot/${slugify(botName(T)) || 'bot'}-${T.id.slice(-6)}/`;
+          T.kdLink.moved = true;
+          await flushSpec(T);
+          pushEvent(T, 'kd', kdPublic(T));
+          return sendJson(res, 202, kdPublic(T));
+        }
+        kdMove(T);
+      }
+      return sendJson(res, 202, kdPublic(T));
+    }
+    fail(404, 'not_found', 'No such endpoint.');
+  }
+  const htmlEsc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  /** The popup's last page: tells the Studio (opener, its own origin only) and closes; never carries a token. */
+  function kdPage(res, { origin = null, trialId = null, ok, code = null, message = '', ref = null }) {
+    const nonce = randomBytes(12).toString('base64');
+    const msg = JSON.stringify({ type: 'knowbot:kd', ok: !!ok, ...(code ? { code } : {}), ...(ref ? { ref } : {}) }).replace(/</g, '\\u003c');
+    const back = origin && trialId ? `${origin}/studio/?t=${encodeURIComponent(trialId)}` : null;
+    const title = ok ? "You're signed in to KnowDrive" : "KnowDrive sign-in didn't finish";
+    const body = ok ? 'You can close this window and go back to KnowBot Studio.' : `${message || 'Something went wrong.'}${ref ? ` (ref ${ref})` : ''} Close this window and try again from KnowBot Studio.`;
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEsc(title)}</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:#faf9f5;color:#1f1e1d}main{max-width:420px;padding:32px 24px;text-align:center}h1{font-size:20px;margin:0 0 8px}p{margin:0 0 16px;color:#5e5d59}a{color:#6c5ce7}@media(prefers-color-scheme:dark){body{background:#1f1e1d;color:#f5f4ef}p{color:#c2c0b6}a{color:#a99ff5}}</style></head>
+<body><main><h1>${htmlEsc(title)}</h1><p>${htmlEsc(body)}</p>${back ? `<p><a href="${htmlEsc(back)}">Back to KnowBot Studio</a></p>` : ''}</main>
+<script nonce="${nonce}">(function(){var o=${JSON.stringify(origin || '')};try{if(window.opener&&o){window.opener.postMessage(${msg},o);setTimeout(function(){window.close();},${ok ? 400 : 4000});}}catch(e){}})();</script></body></html>`;
+    res.writeHead(ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
+      'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` });
+    res.end(html);
+  }
+  async function kdCallback(req, res, url) {
+    const state = url.searchParams.get('state') || '';
+    let d = null;
+    try { d = kdAcct?.peekState(state) || null; } catch { d = null; }
+    const where = { origin: d?.o || null, trialId: d?.t || null };
+    try {
+      if (!kdAcct) throw new KdError('not_configured', 'KnowDrive accounts are not available on this server.', 404);
+      limitOrThrow(`kdcb ${ip(req)}`, 30, 60000, 'sign-in attempts');
+      const err = url.searchParams.get('error');
+      if (err) throw new KdError('denied', err === 'access_denied' ? 'Sign-in was cancelled.' : 'KnowDrive could not sign you in.', 400);
+      const r = await kdAcct.finish({ state, code: url.searchParams.get('code') });
+      const id = r.state.t;
+      if (!TRIAL_ID_RE.test(id) || deletedTrials.has(id)) throw new KdError('bad_state', 'This bot no longer exists.', 404);
+      const T = trialFor(id);
+      if (!T.expiresAt) T.expiresAt = Number(r.state.e) || now() + DAY;
+      await loadSpecDoc(T);
+      const prev = T.kdLink;
+      const same = !!prev && prev.account === r.link.account;
+      if (prev?.home && !same) throw new KdError('account_mismatch', 'This bot is live in another KnowDrive account. Sign in to that account to reconnect it.', 409);
+      if (prev && !same) { T.kdMove = null; if (prev.sealed) kdAcct.revoke(prev); }
+      T.kdLink = { ...r.link, root: same ? prev.root || null : null, moved: same ? !!prev.moved : false, home: same ? !!prev.home : false, linkedBy: r.state.bh };
+      kdClients.delete(T.id); kdAcct.forget(T.id); kdAcct.prime(T.id, r.access);
+      if (!T.email && r.link.email) T.email = r.link.email;
+      await flushSpec(T);
+      pushEvent(T, 'kd', kdPublic(T));
+      log(`[kd] ${T.id} signed in to KnowDrive account ${r.link.account}${same ? ' (reconnected)' : ''}`);
+      return kdPage(res, { ...where, ok: true });
+    } catch (e) {
+      const ref = randomBytes(4).toString('hex');
+      log(`[kd] sign-in failed ref=${ref}${where.trialId ? ` trial=${where.trialId}` : ''}: ${e?.code || ''} ${clip(e?.message || e, 160)}`);
+      const message = e instanceof KdError ? e.message : e instanceof StudioError && e.status === 429 ? e.message : 'Something went wrong.';
+      return kdPage(res, { ...where, ok: false, code: e?.code || 'error', message, ref });
+    }
+  }
+  /**
+   * convert for a linked bot (owner decision 2): no re-tag in the shared store. The copies in the customer's store
+   * must all be ready; then KnowBot's shared copies (and the samples) are removed, the bot's state is pointed at the
+   * copies, and the registry gets a bucket that reads the customer's store through their sign-in.
+   */
+  async function convertLinked(T, { account, bucketId }) {
+    const L = T.kdLink;
+    if (String(account).toLowerCase() !== String(L.account).toLowerCase()) fail(409, 'account_mismatch', 'This bot is linked to a different KnowDrive account.');
+    const via = kdClientOf(T);
+    let copies;
+    try { copies = await listRows({ tags_all: kdTagOf(T) }, via); }
+    catch (e) { if (e?.code === 'kd_reconnect') fail(409, 'kd_reconnect', 'The KnowDrive sign-in for this bot expired; the owner must reconnect it in the Studio.'); throw e; }
+    const ready = new Map();
+    for (const r of copies) { const src = (r.tags || []).find((t) => t.startsWith('kbsrc:'))?.slice(6); if (src && deriveStage(r) === 'ready') ready.set(src, r); }
+    const moved = Object.entries(T.kdMove?.items || {}).filter(([, it]) => it.status === 'ready').map(([id]) => id);
+    if ((!ready.size && moved.length) || moved.some((id) => !ready.has(id))) fail(409, 'kd_incomplete', "This bot's files are not all in the KnowDrive account yet.");
+    // KnowBot's shared copies go now: the customer's store is the only home (a copy that fails to delete keeps its
+    // trial and expiry tags, so the sweeper removes it when the trial would have expired)
+    const shared = await listRows({ tags_all: `trial:${T.id}` });
+    let removed = 0;
+    for (const r of shared.filter(isTrialFileRow)) { try { await deleteRow(r.id); removed++; } catch (e) { log(`[kd] convert ${T.id}: delete ${r.id}: ${e.message}`); } }
+    const idMap = new Map([...ready].map(([src, r]) => [src, r.id]));
+    const remap = (m) => { if (!(m instanceof Map)) return m; const out = new Map(); for (const [k, v] of m) out.set(idMap.get(k) || k, v); return out; };
+    T.summaries = remap(T.summaries); if (T.storeManifest) T.storeManifest = remap(T.storeManifest);
+    if (T.flags.storePdfUrls) T.flags.storePdfUrls = Object.fromEntries(Object.entries(T.flags.storePdfUrls).map(([k, v]) => [idMap.get(k) || k, v]));
+    T.spec = { ...T.spec, sampleSet: null, sources: {} };
+    if (T.flags.sharedSet) { T.flags.sharedSet = null; T.flags.sharedAt = null; }
+    T.converted = true; T.convertedFiles = ready.size; T.convertedBucket = bucketId.toLowerCase();
+    T.kdLink.home = true;
+    T.rows = null; T.rowsAt = 0; T.atomCache.clear(); T.atomPreview.clear(); T.questionsCache = null; T.lastStage.clear(); T.stageAt.clear();
+    // the launched bot in the registry (POST /api/instances links it): a bucket read from the customer's store
+    if (o.registry?.canWrite && typeof o.registry.ensureOwnedBucket === 'function') {
+      try { await o.registry.ensureOwnedBucket({ id: T.convertedBucket, name: botName(T), trial: T.id, store: L.store, tag: kdTagOf(T), root: L.root }); }
+      catch (e) { log(`[kd] convert ${T.id}: registry bucket ${T.convertedBucket}: ${e.message}`); }
+    }
+    await flushSpec(T);
+    log(`[studio] converted ${T.id} → KnowDrive account ${L.account} bucket:${bucketId} (${ready.size} files in the customer's store, ${removed} shared copies removed)`);
+    return ready.size;
+  }
+  /** A launched bot's fetch against its customer's store (the registry's owned buckets). */
+  async function kdFetchFor(trialId, p, init = {}) {
+    if (!kdAcct || !TRIAL_ID_RE.test(String(trialId || ''))) throw new KdError('reconnect', 'KnowDrive is not connected', 401);
+    const T = trialFor(trialId);
+    await loadSpecDoc(T);
+    const c = kdClientOf(T);
+    if (!c) throw new KdError('reconnect', 'KnowDrive is not connected', 401);
+    return c.fetch(p, init);
+  }
+
   // ------------------------------------------------------------------------- convert + sweeper
   function requireAdmin(req) {
     if (!adminToken) {
@@ -4370,22 +4705,28 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     // caller passes it on as the bot's shopDomain, POST /api/instances; the converted trial keeps its flags anyway)
     const shop = T.flags?.storeLast?.platform === 'shopify' && T.flags.storeLast.url ? { shopDomain: String(T.flags.storeLast.url) } : {};
     if (T.converted) return { converted: true, files: T.convertedFiles ?? 0, ...shop };
-    const rows = await listRows({ tags_all: `trial:${T.id}` });
-    const samples = rows.filter((r) => (r.tags || []).some((t) => t.startsWith('sample:')));
-    for (const r of samples) await deleteRow(r.id);
-    const keep = rows.filter((r) => !samples.includes(r));
-    const expiresTags = [...new Set(keep.flatMap((r) => (r.tags || []).filter((t) => t.startsWith('expires:'))))];
-    await batchTags(keep.map((r) => r.id), [`account:${account.toLowerCase()}`, `bucket:${bucketId.toLowerCase()}`], ['kind:trial', `trial:${T.id}`, ...expiresTags]);
-    const files = keep.filter(isTrialFileRow).length;
-    T.converted = true; T.convertedFiles = files; T.convertedBucket = bucketId.toLowerCase();
-    // shared sample copies are only switched off for this trial (never deleted: other trials replay them)
-    const sources = { ...T.spec.sources }; for (const r of samples) delete sources[r.id];
-    T.spec = { ...T.spec, sampleSet: null, sources };
-    if (T.flags.sharedSet) { T.flags.sharedSet = null; T.flags.sharedAt = null; }
-    T.rows = keep.filter(isTrialFileRow).map((r) => ({ ...r, tags: [...new Set([...(r.tags || []).filter((t) => !['kind:trial', `trial:${T.id}`, ...expiresTags].includes(t)), `account:${account.toLowerCase()}`, `bucket:${T.convertedBucket}`])] }));
-    T.rowsAt = now();
-    T.questionsCache = null;
-    await flushSpec(T);
+    let files;
+    if (T.kdLink?.moved) files = await convertLinked(T, { account, bucketId }); // the customer's own store: no re-tag here
+    else {
+      if (kdRequired && T.kdLink) fail(409, 'kd_incomplete', "This bot's files are not in its KnowDrive account yet.");
+      const rows = await listRows({ tags_all: `trial:${T.id}` });
+      const samples = rows.filter((r) => (r.tags || []).some((t) => t.startsWith('sample:')));
+      for (const r of samples) await deleteRow(r.id);
+      const keep = rows.filter((r) => !samples.includes(r));
+      const expiresTags = [...new Set(keep.flatMap((r) => (r.tags || []).filter((t) => t.startsWith('expires:'))))];
+      await batchTags(keep.map((r) => r.id), [`account:${account.toLowerCase()}`, `bucket:${bucketId.toLowerCase()}`], ['kind:trial', `trial:${T.id}`, ...expiresTags]);
+      files = keep.filter(isTrialFileRow).length;
+      T.converted = true; T.convertedFiles = files; T.convertedBucket = bucketId.toLowerCase();
+      // shared sample copies are only switched off for this trial (never deleted: other trials replay them)
+      const sources = { ...T.spec.sources }; for (const r of samples) delete sources[r.id];
+      T.spec = { ...T.spec, sampleSet: null, sources };
+      if (T.flags.sharedSet) { T.flags.sharedSet = null; T.flags.sharedAt = null; }
+      T.rows = keep.filter(isTrialFileRow).map((r) => ({ ...r, tags: [...new Set([...(r.tags || []).filter((t) => !['kind:trial', `trial:${T.id}`, ...expiresTags].includes(t)), `account:${account.toLowerCase()}`, `bucket:${T.convertedBucket}`])] }));
+      T.rowsAt = now();
+      T.questionsCache = null;
+      await flushSpec(T);
+      log(`[studio] converted ${T.id} → account:${account} bucket:${bucketId} (${files} files, ${samples.length} samples removed)`);
+    }
     // the open Studio drops the sample rows and the "partial" banner at once: a reset snapshot of the post-convert files
     try {
       const after = await filesOf(T, { maxAgeMs: 0 });
@@ -4395,8 +4736,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       T.usageEmitted = JSON.stringify(usage);
       pushEvent(T, 'hello', { files: after, usage, reset: true, converted: true, convertedFiles: files });
       pushEvent(T, 'converted', { converted: true, convertedFiles: files, files: after.length });
+      if (T.kdLink?.home) pushEvent(T, 'kd', kdPublic(T));
     } catch (e) { log(`[studio] convert snapshot ${T.id}: ${e.message}`); }
-    log(`[studio] converted ${T.id} → account:${account} bucket:${bucketId} (${files} files, ${samples.length} samples removed)`);
     // a KnowBot number moves with the bot: it now answers for the launched bot, which points back at this trial's state
     if (T.flags.number?.state === 'active' && body.bot) {
       try {
@@ -4409,7 +4750,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       try { await o.registry.update(String(body.bot), { shopDomain: shop.shopDomain }); shop.bot = String(body.bot).toLowerCase(); }
       catch (e) { log(`[studio] convert ${T.id}: could not set the storefront on bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
     }
-    return { converted: true, files, ...shop };
+    return { converted: true, files, ...shop, ...(T.kdLink?.home ? { kd: { account: T.kdLink.account, store: T.kdLink.store, bucket: T.convertedBucket } } : {}) };
   }
   async function sweep() {
     if (!enabled) return { deleted: 0, scanned: 0 };
@@ -4548,6 +4889,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }
   function sendError(res, e) {
     if (e instanceof StudioError) return sendJson(res, e.status, { error: { status: e.status, code: e.code, message: e.message, ...e.extra } }, e.headers);
+    if (e instanceof KdError) { const st = e.code === 'reconnect' ? 409 : Number(e.status) || 502; return sendJson(res, st, { error: { status: st, code: `kd_${e.code}`, message: e.message } }); }
     const status = Number(e?.status) || 500;
     const code = e?.extra?.code || CODE_BY_STATUS[status] || 'upstream';
     if (status >= 500 && !(e instanceof HttpErrorCls)) log(`[studio] error: ${e?.stack || e}`);
@@ -4643,6 +4985,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         samples: sampleSets().map(({ names, ...s }) => s), sampleMode, anchors: ANCHORS, contact, floor: floorDefault,
         // the AI agents tool (server/agents.mjs): the free daily allowance and the metered price, from the environment
         agents: (({ freePerDay, pricePer1k, currency }) => ({ freePerDay, pricePer1k, currency, priceText: `${agentPriceText(pricePer1k)} per 1,000 agent answers` }))(agentLimits(env)),
+        // launch asks for a KnowDrive account first (the bot's files move into the store it owns)
+        kd: { available: !!kdAcct, required: kdRequired },
       });
     }
     // the payments webhook (no trial token: verified by its Stripe-Signature; the session's metadata names the bot)
@@ -4651,6 +4995,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const raw = await o.readRaw(req, 512 * 1024);
       return sendJson(res, 200, await numbers.webhook(raw, req.headers['stripe-signature']));
     }
+    // the KnowDrive sign-in popup's redirect (no trial token: the sealed state names the trial)
+    if (a === 'kd' && id === 'callback' && !sub) { allow('GET'); return kdCallback(req, res, url); }
     if (a !== 'trials') fail(404, 'not_found', `no such endpoint ${p}`);
 
     if (!id) {
@@ -4716,12 +5062,14 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 
     const T = await auth(req, id);
 
+    if (sub === 'kd') return kdRoute(req, res, T, fid, m);
+
     if (!sub) {
       if (m === 'GET') {
         await resumeStoreJob(T); // an import a restart interrupted goes on as soon as its bot is opened
         const files = await filesOf(T, { maxAgeMs: 0 });
         return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
-          convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email,
+          convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email, kd: kdPublic(T),
           restoreKey: signRestore(T.id, T.expiresAt), shareLink: shareLinkOf(req, T, selfOriginOf(req)) });
       }
       if (m === 'PATCH') {
@@ -4797,9 +5145,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (sub === 'files' && fid) {
       if (!/^[\w.:@-]{1,160}$/.test(fid)) fail(404, 'not_found', 'No such file.');
       // membership: the row must carry this trial's tag
-      const row = await kdJson(`/api/v1/files/${encodeURIComponent(fid)}`, { timeout: 15000 }, 'reading the file').catch((e) => { if (e.status === 404) fail(404, 'not_found', 'No such file.'); throw e; });
+      const fileVia = viaOf(T);
+      const row = await kdJson(`/api/v1/files/${encodeURIComponent(fid)}`, { timeout: 15000, via: fileVia }, 'reading the file').catch((e) => { if (e.status === 404) fail(404, 'not_found', 'No such file.'); throw e; });
       const sharedRow = !!T.flags.sharedSet && (row.tags || []).includes(`sample-set:${T.flags.sharedSet}`) && (row.tags || []).includes('kind:trial-sample');
-      if (!sharedRow && (!(row.tags || []).includes(`trial:${T.id}`) || !isTrialFileRow(row))) fail(404, 'not_found', 'No such file.');
+      if (!sharedRow && (!(row.tags || []).includes(fileVia ? kdTagOf(T) : `trial:${T.id}`) || !isTrialFileRow(row))) fail(404, 'not_found', 'No such file.');
       if (!sub2) {
         allow('DELETE');
         if (sharedRow) { // a shared sample copy is only turned off for this trial
@@ -4999,7 +5348,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (sub === 'checkout') {
       allow('POST');
       const body = await readBody(req);
-      const email = String(body.email ?? T.email ?? '').trim();
+      // owner decision 4: checkout only once the KnowDrive account is linked and the files are in its store
+      if (kdRequired && !T.converted && !kdReady(T)) {
+        fail(409, T.kdLink?.status === 'reconnect' ? 'kd_reconnect' : 'kd_required', T.kdLink ? 'Finish moving your files into your KnowDrive account first.' : 'Create or sign in to your KnowDrive account first.');
+      }
+      const kdAccount = kdReady(T) ? T.kdLink.account : null;
+      const email = String(body.email ?? T.email ?? T.kdLink?.email ?? '').trim();
       if (email && (email.length > 254 || !EMAIL_RE.test(email))) fail(400, 'bad_request', "That email address doesn't look right.", { field: 'email' });
       if (email) T.email = email;
       // features (spec.surfaces): saved if sent, but they never change the price (one plan, every feature included)
@@ -5024,7 +5378,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       u.searchParams.set('surfaces', surfaces.join(','));
       u.searchParams.set('interval', interval);
       u.searchParams.set('total', String(total));
-      u.searchParams.set('sig', checkoutSig(T.id, surfaces, interval, each, total));
+      // the KnowDrive account the bot's files live in (signed with the rest; KnowDrive must check it is the payer's)
+      if (kdAccount) u.searchParams.set('kd_account', kdAccount);
+      u.searchParams.set('sig', checkoutSig(T.id, surfaces, interval, each, total, kdAccount));
       u.searchParams.set('return', `${originOf(req)}/studio/?t=${T.id}&launched=1`);
       T.checkoutStartedAt = new Date(now()).toISOString();
       await flushSpec(T);
@@ -5190,7 +5546,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }
   return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
     // a trial bot's answer on the API, AI agents, channels and the website widget (devapi): the Studio's own pipeline
-    answerTrial, searchTrial, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
+    answerTrial, searchTrial, kdFetchFor, kd: kdAcct, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };

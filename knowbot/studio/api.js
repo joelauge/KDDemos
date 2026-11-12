@@ -437,6 +437,15 @@ export async function devKey() { return request('GET', trialPath('/devkey')); }
 /** POST /email -> {sent, link}. */
 export async function sendEmail(email) { return request('POST', trialPath('/email'), { body: { email } }); }
 
+/** KnowDrive account at launch: GET /kd -> status {status: none|linked|reconnect, email, move, movable, ready, live}. */
+export async function kdStatus() { return request('GET', trialPath('/kd')); }
+/** POST /kd/start {mode: signup|signin} -> {url} (the KnowDrive sign-in page for the popup). */
+export async function kdStart(mode = 'signup') { return request('POST', trialPath('/kd/start'), { body: { mode } }); }
+/** POST /kd/move -> status (202): copies the bot's files into the KnowDrive account (idempotent; retries failed files). */
+export async function kdMove() { return request('POST', trialPath('/kd/move'), { body: {} }); }
+/** DELETE /kd -> status: signs out of KnowDrive (before launch only). */
+export async function kdSignOut() { return request('DELETE', trialPath('/kd')); }
+
 /** POST /checkout -> {url}. surfaces (answer surfaces on the plan) and interval ('month'|'year') ride along when set. */
 export async function checkout({ email, surfaces, interval } = {}) {
   return request('POST', trialPath('/checkout'), { body: { ...(email ? { email } : {}), ...(Array.isArray(surfaces) && surfaces.length ? { surfaces } : {}), ...(interval ? { interval } : {}) } });
@@ -496,6 +505,7 @@ export function openEvents({ onEvent, onStatus } = {}) {
         if (type === 'store') emit('store:event', data);
         else if (type === 'storegroup') emit('store:group', data);
         else if (type === 'asked') emit('insights:asked', data);
+        else if (type === 'kd') emit('kd:event', data);
         else if (type === 'hello') {
           if (Array.isArray(data.files)) emit('store:rows', { rows: data.files.filter((r) => r && r.origin === 'store'), reset: true });
           for (const g of Array.isArray(data.groups) ? data.groups : []) emit('store:group', g);

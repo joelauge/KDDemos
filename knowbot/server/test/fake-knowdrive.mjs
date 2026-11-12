@@ -32,7 +32,7 @@
 //     NOTHING, while hybrid search with the same filter still finds the atoms and every hybrid hit carries `distance`
 //     (similarity = 1 - distance/2) next to its RRF `score`.
 import http from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 const STOP = new Set(`a about above after again all am an and any are as at be because been before being below between both but by can
 could did do does doing down during each few for from further had has have having he her here hers him his how i if in into is it its
@@ -301,7 +301,7 @@ const FIXTURE_UGM = Object.freeze({
  * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number, chunker?: 'blocks'|'production' }} [o]
  * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, settle: () => Promise<void> }>}
  */
-export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all', chunker = 'blocks', progressOverride } = {}) {
+export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all', chunker = 'blocks', progressOverride, accessTtlSec = 3600, rotateRefresh = true } = {}) {
   speed = Math.max(0.01, Number(speed) || 1);
   const files = new Map();
   const calls = [];
@@ -311,7 +311,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   const later = (ms, fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, Math.max(0, ms / speed)); timers.add(t); };
 
   const nowSec = () => Math.floor(Date.now() / 1000);
-  function add({ store = 'vs_fake', path, text, tags = [], bytes, mime = 'text/plain', pipeline = false, hash = null }) {
+  function add({ store = 'vs_fake', path, text, tags = [], bytes, mime = 'text/plain', pipeline = false, hash = null, blob = null }) {
     // same path in the same store replaces the file (how the registry and spec docs are rewritten)
     for (const f of files.values()) if (f.store === store && f.filename === path) { for (const t of f.timers || []) clearTimeout(t); files.delete(f.id); }
     const id = `file_${(++seq).toString(36).padStart(4, '0')}${Math.random().toString(36).slice(2, 8)}`;
@@ -320,7 +320,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     const created = nowSec();
     // production dedup: a byte-identical copy of a live file is stored, but never searchable under its own tags
     const dupOf = hash ? [...files.values()].find((x) => x.store === store && x.hash === hash)?.id ?? null : null;
-    const f = { id, store, hash, dupOf, filename: path, tags: [...new Set(tags)], bytes: bytes ?? Buffer.byteLength(String(text || '')), mime_type: mime, text: String(text || ''),
+    const f = { id, store, hash, dupOf, blob, filename: path, tags: [...new Set(tags)], bytes: bytes ?? Buffer.byteLength(String(text || '')), mime_type: mime, text: String(text || ''),
       status: 'in_progress', phase: 'pending', atom_count: 0, atoms_vectorized: 0, chunk_count: 0, created_at: created, updated_at: created, last_error: null, atoms };
     files.set(id, f);
     const touch = () => { f.updated_at = nowSec(); };
@@ -379,7 +379,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     // Filters are otherwise ignored on purpose (client-side tag enforcement is under test), but a trial: tag in
     // all_of scopes the ranking like real knowDrive does, so many trials on one dev server don't crowd each other
     // out of the top-k (identical sample atoms in other trials would otherwise fill it).
-    const trialTag = (Array.isArray(filter?.all_of) ? filter.all_of : []).find((t) => typeof t === 'string' && t.startsWith('trial:'));
+    const trialTag = (Array.isArray(filter?.all_of) ? filter.all_of : []).find((t) => typeof t === 'string' && (t.startsWith('trial:') || t.startsWith('knowbot:tr_')));
     // honorScope (dev server only): none_of tfile:<k> is applied like real knowDrive, so a switched-off file leaves room
     // for the other files' candidates. Tests keep it off so the server's own client-side scope check is exercised.
     const scopeOff = honorScope ? new Set((Array.isArray(filter?.none_of) ? filter.none_of : []).filter((t) => typeof t === 'string' && t.startsWith('tfile:'))) : null;
@@ -453,6 +453,120 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
     });
   }
 
+  // ------------------------------------------------------------------ the fake authorization server (KnowDrive sign-in)
+  // Production paths (verified 2026-11-12): /.well-known/oauth-authorization-server, /-/oauth/authorize, /-/token,
+  // /-/oauth/register (DCR). Free sign-up provisions one owned vector store per account. The fake also offers RFC 7009
+  // revocation (/-/oauth/revoke, which production does not advertise) so unlink can be tested both ways.
+  const accounts = new Map();   // email → { id, email, store, revoked }
+  const ownedStores = new Set();
+  const oauthClients = new Map(); // client_id → { redirect_uris }
+  const codes = new Map();        // code → { client_id, redirect_uri, challenge, account, exp }
+  const accessTokens = new Map(); // token → { account, exp }
+  const refreshTokens = new Map(); // token → { account, client_id }
+  const auth = { accounts, ownedStores, clients: oauthClients, tokenCalls: [], apiCalls: [], registrations: 0, revocations: 0, revocationEndpoint: true,
+    /** Creates an account (as the hosted sign-up would): one owned store. */
+    createAccount(email) {
+      const e = String(email).trim().toLowerCase();
+      if (accounts.has(e)) return accounts.get(e);
+      const n = accounts.size + 1;
+      const a = { id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, email: e, store: `vs_acct_${n}`, revoked: false };
+      accounts.set(e, a); ownedStores.add(a.store);
+      return a;
+    },
+    /** The user revokes KnowBot's access in KnowDrive: every token for the account stops working. */
+    revokeAccount(email) { const a = accounts.get(String(email).toLowerCase()); if (a) a.revoked = true; },
+    restoreAccount(email) { const a = accounts.get(String(email).toLowerCase()); if (a) a.revoked = false; },
+    /** Every access token expires now (the next call must refresh). */
+    expireAccess() { for (const v of accessTokens.values()) v.exp = 0; },
+    storeFiles(store) { return [...files.values()].filter((f) => f.store === store); },
+  };
+  const tok = (p) => `${p}${randomBytes(18).toString('base64url')}`;
+  const sha256u = (s) => createHash('sha256').update(String(s)).digest('base64url');
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function authorizePage(q, { error = '' } = {}) {
+    const signup = q.screen_hint === 'signup';
+    const hidden = ['client_id', 'redirect_uri', 'state', 'code_challenge', 'code_challenge_method', 'scope', 'screen_hint'].map((k) => `<input type="hidden" name="${k}" value="${esc(q[k] || '')}">`).join('');
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${signup ? 'Create your KnowDrive account' : 'Sign in to KnowDrive'}</title>
+<style>body{font:15px system-ui,sans-serif;max-width:380px;margin:40px auto;padding:0 16px}label,input,button{display:block;width:100%;box-sizing:border-box;margin:8px 0}input{padding:10px}button{padding:10px}</style></head>
+<body><h1>${signup ? 'Create your KnowDrive account' : 'Sign in to KnowDrive'}</h1>${error ? `<p role="alert" id="kd-error">${esc(error)}</p>` : ''}
+<form method="post" action="/-/oauth/authorize">${hidden}<label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" value="${esc(q.email || '')}">
+${signup ? '<button id="kd-create" name="action" value="create">Create account</button><p>Already have an account? <button id="kd-signin" name="action" value="signin">Sign in</button></p>'
+    : '<button id="kd-signin" name="action" value="signin">Sign in</button><p>New to KnowDrive? <button id="kd-create" name="action" value="create">Create account</button></p>'}
+<button id="kd-cancel" name="action" value="cancel">Cancel</button></form></body></html>`;
+  }
+  async function oauthRoute(req, res, url, p, body, call) {
+    const json = (status, b, h = {}) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...h }); res.end(JSON.stringify(b)); return true; };
+    const html = (status, h) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }); res.end(h); return true; };
+    const base = `http://${req.headers.host}`;
+    if (p === '/.well-known/oauth-authorization-server' && req.method === 'GET') {
+      return json(200, { issuer: base, authorization_endpoint: `${base}/-/oauth/authorize`, token_endpoint: `${base}/-/token`, registration_endpoint: `${base}/-/oauth/register`,
+        ...(auth.revocationEndpoint ? { revocation_endpoint: `${base}/-/oauth/revoke` } : {}), code_challenge_methods_supported: ['S256'], response_types_supported: ['code'],
+        grant_types_supported: ['authorization_code', 'refresh_token'], scopes_supported: ['openid', 'email', 'profile', 'entitlements', 'roles'] });
+    }
+    if (p === '/.well-known/oauth-protected-resource' && req.method === 'GET') return json(200, { resource: `${base}/api/v1/mcp`, authorization_servers: [base], scopes_supported: ['functions:/api/v1/mcp:read'] });
+    if (p === '/-/oauth/register' && req.method === 'POST') {
+      const b = JSON.parse(body.toString('utf8') || '{}');
+      const uris = Array.isArray(b.redirect_uris) ? b.redirect_uris.map(String) : [];
+      if (!uris.length) return json(400, { error: 'invalid_redirect_uri' });
+      const id = tok('kdc_');
+      oauthClients.set(id, { redirect_uris: uris, name: b.client_name || null });
+      auth.registrations++;
+      return json(201, { client_id: id, redirect_uris: uris, token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'] });
+    }
+    if (p === '/-/oauth/authorize') {
+      const q = req.method === 'POST' ? Object.fromEntries(new URLSearchParams(body.toString('utf8'))) : Object.fromEntries(url.searchParams);
+      const c = oauthClients.get(q.client_id);
+      if (!c || !c.redirect_uris.includes(q.redirect_uri)) return html(400, '<h1>Unknown client or redirect URI</h1>');
+      if (req.method === 'GET') {
+        if (q.response_type !== 'code' || q.code_challenge_method !== 'S256' || !q.code_challenge) return html(400, '<h1>PKCE S256 is required</h1>');
+        return html(200, authorizePage(q));
+      }
+      const back = new URL(q.redirect_uri);
+      if (q.action === 'cancel') { back.searchParams.set('error', 'access_denied'); back.searchParams.set('state', q.state || ''); res.writeHead(302, { location: back.toString() }); res.end(); return true; }
+      const email = String(q.email || '').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return html(200, authorizePage(q, { error: 'Enter your email.' }));
+      let a = accounts.get(email);
+      if (q.action === 'create') { if (a) return html(200, authorizePage({ ...q, screen_hint: '' }, { error: 'That email already has an account. Sign in instead.' })); a = auth.createAccount(email); }
+      else if (!a) return html(200, authorizePage({ ...q, screen_hint: 'signup' }, { error: 'No account with that email. Create one.' }));
+      a.revoked = false;
+      const code = tok('kdcode_');
+      codes.set(code, { client_id: q.client_id, redirect_uri: q.redirect_uri, challenge: q.code_challenge, account: a, exp: Date.now() + 60000 });
+      back.searchParams.set('code', code); back.searchParams.set('state', q.state || '');
+      res.writeHead(302, { location: back.toString() }); res.end(); return true;
+    }
+    if (p === '/-/token' && req.method === 'POST') {
+      const f = Object.fromEntries(new URLSearchParams(body.toString('utf8')));
+      auth.tokenCalls.push({ grant_type: f.grant_type, at: Date.now() });
+      const issue = (account, client_id) => {
+        const at = tok('kdat_'), rt = tok('kdrt_');
+        accessTokens.set(at, { account, exp: Date.now() + accessTtlSec * 1000 });
+        refreshTokens.set(rt, { account, client_id });
+        return json(200, { access_token: at, token_type: 'Bearer', expires_in: accessTtlSec, refresh_token: rt, scope: f.scope || 'openid email profile entitlements' });
+      };
+      if (f.grant_type === 'authorization_code') {
+        const c = codes.get(f.code);
+        codes.delete(f.code);
+        if (!c || c.exp < Date.now() || c.client_id !== f.client_id || c.redirect_uri !== f.redirect_uri) return json(400, { error: 'invalid_grant' });
+        if (!f.code_verifier || sha256u(f.code_verifier) !== c.challenge) return json(400, { error: 'invalid_grant', error_description: 'PKCE verification failed' });
+        return issue(c.account, f.client_id);
+      }
+      if (f.grant_type === 'refresh_token') {
+        const r = refreshTokens.get(f.refresh_token);
+        if (!r || r.account.revoked || r.client_id !== f.client_id) return json(400, { error: 'invalid_grant' });
+        if (rotateRefresh) refreshTokens.delete(f.refresh_token);
+        return issue(r.account, r.client_id);
+      }
+      return json(400, { error: 'unsupported_grant_type' });
+    }
+    if (p === '/-/oauth/revoke' && req.method === 'POST') {
+      const f = Object.fromEntries(new URLSearchParams(body.toString('utf8')));
+      refreshTokens.delete(f.token); accessTokens.delete(f.token);
+      auth.revocations++;
+      return json(200, {});
+    }
+    return false;
+  }
+
   const srv = http.createServer((req, res) => {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
@@ -466,10 +580,46 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
       const err = (status, message) => json(status, { error: { message, type: 'invalid_request_error' } });
       try {
         if (latencyMs) await new Promise((r) => setTimeout(r, latencyMs));
+        // the KnowDrive authorization server (OAuth 2.0 + PKCE + DCR) and its accounts: no bearer needed here
+        if (await oauthRoute(req, res, url, p, body, call)) return;
         if (!/^Bearer \S+/.test(call.auth || '')) return err(401, 'missing api key');
+        // a user's delegated access token reaches only that user's owned store; KnowBot's own key never reaches it
+        const bearerTok = String(call.auth).slice(7).trim();
+        if (bearerTok.startsWith('kdat_')) {
+          const a = accessTokens.get(bearerTok);
+          if (!a || a.exp <= Date.now() || a.account.revoked) { res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer error="invalid_token"' }); return res.end(JSON.stringify({ error: { message: 'invalid token' } })); }
+          call.account = a.account;
+          auth.apiCalls.push({ method: req.method, url: p, account: a.account.id });
+        }
+        const storeOk = (st) => (call.account ? st === call.account.store : !ownedStores.has(st));
+        if (call.store && !storeOk(call.store)) return err(403, 'not allowed on this store');
+        const pathStore = /^\/api\/v1\/vector_stores\/([^/]+)/.exec(p);
+        if (pathStore && pathStore[1] !== 'stats' && !storeOk(decodeURIComponent(pathStore[1]))) return err(403, 'not allowed on this store');
+        const fileRef = /^\/api\/v1\/files\/([^/]+)/.exec(p);
+        if (fileRef && files.has(decodeURIComponent(fileRef[1])) && !storeOk(files.get(decodeURIComponent(fileRef[1])).store)) return err(403, 'not allowed on this file');
+        if (p === '/v1/users/me' && req.method === 'GET') {
+          if (!call.account) return err(401, 'a user token is required');
+          return json(200, { id: call.account.id, email: call.account.email, preferred_language: 'en', timezone: 'UTC', status: 'active', mfa_required: false });
+        }
+        if (p === '/tenant/v1/stores' && req.method === 'GET') {
+          if (!call.account) return err(401, 'a user token is required');
+          return json(200, [{ id: call.account.store, display_name: `${call.account.email}'s store`, owner: true, role: 'owner', plan: 'free', quota_bytes: 1073741824, included_bytes: 1073741824, included_atoms: 0 }]);
+        }
+        if (p === '/api/v1/vector_stores' && req.method === 'GET') {
+          const list = call.account ? [call.account.store] : [...new Set([...files.values()].map((f) => f.store))].filter((st) => !ownedStores.has(st));
+          return json(200, { object: 'list', data: list.map((id) => ({ id, object: 'vector_store', name: id, created_by: call.account ? `bearer:${call.account.email}` : 'bearer:knowbot' })), has_more: false });
+        }
+        let cm;
+        if ((cm = /^\/api\/v1\/files\/([^/]+)\/content$/.exec(p)) && req.method === 'GET') {
+          const f = files.get(decodeURIComponent(cm[1]));
+          if (!f) return err(404, 'no such file');
+          res.writeHead(200, { 'content-type': f.mime_type || 'application/octet-stream' });
+          return res.end(f.blob ?? f.raw ?? f.text);
+        }
 
         if (p === '/api/v1/ingest' && req.method === 'POST') {
           if (failNext.ingest > 0) { failNext.ingest--; return err(500, 'ingest failed (injected)'); }
+          if (failNext.ingestStore?.n > 0 && call.store === failNext.ingestStore.store) { failNext.ingestStore.n--; return err(500, 'ingest failed (injected)'); }
           if (!call.store) return err(400, 'x-vector-store-id header required');
           const fd = await new Request('http://x/', { method: 'POST', headers: { 'content-type': req.headers['content-type'] || '' }, body }).formData();
           // production batch semantics, in part order: tags, mime_type, then file parts
@@ -489,7 +639,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
             const m0 = it.stray ? 'text/plain' : String(mime || it.type || 'application/octet-stream');
             const cfg = tags.includes('kind:trial-spec') || tags.includes('kind:config');
             const hash = createHash('sha256').update(it.bytes).digest('hex');
-            const f = add({ store: call.store, path: it.path, text: extractText(it.bytes, m0, it.path), tags, bytes: it.bytes.length, mime: m0, pipeline: !cfg, hash: cfg ? null : hash });
+            const f = add({ store: call.store, path: it.path, text: extractText(it.bytes, m0, it.path), tags, bytes: it.bytes.length, mime: m0, pipeline: !cfg, hash: cfg ? null : hash, blob: it.bytes });
             if (cfg) f.raw = it.bytes.toString('utf8');
             if (!it.stray && !call.ingest) call.ingest = { path: it.path, tags, mime: m0, bytes: it.bytes.length };
             if (it.stray) (call.stray ||= []).push(it.path);
@@ -596,7 +746,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   await new Promise((r) => srv.listen(0, host, r));
   const port = srv.address().port;
   return {
-    url: `http://${host}:${port}`, port, calls, files, failNext,
+    url: `http://${host}:${port}`, port, calls, files, failNext, auth,
     /** Pins the store record's `progress` block (undefined = derive it from the files). */
     setProgress(v) { progressOverride = v; },
     /** Adds a delay to every request from now on (slow-store tests). */

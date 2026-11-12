@@ -201,7 +201,7 @@ async function boot() {
   const llm = await startFakeLLM({ slowMs: 9000 });
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-surf-'));
   const env = { KNOWDRIVE_BASE_URL: kd.url, KNOWDRIVE_API_KEY: 'fake-key', KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials', KNOWBOT_STUDIO_SAMPLE_MODE: 'live',
-    KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen' };
+    KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', KNOWBOT_KD_ACCOUNTS: 'off', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen' };
   const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, trustProxy: true, env, studio: { sweep: false, pingMs: 200, pollMs: 40 } });
   await new Promise((r) => kb.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${kb.server.address().port}`;
