@@ -10,7 +10,7 @@
 //   v.open(); v.close(); v.destroy();
 // The orb colour is the bot's own choice from KnowBot Studio (GET /v1/channels/:bot → webVoice.orb) unless `orb` is given.
 
-import { orbSwatch, orbId } from './voice-orb.js?v=357231d';
+import { orbSwatch, orbId } from './voice-orb.js?v=5e1c008';
 
 const CSS = `
 :host{all:initial;font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#15151f;--bg:#fff;--line:#e3e6ee;--shadow:0 12px 40px rgba(15,23,42,.28)}
@@ -85,7 +85,7 @@ export function mountVoiceLauncher(target, o = {}) {
     panel.replaceChildren(box);
     box.textContent = 'Starting voice mode…';
     try {
-      const [{ openVoiceMode }] = await Promise.all([import('./voice-mode.js?v=357231d'), orbReady]);
+      const [{ openVoiceMode }] = await Promise.all([import('./voice-mode.js?v=5e1c008'), orbReady]);
       const o2 = orb || 'ocean';   // the latest choice (setOrb), else the bot's own
       if (destroyed || panel.hidden) return;
       box.textContent = '';

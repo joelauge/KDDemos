@@ -4,8 +4,8 @@
 // Homepage search and web chat both use it). Every change saves at once (POST /site) and calls onSaved(view) so the
 // caller can refresh its preview.
 
-import * as api from './api.js?v=357231d';
-import { ORB_PRESETS, ORB_IDS, orbId, orbSwatch, createOrb } from '../lib/voice-orb.js?v=357231d';
+import * as api from './api.js?v=5e1c008';
+import { ORB_PRESETS, ORB_IDS, orbId, orbSwatch, createOrb } from '../lib/voice-orb.js?v=5e1c008';
 
 export const LOGO_BOX = { w: 600, h: 200 };          // the suggested size; uploads are fitted inside it
 const LOGO_MAX = 150 * 1024;                          // matches server/site.mjs LOGO_MAX_BYTES
