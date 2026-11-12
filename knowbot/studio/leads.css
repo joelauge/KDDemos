@@ -23,9 +23,12 @@
 .kb-leads-switch[aria-checked="true"] .kb-leads-knob { background: var(--accent); }
 .kb-leads-switch[aria-checked="true"] .kb-leads-knob::after { transform: translateX(14px); }
 .kb-leads-switch:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 6px; }
-.kb-leads-status { margin: 0; padding: 0 20px; min-height: 0; font-size: 12px; color: var(--muted); }
+.kb-leads-status { margin: 0; padding: 0 20px; min-height: 0; flex: none; font-size: 12px; color: var(--muted); }
 .kb-leads-status:not(:empty) { padding-top: 8px; }
-.kb-leads-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 12px 20px 20px; display: grid; gap: 22px; align-content: start; }
+.kb-leads-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 12px 20px 20px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; align-content: start; }
+/* What people ask: the chat card's rows (studio.css .st-ins-*), one column on narrow screens */
+.kb-leads-asks .kb-leads-hint { display: block; margin: -4px 0 12px; }
+.kb-leads-asks .st-ins-grid > * { min-width: 0; }
 .kb-leads-body[aria-busy="true"] { opacity: .6; }
 .kb-leads-err { margin: 0; }
 
@@ -81,6 +84,7 @@
   .kb-leads-head, .kb-leads-bar, .kb-leads-body { padding-left: 16px; padding-right: 16px; }
   .kb-leads-status { padding: 0 16px; }
   .kb-leads-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kb-leads-asks .st-ins-grid { grid-template-columns: 1fr; }
   .kb-leads-csv { margin-left: 0; width: 100%; }
   .kb-leads-bars li { grid-template-columns: minmax(90px, 120px) minmax(0, 1fr) 40px; }
 }

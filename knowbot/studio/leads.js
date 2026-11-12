@@ -113,7 +113,8 @@ export async function openLeads() {
     body.setAttribute('aria-busy', 'true');
     status.textContent = 'Loading…';
     try {
-      data = await api.leads(days);
+      const [rep, ins] = await Promise.all([api.leads(days), api.insights().catch(() => null)]);
+      data = rep; data.insights = ins;
       paint();
       status.textContent = `Showing the last ${days} days: ${plural(data.interactions?.total || 0, 'question')}, ${plural(data.leads.length, 'lead')}, ${plural(data.conversions.sent, 'checkout link')} sent.`;
     } catch (e) {
@@ -169,13 +170,43 @@ export async function openLeads() {
       tile('Leads', data.leads.length, `${plural(emails, 'email')} · ${plural(phones, 'phone')}`),
       tile('Checkout links sent', data.conversions.sent, `${plural(data.conversions.clickedSends || 0, 'opened', 'opened')}`),
       tile('Link clicks', data.links?.clicks || 0, `on ${plural(data.links?.sent || 0, 'tracked link')}`));
-    body.replaceChildren(...[tiles, channelsSection(ix), agentsSection(data.agents), leadsSection(data.leads), checkoutSection(data.conversions.items || []),
+    body.replaceChildren(...[tiles, asksSection(data.insights), channelsSection(ix), agentsSection(data.agents), leadsSection(data.leads), checkoutSection(data.conversions.items || []),
       h('p', { class: 'kb-leads-foot' }, h('span', { 'aria-hidden': 'true', html: icon('lock', 12) }),
         ` Only you can see this report. Leads are kept for ${data.retentionDays || 90} days. Tracked links carry utm_source=knowbot, utm_medium (the channel) and utm_campaign (this bot), so your own analytics can count visits and sales from them. The CSV lists each AI agent question on channel "agent".`)].filter(Boolean));
   }
 
   function tile(label, n, sub) {
     return h('li', { class: 'kb-leads-tile' }, h('span', { class: 'kb-leads-tile-label' }, label), h('strong', { class: 'kb-leads-tile-n st-mono' }, Number(n || 0).toLocaleString()), h('span', { class: 'kb-leads-tile-sub' }, sub));
+  }
+
+  // "What people ask" (the same question insights as the chat card, SPEC 11.1), with more rows: every question since the
+  // bot started (not the 7/30-day range above), answered ones by count and the gaps it refused
+  function asksSection(d) {
+    if (!d) return null;
+    const sec = h('section', { class: 'kb-leads-sec kb-leads-asks', 'aria-labelledby': 'kb-leads-qs' },
+      h('h3', { id: 'kb-leads-qs' }, 'What people ask', h('span', { class: 'kb-leads-count st-mono' }, Number(d.total || 0).toLocaleString())),
+      h('p', { class: 'kb-leads-hint' }, `Since your bot started: ${Number(d.answered || 0).toLocaleString()} answered · ${Number(d.refused || 0).toLocaleString()} refused. Questions are never used as sources.`));
+    const answered = (d.top || []).filter((t) => t && t.outcome !== 'refused').slice(0, 12);
+    const gaps = (d.gaps || []).slice(0, 12);
+    const max = Math.max(1, ...answered.map((t) => t.count || 1));
+    const row = (t, gap) => {
+      const n = t.count || 1, ways = Number(t.ways) || 1;
+      return h('li', { class: 'st-ins-row', dataset: { outcome: gap ? 'refused' : 'answered' } },
+        h('span', { class: 'st-ins-q', title: t.q }, t.q),
+        ...(ways > 1 ? [h('span', { class: 'st-ins-ways' }, `asked ${ways} ways`)] : []),
+        gap ? h('span', { class: 'st-ins-tag' }, h('span', { html: icon('shield', 11), 'aria-hidden': 'true' }), 'refused')
+          : h('span', { class: 'st-ins-bar', 'aria-hidden': 'true' }, h('i', { style: `transform:scaleX(${n / max})` })),
+        h('span', { class: 'st-ins-n st-mono', 'aria-label': `asked ${n} time${n === 1 ? '' : 's'}` }, `×${n}`));
+    };
+    const col = (label, cls, items, gap, empty) => h('section', { class: `st-ins-col ${cls}`, 'aria-label': label },
+      h('h3', null, ...(gap ? [h('span', { html: icon('shield', 13) }), ' '] : []), label),
+      items.length ? h('ol', { class: 'st-ins-list' }, items.map((t) => row(t, gap))) : h('p', { class: 'empty-state st-field-hint st-ins-empty' }, empty));
+    const off = (d.offTopic || []).length;
+    sec.append(h('div', { class: 'st-ins-grid' },
+      col('Most asked', '', answered, false, 'No answered questions yet.'),
+      h('div', null, col('Gaps · refused', 'st-ins-gaps', gaps, true, off ? 'No content gaps: every on-topic question was answered from your files.' : 'No gaps: every question so far was answered from your files.'),
+        ...(off ? [h('p', { class: 'st-field-hint st-ins-off' }, `${off} off-topic question${off === 1 ? '' : 's'} refused, as ${off === 1 ? 'it' : 'they'} should be (not a gap).`)] : []))));
+    return sec;
   }
 
   function channelsSection(ix) {
