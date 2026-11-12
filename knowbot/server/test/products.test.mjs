@@ -3,6 +3,7 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import os from 'node:os';
 import { importStore, productDoc, productFacts, readProductHtml, renderMarkdown, imageOf, ogImageOf, productCardOf, productImageOfHtml } from '../storeimport.mjs';
 import { indexToJson, indexFromJson, indexAdd, createImageFinder, within, INDEX_MAX } from '../products.mjs';
 import { productFromText, productCards, productCard, productKey, linksIn, isSoldOut, safeHttpUrl, candidateLines, PRODUCT_CARDS_MAX } from '../../lib/knowbot.js';
@@ -205,5 +206,23 @@ describe('photo lookups (og:image) through the import fetcher', () => {
     assert.equal(await prod.find(`${s.base}/products/a`), null);
     assert.equal(s.hits.get('/products/a'), before);
     assert.equal(await within(new Promise(() => {}), 20), null, 'within() gives up');
+  });
+  // KNOWBOT_IMPORT_ALLOW reaches photo lookups: a product page on this machine's own private (RFC 1918) address
+  const lan = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal && /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(i.address))?.address;
+  test('a listed intranet address is read for a photo; unlisted it is refused before any request', { skip: !lan && 'no private IPv4 interface' }, async () => {
+    let hits = 0;
+    const s = http.createServer((req, res) => {
+      if (req.url === '/robots.txt') { res.writeHead(404); return res.end(); }
+      hits++;
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(page('Mug', '<p>Mug</p>', '<meta property="og:image" content="/img/mug.jpg">'));
+    });
+    await new Promise((r) => s.listen(0, lan, r));
+    servers.push(s);
+    const url = `http://${lan}:${s.address().port}/products/mug`;
+    assert.equal(await createImageFinder({ net: { allowPorts: 'any', paceMs: 0 }, timeoutMs: 1000 }).find(url), null);
+    assert.equal(hits, 0, 'unlisted: never requested');
+    assert.equal(await createImageFinder({ net: { allowPorts: 'any', paceMs: 0, allow: `${lan}/32` }, timeoutMs: 1000 }).find(url), `http://${lan}:${s.address().port}/img/mug.jpg`);
+    assert.equal(hits, 1);
   });
 });

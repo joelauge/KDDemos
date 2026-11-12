@@ -227,7 +227,7 @@ export function createDevApi(o = {}) {
           K.list = Array.isArray(inner.keys) ? inner.keys.filter((k) => k && typeof k.hash === 'string' && BOT_ID_RE.test(String(k.bot))) : [];
         }
         indexKeys();
-      })().catch((e) => { K.loaded = null; throw new ApiError(503, 'keys_unavailable', `API keys could not be loaded: ${e.message}`); });
+      })().catch((e) => { K.loaded = null; throw Object.assign(new ApiError(503, 'keys_unavailable', `API keys could not be loaded: ${e.message}`), { cause: e }); });
     }
     return K.loaded;
   }
@@ -1544,7 +1544,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       const g = googleConfig(env);
       const base = apiBase(req);
       const tgt = await resolveTarget(id).catch(() => null);
-      return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, ...(tgt ? { agents: await agentInfo(req, tgt) } : {}), expiresAt: new Date(Number(data.e)).toISOString(), scope: 'trial',
+      return send(res, 200, { key: trialKey(id, Number(data.e)), botId: id, ...(tgt ? { agents: await agentInfo(req, tgt) } : {}), expiresAt: studio.expiryOf(Number(data.e)), scope: 'trial',
         rateLimit: { perMinute: limits.trial }, voice: { google: g.stt && g.tts, stt: g.stt ? 'google' : 'browser', tts: g.tts ? 'google' : 'browser' },
         endpoints: { chat: `${base}/v1/bots/${id}/chat`, completions: `${base}/v1/chat/completions`, voice: `${base}/v1/bots/${id}/voice`, channels: `${base}/v1/channels/${id}` },
         channels: channelsInfo(req, id, tgt).channels });
@@ -1657,6 +1657,8 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
 
   return {
     handle, upgrade, answer, resolveTarget, agentLimits: AG, logLive, logChat, trialKey, createKey, revokeKey, sendInfo,
+    /** Rejects when the stored kb_live_ keys cannot be loaded; `cause` is a ProviderError when this server's secret does not open them. */
+    keysCheck: () => loadKeys(),
     /** The Studio's "send me this" proof link: a public /p/<id> for a trial answer (sendinfo.mjs normalizeAnswer shape). */
     proofLink: async (req, trialId, a) => proofLinkFor(req, await resolveTarget(trialId), 'studio')(a),
     /** The Studio's "send me this" link tracker (leads.mjs) for a trial, or null when tracking is off for it. */

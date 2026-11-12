@@ -18,7 +18,8 @@
 //       skip?: { urls?: string[], paths?: string[] },   // resume: pages an interrupted run of this import already wrote
 //                                   // (their URLs, and/or their file paths site/<host>/<kind>/<slug>.<ext>). They are
 //                                   // neither read nor written again; result.report.already {kind:n} counts them.
-//       net?: { ...createStoreFetcher options }   // tests only: allowAddresses, allowPorts:'any', resolve, paceMs
+//       net?: { ...createStoreFetcher options }   // allow (KNOWBOT_IMPORT_ALLOW, parsed); tests only: allowAddresses,
+//                                   // allowPorts:'any', resolve, paceMs
 //   }) → Promise<{ platform, api, base, host, name, plan, files, counts, report, capped, skipped, warnings }>
 //   It throws StoreImportError { code, message, status } after emitting `error`.
 //
@@ -96,10 +97,13 @@ const FATAL = new Set(['aborted', 'quota']);
 
 // ------------------------------------------------------------------------------------------------ address policy
 function v4int(ip) { const p = ip.split('.').map(Number); return (((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]) >>> 0; }
+/** [base, mask] for an IPv4 CIDR (a /0 mask is 0: JS shifts count mod 32). */
+const cidr4 = (b, bits) => [v4int(b), bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0];
+const v4In = (n, [b, m]) => ((n & m) >>> 0) === ((b & m) >>> 0);
 const V4_BLOCKS = [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24],
   ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]
-  .map(([b, bits]) => [v4int(b), bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0]);
-function v4Blocked(ip) { const n = v4int(ip); return V4_BLOCKS.some(([b, m]) => ((n & m) >>> 0) === ((b & m) >>> 0)); }
+  .map(([b, bits]) => cidr4(b, bits));
+function v4Blocked(ip) { const n = v4int(ip); return V4_BLOCKS.some((r) => v4In(n, r)); }
 /** Parse an IPv6 literal into 8 16-bit groups (handles ::, embedded IPv4 and %zone). */
 function v6groups(ip) {
   let s = ip.replace(/^\[|\]$/g, '').split('%')[0].toLowerCase();
@@ -111,6 +115,7 @@ function v6groups(ip) {
   return [...h, ...fill, ...r].map((x) => parseInt(x || '0', 16));
 }
 const g2v4 = (a, b) => `${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`;
+const isUla = (g) => (g[0] & 0xfe00) === 0xfc00;
 /** True for addresses a server-side fetch must never reach: private, loopback, link-local, CGNAT, metadata, multicast,
  *  reserved, and IPv6 equivalents (incl. IPv4-mapped/compatible, NAT64, 6to4 and Teredo wrappers). */
 export function isBlockedAddress(ip) {
@@ -126,12 +131,53 @@ export function isBlockedAddress(ip) {
   if (g[0] === 0x2002) return v4Blocked(g2v4(g[1], g[2]));                                                          // 6to4
   if (g[0] === 0x2001 && (g[1] === 0 || g[1] === 0xdb8)) return true;                                               // Teredo, doc
   if (g[0] === 0x100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true;                                       // discard
-  if ((g[0] & 0xfe00) === 0xfc00) return true;                                                                      // ULA (incl. fd00:ec2::254)
+  if (isUla(g)) return true;                                                                                        // ULA (incl. fd00:ec2::254)
   if ((g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0) return true;                                        // link/site-local
   if ((g[0] & 0xff00) === 0xff00) return true;                                                                      // multicast
   return false;
 }
+// KNOWBOT_IMPORT_ALLOW (intranet import): a comma list of CIDRs, addresses and host names an operator admits although
+// they are private. Only RFC 1918, CGNAT (100.64.0.0/10) and IPv6 ULA (fc00::/7) addresses can be admitted. Loopback,
+// link-local, cloud metadata (169.254.169.254, fd00:ec2::254, 100.100.100.200) and every IPv6 wrapper of an IPv4
+// address stay blocked whatever is listed, with no override: no intranet site lives there, and they are the box's own
+// loopback-bound services (KnowDB, host-manager, the model) and the cloud's credentials. A service the box serves on
+// its own LAN address is not covered: a listed range that holds that address admits it (ports 80/443 only).
+// Admission also needs an intranet start: see createStoreFetcher.
 const normIp = (ip) => { const s = String(ip).replace(/^\[|\]$/g, '').toLowerCase(); return net.isIP(s) === 6 ? v6groups(s).join(':') : s; };
+const ADMITTABLE_V4 = [['10.0.0.0', 8], ['100.64.0.0', 10], ['172.16.0.0', 12], ['192.168.0.0', 16]].map(([b, bits]) => cidr4(b, bits));
+const NEVER_ADMIT = new Set(['100.100.100.200', 'fd00:ec2::254'].map(normIp));
+const v6In = (g, [b, bits]) => b.every((x, i) => { const k = Math.max(0, Math.min(16, bits - 16 * i)); return k === 0 || ((g[i] ^ x) >> (16 - k)) === 0; });
+/** Parse KNOWBOT_IMPORT_ALLOW: { v4:[[base,mask]], v6:[[groups,bits]], hosts:Set, suffixes:[] (".corp.example" entries), bad:[] }. */
+export function parseImportAllow(spec) {
+  const out = { v4: [], v6: [], hosts: new Set(), suffixes: [], bad: [] };
+  for (const raw of (Array.isArray(spec) ? spec : String(spec || '').split(','))) {
+    const e = String(raw).trim().toLowerCase();
+    if (!e) continue;
+    const [ip, len] = e.split('/'), kind = net.isIP(ip.replace(/^\[|\]$/g, ''));
+    const bits = len === undefined ? (kind === 4 ? 32 : 128) : /^\d{1,3}$/.test(len) ? Number(len) : -1;
+    if (kind === 4 && bits >= 0 && bits <= 32) out.v4.push(cidr4(ip, bits));
+    else if (kind === 6 && bits >= 0 && bits <= 128) out.v6.push([v6groups(ip), bits]);
+    else if (!kind && len === undefined && /^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(e)) { if (e.startsWith('.')) out.suffixes.push(e); else out.hosts.add(e); }
+    else out.bad.push(raw);
+  }
+  return out;
+}
+const allowsHost = (allow, h) => !!allow && (allow.hosts.has(h) || allow.suffixes.some((x) => h.endsWith(x)));
+/** True when KNOWBOT_IMPORT_ALLOW admits this blocked address (reached as `host`): an admittable private range only. */
+export function importAllows(allow, ip, host = '') {
+  if (!allow) return false;
+  const s = String(ip || '').replace(/^\[|\]$/g, '').split('%')[0].toLowerCase();
+  const kind = net.isIP(s);
+  if (kind === 4) {
+    const n = v4int(s);
+    if (NEVER_ADMIT.has(normIp(s)) || !ADMITTABLE_V4.some((r) => v4In(n, r))) return false;
+    return allowsHost(allow, host) || allow.v4.some((r) => v4In(n, r));
+  }
+  if (kind !== 6) return false;
+  const g = v6groups(s);
+  if (!isUla(g) || NEVER_ADMIT.has(normIp(s))) return false;
+  return allowsHost(allow, host) || allow.v6.some((r) => v6In(g, r));
+}
 const BAD_HOST_RE = /(?:^|\.)(?:localhost|local|internal|localdomain|home\.arpa|intranet|lan|corp)$/i;
 
 const MULTI_SUFFIX = new Set(('co.uk org.uk ac.uk gov.uk me.uk ltd.uk plc.uk com.au net.au org.au co.nz org.nz co.jp ne.jp or.jp com.br com.mx co.za '
@@ -234,16 +280,23 @@ async function defaultResolve(host) { return dns.promises.lookup(host, { all: tr
  * backoff and retry, slow answers slow us down). No cookies are stored or sent; only UA/Accept/Accept-Encoding
  * (+content-type for GraphQL POSTs) go out.
  *
+ * allow: KNOWBOT_IMPORT_ALLOW (a comma list or array of CIDRs, addresses, host names and ".suffix" names): the private
+ * addresses it admits (see importAllows), on every hop; listed host names also pass the internal-name check. Only an
+ * intranet start admits them: the first host this fetcher resolves (the address the user gave) must itself be an
+ * admitted private address. From a public start every private address stays blocked, so a public site can't steer the
+ * fetcher into the intranet by a redirect, a link or a same-site name that resolves there. One fetcher per start.
  * Options (tests): allowAddresses: ['127.0.0.1'] (default none), allowPorts: [80,443] | 'any', resolve(host) →
  * [{address,family}], timeoutMs, maxBytes, budgetMs, concurrency, paceMs, maxRedirects, maxRetries, maxRetryAfterMs,
  * signal, onProgress({done,total}).
  */
 export function createStoreFetcher(o = {}) {
   const cfg = { ...LIMITS, resolve: defaultResolve, allowAddresses: [], allowPorts: [80, 443], userAgent: USER_AGENT, ...o };
+  const allow = !cfg.allow ? null : cfg.allow.v4 ? cfg.allow : parseImportAllow(cfg.allow); // KNOWBOT_IMPORT_ALLOW, parsed or not
   cfg.concurrency = Math.max(1, Math.min(4, Number(cfg.concurrency) || 4)); // politeness: never more than 4 in flight
   const allowAddr = new Set((cfg.allowAddresses || []).map(normIp));
   const sites = new Set(), hosts = new Set(), pdfHosts = new Set();
   const dnsCache = new Map(), robotsCache = new Map();
+  let startPrivate = null; // allow only: Promise<boolean>, did the first host resolved (the start) land on an admitted private address
   const startedAt = Date.now();
   const deadline = startedAt + cfg.budgetMs;
   const stats = { done: 0, total: 0, bytes: 0, maxActive: 0, retries: 0, throttled: 0, pace: cfg.paceMs, crawlDelayMs: 0 };
@@ -281,7 +334,7 @@ export function createStoreFetcher(o = {}) {
     if (u.protocol !== 'http:' && u.protocol !== 'https:') throw err('blocked_host', 'Only http and https links can be read.');
     if (u.username || u.password) throw err('blocked_host', 'Links with credentials are not followed.');
     const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    if (!net.isIP(h) && (BAD_HOST_RE.test(h) || !h.includes('.'))) throw err('blocked_host');
+    if (!net.isIP(h) && (BAD_HOST_RE.test(h) || !h.includes('.')) && !allowsHost(allow, h)) throw err('blocked_host');
     // fixer r8 (D10): only an explicit non-standard port gets the port copy here; an implicit 80/443 is checked after
     // DNS and address blocking (resolveChecked), so an unknown host reads "couldn't reach" and a private one "public
     // web address", never a misleading port message
@@ -295,16 +348,25 @@ export function createStoreFetcher(o = {}) {
   async function resolveChecked(hostname) {
     const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
     if (!dnsCache.has(h)) {
+      let markStart = null;
+      if (allow && !startPrivate) startPrivate = new Promise((r) => { markStart = r; });
       dnsCache.set(h, (async () => {
-        let addrs;
-        if (net.isIP(h)) addrs = [{ address: h, family: net.isIP(h) }];
-        else {
-          try { addrs = await cfg.resolve(h); } catch { throw err('not_found', `We couldn't reach ${h}. Check the address.`); }
-          addrs = (Array.isArray(addrs) ? addrs : [addrs]).map((a) => (typeof a === 'string' ? { address: a, family: net.isIP(a) } : a));
-        }
-        if (!addrs.length) throw err('not_found', `We couldn't reach ${h}. Check the address.`);
-        for (const a of addrs) if (isBlockedAddress(a.address) && !allowAddr.has(normIp(a.address))) throw err('blocked_host', undefined, { address: a.address });
-        return addrs[0].address;
+        let admitted = false;
+        try {
+          let addrs;
+          if (net.isIP(h)) addrs = [{ address: h, family: net.isIP(h) }];
+          else {
+            try { addrs = await cfg.resolve(h); } catch { throw err('not_found', `We couldn't reach ${h}. Check the address.`); }
+            addrs = (Array.isArray(addrs) ? addrs : [addrs]).map((a) => (typeof a === 'string' ? { address: a, family: net.isIP(a) } : a));
+          }
+          if (!addrs.length) throw err('not_found', `We couldn't reach ${h}. Check the address.`);
+          for (const a of addrs) {
+            if (!isBlockedAddress(a.address) || allowAddr.has(normIp(a.address))) continue;
+            if (importAllows(allow, a.address, h) && (markStart || await startPrivate)) { admitted = true; continue; }
+            throw err('blocked_host', undefined, { address: a.address });
+          }
+          return addrs[0].address;
+        } finally { markStart?.(admitted); }
       })());
     }
     return dnsCache.get(h);

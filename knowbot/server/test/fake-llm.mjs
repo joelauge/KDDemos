@@ -313,7 +313,8 @@ export async function startFakeLLM({ host = '127.0.0.1', slowMs = 9000, model = 
       const all = messages.map((m) => textOf(m.content)).join('\n');
       const user = textOf(lastUser(messages));
       const kind = /You select lines/.test(sys) ? 'select' : /summari[sz]e/i.test(sys) ? 'summary' : /write test questions/i.test(sys) ? 'questions' : /KnowBot Builder/.test(sys) ? 'setup' : 'chat';
-      calls.push({ kind, at: Date.now(), stream: !!body.stream, user: user.slice(0, 400) });
+      calls.push({ kind, model: body.model, at: Date.now(), stream: !!body.stream, user: user.slice(0, 400), max_tokens: body.max_tokens,
+        ...('chat_template_kwargs' in body ? { chat_template_kwargs: body.chat_template_kwargs } : {}) });
       if (/\bFAIL\b/.test(user) || (kind !== 'select' && /\bFAIL\b/.test(all))) return json(500, { error: { message: 'injected failure' } });
       if (/\bSLOW\b/.test(user)) {
         await new Promise((r) => { const t = setTimeout(r, slowMs); pending.add(t); res.on('close', () => { clearTimeout(t); pending.delete(t); r(); }); });

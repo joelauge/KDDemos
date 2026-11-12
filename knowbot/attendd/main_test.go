@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"gitlab.com/recoursellm-group/knowdrive-resolve.engine/knowdb"
 )
 
 // fakeKnowDrive answers the read routes a depth-1 attend call uses, for one store holding two files.
@@ -43,7 +48,7 @@ func TestAttendAgainstFakeKnowDrive(t *testing.T) {
 	var mu sync.Mutex
 	kd := fakeKnowDrive(t, &seen, &mu)
 	defer kd.Close()
-	s := newServer(apiBase(kd.URL), "test-key", 5*time.Second, false)
+	s := newServer(apiBase(kd.URL), knowdb.StaticTokenSource("test-key"), 5*time.Second, false)
 	s.noSection.Store(true)
 	h := s.routes()
 
@@ -99,7 +104,7 @@ func TestAttendAgainstFakeKnowDrive(t *testing.T) {
 }
 
 func TestAttendErrors(t *testing.T) {
-	s := newServer("http://127.0.0.1:9/api", "k", 2*time.Second, false)
+	s := newServer("http://127.0.0.1:9/api", knowdb.StaticTokenSource("k"), 2*time.Second, false)
 	h := s.routes()
 	for _, tc := range []struct {
 		body string
@@ -124,5 +129,87 @@ func TestControlTagsAndBase(t *testing.T) {
 	}
 	if apiBase("https://knowdrive.ai/") != "https://knowdrive.ai/api" || apiBase("https://x/api") != "https://x/api" {
 		t.Error("apiBase")
+	}
+}
+
+// KNOWDRIVE_API_KEY_FILE is re-read on every call: a token rotated in the file is used by the next call, no restart.
+func TestKeyFileRotation(t *testing.T) {
+	var seen []string
+	var mu sync.Mutex
+	kd := fakeKnowDrive(t, &seen, &mu)
+	defer kd.Close()
+	file := filepath.Join(t.TempDir(), "knowbot.token")
+	write := func(k string) {
+		if err := os.WriteFile(file, []byte(k+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("test-key")
+	tok, err := keySource(file, "env-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newServer(apiBase(kd.URL), tok, 5*time.Second, false)
+	s.noSection.Store(true)
+	h := s.routes()
+	attend := func() int {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/attend", strings.NewReader(`{"store":"vs_x","question":"How long do I have to return an item?"}`)))
+		return rec.Code
+	}
+	if c := attend(); c != 200 {
+		t.Fatalf("file key: HTTP %d (calls %v)", c, seen)
+	}
+	write("rotated-key")
+	if c := attend(); c == 200 {
+		t.Fatal("a rotated key the fake rejects still answered 200: the file was not re-read")
+	}
+	mu.Lock()
+	last := seen[len(seen)-1]
+	mu.Unlock()
+	if !strings.HasSuffix(last, "auth=Bearer rotated-key") {
+		t.Errorf("last call %q, want the rotated key", last)
+	}
+	write("test-key")
+	if c := attend(); c != 200 {
+		t.Errorf("key rotated back: HTTP %d", c)
+	}
+	for _, c := range seen {
+		if strings.Contains(c, "env-key") {
+			t.Errorf("the key file must win over KNOWDRIVE_API_KEY: %s", c)
+		}
+	}
+}
+
+func TestKeySource(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := keySource("", "env-key"); err != nil {
+		t.Fatal(err)
+	} else if k, _ := tok.Token(context.Background()); k != "env-key" {
+		t.Errorf("no file: token %q, want the env key", k)
+	}
+	for _, tc := range []struct{ file, key string }{{"", ""}, {filepath.Join(dir, "missing"), "env-key"}, {empty, "env-key"}} {
+		if _, err := keySource(tc.file, tc.key); err == nil {
+			t.Errorf("file %q key %q: want an error at start", tc.file, tc.key)
+		}
+	}
+	// a file that goes missing after start fails the call, never falls back to another key
+	gone := filepath.Join(dir, "gone")
+	if err := os.WriteFile(gone, []byte("k1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := keySource(gone, "env-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := tok.Token(context.Background()); err == nil || k != "" {
+		t.Errorf("removed file: token %q err %v, want an error", k, err)
 	}
 }

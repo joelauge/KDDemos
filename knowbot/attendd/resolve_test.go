@@ -145,7 +145,7 @@ func TestResolveOneScope(t *testing.T) {
 	f := &fakeResolveStore{}
 	kd := f.server(t)
 	defer kd.Close()
-	h := newServer(apiBase(kd.URL), "k", 5*time.Second, false).routes()
+	h := newServer(apiBase(kd.URL), knowdb.StaticTokenSource("k"), 5*time.Second, false).routes()
 	code, out := postResolve(t, h, `{"store":"vs_x","question":"How long do I have to return an item?","scope":{"tags_all":["trial:t1"],"tags_none":["kind:config"]}}`)
 	if code != 200 {
 		t.Fatalf("HTTP %d %v", code, out)
@@ -200,7 +200,7 @@ func TestResolveScopesFoldIntoOneTagQuery(t *testing.T) {
 	f := &fakeResolveStore{}
 	kd := f.server(t)
 	defer kd.Close()
-	h := newServer(apiBase(kd.URL), "k", 5*time.Second, false).routes()
+	h := newServer(apiBase(kd.URL), knowdb.StaticTokenSource("k"), 5*time.Second, false).routes()
 	code, out := postResolve(t, h, `{"store":"vs_x","question":"returns?","scopes":[{"tags_all":["trial:t1"],"tags_none":["kind:config"]},{"tags_all":["sample-set:s1","kind:trial-sample"],"tags_none":["kind:config"]}],"limit":5}`)
 	if code != 200 {
 		t.Fatalf("HTTP %d %v", code, out)
@@ -225,7 +225,7 @@ func TestResolveScopesSplitWhenTooLarge(t *testing.T) {
 	f := &fakeResolveStore{}
 	kd := f.server(t)
 	defer kd.Close()
-	h := newServer(apiBase(kd.URL), "k", 5*time.Second, false).routes()
+	h := newServer(apiBase(kd.URL), knowdb.StaticTokenSource("k"), 5*time.Second, false).routes()
 	var none []string
 	for i := 0; i < 10; i++ { // 1 + 10 + 2 leaves: over the 12-leaf limit
 		none = append(none, fmt.Sprintf(`"tfile:k%d"`, i))
@@ -264,7 +264,7 @@ func TestResolveFusionAndErrors(t *testing.T) {
 	f := &fakeResolveStore{}
 	kd := f.server(t)
 	defer kd.Close()
-	h := newServer(apiBase(kd.URL), "k", 5*time.Second, true).routes()
+	h := newServer(apiBase(kd.URL), knowdb.StaticTokenSource("k"), 5*time.Second, true).routes()
 	code, out := postResolve(t, h, `{"store":"vs_x","question":"returns?","scope":{"tags_all":["trial:t1"]}}`)
 	if code != 200 || out["rank_mode"] != "client_rrf" {
 		t.Fatalf("HTTP %d %v", code, out)
@@ -322,7 +322,7 @@ func TestResolveDistanceFallbacks(t *testing.T) {
 	// one span outside the distance window: only that span's vector is read (one embed, one read of atom 3)
 	f := &fakeResolveStore{omit: map[string]bool{"file-a#3": true}}
 	kd := f.server(t)
-	h := newServer(apiBase(kd.URL), "k", 5*time.Second, false).routes()
+	h := newServer(apiBase(kd.URL), knowdb.StaticTokenSource("k"), 5*time.Second, false).routes()
 	code, out := postResolve(t, h, body)
 	if code != 200 || sims(out) != "file-a#0=0.8 file-a#3=0.6" {
 		t.Fatalf("HTTP %d %v", code, out)
@@ -335,7 +335,7 @@ func TestResolveDistanceFallbacks(t *testing.T) {
 	// a hit without a distance (full text only): the question is embedded beside the ranked call, once
 	f = &fakeResolveStore{noDist: map[string]bool{"file-a#3": true}}
 	kd = f.server(t)
-	h = newServer(apiBase(kd.URL), "k", 5*time.Second, false).routes()
+	h = newServer(apiBase(kd.URL), knowdb.StaticTokenSource("k"), 5*time.Second, false).routes()
 	code, out = postResolve(t, h, body)
 	if code != 200 || sims(out) != "file-a#0=0.8 file-a#3=0.6" || f.embeds != 1 || len(f.reads) != 1 {
 		t.Fatalf("HTTP %d %v embeds %d reads %v", code, out, f.embeds, f.reads)
@@ -348,7 +348,7 @@ func TestResolveDistanceFallbacks(t *testing.T) {
 	f = &fakeResolveStore{failPost: true}
 	kd = f.server(t)
 	defer kd.Close()
-	h = newServer(apiBase(kd.URL), "k", 5*time.Second, false).routes()
+	h = newServer(apiBase(kd.URL), knowdb.StaticTokenSource("k"), 5*time.Second, false).routes()
 	code, out = postResolve(t, h, body)
 	if code != 200 || sims(out) != "file-a#0=0.8 file-a#3=0.6" {
 		t.Fatalf("HTTP %d %v", code, out)

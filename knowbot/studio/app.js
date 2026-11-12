@@ -384,6 +384,8 @@ function setActivating(on) {
   updatePrice();
 }
 const isLive = () => !!getState().trial.converted || !!getState().milestones.launched;
+const ownerMode = api.isOwnerMode;
+const LAUNCH_CHIP_IDS = new Set(['launch', 'launch-anyway', 'what-get']);
 /** Activating (back from checkout) or Live: ingest progress stops narrating, so the launch moment reads clean. */
 const narrationQuiet = () => isLive() || activatingUntil > Date.now() || (params.get('launched') === '1' && !successPosted && performance.now() < 30000);
 function updatePrice() {
@@ -393,11 +395,13 @@ function updatePrice() {
   if (document.documentElement.hasAttribute('data-live') !== live) document.documentElement.toggleAttribute('data-live', live);
   const wrap = $('#st-pricewrap'); const pill = $('#st-livepill'); const dash = $('#st-dash');
   setHidden($('#st-leads'), !getState().trial.id);
-  setHidden(wrap, live);
+  setHidden(wrap, live || ownerMode());
   setHidden(pill, !live);
   if (dash) { setHidden(dash, !live); setAttr(dash, 'href', getState().config?.dashboardUrl || 'https://knowdrive.ai/'); }
   updateTrialPill();
-  if (live) return;
+  setText($('.st-node[data-step="launch"] .st-node-label'), ownerMode() ? 'Go live' : 'Launch');
+  if (ownerMode()) for (const el of document.querySelectorAll('.kl-terms, #kl-surf-note')) setHidden(el, true);   // the landing's plan copy
+  if (live || ownerMode()) return;
   if (activating) {
     b.dataset.level = 'activating'; b.disabled = true; b.setAttribute('aria-busy', 'true');
     // phones: the spinner alone (its words stay in the accessible name), so the bot name keeps its room
@@ -814,6 +818,13 @@ function miyRepeatLine(miy) {
 function priceIntent(text, label) {
   const miy = !isLive() ? pendingDecision('make-it-yours') : null;
   addUserMessage(label || text, { keepDecision: !!miy });
+  if (ownerMode()) {
+    // the same reply as the Builder's (server/trials.mjs ownerLaunch)
+    localSay(`${botName()} is yours on this server: there is nothing to launch or buy. Its embed line and chat API are in Set up and Developers.`, { reply: true, chips: [
+      { id: 'channels', label: 'Set up', kind: 'primary', local: true, run: () => openGoLive('channels') },
+      { id: 'open_api', label: 'Developers', local: true, run: () => openGoLive('developers') }] });
+    return;
+  }
   if (miy) {
     // r8 (D2/D8): the open card already holds the paragraph; the reply is the delta (the price) plus one short line.
     // One plan, the same total checkout shows, whatever features are switched on.
@@ -1291,6 +1302,7 @@ function setChips(rec, chips, { still = false } = {}) {
   // "No change needed: …" ends with what the person can change instead (never the no-op it just declined)
   if (/^No change needed\b/i.test(plain(rec.text || ''))) list = [...styleAlternatives(), ...list.filter((c) => !/shorter|formal|friendl|detail/i.test(`${c.label} ${c.send || ''}`))];
   list = list.filter((c) => !isNoOpChip(c));
+  if (ownerMode()) list = list.filter((c) => c.action?.type !== 'show_launch' && !LAUNCH_CHIP_IDS.has(c.id));
   const seenIds = new Set(); list = list.filter((c) => (seenIds.has(c.id) ? false : (seenIds.add(c.id), true))).slice(0, 4);
   const offered = list.find(isNamingChip);
   if (offered) namingOffer = { chip: offered, name: String(offered.label).replace(/^Call it\s+/, '').replace(/\?$/, '') };
@@ -1909,6 +1921,7 @@ function dispatchAction(a, { fromClick = false } = {}) {
 }
 
 function launchOpen(source, extra = {}) {
+  if (ownerMode()) { openGoLive('channels'); return; }   // nothing to launch: the bot is already the owner's
   if (!launchIntent) { launchIntent = true; refreshShellSoon(); }
   whenReady(async () => {
     if (!store.listenerCount('launch:open')) { toast({ kind: 'warn', text: 'Launch is loading. Try again in a moment.' }); return; }
@@ -3111,11 +3124,11 @@ store.registerCard('email-capture', (data, el) => {
   const no = h('button', { type: 'button', class: 'btn btn-ghost st-btn st-btn-ghost' }, 'No thanks');
   const form = h('form', { class: 'st-email-form', novalidate: true }, h('label', { for: id, class: 'st-sr' }, 'Email'), input, sendBtn);
   const card = h('div', { class: 'card st-card st-email' },
-    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Keep this bot'), h('span', { class: 'st-card-meta' }, 'Saved for 7 days')),
+    h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('link', 14) }), h('span', null, 'Keep this bot'), h('span', { class: 'st-card-meta' }, ownerMode() ? 'Saved on this server' : 'Saved for 7 days')),
     form, h('div', { class: 'st-email-foot' }, msg, no));
   el.append(card);
   const done = (node) => { form.replaceWith(node); no.remove(); };
-  no.addEventListener('click', () => { card.classList.add('is-dismissed'); done(h('p', { class: 'st-field-hint' }, 'No problem. Your bot is still saved for 7 days in this browser.')); });
+  no.addEventListener('click', () => { card.classList.add('is-dismissed'); done(h('p', { class: 'st-field-hint' }, ownerMode() ? 'No problem. Your bot stays saved on this server.' : 'No problem. Your bot is still saved for 7 days in this browser.')); });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const v = input.value.trim();
@@ -3952,7 +3965,7 @@ function offerEmail() {
   emailOffered = true;
   mark('emailOffered');
   // checked again when its turn comes: a Launch card posted while this line waited in the queue wins
-  sendTurn({ local: async () => { if (launchOnTable()) return; await sayNow("Want a link to this bot so you don't lose it? It's saved for 7 days.", { card: { type: 'email-capture', data: {} }, chips: [] }); }, at: Date.now() });
+  sendTurn({ local: async () => { if (launchOnTable()) return; await sayNow(ownerMode() ? "Want a link to this bot so you can reopen it on another device?" : "Want a link to this bot so you don't lose it? It's saved for 7 days.", { card: { type: 'email-capture', data: {} }, chips: [] }); }, at: Date.now() });
 }
 
 async function copyText(text, btn) {

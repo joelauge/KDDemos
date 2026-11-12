@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promises as fsp, createReadStream, existsSync, mkdirSync, appendFile, readFileSync, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
-import { randomUUID, timingSafeEqual, createHmac } from 'node:crypto';
+import { randomUUID, timingSafeEqual, createHmac, createHash } from 'node:crypto';
 import { createRetriever, DEFAULT_STORE, DEFAULT_PREFIX } from './retrievers.mjs';
 import { InstanceRegistry, InstanceError, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, ProviderError, HAIKU_MODEL, queryVariantsOf } from './providers.mjs';
@@ -19,6 +19,7 @@ import { phoneSessions } from './channels/voice-live.mjs';
 import { activeWebVoiceSessions } from './channels/webvoice.mjs';
 import { createResearchAgent } from './research.mjs';
 import { createEvidenceSelector, createResolver } from './evidence.mjs';
+import { createHmAuth, LEEWAY_S } from './hmauth.mjs';
 
 /**
  * The header the Cloudflare Worker sends on internal calls to this server (GET /api/internal/busy): an HMAC of a fixed
@@ -51,11 +52,28 @@ const MIME = {
   '.webmanifest': 'application/manifest+json', '.mp4': 'video/mp4', '.webm': 'video/webm', '.pdf': 'application/pdf',
 };
 
+// The web root: only what the pages, the widget, the Studio, the dashboard and the homepage site load (SPEC "Static
+// files"). Everything else in the tree (corpus/, eval/, attendd/, cloudflare/, scripts/, server/, package files, tests,
+// dotfiles) answers 404. demo/ needs the built-in bot; corpus/ is served only with KNOWBOT_SERVE_CORPUS (browser-only demo).
+const STATIC_FILES = new Set(['index.html', '404.html']);
+const STATIC_DIRS = new Set(['lib', 'studio', 'dashboard', 'site', 'vendor']);
+const STATIC_HIDDEN = ['lib/test', 'studio/test', 'studio/kb'];
+const isOff = (v) => /^(0|off|false|no)$/i.test(String(v ?? '').trim());
+const isOn = (v) => /^(1|on|true|yes)$/i.test(String(v ?? '').trim());
+
 class HttpError extends Error {
-  constructor(status, message, extra) { super(message); this.status = status; this.extra = extra; }
+  constructor(status, message, extra, headers) { super(message); this.status = status; this.extra = extra; this.headers = headers; }
 }
 
 const tsNum = (ts) => (typeof ts === 'number' ? ts : Date.parse(ts) || 0);
+
+// Behind host-manager (KNOWBOT_AUTH_*): the only paths answered through it, i.e. the operator dashboard and its API.
+// Studio, site, widget, /p, /v1 stay on KnowBot's own port; through host-manager they would run on its auth origin.
+const HM_STATIC = /^\/(?:dashboard(?:\/[^/]*)?|lib\/site-config\.js)$/;
+const INSTANCE_API = /^\/api\/(?:instances|buckets|graph|providers|flows)(?:\/|$)/; // instanceRoutes (and devapi's bot keys)
+const HM_API = /^\/api\/(?:(?:stream|sessions|events|reindex|config|canonical)$|studio\/trials\/[^/]+\/convert$)/;
+const hmRoute = (m, p) => HM_STATIC.test(p) || INSTANCE_API.test(p) || (HM_API.test(p) && !(p === '/api/events' && m !== 'GET'));
+const UPLOAD_PATH = /^\/api\/buckets\/[^/]+\/files$/;
 
 /**
  * Create (but do not start) a KnowBot server.
@@ -69,6 +87,10 @@ export function createKnowBotServer(opts = {}) {
   const libPath = path.resolve(opts.libPath || env.KNOWBOT_LIB || path.join(root, 'lib', 'knowbot.js'));
   const llmBase = String(env.LLM_BASE_URL || 'http://127.0.0.1:8080/v1').replace(/\/+$/, '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
+  // KNOWBOT_LLM_THINKING=off: every request to LLM_BASE_URL (select, generate, the local Studio provider, /api/chat)
+  // asks the chat template not to think (llama.cpp/Qwen3, as Provenance sends it). Hosted providers and KNOWBOT_MODELS
+  // entries whose baseUrl is not LLM_BASE_URL never get the field.
+  const noThink = String(env.KNOWBOT_LLM_THINKING || '').trim().toLowerCase() === 'off' ? { chat_template_kwargs: { enable_thinking: false } } : {};
   const researchAgent = opts.researchAgent !== undefined ? opts.researchAgent : createResearchAgent(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
   // Evidence selector (server/evidence.mjs): off unless KNOWBOT_EVIDENCE=attend; shared by every answer path
   const evidence = opts.evidence !== undefined ? opts.evidence : createEvidenceSelector(env, { log: (x) => { if (!opts.quiet) console.log(x); } });
@@ -86,17 +108,28 @@ export function createKnowBotServer(opts = {}) {
   const publicModels = models.map(({ id, label, default: d }) => ({ id, label, ...(d ? { default: true } : {}) }));
   const rateLimit = Number(opts.rateLimit ?? env.KNOWBOT_RATE_LIMIT ?? 30);
   const eventsRateLimit = Number(opts.eventsRateLimit ?? env.KNOWBOT_EVENTS_RATE_LIMIT ?? 240);
-  const trustProxy = !!(opts.trustProxy ?? /^(1|true|yes)$/i.test(env.KNOWBOT_TRUST_PROXY || ''));
+  const trustProxy = !!(opts.trustProxy ?? isOn(env.KNOWBOT_TRUST_PROXY));
   const maxTokens = Number(env.KNOWBOT_MAX_TOKENS || 1024);
   const maxSse = Number(opts.maxSse ?? env.KNOWBOT_MAX_SSE ?? 100);
   const eventsMaxBytes = Number(opts.eventsMaxBytes ?? env.KNOWBOT_EVENTS_MAX_BYTES ?? 50 * 1024 * 1024);
   const readToken = String(opts.dashboardToken ?? env.KNOWBOT_DASHBOARD_TOKEN ?? '');
   const adminToken = String(opts.adminToken ?? env.KNOWBOT_ADMIN_TOKEN ?? '');
+  // KNOWBOT_BUILTIN_BOT=off: no built-in bot (UGM), no corpus/ index and no demo pages; corpus/ and demo/ may be absent
+  const builtinBot = !isOff(env.KNOWBOT_BUILTIN_BOT);
+  const serveCorpus = builtinBot && isOn(env.KNOWBOT_SERVE_CORPUS);
   const quiet = opts.quiet ?? false;
   const log = (...a) => { if (!quiet) console.log(...a); };
+  // Admin sign-in through host-manager (server/hmauth.mjs): null unless KNOWBOT_AUTH_* are all set (the cloud: never)
+  const hmAuth = opts.hmAuth !== undefined ? opts.hmAuth : createHmAuth({ env, log });
+  // seals provider keys (registry) and kb_live_ keys (devapi.mjs, same order); the constant is for local development only
+  const sealSecret = env.KNOWBOT_SECRET_KEY || adminToken;
+  if (hmAuth && !sealSecret) {
+    // without either, provider keys and kb_live_ keys would be sealed with the public constant below
+    throw new Error('KNOWBOT_AUTH_* is set: set KNOWBOT_SECRET_KEY too (it seals provider and API keys)');
+  }
 
   // Stored questions (SPEC 11.1) are never searchable, so never citable.
-  const { mode, retriever, local } = createRetriever({ corpusDir, env: { ...env, KNOWDRIVE_EXCLUDE_TAGS: [env.KNOWDRIVE_EXCLUDE_TAGS, 'questions'].filter(Boolean).join(',') }, logger: log, watch: opts.watch ?? true, resolver });
+  const { mode, retriever, local } = createRetriever({ corpusDir: builtinBot ? corpusDir : null, env: { ...env, KNOWDRIVE_EXCLUDE_TAGS: [env.KNOWDRIVE_EXCLUDE_TAGS, 'questions'].filter(Boolean).join(',') }, logger: log, watch: opts.watch ?? true, resolver });
   const store = mode === 'knowdrive' ? (env.KNOWDRIVE_STORE || DEFAULT_STORE) : 'local:corpus';
 
   // ------------------------------------------------------------ chat instances (one knowDrive folder each)
@@ -113,8 +146,9 @@ export function createKnowBotServer(opts = {}) {
     defaultMinSimilarity: Number(env.KNOWBOT_INSTANCE_MIN_SIMILARITY ?? 0.7),
     models: models.map((x) => x.id),
     // Seals the operator's OpenAI/Anthropic keys in the registry. Changing it means re-entering those keys.
-    secret: env.KNOWBOT_SECRET_KEY || adminToken || 'knowbot-local-dev',
-    builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', tag: env.KNOWDRIVE_TAG || 'knowbot:ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
+    secret: sealSecret || 'knowbot-local-dev',
+    builtinId: env.KNOWBOT_BUILTIN_ID || 'ugm',
+    builtin: builtinBot ? { id: env.KNOWBOT_BUILTIN_ID || 'ugm', tag: env.KNOWDRIVE_TAG || 'knowbot:ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' } : null,
   });
 
   // ------------------------------------------------------------ Claude Haiku 5.5, the default answering engine
@@ -143,7 +177,7 @@ export function createKnowBotServer(opts = {}) {
       .catch((err) => log(`[sendinfo] credit not recorded: ${err.message}`));
   } });
   const studio = createStudio({ env, registry, lib: () => loadLib(), kd: kdConfig, llmComplete, completeWith, researchAgent, evidence, resolver, haiku, queryVariants,
-    rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, adminToken, sendInfo, leads,
+    rateLimited, clientIp, readRaw, readJson, HttpError, logger: log, dataDir, requireAdmin, sendInfo, leads,
     // tracked links for the Studio's own "send me this" sends (server/leads.mjs), made by the developer API like proof links
     linkTracker: (req, trialId, channel) => devapi.linkTracker(req, trialId, channel),
     // a Studio answer's public proof link (/p/<id>) for what it sends, made by the developer API (created below)
@@ -152,6 +186,31 @@ export function createKnowBotServer(opts = {}) {
   // ------------------------------------------------------------ developer API, channels, questions loop (/v1/*, server/devapi.mjs)
   const devapi = createDevApi({ env, registry, studio, kd, loadLib, llmComplete, completeWith, researchAgent, evidence, resolver, haiku, queryVariants, readRaw, readJson, clientIp, requireAdmin,
     logger: log, dataDir, llmModel, canonical: CANONICAL, sendInfo, leads, ...(opts.devapi || {}) });
+
+  // ------------------------------------------------------------ admin sign-in through host-manager (KNOWBOT_AUTH_*)
+  // The CSP for everything answered through host-manager: no third-party script on its origin, no inline script but the
+  // dashboard's own (hashed here from dashboard/index.html, so the theme bootstrap keeps working).
+  const hmCsp = hmAuth ? (() => {
+    let html = '';
+    try { html = readFileSync(path.join(root, 'dashboard', 'index.html'), 'utf8'); } catch {}
+    const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((x) => `'sha256-${createHash('sha256').update(x[1]).digest('base64')}'`);
+    return ["default-src 'self'", `script-src 'self'${hashes.map((h) => ` ${h}`).join('')}`, "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      'font-src https://fonts.gstatic.com', "img-src 'self' data:", "connect-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'self'"].join('; ');
+  })() : '';
+  if (hmAuth) {
+    hmAuth.start();
+    log(`[auth] host-manager sign-in on: iss=${hmAuth.issuer} aud=${hmAuth.audience}`);
+    // the seals must still open with this secret (it changes when the admin token stops being the sealing input)
+    Promise.resolve(registry.ready).then(async () => {
+      const bad = [];
+      for (const pr of registry.providerList().filter((x) => x.needsKey && x.configured)) {
+        try { registry.providerKey(pr.id); } catch { bad.push(`${pr.id} key`); }
+      }
+      // only a failed unseal names the secret; knowDrive down or slow at boot is not a reason to change it
+      try { await devapi.keysCheck?.(); } catch (e) { if (e?.cause instanceof ProviderError) bad.push('kb_live_ keys'); else log(`[auth] could not check the kb_live_ keys: ${e?.message || e}`); }
+      if (bad.length) log(`[auth] KNOWBOT_SECRET_KEY does not open the stored ${bad.join(', ')}: set it to the value that sealed them`);
+    }).catch(() => {});
+  }
 
   // ------------------------------------------------------------ events / SSE
   mkdirSync(dataDir, { recursive: true });
@@ -278,7 +337,7 @@ export function createKnowBotServer(opts = {}) {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
       // reasoning_effort is a hosted-model setting (Claude): never sent to the local model
-      body: JSON.stringify({ model: m.id, messages, stream: false, ...Object.fromEntries(Object.entries(settings || {}).filter(([k]) => k !== 'reasoning_effort')) }),
+      body: JSON.stringify({ model: m.id, messages, stream: false, ...Object.fromEntries(Object.entries(settings || {}).filter(([k]) => k !== 'reasoning_effort')), ...(base === llmBase ? noThink : {}) }),
       signal: AbortSignal.timeout(Number(env.LLM_TIMEOUT_MS || 300000)),
     }).catch((e) => {
       if (e.name === 'TimeoutError') throw new HttpError(504, `LLM timed out after ${Number(env.LLM_TIMEOUT_MS || 300000)}ms`);
@@ -334,7 +393,7 @@ export function createKnowBotServer(opts = {}) {
       return { role: m.role, content: m.content };
     });
     if (chars > 24000) throw new HttpError(413, 'messages too long (max 24000 chars)');
-    const out = { model: llmModel, messages, stream: body.stream === true };
+    const out = { model: llmModel, messages, stream: body.stream === true, ...noThink };
     for (const k of ['temperature', 'top_p', 'seed', 'frequency_penalty', 'presence_penalty']) if (typeof body[k] === 'number' && Number.isFinite(body[k])) out[k] = body[k];
     // the hidden query rewrite asks for low effort (Claude only; dropped before the local model)
     if (['low', 'medium', 'high'].includes(body.reasoning_effort)) out.reasoning_effort = body.reasoning_effort;
@@ -343,26 +402,70 @@ export function createKnowBotServer(opts = {}) {
     return out;
   }
 
+  /** The static-token rule for both gates: `?token=` (only when `url` is given: the reader gate), else the Bearer. */
+  function tokenOk(req, token, url) {
+    const auth = String(req.headers.authorization || '');
+    const got = Buffer.from((url && url.searchParams.get('token')) || (auth.startsWith('Bearer ') ? auth.slice(7) : ''));
+    const want = Buffer.from(token);
+    return got.length === want.length && timingSafeEqual(got, want);
+  }
+
   /** Optional operator token (KNOWBOT_DASHBOARD_TOKEN) for endpoints that expose other users' conversations. */
   function requireReader(req, url) {
+    if (hmAuth) return hmGate(req, 'reader', url);
     if (!readToken) return;
-    const auth = String(req.headers.authorization || '');
-    const got = Buffer.from(url.searchParams.get('token') || (auth.startsWith('Bearer ') ? auth.slice(7) : ''));
-    const want = Buffer.from(readToken);
-    if (got.length !== want.length || !timingSafeEqual(got, want)) throw new HttpError(401, 'operator token required');
+    if (!tokenOk(req, readToken, url)) throw new HttpError(401, 'operator token required');
   }
 
   /** Instance management writes to the knowDrive store: KNOWBOT_ADMIN_TOKEN, or loopback only when none is set. */
   function requireAdmin(req) {
+    if (hmAuth) return hmGate(req, 'admin');
     if (!adminToken) {
       const ip = req.socket.remoteAddress || '';
       if (/^(?:127\.|::1$|::ffff:127\.)/.test(ip) && !req.headers['x-forwarded-for']) return;
       throw new HttpError(403, 'instance management is disabled: set KNOWBOT_ADMIN_TOKEN on the server');
     }
-    const auth = String(req.headers.authorization || '');
-    const got = Buffer.from(auth.startsWith('Bearer ') ? auth.slice(7) : '');
-    const want = Buffer.from(adminToken);
-    if (got.length !== want.length || !timingSafeEqual(got, want)) throw new HttpError(401, 'admin token required');
+    if (!tokenOk(req, adminToken)) throw new HttpError(401, 'admin token required');
+  }
+
+  /**
+   * The gates with KNOWBOT_AUTH_* set: a host-manager FAT granting `need` (knowbot:*:admin, or :read for reader),
+   * else the admin token (admin) or the dashboard token (reader). No loopback bypass, no open reader.
+   */
+  function hmGate(req, need, url) {
+    const v = hmAuth.verify(req);
+    const write = req.method !== 'GET' && req.method !== 'HEAD';
+    const p = new URL(req.url, 'http://localhost').pathname; // as handle() routes it
+    if (v?.ok && v[need]) {
+      if (write) sameOriginWrite(req, p);
+      req.knowbotAuth = { sub: v.sub, exp: v.exp };
+      if (write) log(`[auth] ${req.method} ${p} by ${v.sub}`);
+      return;
+    }
+    if (v) log(`[auth] denied ${v.sub || '-'} ${v.ok ? `no ${need} grant${v.why ? ` (${v.why})` : ''}` : v.why}`);
+    if (v?.ok) throw new HttpError(403, `this sign-in does not grant KnowBot ${need} access`);
+    const token = need === 'admin' ? adminToken : readToken;
+    if (token && tokenOk(req, token, need === 'reader' ? url : null)) { if (write) log(`[auth] ${req.method} ${p} by admin-token`); return; }
+    throw new HttpError(401, need === 'admin' ? 'sign in through host-manager, or send the admin token' : 'sign in through host-manager, or send the operator token',
+      undefined, { 'www-authenticate': 'Bearer realm="knowbot"' });
+  }
+
+  /**
+   * A FAT rides on the owner's host-manager cookie, which every page on 127.0.0.1 (any port: same site) can make the
+   * browser send. So a write admitted by a FAT must come from host-manager's own origin, as JSON (or a raw upload named
+   * in X-Filename): both force a CORS preflight on a cross-origin page.
+   */
+  function sameOriginWrite(req, p) {
+    const h = req.headers;
+    if (h['sec-fetch-site'] && !['same-origin', 'none'].includes(h['sec-fetch-site'])) throw new HttpError(403, 'cross-site request refused');
+    let from = h.origin;
+    if (from === undefined && h.referer) { try { from = new URL(h.referer).origin; } catch { from = 'null'; } }
+    if (from !== undefined && from !== hmAuth.origin) throw new HttpError(403, 'cross-origin request refused');
+    if (req.method === 'POST' && UPLOAD_PATH.test(p)) {
+      if (!h['x-filename']) throw new HttpError(400, 'name the file in X-Filename');
+    } else if ((Number(h['content-length']) > 0 || h['transfer-encoding']) && String(h['content-type'] || '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+      throw new HttpError(415, 'send the body as application/json');
+    }
   }
 
   /** Raw upload body (one file per request), capped below the Cloudflare request limit. */
@@ -426,9 +529,10 @@ export function createKnowBotServer(opts = {}) {
         if (!fileId && m === 'GET') return send(res, 200, { files: await registry.listFiles(id) });
         if (!fileId && m === 'POST') {
           registry.bucket(id); // 404 before reading a large body
-          const name = decodeURIComponent(String(req.headers['x-filename'] || url.searchParams.get('name') || ''));
+          const name = decodeURIComponent(String(req.headers['x-filename'] || (req.knowbotAuth ? '' : url.searchParams.get('name')) || ''));
           const bytes = await readRaw(req, MAX_UPLOAD_BYTES);
-          return send(res, 201, await registry.upload(id, name, String(req.headers['content-type'] || '').split(';')[0].trim(), bytes));
+          // through host-manager (60 s request cut) a retry must not ingest the same file twice: 409 if it is there
+          return send(res, 201, await registry.upload(id, name, String(req.headers['content-type'] || '').split(';')[0].trim(), bytes, { once: !!req.knowbotAuth }));
         }
         if (fileId && m === 'DELETE') return send(res, 200, await registry.deleteFile(id, fileId));
         if (fileId && !parts4 && m === 'PATCH') return send(res, 200, await registry.moveFile(id, fileId, (await readJson(req)).folders));
@@ -481,6 +585,15 @@ export function createKnowBotServer(opts = {}) {
   }
 
   // ------------------------------------------------------------ static
+  /** Is this root-relative path (split in segments) inside the web root? '' is the root itself. */
+  function staticAllowed(segs) {
+    const [top] = segs;
+    if (segs.length === 1 && (top === '' || STATIC_FILES.has(top))) return true;
+    if (top === 'demo') return builtinBot;
+    if (top === 'corpus') return serveCorpus;
+    const rel = segs.join('/');
+    return STATIC_DIRS.has(top) && !STATIC_HIDDEN.some((h) => rel === h || rel.startsWith(`${h}/`));
+  }
   async function serveStatic(req, res, pathname) {
     let rel;
     try { rel = decodeURIComponent(pathname); } catch { throw new HttpError(400, 'bad path encoding'); }
@@ -489,19 +602,21 @@ export function createKnowBotServer(opts = {}) {
     const relToRoot = path.relative(root, abs);
     if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) throw new HttpError(403, 'forbidden');
     const segs = relToRoot.split(path.sep);
-    if (segs.some((s) => s.startsWith('.') && s !== '.well-known') || relToRoot.startsWith(path.join('server', 'data'))) throw new HttpError(404, 'not found');
+    if (segs.some((s) => s.startsWith('.')) || !staticAllowed(segs)) throw new HttpError(404, 'not found');
     // raw ".." in the request (e.g. %2e%2e) that normalized inside root is still refused, to be explicit
     if (rel.split('/').includes('..')) throw new HttpError(403, 'forbidden');
+    // no built-in bot, so no demos: the root (index.html redirects to demo/) opens the Studio instead
+    if (!builtinBot && (relToRoot === '' || relToRoot === 'index.html')) { res.writeHead(302, { location: './studio/' }); res.end(); return; }
 
     let file = abs, st;
     try { st = await fsp.stat(file); } catch { throw new HttpError(404, 'not found'); }
     if (st.isDirectory()) {
-      if (!pathname.endsWith('/')) { res.writeHead(301, { location: pathname + '/' }); res.end(); return; }
+      if (!pathname.endsWith('/')) { res.writeHead(301, { location: path.posix.basename(pathname) + '/' }); res.end(); return; } // relative: stays under a proxy prefix
       file = path.join(abs, 'index.html');
       try { st = await fsp.stat(file); } catch { throw new HttpError(404, 'not found'); }
     }
-    if (!st.isFile()) throw new HttpError(404, 'not found');
-    const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+    const type = MIME[path.extname(file).toLowerCase()];
+    if (!st.isFile() || !type) throw new HttpError(404, 'not found');
     const etag = `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
     if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag }); res.end(); return; }
     res.writeHead(200, { 'content-type': type, 'content-length': st.size, etag, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
@@ -519,6 +634,13 @@ export function createKnowBotServer(opts = {}) {
       res.writeHead(204, { 'access-control-max-age': '86400' });
       res.end();
       return;
+    }
+
+    // Through host-manager (it sets X-Kdex-Forwarded; a FAT only ever arrives that way): the dashboard and its API only,
+    // under a CSP, since these pages run on host-manager's origin. The header only ever restricts, so forging it gains nothing.
+    if (hmAuth && (req.headers['x-kdex-forwarded'] === 'true' || hmAuth.looksLikeFat(req))) {
+      res.setHeader('content-security-policy', hmCsp);
+      if (!hmRoute(m, p)) throw new HttpError(404, `no such endpoint ${p}`);
     }
 
     if (p === '/healthz' && m === 'GET') {
@@ -542,7 +664,7 @@ export function createKnowBotServer(opts = {}) {
 
     if (isDevApiPath(p)) return devapi.handle(req, res, url, p, m); // /v1/*, /p/:id, bot keys + insights, trial devkey (server/devapi.mjs)
     if (p.startsWith('/api/studio/')) return studio.handle(req, res, url, p, m);
-    if (/^\/api\/(?:instances|buckets|graph|providers|flows)(?:\/|$)/.test(p)) return instanceRoutes(req, res, url, p, m);
+    if (INSTANCE_API.test(p)) return instanceRoutes(req, res, url, p, m);
 
     if (p.startsWith('/api/')) {
       switch (`${m} ${p}`) {
@@ -650,7 +772,10 @@ export function createKnowBotServer(opts = {}) {
           clients.add(res);
           req.socket.setKeepAlive?.(true);
           req.socket.setTimeout?.(0);
-          const drop = () => clients.delete(res);
+          // opened with a FAT: closed when it expires; EventSource reconnects through host-manager with a fresh one
+          const until = req.knowbotAuth ? setTimeout(() => { try { res.end(); } catch {} }, Math.max(0, (req.knowbotAuth.exp + LEEWAY_S) * 1000 - Date.now())) : null;
+          until?.unref?.();
+          const drop = () => { clients.delete(res); clearTimeout(until); };
           req.on('close', drop); res.on('close', drop); res.on('error', drop);
           return;
         }
@@ -690,7 +815,7 @@ export function createKnowBotServer(opts = {}) {
     // /v1 (and its /api/v1 alias): a browser client can read retry-after, the rate-limit headers and x-request-id, preflight included
     res.setHeader('access-control-expose-headers', isDevApiPath(String(req.url || '').split('?')[0]) ? DEV_EXPOSE_HEADERS : 'content-type');
     const isStream = req.url.startsWith('/api/stream') || /^\/api\/studio\/trials\/[^/]+\/(?:events|setup|ask|store)/.test(req.url);
-    const logUrl = req.url.replace(/([?&]token=)[^&]*/g, '$1***').slice(0, 200); // never log the operator token
+    const logUrl = req.url.replace(/([?&][^=&]*token=)[^&]*/gi, '$1***').slice(0, 200); // never log a token (operator token, api_token, …)
     if (isStream) log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${logUrl} SSE open`);
     res.on('finish', () => {
       log(`${new Date().toISOString()} ${clientIp(req)} ${req.method} ${logUrl} ${res.statusCode} ${Math.round(performance.now() - t0)}ms`);
@@ -700,7 +825,7 @@ export function createKnowBotServer(opts = {}) {
     } catch (e) {
       const status = e instanceof HttpError || e instanceof InstanceError || e instanceof ProviderError ? e.status : 500;
       if (status === 500) log(`[error] ${req.method} ${logUrl}: ${e.stack || e}`);
-      if (!res.headersSent) send(res, status, { error: { status, message: e.message || 'internal error', ...(e.extra || {}) } });
+      if (!res.headersSent) send(res, status, { error: { status, message: e.message || 'internal error', ...(e.extra || {}) } }, e.headers);
       else { try { res.end(); } catch {} }
     }
   });
@@ -714,7 +839,7 @@ export function createKnowBotServer(opts = {}) {
   });
 
   server.on('close', () => {
-    clearInterval(pingTimer); clearInterval(rlSweep); local.close(); studio.close(); devapi.close();
+    clearInterval(pingTimer); clearInterval(rlSweep); local.close(); studio.close(); devapi.close(); hmAuth?.close();
     for (const c of clients) { try { c.end(); } catch {} }
   });
 
@@ -727,7 +852,7 @@ export function createKnowBotServer(opts = {}) {
     return origClose(cb);
   };
 
-  return { server, retriever, registry, studio, leads, local, mode, ready: local.ready, flush: () => writeQueue, config: { root, corpusDir, dataDir, libPath, llmBase, llmModel } };
+  return { server, retriever, registry, studio, leads, local, mode, hmAuth, ready: local.ready, flush: () => writeQueue, config: { root, corpusDir, dataDir, libPath, llmBase, llmModel, builtinBot } };
 }
 
 // ------------------------------------------------------------ main
@@ -747,13 +872,15 @@ if (isMain) {
     }
   } catch { /* a bad .env never stops the server */ }
   const port = Number(process.env.PORT || 8787);
-  const host = process.env.HOST || '0.0.0.0';
   const kb = createKnowBotServer();
+  // behind host-manager (KNOWBOT_AUTH_*) KnowBot is reached through it: loopback unless HOST says otherwise
+  const host = process.env.HOST || (kb.hmAuth ? '127.0.0.1' : '0.0.0.0');
+  if (kb.hmAuth && !/^(?:127\.|::1$|localhost$)/.test(host)) console.log(`[auth] KNOWBOT_AUTH_* is on but HOST=${host}: KnowBot's own port is reachable without host-manager`);
   kb.server.listen(port, host, () => {
     const c = kb.config;
     console.log(`[knowbot] listening on http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
     console.log(`[knowbot] retrieval=${kb.mode} corpus=${c.corpusDir} llm=${c.llmBase} model=${c.llmModel}`);
-    console.log(`[knowbot] dashboard: http://localhost:${port}/dashboard/   demo: http://localhost:${port}/demo/`);
+    console.log(`[knowbot] dashboard: http://localhost:${port}/dashboard/${c.builtinBot ? `   demo: http://localhost:${port}/demo/` : ''}`);
   });
   const stop = () => { console.log('[knowbot] shutting down'); kb.server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); };
   process.on('SIGINT', stop);

@@ -178,10 +178,11 @@ async function walkMd(dir, root = dir, out = []) {
 
 export class LocalRetriever {
   /**
-   * @param {{ corpusDir: string, watch?: boolean, k1?: number, b?: number, titleBoost?: number, maxPerFile?: number, logger?: Function }} opts
+   * corpusDir null (KNOWBOT_BUILTIN_BOT=off): an empty index; nothing is read or watched.
+   * @param {{ corpusDir: string|null, watch?: boolean, k1?: number, b?: number, titleBoost?: number, maxPerFile?: number, logger?: Function }} opts
    */
   constructor({ corpusDir, watch = true, k1 = 1.2, b = 0.75, titleBoost = 2.0, maxPerFile = 2, logger = () => {} }) {
-    this.corpusDir = path.resolve(corpusDir);
+    this.corpusDir = corpusDir ? path.resolve(corpusDir) : null;
     this.k1 = k1; this.b = b; this.titleBoost = titleBoost; this.maxPerFile = maxPerFile;
     this.log = logger;
     this.docs = new Map();   // filename -> { filename, title, url, meta }
@@ -190,7 +191,7 @@ export class LocalRetriever {
     this.avgLen = 1;
     this.loadedAt = 0;
     this.ready = this.reindex();
-    if (watch) this._watch();
+    if (watch && this.corpusDir) this._watch();
   }
 
   get name() { return 'local'; }
@@ -199,6 +200,7 @@ export class LocalRetriever {
 
   async reindex() {
     const t0 = Date.now();
+    if (!this.corpusDir) return { files: 0, chunks: 0, ms: 0 };
     const files = await walkMd(this.corpusDir);
     const docs = new Map();
     const chunks = [];

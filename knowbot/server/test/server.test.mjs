@@ -7,6 +7,7 @@ import os from 'node:os';
 import { promises as fsp, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
+import { startFakeLLM } from './fake-llm.mjs';
 import { LocalRetriever, KnowDriveRetriever, chunkMarkdown, tokenize, parseFrontmatter } from '../retrievers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -396,11 +397,12 @@ describe('server (HTTP)', () => {
   });
 
   test('static serving + MIME types', async () => {
-    const r = await api('/SPEC.md');
+    const r = await api('/studio/samples/README.md');
     assert.equal(r.status, 200);
     assert.match(r.headers.get('content-type'), /text\/markdown/);
-    const js = await api('/server/retrievers.mjs');
+    const js = await api('/lib/knowbot.js');
     assert.match(js.headers.get('content-type'), /text\/javascript/);
+    for (const p of ['/SPEC.md', '/server/retrievers.mjs']) assert.equal((await api(p)).status, 404, `${p} is outside the web root`);
     const missing = await api('/nope.html');
     assert.equal(missing.status, 404);
     const unknownApi = await api('/api/nope');
@@ -552,5 +554,55 @@ describe('server: librarian voice on live bots (select mode)', () => {
       if (c.url) assert.ok(a.text.includes(`](${c.url})`), 'points to where it found it, with the link');
       assert.ok(a.text.includes(`“${c.title}”`), `names the document: ${a.text}`);
     } finally { await close(kb.server); await close(llm); }
+  });
+});
+
+describe('server: KNOWBOT_LLM_THINKING=off (chat_template_kwargs for LLM_BASE_URL only)', () => {
+  const NO_THINK = { enable_thinking: false };
+  async function run(env, fn) {
+    const corpusDir = await makeCorpus();
+    const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-'));
+    const llm = await startFakeLLM();
+    const kb = createKnowBotServer({ root: ROOT, corpusDir, dataDir, libPath: LIB, quiet: true, watch: false, rateLimit: 1000,
+      env: { LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-model', KNOWBOT_ANSWER_MODE: 'select', ...env } });
+    await kb.ready;
+    const port = await listen(kb.server);
+    const api = (p, body) => fetch(`http://127.0.0.1:${port}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    try { await fn({ api, calls: llm.calls }); } finally { await close(kb.server); await llm.close(); }
+  }
+  const ask = (api) => api('/api/canonical', { question: 'What is your return policy?' }).then((r) => r.json());
+  const chat = async (api, extra) => {
+    const r = await api('/api/chat', { messages: [{ role: 'user', content: 'hi' }], ...extra });
+    assert.equal(r.status, 200); await r.text();
+  };
+
+  test('off: the select step (max_tokens 24/80) and the /api/chat relay carry enable_thinking:false; a browser cannot turn it back on', { skip: !existsSync(LIB) && 'lib/knowbot.js not present' }, async () => {
+    await run({ KNOWBOT_LLM_THINKING: 'off' }, async ({ api, calls }) => {
+      const a = await ask(api);
+      assert.equal(a.refused, false, a.text);
+      assert.ok(calls.some((c) => c.max_tokens <= 80), `a select call (max_tokens ${calls.map((c) => c.max_tokens)})`);
+      await chat(api, { stream: true, chat_template_kwargs: { enable_thinking: true } });
+      assert.ok(calls.length >= 2);
+      for (const c of calls) assert.deepEqual(c.chat_template_kwargs, NO_THINK);
+    });
+  });
+
+  test('off: generate mode carries it too', { skip: !existsSync(LIB) && 'lib/knowbot.js not present' }, async () => {
+    await run({ KNOWBOT_LLM_THINKING: 'OFF', KNOWBOT_ANSWER_MODE: 'generate' }, async ({ api, calls }) => {
+      await ask(api);
+      assert.ok(calls.length >= 1 && calls.every((c) => c.max_tokens > 80), `generate calls (max_tokens ${calls.map((c) => c.max_tokens)})`);
+      for (const c of calls) assert.deepEqual(c.chat_template_kwargs, NO_THINK);
+    });
+  });
+
+  test('default (unset) and any other value: no chat_template_kwargs, and the relay still drops a client-sent one', { skip: !existsSync(LIB) && 'lib/knowbot.js not present' }, async () => {
+    for (const env of [{}, { KNOWBOT_LLM_THINKING: 'on' }]) {
+      await run(env, async ({ api, calls }) => {
+        await ask(api);
+        await chat(api, { chat_template_kwargs: { enable_thinking: false } });
+        assert.ok(calls.length >= 2);
+        for (const c of calls) assert.equal('chat_template_kwargs' in c, false, JSON.stringify(env));
+      });
+    }
   });
 });

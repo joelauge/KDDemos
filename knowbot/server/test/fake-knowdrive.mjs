@@ -299,14 +299,15 @@ const FIXTURE_UGM = Object.freeze({
 // ------------------------------------------------------------------ server
 /**
  * @param {{ speed?: number, fixtures?: Array<{path, text, tags, store?}>, latencyMs?: number, chunker?: 'blocks'|'production' }} [o]
- * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, settle: () => Promise<void> }>}
+ * @returns {Promise<{ url: string, port: number, calls: object[], files: Map, close: () => Promise<void>, failNext: object, slow: object, settle: () => Promise<void> }>}
  */
 export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs = 0, host = '127.0.0.1', queueStaggerMs = 0, honorScope = false, narrowRows = 3, narrowScope = 'all', chunker = 'blocks', progressOverride } = {}) {
   speed = Math.max(0.01, Number(speed) || 1);
   const files = new Map();
   const calls = [];
   const timers = new Set();
-  const failNext = { search: 0, ingest: 0, list: 0 };
+  const failNext = { search: 0, ingest: 0, list: 0, paths: {} }; // paths: store path → how many reads of it fail (503)
+  const slow = { ingest: 0 }; // ms an ingest waits, once parsed, before it is stored (an upload still in flight)
   let seq = 0;
   const later = (ms, fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, Math.max(0, ms / speed)); timers.add(t); };
 
@@ -484,6 +485,8 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
             items.push({ path: name, bytes: Buffer.from(String(v), 'utf8'), type: 'text/plain', stray: true });
           }
           if (!items.some((x) => !x.stray)) return err(400, 'file is required');
+          call.ingestPath = items.find((x) => !x.stray).path; // known (and counted) while a slow ingest is still waiting
+          if (slow.ingest) await new Promise((r) => setTimeout(r, slow.ingest));
           const out = [];
           for (const it of items) {
             const m0 = it.stray ? 'text/plain' : String(mime || it.type || 'application/octet-stream');
@@ -535,6 +538,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
         if ((m = /^\/api\/v1\/vector_stores\/([^/]+)\/path\/content\/(.+)$/.exec(p)) && req.method === 'GET') {
           const store = decodeURIComponent(m[1]);
           const path = m[2].split('/').map(decodeURIComponent).join('/');
+          if (failNext.paths[path] > 0) { failNext.paths[path]--; return err(503, 'read failed (injected)'); }
           const f = [...files.values()].find((x) => x.store === store && x.filename === path);
           if (!f) return err(404, 'not found');
           res.writeHead(200, { 'content-type': f.mime_type || 'application/octet-stream' });
@@ -596,7 +600,7 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   await new Promise((r) => srv.listen(0, host, r));
   const port = srv.address().port;
   return {
-    url: `http://${host}:${port}`, port, calls, files, failNext,
+    url: `http://${host}:${port}`, port, calls, files, failNext, slow,
     /** Pins the store record's `progress` block (undefined = derive it from the files). */
     setProgress(v) { progressOverride = v; },
     /** Adds a delay to every request from now on (slow-store tests). */

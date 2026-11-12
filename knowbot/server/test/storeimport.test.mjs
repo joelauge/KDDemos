@@ -5,7 +5,8 @@ import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import zlib from 'node:zlib';
-import { importStore, detectPlatform, createStoreFetcher, isBlockedAddress, normalizeStoreUrl, parseRobots, robotsAllows, buildMarkdownFiles, renderMarkdown,
+import os from 'node:os';
+import { importStore, detectPlatform, createStoreFetcher, isBlockedAddress, importAllows, parseImportAllow, normalizeStoreUrl, parseRobots, robotsAllows, buildMarkdownFiles, renderMarkdown,
   htmlToText, readPageHtml, readProductHtml, registrableDomain, StoreImportError, USER_AGENT, FILE_OVERHEAD, convertShortcodes, stripBoilerplate, retryAfterMs, LIMITS } from '../storeimport.mjs';
 import { atomizeProduction } from './fake-knowdrive.mjs';
 
@@ -607,6 +608,120 @@ describe('SSRF safety', () => {
     assert.equal(createStoreFetcher({ concurrency: 50 }).config.concurrency, 4);
     assert.equal(LIMITS.maxProducts, 10000);
     assert.equal(LIMITS.budgetMs, 20 * 60000);
+  });
+});
+// KNOWBOT_IMPORT_ALLOW: listed intranet addresses are admitted; nothing else changes.
+describe('intranet allow-list (KNOWBOT_IMPORT_ALLOW)', () => {
+  const ALLOW = '10.1.0.0/16, 192.168.7.0/24, fd12:3456::/32, wiki, .corp.example, 127.0.0.0/8, 169.254.0.0/16, ::1, fd00:ec2::/32, 100.64.0.0/10';
+  test('parse: CIDRs, addresses, host names and .suffix names; anything else is reported, never guessed', () => {
+    const a = parseImportAllow('10.1.0.0/16, 192.168.7.9 ,fd12::/16, Wiki, .Corp.Example, 10.0.0.0/33, http://x/, bad host, ');
+    assert.equal(a.v4.length, 2); assert.equal(a.v6.length, 1);
+    assert.deepEqual([...a.hosts], ['wiki']); assert.deepEqual(a.suffixes, ['.corp.example']);
+    assert.deepEqual(a.bad.map((x) => x.trim()), ['10.0.0.0/33', 'http://x/', 'bad host']);
+  });
+  test('admits listed private ranges only; loopback, link-local and metadata stay blocked even when listed', () => {
+    const a = parseImportAllow(ALLOW);
+    for (const ip of ['10.1.2.3', '10.1.255.254', '192.168.7.20', 'fd12:3456::8', '100.64.1.1']) assert.equal(importAllows(a, ip), true, ip);
+    for (const ip of ['10.2.0.1', '192.168.8.1', '172.16.0.1', 'fd99::1', // private but unlisted
+      '127.0.0.1', '169.254.169.254', '169.254.1.1', '::1', 'fd00:ec2::254', '100.100.100.200', '0.0.0.0', 'fe80::1', '224.0.0.1', // never
+      '::ffff:10.1.2.3', '::ffff:127.0.0.1', '64:ff9b::a01:203', '2002:a01:203::']) assert.equal(importAllows(a, ip), false, ip); // wrappers
+    // a listed host name admits its private addresses (any admittable range), never loopback or metadata
+    assert.equal(importAllows(a, '172.20.0.5', 'wiki'), true);
+    assert.equal(importAllows(a, '172.20.0.5', 'docs.corp.example'), true);
+    assert.equal(importAllows(a, '172.20.0.5', 'corp.example.evil'), false);
+    for (const ip of ['127.0.0.1', '169.254.169.254', '::1']) assert.equal(importAllows(a, ip, 'wiki'), false, ip);
+    assert.equal(importAllows(null, '10.1.2.3'), false, 'unset: nothing is admitted');
+    // the defaults are unchanged: the allow-list is not consulted when it is not set
+    assert.equal(isBlockedAddress('10.1.2.3'), true);
+  });
+  test('the fetcher: an allowed CIDR passes the address check, an unlisted private one and metadata are refused', async () => {
+    const addr = { 'ok.corp.test': '10.1.2.3', 'other.corp.test': '10.9.9.9', 'meta.corp.test': '169.254.169.254', 'lo.corp.test': '127.0.0.1', wiki: '10.1.2.3', intranet: '10.1.2.3' };
+    // nothing is dialled: each fetcher aborts once its address is resolved, so a passed check reads 'aborted' (the next
+    // step) and a refused one 'blocked_host' (the LAN end-to-end tests below do dial)
+    const check = async (url, allow, site) => {
+      const ac = new AbortController();
+      const f = createStoreFetcher({ resolve: async (h) => { ac.abort(); return [{ address: addr[h] || '93.184.216.34', family: 4 }]; }, paceMs: 0, allow, signal: ac.signal });
+      f.allowSite(site);
+      return f.fetch(url).then(() => 'fetched', (e) => e.code);
+    };
+    assert.equal(await check('http://ok.corp.test/', ALLOW, 'corp.test'), 'aborted');
+    for (const h of ['other', 'meta', 'lo']) assert.equal(await check(`http://${h}.corp.test/`, ALLOW, 'corp.test'), 'blocked_host', h);
+    // without the allow-list the same address is refused
+    assert.equal(await check('http://ok.corp.test/', '', 'corp.test'), 'blocked_host');
+    // a listed single-label host passes the internal-name check; an unlisted one does not
+    assert.equal(await check('http://wiki/', ALLOW, 'wiki'), 'aborted');
+    assert.equal(await check('http://intranet/', ALLOW, 'intranet'), 'blocked_host');
+  });
+  test('only an intranet start admits listed addresses: a public site cannot redirect, link or resolve into them', async () => {
+    const inner = await site({ '/': { body: 'intranet secret page' } });
+    const port = new URL(inner.base).port;
+    // shop.evil.test stands in for a public site (127.0.0.2, admitted as public through allowAddresses); the others
+    // resolve into the listed 10.1.0.0/16
+    const addr = { 'shop.evil.test': '127.0.0.2', 'intra.evil.test': '10.1.2.3', 'wiki.corp.test': '10.1.2.3' };
+    const resolve = async (h) => [{ address: addr[h] || '93.184.216.34', family: 4 }];
+    const net = { allowAddresses: ['127.0.0.2'], allowPorts: 'any', paceMs: 0, resolve, allow: ALLOW };
+    const store = await site({ '/': { status: 302, headers: { location: `http://wiki.corp.test:${port}/` }, body: '' } }, { host: '127.0.0.2' });
+    const { error } = await run(`http://shop.evil.test:${new URL(store.base).port}/`, { net });
+    assert.equal(error?.code, 'blocked_host', 'redirect from a public start into a listed range');
+    assert.equal(error.address, '10.1.2.3');
+    // a same-site name whose DNS the site owner points into the listed range
+    const pub = await site({ '/': { body: 'ok' } }, { host: '127.0.0.2' });
+    const f = createStoreFetcher(net);
+    f.allowSite('evil.test');
+    assert.equal((await f.fetch(`http://shop.evil.test:${new URL(pub.base).port}/`)).status, 200);
+    await assert.rejects(f.fetch(`http://intra.evil.test:${port}/`), { code: 'blocked_host', address: '10.1.2.3' });
+    // the start decides even when a second host is resolved at the same time
+    const g = createStoreFetcher(net);
+    g.allowSite('evil.test');
+    const [a, b] = await Promise.allSettled([g.fetch(`http://shop.evil.test:${new URL(pub.base).port}/`), g.fetch(`http://intra.evil.test:${port}/`)]);
+    assert.equal(a.status, 'fulfilled');
+    assert.equal(b.reason?.code, 'blocked_host');
+    assert.equal(inner.log.length, 0, 'the intranet server was never contacted');
+    // an intranet start admits other listed hosts too (nothing dialled: aborted once the second address is resolved)
+    const ac = new AbortController();
+    let n = 0;
+    const h = createStoreFetcher({ ...net, resolve: async (x) => { if (++n === 2) ac.abort(); return resolve(x); }, signal: ac.signal });
+    h.allowSite('corp.test'); h.allowSite('evil.test');
+    const first = h.fetch(`http://wiki.corp.test:${port}/`).then(() => 'fetched', (e) => e.code);
+    assert.equal(await h.fetch(`http://intra.evil.test:${port}/`).then(() => 'fetched', (e) => e.code), 'aborted');
+    await first;
+  });
+  test('redirects into an unlisted private range, loopback or metadata are refused on the hop; DNS is checked once per host', async () => {
+    const inner = await site({ '/': { body: 'internal admin' } });
+    const port = new URL(inner.base).port;
+    let lookups = 0;
+    const addr = { 'shop.corp.test': '127.0.0.2', 'other.corp.test': '10.9.9.9', 'meta.corp.test': '169.254.169.254', 'lo.corp.test': '127.0.0.1' };
+    const resolve = async (h) => { lookups++; return [{ address: addr[h] || '93.184.216.34', family: 4 }]; };
+    for (const target of ['other', 'meta', 'lo']) {
+      const store = await site({ '/': { status: 302, headers: { location: `http://${target}.corp.test:${port}/` }, body: '' } }, { host: '127.0.0.2' });
+      const { error } = await run(`http://shop.corp.test:${new URL(store.base).port}/`, { net: { allowAddresses: ['127.0.0.2'], allowPorts: 'any', paceMs: 0, resolve, allow: ALLOW } });
+      assert.equal(error?.code, 'blocked_host', target);
+      assert.equal(error.address, addr[`${target}.corp.test`], target);
+    }
+    assert.equal(inner.log.length, 0, 'the internal server was never contacted');
+    // one fetcher resolves a host once and dials that checked address: a second answer (rebinding) is never used
+    lookups = 0;
+    const flip = async () => (lookups++ ? [{ address: '127.0.0.1', family: 4 }] : [{ address: '127.0.0.2', family: 4 }]);
+    const t = await site({ '/': { body: 'ok' } }, { host: '127.0.0.2' });
+    const f = createStoreFetcher({ allowAddresses: ['127.0.0.2'], allowPorts: 'any', paceMs: 0, resolve: flip, allow: ALLOW });
+    f.allowSite('shop.corp.test');
+    for (let i = 0; i < 3; i++) assert.equal((await f.fetch(`http://shop.corp.test:${new URL(t.base).port}/`)).status, 200);
+    assert.equal(lookups, 1);
+  });
+  // a real import from a server on this machine's own private (RFC 1918) address, when it has one
+  const lan = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal && /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(i.address))?.address;
+  test('end to end: an intranet site on a listed private address imports; unlisted it is refused', { skip: !lan && 'no private IPv4 interface' }, async () => {
+    const intranet = await site({ '/': { body: html('Staff', '<h1>Staff</h1><p><a href="/help/holidays">Holidays</a></p>') },
+      '/help/holidays': { body: html('Holidays', '<h1>Holidays</h1><p>Holiday requests go to the office manager two weeks ahead.</p>') } }, { host: lan });
+    const url = `http://handbook.intranet.example:${new URL(intranet.base).port}/`;
+    const net = { allowPorts: 'any', paceMs: 0, resolve: async () => [{ address: lan, family: 4 }] };
+    assert.equal((await run(url, { net })).error?.code, 'blocked_host', 'unlisted: refused');
+    assert.equal(intranet.log.length, 0);
+    const { r, error } = await run(url, { net: { ...net, allow: `${lan}/32` } });
+    assert.equal(error, undefined, error?.message);
+    assert.ok(r.files.some((x) => text(x).includes('two weeks ahead')), 'the page was read');
+    // the same host name listed (it ends in .example, not an internal suffix) works too
+    assert.equal((await run(url, { net: { ...net, allow: 'handbook.intranet.example' } })).error, undefined);
   });
 });
 describe('robots.txt', () => {

@@ -4,7 +4,7 @@
 // Server values are written with textContent only (via h()). The admin token lives in localStorage and is sent
 // only as an Authorization header: never logged, never put in a URL.
 
-const TOKEN_KEY = 'knowbot-admin-token';
+const TOKEN_KEY = 'knowbot-admin-token'; // the Studio reads it too (studio/api.js ownerHeaders)
 const MAX_BYTES = 95 * 1024 * 1024; // server MAX_UPLOAD_BYTES (Cloudflare request bodies stop at 100 MB)
 const CONCURRENCY = 2;
 const POLL_MS = 4000;

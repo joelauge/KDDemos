@@ -37,6 +37,20 @@ const trialPath = (suffix = '') => {
   return `/api/studio/trials/${encodeURIComponent(id)}${suffix}`;
 };
 const authHeaders = () => (T().token ? { authorization: `Bearer ${T().token}` } : {});
+/** Owner mode (KNOWBOT_MODE=owner on the server): the bots are the owner's; nothing to launch, price or buy. */
+export const isOwnerMode = () => getState().config?.mode === 'owner';
+/**
+ * Owner mode: only the server's owner creates bots, with the dashboard's admin token when this browser has one. Sent only
+ * to this page's own origin, never to an API a ?api= link names. The key is the dashboard's TOKEN_KEY (dashboard/bots.js).
+ */
+function ownerHeaders() {
+  if (!isOwnerMode()) return {};
+  try {
+    if (BASE && new URL(BASE, location.href).origin !== location.origin) return {};
+    const t = localStorage.getItem('knowbot-admin-token');
+    return t ? { authorization: `Bearer ${t}` } : {};
+  } catch { return {}; }
+}
 
 function retryAfterOf(res, body) {
   const h = res && res.headers && res.headers.get('retry-after');
@@ -70,8 +84,8 @@ function netError(err, signal) {
   return new ApiError("Couldn't reach the studio", { status: 0, code: 'network', detail: String(err && err.message || err) });
 }
 
-async function request(method, path, { body, trial = true, signal, root = false, raw = false } = {}) {
-  const headers = { ...(trial ? authHeaders() : {}) };
+async function request(method, path, { body, trial = true, signal, root = false, raw = false, headers: extra = {} } = {}) {
+  const headers = { ...(trial ? authHeaders() : {}), ...extra };
   let payload;
   if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
   let res;
@@ -238,7 +252,7 @@ export async function createTrial() {
   const prev = T();
   setState({ trial: { ...prev, status: 'creating' } }, 'trial:creating');
   let r;
-  try { r = await request('POST', '/api/studio/trials', { trial: false, body: {} }); }
+  try { r = await request('POST', '/api/studio/trials', { trial: false, body: {}, headers: ownerHeaders() }); }
   catch (err) { setState({ trial: { ...T(), status: 'error' } }, 'trial:error'); throw err; }
   const s = getState();
   setState({

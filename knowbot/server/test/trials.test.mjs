@@ -2589,3 +2589,202 @@ describe('answer failures say where they happened (step + reference); past the s
     });
   }
 });
+
+// ---------------------------------------------------------------------------------------------- owner mode
+describe('owner mode (KNOWBOT_MODE=owner): permanent bots, nothing sold, a configurable public origin', () => {
+  let O, P, D, co, cd;
+  const admin = (ip) => ({ authorization: 'Bearer dev-admin', 'x-forwarded-for': ip || nextIp() });
+  async function ownerBot(S) {
+    const r = await S.api('/api/studio/trials', { method: 'POST', headers: admin() });
+    assert.equal(r.status, 201);
+    return { ...(await r.json()), ip: nextIp() };
+  }
+  before(async () => {
+    O = await boot({ env: { KNOWBOT_MODE: 'owner' } });
+    P = await boot({ env: { KNOWBOT_MODE: 'owner', KNOWBOT_PUBLIC_ORIGIN: 'https://box.example/' } });
+    D = await boot();
+    co = client(O); cd = client(D);
+  });
+  after(async () => { await O.close(); await P.close(); await D.close(); });
+
+  test('config: no price, anchors or trial length in owner mode; the default config is unchanged', async () => {
+    const o = await (await O.api('/api/studio/config')).json();
+    assert.equal(o.mode, 'owner');
+    assert.equal(o.price, null);
+    assert.equal(o.anchors, null);
+    assert.equal(o.quota.ttlDays, null);
+    assert.equal(o.publicOrigin, undefined);
+    assert.equal((await (await P.api('/api/studio/config')).json()).publicOrigin, 'https://box.example');
+    const d = await (await D.api('/api/studio/config')).json();
+    assert.equal(d.mode, undefined);
+    assert.equal(d.publicOrigin, undefined);
+    assert.equal(d.price.amount, 549);
+    assert.equal(d.quota.ttlDays, 7);
+    assert.ok(d.anchors.items.length > 0);
+  });
+
+  test('only the owner creates bots; the default still creates anonymous trials', async () => {
+    const anon = await O.api('/api/studio/trials', { method: 'POST', headers: { 'x-forwarded-for': nextIp() } });
+    assert.equal(anon.status, 401);
+    const wrong = await O.api('/api/studio/trials', { method: 'POST', headers: { authorization: 'Bearer nope', 'x-forwarded-for': nextIp() } });
+    assert.equal(wrong.status, 401);
+    const t = await ownerBot(O);
+    assert.match(t.trialId, /^tr_[a-z2-7]{16}$/);
+    assert.equal(t.expiresAt, null, 'no expiry shown');
+    assert.match(t.restoreKey, /^[\w-]+\.[\w-]+$/);
+    // a share link still reopens the bot, without the admin token
+    const re = await O.api('/api/studio/trials', { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': nextIp() }, body: JSON.stringify({ trialId: t.trialId, restoreKey: t.restoreKey }) });
+    assert.equal(re.status, 200);
+    assert.equal((await re.json()).expiresAt, null);
+    const d = await cd.trial();
+    assert.ok(Date.parse(d.expiresAt) - Date.now() > 6.9 * DAY, 'the default trial still expires in 7 days');
+    // no admin token (the box's loopback default): only a direct loopback request creates a bot
+    const Q = await boot({ env: { KNOWBOT_MODE: 'owner', KNOWBOT_ADMIN_TOKEN: '' } });
+    try {
+      assert.equal((await Q.api('/api/studio/trials', { method: 'POST' })).status, 201);
+      const proxied = await Q.api('/api/studio/trials', { method: 'POST', headers: { 'x-forwarded-for': nextIp() } });
+      assert.equal(proxied.status, 403);
+      assert.match((await proxied.json()).error.message, /Only the owner of this server can create bots/);
+      // the Studio the box serves sends its own loopback Origin; a web page from elsewhere, a rebound DNS name or a proxy's
+      // other forwarding headers do not get in
+      const post = (headers) => Q.api('/api/studio/trials', { method: 'POST', headers });
+      assert.equal((await post({ origin: Q.base })).status, 201, 'the Studio on the box');
+      assert.equal((await post({ origin: 'http://localhost:8787' })).status, 201);
+      for (const h of [{ origin: 'https://evil.example' }, { origin: 'null' }, { 'x-real-ip': '203.0.113.9' }, { forwarded: 'for=203.0.113.9' }]) assert.equal((await post(h)).status, 403, JSON.stringify(h));
+      const rebound = await new Promise((resolve, reject) => {
+        const rq = http.request(`${Q.base}/api/studio/trials`, { method: 'POST', headers: { host: `rebind.evil.example:${new URL(Q.base).port}`, origin: `http://rebind.evil.example:${new URL(Q.base).port}` } }, (res) => { res.resume(); resolve(res.statusCode); });
+        rq.on('error', reject); rq.end();
+      });
+      assert.equal(rebound, 403, 'DNS rebinding: a foreign Host');
+    } finally { await Q.close(); }
+  });
+
+  test('bots never expire and the sweeper deletes nothing', async () => {
+    const t = await ownerBot(O);
+    const up = await co.upload(t, 'handbook.md', Buffer.from('# Handbook\n\nThe office opens at 9.\n'));
+    assert.equal(up.status, 201);
+    const row = [...O.kd.files.values()].find((f) => (f.tags || []).includes(`trial:${t.trialId}`) && f.filename.endsWith('handbook.md'));
+    assert.ok(row.tags.includes('expires:99991231'), row.tags.join(','));
+    // a trial file left by the cloud funnel, long expired: the owner's server never sweeps it either
+    const old = O.kd.add({ store: 'vs_fake_trials', path: 'knowbot/trials/tr_aaaaaaaaaaaaaaaa/x.md', text: 'old', tags: ['knowbot', 'kind:trial', 'trial:tr_aaaaaaaaaaaaaaaa', 'expires:20000101'] });
+    O.clock.skew = 3650 * DAY;
+    try {
+      const g = await O.api(`/api/studio/trials/${t.trialId}`, { headers: co.h(t) });
+      assert.equal(g.status, 200, 'ten years on, the bot still opens');
+      assert.equal((await g.json()).expiresAt, null);
+      const deletes = O.kd.calls.filter((x) => x.method === 'DELETE').length;
+      assert.deepEqual(await O.kb.studio.sweep(), { deleted: 0, scanned: 0 });
+      assert.equal(O.kd.calls.filter((x) => x.method === 'DELETE').length, deletes);
+      assert.ok(O.kd.files.has(row.id) && O.kd.files.has(old.id));
+    } finally { O.clock.skew = 0; }
+    const dk = await (await O.api(`/api/studio/trials/${t.trialId}/devkey`, { headers: co.h(t) })).json();
+    assert.equal(dk.expiresAt, null);
+    assert.match(dk.key, /^kb_trial_/);
+  });
+
+  test('checkout, KnowBot numbers and the payments webhook are refused', async () => {
+    const t = await ownerBot(O);
+    const json = co.h(t, null, { 'content-type': 'application/json' });
+    for (const [p, method] of [['/checkout', 'POST'], ['/number', 'GET'], ['/number/search?areaCode=415', 'GET'], ['/number/checkout', 'POST'], ['/number/topup', 'POST']]) {
+      const r = await O.api(`/api/studio/trials/${t.trialId}${p}`, { method, headers: json, body: method === 'POST' ? '{}' : undefined });
+      assert.equal(r.status, 403, p);
+      assert.equal((await r.json()).error.code, 'owner_mode', p);
+    }
+    const wh = await O.api('/api/studio/numbers/webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': 't=1,v1=x' }, body: '{}' });
+    assert.equal(wh.status, 403);
+    // the default server still sells
+    const d = await cd.trial();
+    const r = await D.api(`/api/studio/trials/${d.trialId}/checkout`, { method: 'POST', headers: cd.h(d, null, { 'content-type': 'application/json' }), body: '{}' });
+    assert.equal(r.status, 200);
+    assert.equal((await D.api(`/api/studio/trials/${d.trialId}/number`, { headers: cd.h(d) })).status, 200);
+  });
+
+  test('the Builder never offers Launch, a price or a launch card; it points at Set up instead', async () => {
+    const t = await ownerBot(O);
+    const turn = async (body) => {
+      const ev = await co.stream(t, '/setup', body);
+      return { reply: ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), chips: ev.find((e) => e.event === 'chips')?.data.chips || [],
+        actions: ev.filter((e) => e.event === 'action').map((e) => e.data), card: ev.find((e) => e.event === 'card')?.data };
+    };
+    for (const body of [{ message: 'launch' }, { message: 'What do I get?' }, { chip: 'launch' }, { message: 'how much does it cost?' }]) {
+      const x = await turn(body);
+      assert.ok(!x.actions.some((a) => a.type === 'show_launch'), JSON.stringify(body));
+      assert.ok(!x.chips.some((c) => c.action?.type === 'show_launch' || ['launch', 'launch-anyway', 'what-get'].includes(c.id)), JSON.stringify(x.chips));
+      assert.notEqual(x.card?.type, 'launch');
+      assert.doesNotMatch(x.reply, /\$\d|per month|a month|credit card/i, x.reply);
+    }
+    const l = await turn({ message: 'launch' });
+    assert.match(l.reply, /nothing to launch or buy/);
+    assert.ok(l.chips.some((c) => c.emit?.type === 'golive:open'));
+    // the default Builder still sells the plan
+    const d = await cd.trial();
+    const ev = await cd.stream(d, '/setup', { message: 'What do I get?' });
+    assert.match(ev.filter((e) => e.event === 'delta').map((e) => e.data.text).join(''), /\$549 a month/);
+  });
+
+  test('links: KNOWBOT_PUBLIC_ORIGIN, else (owner) the host the request reached, else (default) the cloud site', async () => {
+    const link = async (S, cl, t) => (await (await cl.json(t, '/email', 'POST', { email: 'owner@example.com' })).json()).link;
+    assert.ok((await link(O, co, await ownerBot(O))).startsWith(`${O.base}/studio/?t=`));
+    const cp = client(P);
+    assert.ok((await link(P, cp, await ownerBot(P))).startsWith('https://box.example/studio/?t='));
+    assert.ok((await link(D, cd, await cd.trial())).startsWith('https://knowbot.knowdrive.ai/studio/?t='));
+  });
+
+  test('links: KNOWBOT_PUBLIC_ORIGIN wins over the loopback Origin a browser on the box sends', async () => {
+    const box = { origin: 'http://127.0.0.1:8787' };
+    const cp = client(P);
+    const t = await ownerBot(P);
+    const e = await P.api(`/api/studio/trials/${t.trialId}/email`, { method: 'POST', headers: cp.h(t, null, { 'content-type': 'application/json', ...box }), body: JSON.stringify({ email: 'owner@example.com' }) });
+    assert.ok((await e.json()).link.startsWith('https://box.example/studio/?t='));
+    const g = await (await P.api(`/api/studio/trials/${t.trialId}`, { headers: cp.h(t, null, box) })).json();
+    assert.ok(g.shareLink.startsWith('https://box.example/studio/?t='), g.shareLink);
+    const site = await (await P.api(`/api/studio/trials/${t.trialId}/site`, { headers: cp.h(t, null, box) })).json();
+    assert.equal(site.hostedUrl, `https://box.example/site/?bot=${t.trialId}`);
+    assert.match(site.snippet, /^<script src="https:\/\/box\.example\/site\/overlay\.js"/);
+    assert.doesNotMatch(site.snippet, /data-api|127\.0\.0\.1/);
+    // unset (the cloud default): a browser's Origin is still where the link points, as before
+    const d = await cd.trial();
+    const de = await D.api(`/api/studio/trials/${d.trialId}/email`, { method: 'POST', headers: cd.h(d, null, { 'content-type': 'application/json', ...box }), body: JSON.stringify({ email: 'owner@example.com' }) });
+    assert.ok((await de.json()).link.startsWith('http://127.0.0.1:8787/studio/?t='));
+  });
+
+  test('the Builder never says a bot expires', async () => {
+    const t = await ownerBot(O);
+    for (const message of ['Keep testing', 'No thanks', 'not now']) {
+      const ev = await co.stream(t, '/setup', { message });
+      const reply = ev.filter((x) => x.event === 'delta').map((x) => x.data.text).join('');
+      assert.doesNotMatch(reply, /\b\d+ days?\b/, reply);
+    }
+    const d = await cd.trial();
+    const ev = await cd.stream(d, '/setup', { message: 'Keep testing' });
+    assert.match(ev.filter((x) => x.event === 'delta').map((x) => x.data.text).join(''), /saved for 7 days/, 'the default still says how long');
+  });
+});
+
+describe('KNOWBOT_IMPORT_ALLOW reaches the Studio fetchers', () => {
+  // a page on this machine's own private (RFC 1918) address, linked from a note: refused by default, read when listed
+  const lan = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal && /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(i.address))?.address;
+  test('a note link to a listed intranet address is read; unset, it is refused', { skip: !lan && 'no private IPv4 interface' }, async () => {
+    const site = http.createServer((req, res) => {
+      if (req.url === '/robots.txt') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('User-agent: *\nAllow: /\n'); }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<!doctype html><html><head><title>Opening hours</title></head><body><main><h1>Opening hours</h1><p>The office opens at eight and closes at five on weekdays.</p></main></body></html>');
+    });
+    await new Promise((r) => site.listen(0, lan, r));
+    const link = `http://${lan}:${site.address().port}/hours`;
+    try {
+      for (const [env, ok] of [[{}, false], [{ KNOWBOT_IMPORT_ALLOW: `${lan}/32` }, true]]) {
+        const S = await boot({ env, studio: { storeNet: { allowPorts: 'any', paceMs: 0 } } });
+        try {
+          const c = client(S);
+          const t = await c.trial();
+          const r = await c.json(t, '/notes', 'POST', { question: 'When does the office open?', answer: `See ${link}.` });
+          assert.equal(r.status, 201);
+          const [l] = (await r.json()).links;
+          assert.equal(l.ok, ok, JSON.stringify({ env, l }));
+          if (!ok) assert.match(l.reason, /can't be read/);
+        } finally { await S.close(); }
+      }
+    } finally { site.closeAllConnections?.(); await new Promise((r) => site.close(r)); }
+  });
+});

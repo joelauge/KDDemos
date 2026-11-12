@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"gitlab.com/recoursellm-group/knowdrive-resolve.engine/knowdb"
 	"gitlab.com/recoursellm-group/knowdrive-resolve.engine/resolve"
 )
 
@@ -36,12 +37,13 @@ const (
 )
 
 type distanceSearcher struct {
-	base, key string // base: the REST base with /api (apiBase)
-	hc        *http.Client
+	base string // the REST base with /api (apiBase)
+	tok  knowdb.TokenSource
+	hc   *http.Client
 }
 
-func newDistanceSearcher(base, key string) *distanceSearcher {
-	return &distanceSearcher{base: strings.TrimRight(base, "/"), key: key, hc: &http.Client{Timeout: 15 * time.Second}}
+func newDistanceSearcher(base string, tok knowdb.TokenSource) *distanceSearcher {
+	return &distanceSearcher{base: strings.TrimRight(base, "/"), tok: tok, hc: &http.Client{Timeout: 15 * time.Second}}
 }
 
 type distKey struct{ file, text string }
@@ -127,12 +129,16 @@ func (d *distanceSearcher) post(ctx context.Context, p resolve.Pin) ([]distanceH
 	}
 	u := d.base + "/v1/vector_stores/" + url.PathEscape(p.VectorStoreID) + "/search"
 	call := func() ([]distanceHit, error) {
+		key, err := d.tok.Token(ctx)
+		if err != nil {
+			return nil, err
+		}
 		req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("content-type", "application/json")
-		req.Header.Set("authorization", "Bearer "+d.key)
+		req.Header.Set("authorization", "Bearer "+key)
 		res, err := d.hc.Do(req)
 		if err != nil {
 			return nil, err

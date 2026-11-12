@@ -299,6 +299,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   const pub = (p) => `${apiRoot.replace(/^https?:\/\/[^/]+/, '')}${p}`;
   const siteBase = `${location.origin}${location.pathname.replace(/\/studio(?:\/.*)?$/, '/')}`.replace(/\/?$/, '/');
   const cfg = () => getState().config || {};
+  const owner = cfg().mode === 'owner';   // owner mode (KNOWBOT_MODE=owner): no plan, price or KnowBot numbers to sell
   const dev = () => devCache.info || { status: 'loading' };
   const botId = () => dev().botId || getState().trial.id || 'tr_yourbot';
   // CONTRACT-GAP (A/F): the Google voice flag is not in GET /api/studio/config yet. Read defensively from either
@@ -334,7 +335,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     h('div', { class: 'gl-head-main' },
       h('p', { class: 'gl-eyebrow' }, h('span', { html: icon('rocket', 13) }), inline ? 'Set up' : 'Go live'),
       h('h2', { class: 'gl-title', id: titleId }, inline ? `Set up ${botName()}` : `Put ${botName()} everywhere`),
-      h('p', { class: 'gl-sub' }, inline ? 'Four tools, one plan. Switch features on and off, set each one up, and try it right here. ' : 'Four tools, one plan: same files, same citations, same refusal everywhere. ', idPill)),
+      h('p', { class: 'gl-sub' }, inline ? `Four tools${owner ? '' : ', one plan'}. Switch features on and off, set each one up, and try it right here. ` : `Four tools${owner ? '' : ', one plan'}: same files, same citations, same refusal everywhere. `, idPill)),
     xBtn);
   // the scroller: the tab strip (sticky at its top) and the panels render into it
   const body = h('div', { class: 'gl-body' });
@@ -556,7 +557,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   function buildChannels(panel) {
     panel.innerHTML = '';
     const intro = h('div', { class: 'gl-intro' },
-      h('p', null, h('b', null, 'Four tools, one plan.'), ' Every feature is included: switching one on or off never changes your price. Pick a feature to set it up and try it right here. Everything answers from the same files and shows its sources.'));
+      h('p', null, h('b', null, owner ? 'Four tools.' : 'Four tools, one plan.'), `${owner ? '' : ' Every feature is included: switching one on or off never changes your price.'} Pick a feature to set it up and try it right here. Everything answers from the same files and shows its sources.`));
     chGrid = h('div', { class: 'gl-toolgrid', role: 'list', 'aria-label': 'Tools' });
     chDetail = h('section', { class: 'card gl-chdetail', id: 'gl-chdetail', 'aria-live': 'polite' });
     const chans = CH();
@@ -582,7 +583,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         feats);
       chGrid.append(h('div', { role: 'listitem', class: 'gl-toolitem' }, card));
     });
-    panel.append(intro, chGrid, h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
+    panel.append(intro, chGrid, ...(owner ? [] : [h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.')]), chDetail);
     motion.stagger($$('.gl-tool', chGrid), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring', fill: 'backwards' }, 60);
     paintSwitches();
     paintCardStatus();
@@ -720,7 +721,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       return;
     }
     const left = h('div', { class: 'gl-cd-setup' });
-    const ownNumber = c.id === 'sms' || c.id === 'phone';
+    const ownNumber = (c.id === 'sms' || c.id === 'phone') && !owner;
     if (ownNumber) left.append(numberBlock());
     const st = chStatus(c);
     if (st.known) {
@@ -1210,8 +1211,10 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
 
   // Text chatbot: a working widget (streams deltas, [n] chips open the quoted excerpt inline).
   // ------------------------------------------------------------ Homepage search: preview, edit, publish, download
-  const siteLink = () => `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(botId())}`;
-  function overlayLine() { return `<script src="https://knowbot.knowdrive.ai/site/overlay.js" data-bot="${encodeURIComponent(botId())}" async></script>`; }
+  // the public site: KNOWBOT_PUBLIC_ORIGIN when the server sets one, this server itself in owner mode, else the cloud site
+  const siteOrigin = () => cfg().publicOrigin || (owner ? location.origin : 'https://knowbot.knowdrive.ai');
+  const siteLink = () => `${siteOrigin()}/site/?bot=${encodeURIComponent(botId())}`;
+  function overlayLine() { return `<script src="${siteOrigin()}/site/overlay.js" data-bot="${encodeURIComponent(botId())}" async></script>`; }
   function siteTry(el) {
     const t = getState().trial;
     const url = `${apiBase}/api/studio/trials/${encodeURIComponent(t.id || '')}/site`;
@@ -2057,7 +2060,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     reveal.addEventListener('click', () => { devState.reveal = !devState.reveal; repaint(); });
     el.append(
       h('div', { class: 'gl-key-row' }, h('code', { class: 'gl-mono gl-key-v' }, h('span', { class: 'co-sr' }, devState.reveal ? 'Trial key: ' : 'Trial key, hidden: '), keyFor()), reveal, copyButton(d.key, 'Copy key', { small: true, what: 'Trial key copied', aria: 'Copy key' })),
-      h('p', { class: 'gl-key-meta' }, h('span', { html: icon('shieldCheck', 13) }), `Scoped to ${botId()} only · rate-limited · ${exp ? `expires ${exp.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} with your trial` : 'expires with your trial'}. After launch you get kb_live_ keys.`));
+      h('p', { class: 'gl-key-meta' }, h('span', { html: icon('shieldCheck', 13) }), owner ? `Scoped to ${botId()} only · rate-limited.` : `Scoped to ${botId()} only · rate-limited · ${exp ? `expires ${exp.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} with your trial` : 'expires with your trial'}. After launch you get kb_live_ keys.`));
   }
 
   function snippetSet(q) {

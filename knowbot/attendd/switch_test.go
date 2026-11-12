@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gitlab.com/recoursellm-group/knowdrive-resolve.engine/knowdb"
 )
 
 // attendCall posts one question to a fresh server over the fake store and returns the decoded response, the search
@@ -38,7 +40,7 @@ func attendCall(t *testing.T, fusion, section bool) (out map[string]any, modes [
 		_, _ = io.Copy(w, res.Body)
 	}))
 	defer kd.Close()
-	s := newServer(apiBase(kd.URL), "test-key", 5*time.Second, fusion)
+	s := newServer(apiBase(kd.URL), knowdb.StaticTokenSource("test-key"), 5*time.Second, fusion)
 	s.noSection.Store(!section)
 	h := s.routes()
 	rec := httptest.NewRecorder()

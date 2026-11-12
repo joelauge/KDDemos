@@ -196,22 +196,26 @@ class LinkedRetriever {
 export class InstanceRegistry {
   /**
    * @param {{ kd?: { baseUrl: string, apiKey: string|Function, store: string } | null, dataDir: string,
-   *           builtin: object, builtinRetriever: object, defaultMinSimilarity: number, logger?: Function }} o
+   *           builtin: object|null, builtinRetriever: object, defaultMinSimilarity: number, logger?: Function }} o
+   * builtin null (KNOWBOT_BUILTIN_BOT=off): no built-in bot or bucket; the demo flow is a plain flow named "All bots & buckets".
+   * The stored built-in settings, and the bot:<id> tags of links to or from builtinId (the configured built-in id), are kept as they are.
    */
-  constructor({ kd = null, dataDir, builtin, builtinRetriever, defaultMinSimilarity = 0.7, models = [], secret = 'knowbot-local-dev', logger = () => {} }) {
+  constructor({ kd = null, dataDir, builtin, builtinId = null, builtinRetriever, defaultMinSimilarity = 0.7, models = [], secret = 'knowbot-local-dev', logger = () => {} }) {
     this.kd = kd; this.dataDir = dataDir; this.log = logger; this.models = models; this.secret = secret;
     this.providerKeys = {}; // provider id → { sealed, last4, updatedAt }
     // The built-in bot and bucket come from the server config. Only the bot's bucket links can be changed.
     // root: where knowDrive stores a bucket's uploads. Never shown; membership is the tag.
-    this.builtinBucket = { id: builtin.id, name: builtin.name, tag: builtin.tag || `knowbot:${builtin.id}`, root: builtin.folder, builtin: true };
+    this.builtinBucket = builtin ? { id: builtin.id, name: builtin.name, tag: builtin.tag || `knowbot:${builtin.id}`, root: builtin.folder, builtin: true } : null;
     this.migrated = {}; // bucket id → ISO time its files were given bucket + folder tags
     // Flows group bots and buckets into separate canvases. The built-in bot and bucket live in the demo flow.
     this.flows = new Map();
-    this.demoFlow = { id: 'demo', name: `${builtin.name} (demo)`, demo: true };
+    this.demoFlow = { id: 'demo', name: builtin ? `${builtin.name} (demo)` : 'All bots & buckets', demo: true };
     this.botTagged = {}; // "bot>bucket" → bucket tag, for every link whose files carry bot:<bot id>
     this.tagChain = Promise.resolve();
-    this.builtinBotBase = { id: builtin.id, name: builtin.name, org: builtin.org, guards: builtin.guards || 'store', builtin: true };
-    this.builtinLinks = [{ id: builtin.id, enabled: true }];
+    this.builtinBotBase = builtin ? { id: builtin.id, name: builtin.name, org: builtin.org, guards: builtin.guards || 'store', builtin: true } : null;
+    this.builtinLinks = builtin ? [{ id: builtin.id, enabled: true }] : [];
+    this.builtinDoc = undefined; // with no built-in bot: its stored settings, written back unchanged
+    this.heldId = builtin ? null : builtinId; // with no built-in bot: its id, whose bot>bucket tag pairs are left as stored
     this.builtinSettings = {}; // operator overrides for the built-in bot (model, instructions, greeting, …)
     this.builtinRetriever = builtinRetriever;
     this.defaultMinSimilarity = defaultMinSimilarity;
@@ -247,7 +251,7 @@ export class InstanceRegistry {
       buckets = doc.instances.map((x) => ({ id: x.id, name: x.name, root: x.folder, createdAt: x.createdAt, updatedAt: x.updatedAt }));
       bots = doc.instances.map(({ folder, ...x }) => ({ ...x, buckets: [{ id: x.id, enabled: true }] }));
     }
-    const builtinId = this.builtinBucket.id;
+    const builtinId = this.builtinBucket?.id;
     // v2 buckets named a folder; now a bucket is its tag, and the old folder is just where its uploads live.
     this.buckets = new Map(buckets.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map(({ folder, ...x }) => [x.id,
       { ...x, tag: x.tag || `bucket:${x.id}`, root: x.root || folder || `knowbot/${x.id}/` }]));
@@ -255,8 +259,9 @@ export class InstanceRegistry {
     this.botTagged = doc.botTagged && typeof doc.botTagged === 'object' ? doc.botTagged : {};
     this.flows = new Map((Array.isArray(doc.flows) ? doc.flows : []).filter((f) => f && ID_RE.test(f.id) && f.id !== this.demoFlow.id).map((f) => [f.id, { id: f.id, name: String(f.name || f.id).slice(0, 80), createdAt: f.createdAt }]));
     this.bots = new Map(bots.filter((x) => x && ID_RE.test(x.id) && x.id !== builtinId).map((x) => [x.id, { ...x, buckets: this.cleanLinks(x.buckets, { strict: false }) }]));
-    if (Array.isArray(doc.builtinBot?.buckets)) this.builtinLinks = this.cleanLinks(doc.builtinBot.buckets, { strict: false });
-    if (doc.builtinBot?.settings && typeof doc.builtinBot.settings === 'object') this.builtinSettings = doc.builtinBot.settings;
+    if (!this.builtinBotBase) this.builtinDoc = doc.builtinBot;
+    else if (Array.isArray(doc.builtinBot?.buckets)) this.builtinLinks = this.cleanLinks(doc.builtinBot.buckets, { strict: false });
+    if (this.builtinBotBase && doc.builtinBot?.settings && typeof doc.builtinBot.settings === 'object') this.builtinSettings = doc.builtinBot.settings;
     this.providerKeys = Object.fromEntries(Object.entries(doc.providers || {}).filter(([k, v]) => PROVIDERS[k] && v && v.sealed));
     if (this.assignFlows() && this.kd) this.save().catch((e) => this.log(`[instances] saving flows failed: ${e.message}`));
     this.log(`[instances] ${this.bots.size} bot(s), ${this.buckets.size} bucket(s) loaded`);
@@ -273,7 +278,7 @@ export class InstanceRegistry {
    */
   async migrateTags() {
     let changed = false;
-    for (const b of [this.builtinBucket, ...this.buckets.values()]) {
+    for (const b of [...(this.builtinBucket ? [this.builtinBucket] : []), ...this.buckets.values()]) {
       if (this.migrated[b.id] || !b.root) continue;
       const rows = await this.listRows({ prefix: b.root });
       const groups = new Map(); // tag set → file ids
@@ -287,7 +292,7 @@ export class InstanceRegistry {
       }
       for (const [k, ids] of groups) {
         for (let i = 0; i < ids.length; i += 500) {
-          const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json' },
+          const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json', 'x-vector-store-id': this.kd.store },
             body: JSON.stringify({ file_ids: ids.slice(i, i + 500), tags_add: k.split(',') }), timeout: 120000 });
           if (!res.ok) throw new Error(`knowDrive HTTP ${res.status} tagging files of ${b.id}`);
         }
@@ -310,13 +315,13 @@ export class InstanceRegistry {
     const find = (k) => { while (parent.get(k) !== k) { parent.set(k, parent.get(parent.get(k))); k = parent.get(k); } return k; };
     const add = (k) => { if (!parent.has(k)) parent.set(k, k); };
     const union = (a, b) => { add(a); add(b); parent.set(find(a), find(b)); };
-    const builtinKey = `bot:${this.builtinBotBase.id}`;
-    add(builtinKey); union(builtinKey, `bucket:${this.builtinBucket.id}`);
+    const builtinKey = this.builtinBotBase ? `bot:${this.builtinBotBase.id}` : null;
+    if (builtinKey) { add(builtinKey); union(builtinKey, `bucket:${this.builtinBucket.id}`); }
     for (const l of this.builtinLinks) union(builtinKey, `bucket:${l.id}`);
     for (const b of this.bots.values()) { add(`bot:${b.id}`); for (const l of b.buckets || []) union(`bot:${b.id}`, `bucket:${l.id}`); }
     for (const k of this.buckets.values()) add(`bucket:${k.id}`);
     // A group that already has a flow (some member has one) keeps it.
-    const flowOf = new Map([[find(builtinKey), this.demoFlow.id]]);
+    const flowOf = new Map(builtinKey ? [[find(builtinKey), this.demoFlow.id]] : []);
     for (const x of [...this.bots.values(), ...this.buckets.values()]) {
       if (!known(x.flow)) continue;
       const r = find(`${this.bots.get(x.id) === x ? 'bot' : 'bucket'}:${x.id}`);
@@ -389,13 +394,13 @@ export class InstanceRegistry {
     if (!this.kd) return Promise.resolve();
     this.botTagging = this.tagChain = this.tagChain.catch(() => {}).then(async () => {
       const want = new Map();
-      for (const bot of [{ id: this.builtinBotBase.id, buckets: this.builtinLinks }, ...this.bots.values()]) {
-        for (const l of bot.buckets || []) { const b = l.id === this.builtinBucket.id ? this.builtinBucket : this.buckets.get(l.id); if (b) want.set(`${bot.id}>${b.id}`, b.tag); }
+      for (const bot of this.allBots()) {
+        for (const l of bot.buckets || []) { const b = this.isBuiltinBucket(l.id) ? this.builtinBucket : this.buckets.get(l.id); if (b) want.set(`${bot.id}>${b.id}`, b.tag); }
       }
       let changed = false;
       const batch = async (ids, body) => {
         for (let i = 0; i < ids.length; i += 500) {
-          const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json' },
+          const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json', 'x-vector-store-id': this.kd.store },
             body: JSON.stringify({ file_ids: ids.slice(i, i + 500), ...body }), timeout: 120000 });
           if (!res.ok) throw new Error(`knowDrive HTTP ${res.status} tagging files`);
         }
@@ -411,7 +416,7 @@ export class InstanceRegistry {
         } catch (e) { this.log(`[instances] ${tag} on ${bucketTag} failed: ${e.message}`); }
       }
       for (const [pair, bucketTag] of Object.entries(this.botTagged)) {
-        if (want.has(pair)) continue;
+        if (want.has(pair) || (this.heldId && pair.split('>').includes(this.heldId))) continue; // no built-in bot here: not ours to untag
         const tag = botTag(pair.split('>')[0]);
         try {
           const ids = (await this.listRows({ tags_all: `${bucketTag},${tag}` })).map((r) => r.id);
@@ -442,7 +447,7 @@ export class InstanceRegistry {
   }
 
   async save() {
-    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: { buckets: this.builtinLinks, settings: this.builtinSettings }, providers: this.providerKeys, migrated: this.migrated, botTagged: this.botTagged, flows: [...this.flows.values()] }, null, 2);
+    const doc = JSON.stringify({ v: 2, buckets: [...this.buckets.values()], bots: [...this.bots.values()], builtinBot: this.builtinBotBase ? { buckets: this.builtinLinks, settings: this.builtinSettings } : this.builtinDoc, providers: this.providerKeys, migrated: this.migrated, botTagged: this.botTagged, flows: [...this.flows.values()] }, null, 2);
     this.writeChain = this.writeChain.catch(() => {}).then(async () => {
       if (!this.kd) {
         await fsp.mkdir(this.dataDir, { recursive: true });
@@ -478,7 +483,7 @@ export class InstanceRegistry {
     for (const l of links) {
       const id = String(typeof l === 'string' ? l : l?.id || '').toLowerCase();
       if (!id || seen.has(id)) continue;
-      if (id !== this.builtinBucket.id && !this.buckets.has(id)) {
+      if (!this.isBuiltinBucket(id) && !this.buckets.has(id)) {
         if (strict) throw new InstanceError(400, `no such bucket "${id}"`);
         continue;
       }
@@ -490,13 +495,17 @@ export class InstanceRegistry {
   }
 
   // ---------------------------------------------------------------- reads
-  bucketList() { return [{ ...this.builtinBucket, flow: this.demoFlow.id }, ...[...this.buckets.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BUCKET_KEYS)); }
+  isBuiltinBucket(id) { return !!this.builtinBucket && id === this.builtinBucket.id; }
+  /** The built-in bot (when there is one) and every other bot. */
+  allBots() { return [...(this.builtinBotBase ? [this.builtinBot()] : []), ...this.bots.values()]; }
+  bucketList() { return [...(this.builtinBucket ? [{ ...this.builtinBucket, flow: this.demoFlow.id }] : []), ...[...this.buckets.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BUCKET_KEYS)); }
   builtinBot() { return { ...this.builtinBotBase, ...this.builtinSettings, builtin: true, id: this.builtinBotBase.id, flow: this.demoFlow.id, buckets: this.builtinLinks }; }
-  list() { return [this.builtinBot(), ...[...this.bots.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BOT_KEYS)); }
+  list() { return [...(this.builtinBotBase ? [this.builtinBot()] : []), ...[...this.bots.values()].sort((a, b) => a.name.localeCompare(b.name))].map((x) => pick(x, BOT_KEYS)); }
 
   get(id) {
     const key = String(id || '').toLowerCase();
-    if (!key || key === this.builtinBotBase.id) return this.builtinBot();
+    if (this.builtinBotBase && (!key || key === this.builtinBotBase.id)) return this.builtinBot();
+    if (!key) throw new InstanceError(404, 'this server has no built-in bot: name a bot (instance)');
     const it = this.bots.get(key);
     if (!it) throw new InstanceError(404, `no such bot "${id}"`);
     return it;
@@ -504,7 +513,7 @@ export class InstanceRegistry {
 
   bucket(id) {
     const key = String(id || '').toLowerCase();
-    if (key === this.builtinBucket.id) return this.builtinBucket;
+    if (this.isBuiltinBucket(key)) return this.builtinBucket;
     const b = this.buckets.get(key);
     if (!b) throw new InstanceError(404, `no such bucket "${id}"`);
     return b;
@@ -538,7 +547,7 @@ export class InstanceRegistry {
   async create(body) {
     this.needWrite();
     const fields = cleanBot(body, { models: this.models });
-    const id = newId(body, fields.name, (x) => x === this.builtinBotBase.id || this.bots.has(x));
+    const id = newId(body, fields.name, (x) => x === this.builtinBotBase?.id || x === this.heldId || this.bots.has(x));
     const t = now();
     const links = this.cleanLinks(body.buckets);
     // No flow named: join the flow of the first bucket it links to, else start a flow of its own.
@@ -579,7 +588,7 @@ export class InstanceRegistry {
     this.needWrite();
     const name = cleanName(body.name);
     // The bucket IS its tag: "Access to Justice" → bucket:access-to-justice. (body.tag may name it explicitly.)
-    const id = newId({ id: body.tag ? String(body.tag).replace(/^bucket:/, '') : body.id }, name, (x) => x === this.builtinBucket.id || this.buckets.has(x));
+    const id = newId({ id: body.tag ? String(body.tag).replace(/^bucket:/, '') : body.id }, name, (x) => this.isBuiltinBucket(x) || x === this.heldId || this.buckets.has(x));
     const t = now();
     const [flow, newFlow] = this.flowFor(body, name);
     const b = { id, flow, name, tag: `bucket:${id}`, root: `knowbot/${id}/`, createdAt: t, updatedAt: t };
@@ -632,7 +641,7 @@ export class InstanceRegistry {
     if (!PROVIDERS[id]?.needsKey) throw new InstanceError(400, `"${id}" does not take an API key`);
     const key = String(apiKey || '').trim();
     if (!key) {
-      if ([...this.bots.values(), this.builtinBot()].some((b) => b.provider === id)) throw new InstanceError(409, `bots still answer with ${PROVIDERS[id].label}; switch them first`);
+      if (this.allBots().some((b) => b.provider === id)) throw new InstanceError(409, `bots still answer with ${PROVIDERS[id].label}; switch them first`);
       return this.commit(() => { delete this.providerKeys[id]; return this.providerList().find((p) => p.id === id); });
     }
     if (key.length > 400 || /\s/.test(key)) throw new InstanceError(400, 'that does not look like an API key');
@@ -718,7 +727,7 @@ export class InstanceRegistry {
   }
 
   /** name may carry folders ("menus/lunch/specials.md"): they become folder tags. */
-  async upload(bucketId, name, contentType, bytes) {
+  async upload(bucketId, name, contentType, bytes, { once = false } = {}) {
     this.needKd();
     const b = this.bucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
@@ -726,8 +735,25 @@ export class InstanceRegistry {
     if (!bytes?.length) throw new InstanceError(400, 'empty file');
     const folders = rel.split('/').slice(0, -1);
     const storePath = `${b.root}${rel}`; // where knowDrive keeps it; people only ever see the folder tags
+    if (once) {
+      // a retry can arrive while the first ingest still runs (host-manager answered the browser at 60 s): 409 then too
+      const busy = (this.uploading ||= new Set());
+      if (busy.has(storePath)) throw new InstanceError(409, `${rel} is already being uploaded to this bucket`);
+      busy.add(storePath);
+      try {
+        if ((await this.listRows({ prefix: storePath })).some((r) => r.filename === storePath)) {
+          throw new InstanceError(409, `${rel} is already in this bucket; delete it first to upload it again`);
+        }
+        return await this.ingestUpload(b, rel, folders, storePath, contentType, bytes);
+      } finally { busy.delete(storePath); }
+    }
+    return this.ingestUpload(b, rel, folders, storePath, contentType, bytes);
+  }
+
+  /** upload()'s knowDrive half: one ingest of a checked path. */
+  async ingestUpload(b, rel, folders, storePath, contentType, bytes) {
     const fd = new FormData();
-    const bots = [{ id: this.builtinBotBase.id, buckets: this.builtinLinks }, ...this.bots.values()].filter((x) => (x.buckets || []).some((l) => l.id === b.id)).map((x) => botTag(x.id));
+    const bots = this.allBots().filter((x) => (x.buckets || []).some((l) => l.id === b.id)).map((x) => botTag(x.id));
     fd.append('tags', ['knowbot', b.tag, 'kind:upload', ...folderTags(folders), ...bots].join(','));
     if (contentType && contentType !== 'application/octet-stream') fd.append('mime_type', contentType);
     fd.append('file', new Blob([bytes], { type: contentType || 'application/octet-stream' }), storePath);
@@ -749,7 +775,7 @@ export class InstanceRegistry {
     const clean = folders.map((x) => String(x).trim()).filter(Boolean);
     const f = await this.memberFile(b, fileId);
     const add = folderTags(clean), remove = (f.tags || []).filter((t) => isFolderTag(t) && !add.includes(t));
-    const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json' },
+    const res = await this.kdFetch('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json', 'x-vector-store-id': this.kd.store },
       body: JSON.stringify({ file_ids: [fileId], tags_add: add, tags_remove: remove }) });
     if (!res.ok) throw new InstanceError(502, `knowDrive HTTP ${res.status} moving the file`);
     return { ok: true, id: fileId, folders: clean.map(tagSafe) };

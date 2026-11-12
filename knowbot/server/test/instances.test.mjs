@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createKnowBotServer } from '../server.mjs';
 import { normalizeFolder, safeRelPath, slugify, folderTags, foldersOf } from '../instances.mjs';
 import { sealKey, openKey } from '../providers.mjs';
+import { startFakeLLM } from './fake-llm.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -266,5 +267,33 @@ describe('chat instances', () => {
     const local = await (await patch('/api/instances/claude-bot', { provider: 'local' })).json();
     assert.equal(local.model, undefined, 'switching platform clears the old model id');
     assert.equal((await api('/api/instances/claude-bot', { method: 'DELETE', headers: admin })).status, 200);
+  });
+});
+
+// KNOWBOT_LLM_THINKING=off is for the model at LLM_BASE_URL: a KNOWBOT_MODELS entry with its own baseUrl may be a
+// hosted OpenAI-compatible service, so it never gets chat_template_kwargs.
+describe('KNOWBOT_LLM_THINKING=off and KNOWBOT_MODELS', () => {
+  test('a bot on the local model (or an entry whose baseUrl is LLM_BASE_URL) gets enable_thinking:false; another baseUrl never does', async () => {
+    const kd = fakeKnowDrive(), kdPort = await listen(kd.srv);
+    const local = await startFakeLLM(), other = await startFakeLLM();
+    const kb = createKnowBotServer({ root: ROOT, corpusDir: path.join(ROOT, 'corpus'), dataDir: await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-inst-')), libPath: LIB, quiet: true, watch: false,
+      env: { KNOWDRIVE_BASE_URL: `http://127.0.0.1:${kdPort}`, KNOWDRIVE_API_KEY: 'k', KNOWDRIVE_STORE: 'vs_t', KNOWBOT_ADMIN_TOKEN: 's3cret', LLM_BASE_URL: `${local.url}/v1`,
+        KNOWBOT_LLM_THINKING: 'off', KNOWBOT_ANSWER_MODE: 'generate', KNOWBOT_MODELS: JSON.stringify([{ id: 'other-model', label: 'Other', baseUrl: `${other.url}/v1` }, { id: 'same-model', label: 'Same', baseUrl: `${local.url}/v1/` }]) } });
+    const port = await listen(kb.server);
+    const admin = { authorization: 'Bearer s3cret', 'content-type': 'application/json' };
+    const post = (p, body, h = admin) => fetch(`http://127.0.0.1:${port}${p}`, { method: 'POST', headers: h, body: JSON.stringify(body) });
+    try {
+      assert.equal((await post('/api/buckets', { name: 'Acme' })).status, 201);
+      // 'same-model' names LLM_BASE_URL itself (a router-mode llama-server): it is the local model, so it gets the field
+      for (const [name, model] of [['Here', undefined], ['There', 'other-model'], ['Same', 'same-model']]) {
+        const r = await post('/api/instances', { name, provider: 'local', model, buckets: [{ id: 'acme' }] });
+        assert.equal(r.status, 201, await r.clone().text());
+        await post('/api/canonical', { question: 'When are you open?', instance: (await r.json()).id }, { 'content-type': 'application/json' });
+      }
+      assert.ok(local.calls.length >= 2 && other.calls.length >= 1, `every model answered (${local.calls.length}, ${other.calls.length})`);
+      assert.ok(local.calls.some((c) => c.model === 'same-model'), 'the same-base entry went to LLM_BASE_URL');
+      for (const c of local.calls) assert.deepEqual(c.chat_template_kwargs, { enable_thinking: false });
+      for (const c of other.calls) assert.equal('chat_template_kwargs' in c, false);
+    } finally { await close(kb.server); await close(kd.srv); await local.close(); await other.close(); }
   });
 });

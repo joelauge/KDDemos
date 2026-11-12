@@ -33,12 +33,12 @@ import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAn
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS, queryVariantsOf } from './providers.mjs';
 import { createImageFinder, indexFromJson, indexToJson, indexAdd, within } from './products.mjs';
-import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS, createStoreFetcher, readPageHtml, renderMarkdown, slugOf, titleOfHtml } from './storeimport.mjs';
+import { importStore, normalizeStoreUrl, registrableDomain, KINDS as STORE_KINDS, ERROR_COPY as STORE_ERROR_COPY, LIMITS as STORE_LIMITS, createStoreFetcher, parseImportAllow, readPageHtml, renderMarkdown, slugOf, titleOfHtml } from './storeimport.mjs';
 import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './builder/engine.mjs';
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
-import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
+import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng, SITE_HOST } from './site.mjs';
 import { agentLimits, agentSettings, priceText as agentPriceText } from './agents.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +67,8 @@ function uniqueCopy(bytes, id) {
 export const TRIAL_ID_RE = /^tr_[a-z2-7]{16}$/;
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const DAY = 86400000;
+/** Owner mode (KNOWBOT_MODE=owner): a bot's expiry, far past any sweep ("expires:99991231"). */
+const NEVER = Date.UTC(9999, 11, 31);
 const STALL_MS = 45000;
 const CLOSE_MISS = 0.06;
 /** fixer r8 (D2): a refusal whose best match is more than this below the floor is off-topic, not a content gap. */
@@ -1104,7 +1106,7 @@ export function starterGrammarOk(q) {
 
 // ------------------------------------------------------------------------------------------- the studio
 /**
- * @param {object} o  see spec 4.1; extra test hooks: now(), pingMs, pollMs, rotateMs, sweepMs, setupTimeoutMs, limits, adminToken
+ * @param {object} o  see spec 4.1 (o.requireAdmin: the server's admin gate, for convert); extra test hooks: now(), pingMs, pollMs, rotateMs, sweepMs, setupTimeoutMs, limits
  */
 /**
  * knowDrive's own drain estimate for a store (#886: VectorStoreObject.progress), made relative to `nowMs`.
@@ -1137,13 +1139,30 @@ export function createStudio(o = {}) {
   const poll = { fast: Number(o.pollMs ?? 1500), slow: Number(o.pollSlowMs ?? 4000), idle: Number(o.pollIdleMs ?? 15000) };
   const floorDefault = Math.max(0.7, Math.min(0.85, Number(env.KNOWBOT_STUDIO_FLOOR || 0.7) || 0.7));
   const ttlDays = Math.max(1, Number(env.KNOWBOT_STUDIO_TTL_DAYS || 7) || 7);
+  // KNOWBOT_MODE=owner (an appliance): every bot belongs to the server's owner. Only the owner creates bots (the admin
+  // token, or loopback when none is set); bots never expire and the sweeper never runs; nothing is sold (no price,
+  // Launch/checkout or KnowBot numbers). Unset: the trial funnel, exactly as before.
+  const ownerMode = String(env.KNOWBOT_MODE || '').trim().toLowerCase() === 'owner';
+  // Where links to the Studio and the hosted homepage search point: KNOWBOT_PUBLIC_ORIGIN (always, whatever origin the
+  // request came from), else the cloud site, else (owner mode) the host the request reached
+  const pinnedOrigin = String(env.KNOWBOT_PUBLIC_ORIGIN || '').trim().replace(/\/+$/, '');
+  const publicOrigin = pinnedOrigin || (ownerMode ? '' : SITE_HOST);
+  /** An expiry as the API shows it: none in owner mode. */
+  const expiryOf = (t) => (ownerMode ? null : new Date(t).toISOString());
+  /** Is this bot on a trial (trial banner, expiry)? Never in owner mode. */
+  const onTrial = (T) => !T.converted && !ownerMode;
+  const notSold = () => fail(403, 'owner_mode', 'Nothing is sold on this server: its bots are already yours.');
   const checkoutBase = env.KNOWBOT_CHECKOUT_URL || 'https://knowdrive.ai/signup?plan=knowbot';
   const contact = env.KNOWBOT_STUDIO_CONTACT || 'mailto:hello@knowdrive.ai';
   const mailHook = env.KNOWBOT_STUDIO_MAIL_WEBHOOK || '';
   const sampleMode = String(env.KNOWBOT_STUDIO_SAMPLE_MODE || 'shared').toLowerCase() === 'live' ? 'live' : 'shared'; // owner: sample data is ingested once and replayed for every trial
   const replayTargetMs = Math.max(1000, Number(o.replayTargetMs ?? env.KNOWBOT_STUDIO_REPLAY_MS) || REPLAY_TARGET_MS); // how long every trial's sample replay takes
-  const adminToken = String(o.adminToken ?? env.KNOWBOT_ADMIN_TOKEN ?? '');
   const llmModel = env.LLM_MODEL || 'qwen2.5-1.5b-instruct';
+  const adminToken = String(o.adminToken ?? env.KNOWBOT_ADMIN_TOKEN ?? ''); // owner mode: whether the box has an admin token (no token: loopback only)
+  // Website import, note links and photo lookups: KNOWBOT_IMPORT_ALLOW admits listed intranet addresses (storeimport.mjs).
+  const importAllow = env.KNOWBOT_IMPORT_ALLOW ? parseImportAllow(env.KNOWBOT_IMPORT_ALLOW) : null;
+  if (importAllow?.bad.length) log(`[studio] KNOWBOT_IMPORT_ALLOW: ignoring ${importAllow.bad.join(', ')} (not a CIDR, address or host name)`);
+  const storeNet = importAllow ? { allow: importAllow, ...(o.storeNet || {}) } : o.storeNet;
   const enabled = !!(kd && (typeof kd.apiKey === 'function' ? kd.apiKey() : kd.apiKey));
   const store = env.KNOWBOT_TRIAL_STORE || kd?.store || '';
   const limits = {
@@ -1477,7 +1496,7 @@ export function createStudio(o = {}) {
   // card) and stored beside the spec doc as _products.json (kind:trial-spec: never searched, deleted with the bot).
   // T.flags.storeProducts {n, at} says it exists, so a bot without one never asks knowDrive for it.
   const productsPath = (id) => `${rootOf(id)}_products.json`;
-  const imageFinder = createImageFinder({ net: o.storeNet || {}, timeoutMs: Math.max(200, Number(o.productImageTimeoutMs ?? 3000)),
+  const imageFinder = createImageFinder({ net: storeNet || {}, timeoutMs: Math.max(200, Number(o.productImageTimeoutMs ?? 3000)),
     ...(o.productImageMissMs != null ? { missTtlMs: Math.max(0, Number(o.productImageMissMs)) } : {}) });
   const productImageWaitMs = Math.max(0, Number(o.productImageWaitMs ?? 1200));
   async function loadProducts(T) {
@@ -2562,7 +2581,8 @@ export function createStudio(o = {}) {
    * 20 min), the 100 MB trial quota (checked before every batch, never exceeded; what did not fit is reported), 10,000
    * products. 6 imports per hour per trial, 20 per IP (plans: 30 / 60).
    * o.storeNet (tests only) is passed to the importer's fetcher (allowAddresses/allowPorts/resolve); production
-   * leaves it unset, so loopback, private and metadata addresses stay refused.
+   * leaves it unset, so loopback, private and metadata addresses stay refused. KNOWBOT_IMPORT_ALLOW admits listed
+   * private (intranet) addresses only; loopback, link-local and metadata stay refused.
    *
    * Restarts: the job is persisted in the trial's spec doc (flags.storeJob: id, url, kinds, startedAt, state, plan
    * counts, done counts per kind, uploaded, and written {path: url}), saved at most every 3 s while it runs; the doc
@@ -2809,7 +2829,7 @@ export function createStudio(o = {}) {
       try { files = await filesOf(T); } catch {}
       const prevBytes = (T.rows || []).filter((r) => (r.tags || []).includes('src:store')).reduce((k, r) => k + (Number(r.bytes) || 0), 0);
       const remainingBytes = Math.max(1, QUOTA_BYTES - (usageOf(T, files).bytes - prevBytes));
-      const r = await importStore(rawUrl, { planOnly: true, remainingBytes, signal: ac.signal, net: o.storeNet, budgetMs: Math.min(storeBudgetMs, 120000),
+      const r = await importStore(rawUrl, { planOnly: true, remainingBytes, signal: ac.signal, net: storeNet, budgetMs: Math.min(storeBudgetMs, 120000),
         onEvent: (ev, d) => { if (ev !== 'error' && ev !== 'fetching') emit(ev, d); } });
       T.lastActivityAt = now();
       emit('done', { planOnly: true, plan: r.plan, platform: r.platform, api: r.api, name: r.name, base: r.base, fileCount: 0 });
@@ -2951,7 +2971,7 @@ export function createStudio(o = {}) {
     try {
       let r;
       for (;;) {
-      r = await importStore(url, { remainingBytes: QUOTA_BYTES - (rowsBytes() - previous.reduce((n, x) => n + (Number(x.bytes) || 0), 0)) - sharedBytes, signal, net: o.storeNet,
+      r = await importStore(url, { remainingBytes: QUOTA_BYTES - (rowsBytes() - previous.reduce((n, x) => n + (Number(x.bytes) || 0), 0)) - sharedBytes, signal, net: storeNet,
         budgetMs: storeBudgetMs, enrich: storeEnrich, onFiles, ...(kinds ? { kinds } : {}), ...(skipNow ? { skip: skipNow } : {}),
         ...(o.storeBatchFiles ? { batchFiles: o.storeBatchFiles } : {}), // tests only: smaller product batches
         onEvent: (ev, d) => {
@@ -3285,6 +3305,8 @@ export function createStudio(o = {}) {
     return 'purpose';
   }
   const C = (id, label, extra = {}) => ({ id, label, kind: 'default', ...extra });
+  /** A chip that opens a Go live tab (the Studio handles {emit:{type:'golive:open'}} in onChip). */
+  const golive = (tab, label, kind = 'default') => C(`golive-${tab}`, label, { kind, emit: { type: 'golive:open', detail: { tab } } });
   /** owner rule: the price (one plan, whatever features are on) shows only once the visitor has tested the bot. */
   const testedBot = (T) => !!(T.grounded > 0 || T.proofDone || T.flags?.launchShown || T.converted);
   const launchLabel = (T) => (testedBot(T) ? `Launch · $${PRICE.toLocaleString('en-US')}/mo` : 'Launch');
@@ -3340,8 +3362,14 @@ export function createStudio(o = {}) {
   };
   const fmtFloor = (f) => String(Math.round(Number(f) * 100));
 
+  /** Owner mode: nothing to launch or buy; the bot already answers on every surface this server has. */
+  function ownerLaunch(T) {
+    return { reply: `${botName(T)} is yours on this server: there is nothing to launch or buy. Its embed line and chat API are in Set up and Developers.`,
+      chips: [golive('channels', 'Set up', 'primary'), golive('developers', 'Developers'), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
+  }
   /** Copy for the launch beat: make-it-yours for sample-only bots, a mini proof first when nothing was tested. */
   function launchFlow(T, files, { force = false } = {}) {
+    if (ownerMode) return ownerLaunch(T);
     force = force || !!T.flags.launchForce;
     if (sampleOnly(files) && !force) {
       // Integrator: the make-it-yours card shows once; asking again gets a short line + the same chips, not a duplicate card.
@@ -3446,6 +3474,7 @@ export function createStudio(o = {}) {
       chips: ready.length ? [C('ask-starter', 'Ask a question', { kind: 'primary', action: { type: 'ask_samplebot', question: ready.length ? (T.questionsCache?.value?.starters?.[0]?.q || null) : null } }), C('add-files', 'Add more files', { action: { type: 'request_upload' } })] : [C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('formal', 'Make it more formal', { send: 'Make it more formal' })] };
     if (has('explain_types')) return { reply: 'PDF, Word (DOCX), PowerPoint (PPTX), Excel (XLSX), HTML, Markdown, plain text and CSV, images (PNG, JPG, WEBP, GIF) and audio (MP3, WAV, M4A, OGG). Up to 95 MB per file and 100 MB in total.',
       chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('samples', 'Use sample files', { action: { type: 'attach_samples' } })] };
+    if (has('explain_plan') && ownerMode) return ownerLaunch(T);
     if (has('explain_plan')) return { reply: `One plan, $${PRICE} a month or $${PRICE_YEAR.toLocaleString('en-US')} for a whole year, includes three tools you switch features on and off in:\n• Website: one line on your site for the chat bubble, voice and homepage search\n• KnowBot number: one phone number for texts, calls and WhatsApp\n• Email: one inbox address that answers with citations\n\nEvery feature is included, so switching one on or off never changes the price. They all use the same files, so your bot gives the same answers everywhere, and it always shows where it found them. The number's own usage is billed separately.\n\nA fourth tool, AI agents, lets other AI assistants ask your bot and get the same cited answers: free up to ${agentLimits(env).freePerDay} answers a day, then metered at ${agentPriceText(agentLimits(env).pricePer1k)} per 1,000 agent answers if you turn on paid access.\n\nYou can store up to 100 MB of files. The first 30 days are free, but you need a credit card to start. You can cancel anytime, and you won't have to upload your files again.\n\nNeed more than 100 MB? Email sales@recoursellm.com.`,
       chips: [C('launch', launchLabel(T), { kind: 'primary', action: { type: 'show_launch' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
     if (has('remove_samples')) return { reply: withNotes('Removing the sample files. Your settings stay as they are.'), actions: [{ type: 'remove_samples' }], patch, chips: [C('upload', 'Upload my files', { kind: 'primary', action: { type: 'request_upload' } }), C('store', 'Add website', { action: { type: 'import_store' } }), C('what-types', 'What file types work?', { send: 'What file types work?' })] };
@@ -3552,7 +3581,7 @@ export function createStudio(o = {}) {
       return { reply: `Great. Ask ${name} anything on the right, or let me test it for you.`, chips: stepChips(T, files) };
     }
     if (/\bkeep the name\b/i.test(msg)) { T.flags.namingDeclined = true; saveSpecSoon(T); return { reply: `Okay, it stays ${name} for now. Rename it anytime: type "call it …".`, chips: stepChips(T, files) }; }
-    if (/\bkeep testing\b|\bno thanks\b|\bnot now\b/i.test(msg)) return { reply: `Sure. ${name} is saved for ${ttlDays} days, so take your time.`, chips: stepChips(T, files) };
+    if (/\bkeep testing\b|\bno thanks\b|\bnot now\b/i.test(msg)) return { reply: ownerMode ? `Sure. ${name} is yours on this server, so take your time.` : `Sure. ${name} is saved for ${ttlDays} days, so take your time.`, chips: stepChips(T, files) };
     if (notes.length) return { reply: notes.join(' '), chips: stepChips(T, files) };
     return { reply: `I can name your bot, change its tone, limit it to some files or test it. Try "make it more formal", "only answer about returns" or "call it ${T.spec.org ? `${titleWords(T.spec.org)} Help` : 'Spokes'}".`, chips: stepChips(T, files) };
   }
@@ -3605,7 +3634,6 @@ export function createStudio(o = {}) {
   function developersReply(T, msg) {
     const name = botName(T);
     const site = /\b(?:site|website|web ?page|widget|embed|wordpress|shopify|squarespace|wix|webflow)\b/i.test(msg) && !/\b(?:api|sdk|code|backend|server|endpoint|curl|app)\b/i.test(msg);
-    const golive = (tab, label, kind = 'default') => C(`golive-${tab}`, label, { kind, emit: { type: 'golive:open', detail: { tab } } });
     // CONTRACT-GAP: studio/app.js dispatchAction (owner B) has no 'open_golive' action, so the Builder can't open the
     // Go live sheet by itself yet; these chips carry {emit:{type:'golive:open'}} (handled by onChip) and the reply asks
     // for one tap. When B adds `case 'open_golive': openGoLive(a.tab, a.channel)`, return actions:[{type:'open_golive', tab}].
@@ -4047,6 +4075,11 @@ export function createStudio(o = {}) {
       out.chips = out.chips.filter((c) => !(c.action?.type === 'run_proof' || c.id === 'proof' || /^run (?:the )?proof run$/i.test(c.label || '')));
       if (!out.chips.some((c) => c.action?.type === 'show_launch')) out.chips.push(C('launch', launchLabel(T), { kind: out.chips.some((c) => c.kind === 'primary') ? 'default' : 'primary', action: { type: 'show_launch' } }));
     }
+    if (ownerMode) { // nothing to launch or buy: no launch action, chip or card reaches the Studio, whichever engine wrote the turn
+      out.actions = out.actions.filter((a) => a.type !== 'show_launch');
+      out.chips = out.chips.filter((c) => c.action?.type !== 'show_launch' && !LAUNCH_CHIPS.has(c.id));
+      if (out.card?.type === 'launch') out.card = null;
+    }
     return out;
   }
 
@@ -4099,11 +4132,13 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
    */
   async function addNoteLinks(T, urls, tags) {
     if (!urls.length) return [];
-    const f = createStoreFetcher({ budgetMs: 30000, timeoutMs: 12000, maxBytes: 20 * 1024 * 1024, ...(o.storeNet || {}) });
+    // one fetcher per link (a fetcher's first host is its start, see KNOWBOT_IMPORT_ALLOW), 30 s for all of them
+    const deadline = Date.now() + 30000;
     const out = [];
     for (const url of urls) {
       try {
         const host = new URL(url).hostname.toLowerCase();
+        const f = createStoreFetcher({ budgetMs: Math.max(1, deadline - Date.now()), timeoutMs: 12000, maxBytes: 20 * 1024 * 1024, ...(storeNet || {}) });
         f.allowHost(host);
         const r = await f.get(url, { accept: 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.5' });
         const type = String(r.headers['content-type'] || '').toLowerCase();
@@ -4353,11 +4388,16 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }
 
   // ------------------------------------------------------------------------- convert + sweeper
-  function requireAdmin(req) {
+  // Owner mode's bot creation, on KnowBot's own port (the Studio is never routed through host-manager, so a host-manager token is
+  // not a credential here): the admin token, or with none set a direct loopback request that is not through a proxy, not a web
+  // page from elsewhere (cross-site Origin) and not a rebound DNS name (Host).
+  function requireOwner(req, why) {
     if (!adminToken) {
       const ip = req.socket.remoteAddress || '';
-      if (/^(?:127\.|::1$|::ffff:127\.)/.test(ip) && !req.headers['x-forwarded-for']) return;
-      fail(403, 'unauthorized', 'Convert needs KNOWBOT_ADMIN_TOKEN on the server.');
+      const h = req.headers, loop = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
+      if (/^(?:127\.|::1$|::ffff:127\.)/.test(ip) && !h['x-forwarded-for'] && !h['x-real-ip'] && !h.forwarded && loop.test(String(h.host || ''))
+        && (!h.origin || loop.test(String(h.origin).replace(/^https?:\/\//i, '')))) return;
+      fail(403, 'unauthorized', why);
     }
     const got = Buffer.from(bearer(req)), want = Buffer.from(adminToken);
     if (got.length !== want.length || !timingSafeEqual(got, want)) fail(401, 'unauthorized', 'admin token required');
@@ -4412,7 +4452,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return { converted: true, files, ...shop };
   }
   async function sweep() {
-    if (!enabled) return { deleted: 0, scanned: 0 };
+    if (!enabled || ownerMode) return { deleted: 0, scanned: 0 }; // owner mode: bots are permanent, nothing is ever swept
     const today = yyyymmdd(now());
     let rows = [];
     try { rows = await listRows({ tags_all: 'kind:trial' }); } catch (e) { log(`[studio] sweep list failed: ${e.message}`); return { deleted: 0, scanned: 0, error: e.message }; }
@@ -4440,9 +4480,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return { deleted, scanned: rows.length };
   }
   let closed = false;
-  const sweepTimer = enabled && o.sweep !== false ? setInterval(() => { sweep(); }, Number(o.sweepMs ?? 3600000)) : null;
+  const sweeps = enabled && o.sweep !== false && !ownerMode;
+  const sweepTimer = sweeps ? setInterval(() => { sweep(); }, Number(o.sweepMs ?? 3600000)) : null;
   sweepTimer?.unref?.();
-  const firstSweep = enabled && o.sweep !== false ? setTimeout(() => { sweep(); }, 5000) : null;
+  const firstSweep = sweeps ? setTimeout(() => { sweep(); }, 5000) : null;
   firstSweep?.unref?.();
 
   // ------------------------------------------------------------------------- insights (11.1)
@@ -4551,7 +4592,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const status = Number(e?.status) || 500;
     const code = e?.extra?.code || CODE_BY_STATUS[status] || 'upstream';
     if (status >= 500 && !(e instanceof HttpErrorCls)) log(`[studio] error: ${e?.stack || e}`);
-    return sendJson(res, status, { error: { status, code, message: status === 500 ? 'internal error' : e.message, ...(e.extra || {}) } });
+    return sendJson(res, status, { error: { status, code, message: status === 500 ? 'internal error' : e.message, ...(e.extra || {}) } }, e.headers);
   }
   const readBody = async (req) => { try { return await o.readJson(req); } catch (e) { throw new StudioError(Number(e.status) || 400, e.status === 413 ? 'bad_request' : 'bad_request', e.message || 'invalid JSON body'); } };
   const ip = (req) => (o.clientIp ? o.clientIp(req) : req.socket.remoteAddress || 'unknown');
@@ -4636,6 +4677,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 
     if (a === 'config' && !id) {
       allow('GET');
+      const owner = ownerMode ? { mode: 'owner', price: null, anchors: null, quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES, ttlDays: null } } : {};
       return sendJson(res, 200, {
         price: { amount: PRICE, yearAmount: PRICE_YEAR, perSurface: false, plan: 'knowbot', currency: 'USD', interval: 'month', answersIncluded: env.KNOWBOT_STUDIO_ANSWERS_INCLUDED || null, annualLine: env.KNOWBOT_STUDIO_ANNUAL_LINE || 'or $5,490/year · up to 100 MB · first 30 days free, card required', guaranteeLine: env.KNOWBOT_STUDIO_GUARANTEE_LINE || null, enterpriseEmail: env.KNOWBOT_ENTERPRISE_EMAIL || 'sales@recoursellm.com' },
         quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES, ttlDays }, types: TYPES,
@@ -4643,11 +4685,13 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         samples: sampleSets().map(({ names, ...s }) => s), sampleMode, anchors: ANCHORS, contact, floor: floorDefault,
         // the AI agents tool (server/agents.mjs): the free daily allowance and the metered price, from the environment
         agents: (({ freePerDay, pricePer1k, currency }) => ({ freePerDay, pricePer1k, currency, priceText: `${agentPriceText(pricePer1k)} per 1,000 agent answers` }))(agentLimits(env)),
+        ...(pinnedOrigin ? { publicOrigin } : {}), ...owner,
       });
     }
     // the payments webhook (no trial token: verified by its Stripe-Signature; the session's metadata names the bot)
     if (a === 'numbers' && id === 'webhook' && !sub) {
       allow('POST');
+      if (ownerMode) { req.resume(); notSold(); }
       const raw = await o.readRaw(req, 512 * 1024);
       return sendJson(res, 200, await numbers.webhook(raw, req.headers['stripe-signature']));
     }
@@ -4670,26 +4714,27 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
           RT.expiresAt = Number(data.e);
           await loadSpecDoc(RT);
           RT.lastActivityAt = now();
-          return sendJson(res, 200, { trialId: RT.id, reused: true, token: signToken(RT.id, RT.expiresAt), restoreKey: signRestore(RT.id, RT.expiresAt), expiresAt: new Date(RT.expiresAt).toISOString(),
+          return sendJson(res, 200, { trialId: RT.id, reused: true, token: signToken(RT.id, RT.expiresAt), restoreKey: signRestore(RT.id, RT.expiresAt), expiresAt: expiryOf(RT.expiresAt),
             quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES }, spec: publicSpec(RT) });
         }
       }
+      if (ownerMode) requireOwner(req, 'Only the owner of this server can create bots: open the Studio on the server itself, or set KNOWBOT_ADMIN_TOKEN.');
       // fixer r4: a short burst window (20 per 15 min, spec 7.3 test 1) plus a roomier hourly ceiling (60), so one person
       // exploring never locks a whole office out for most of an hour: the burst window frees up within 15 minutes.
       limitOrThrow(`createb ${who}`, limits.createBurst, 900000, 'new trials from this address', 1, { replay: true });
       limitOrThrow(`create ${who}`, limits.create, 3600000, 'new trials from this address', 1, { replay: true });
       limitOrThrow('create *', limits.createGlobal, DAY, 'new trials today', 1, { replay: true });
       const tid = `tr_${randB32(16)}`;
-      const expiresAt = now() + ttlDays * DAY;
+      const expiresAt = ownerMode ? NEVER : now() + ttlDays * DAY;
       const T = newTrialState(tid, expiresAt);
       T.specLoaded = true; // brand new: nothing in knowDrive yet
       trials.set(tid, T);
-      return sendJson(res, 201, { trialId: tid, token: signToken(tid, expiresAt), restoreKey: signRestore(tid, expiresAt), expiresAt: new Date(expiresAt).toISOString(), quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES }, usage: { bytes: 0, files: 0 }, spec: publicSpec(T) });
+      return sendJson(res, 201, { trialId: tid, token: signToken(tid, expiresAt), restoreKey: signRestore(tid, expiresAt), expiresAt: expiryOf(expiresAt), quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES }, usage: { bytes: 0, files: 0 }, spec: publicSpec(T) });
     }
 
     if (sub === 'convert') {
       allow('POST');
-      requireAdmin(req);
+      o.requireAdmin(req); // the server's admin gate (server.mjs), one rule for every admin route
       if (!TRIAL_ID_RE.test(id)) fail(404, 'not_found', 'No such trial.');
       const T = trialFor(id);
       if (!T.expiresAt) T.expiresAt = now() + DAY; // token-less admin call: expiry only matters for tags already set
@@ -4711,7 +4756,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       T.expiresAt = Number(data.e);
       await loadSpecDoc(T);
       T.lastActivityAt = now();
-      return sendJson(res, 200, { trialId: id, token: signToken(id, T.expiresAt), restoreKey: signRestore(id, T.expiresAt), expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T) });
+      return sendJson(res, 200, { trialId: id, token: signToken(id, T.expiresAt), restoreKey: signRestore(id, T.expiresAt), expiresAt: expiryOf(T.expiresAt), spec: publicSpec(T) });
     }
 
     const T = await auth(req, id);
@@ -4720,7 +4765,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       if (m === 'GET') {
         await resumeStoreJob(T); // an import a restart interrupted goes on as soon as its bot is opened
         const files = await filesOf(T, { maxAgeMs: 0 });
-        return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
+        return sendJson(res, 200, { trialId: T.id, expiresAt: expiryOf(T.expiresAt), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
           convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email,
           restoreKey: signRestore(T.id, T.expiresAt), shareLink: shareLinkOf(req, T, selfOriginOf(req)) });
       }
@@ -4873,6 +4918,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 
     // "Get your KnowBot number": search, pay in place (embedded checkout), confirm, top up (server/numbers.mjs)
     if (sub === 'number') {
+      if (ownerMode) notSold();
       if (!fid) { allow('GET'); return sendJson(res, 200, await numbers.status(T)); }
       if (fid === 'search') {
         allow('GET');
@@ -4906,7 +4952,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       }
       if (url.searchParams.get('download') === '1') {
         const api = /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(url.searchParams.get('api') || '') ? url.searchParams.get('api') : selfOriginOf(req);
-        const html = siteHtml(publicSite(T.flags.site, siteEditsOf(T), { botId: T.id, trial: !T.converted }), { botId: T.id, apiBase: api, assetBase: url.searchParams.get('assets') === 'self' ? selfOriginOf(req) : undefined });
+        const html = siteHtml(publicSite(T.flags.site, siteEditsOf(T), { botId: T.id, trial: onTrial(T) }), { botId: T.id, apiBase: api, assetBase: url.searchParams.get('assets') === 'self' ? selfOriginOf(req) : publicOrigin || selfOriginOf(req) });
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-disposition': 'attachment; filename="add-to-homepage.html"', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
         return res.end(html);
       }
@@ -4998,6 +5044,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     }
     if (sub === 'checkout') {
       allow('POST');
+      if (ownerMode) notSold();
       const body = await readBody(req);
       const email = String(body.email ?? T.email ?? '').trim();
       if (email && (email.length > 254 || !EMAIL_RE.test(email))) fail(400, 'bad_request', "That email address doesn't look right.", { field: 'email' });
@@ -5080,12 +5127,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }
   function siteView(req, T) {
     const edits = siteEditsOf(T);
-    const hosted = `https://knowbot.knowdrive.ai/site/?bot=${encodeURIComponent(T.id)}`;
     // the homepage snippet: the hosted script on a real deploy; a loopback dev server's own copy (and API) locally
     const self = selfOriginOf(req);
+    const hosted = `${publicOrigin || self}/site/?bot=${encodeURIComponent(T.id)}`;
     const local = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(self);
-    const snippet = overlaySnippet(T.id, local ? { assetBase: self, apiBase: self } : {});
-    return { snippet, site: publicSite(T.flags.site, edits, { botId: T.id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }),
+    const snippet = overlaySnippet(T.id, local ? { assetBase: self, apiBase: self } : { assetBase: publicOrigin || self });
+    return { snippet, site: publicSite(T.flags.site, edits, { botId: T.id, trial: onTrial(T), expiresAt: expiryOf(T.expiresAt) }),
       edits: editsView(edits), generated: T.flags.site ? { name: T.flags.site.name, tagline: T.flags.site.tagline, chips: T.flags.site.chips } : null,
       published: !!edits.published, hostedUrl: hosted, previewPath: `/site/?bot=${encodeURIComponent(T.id)}` };
   }
@@ -5097,7 +5144,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     await loadSpecDoc(T);
     if (!T.flags.site) { if (!had) trials.delete(id); return null; }
     if (!T.expiresAt || T.expiresAt <= now()) return null;
-    return { site: publicSite(T.flags.site, siteEditsOf(T), { botId: id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }), published: !!T.spec.site?.published, expiresAt: T.expiresAt };
+    return { site: publicSite(T.flags.site, siteEditsOf(T), { botId: id, trial: onTrial(T), expiresAt: expiryOf(T.expiresAt) }), published: !!T.spec.site?.published, expiresAt: T.expiresAt };
   }
   /** GET /api/site/:id/logo (server/devapi.mjs): the owner's uploaded logo as bytes, or null. */
   async function siteLogoPublic(id) {
@@ -5111,16 +5158,20 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   function shareLinkOf(req, T, origin = originOf(req)) {
     return `${origin}/studio/?t=${encodeURIComponent(T.id)}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
   }
-  /** Origin for a link handed back to the caller itself: Origin, else the Host it reached us on, else the public default. */
+  /** Origin for a link handed back to the caller itself: KNOWBOT_PUBLIC_ORIGIN, else Origin, else the Host it reached us on, else the public default. */
   function selfOriginOf(req) {
-    if (req.headers.origin) return originOf(req);
+    if (pinnedOrigin || req.headers.origin) return originOf(req);
+    return hostOriginOf(req) || originOf(req);
+  }
+  function hostOriginOf(req) {
     const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
     const proto = String(req.headers['x-forwarded-proto'] || (req.socket?.encrypted ? 'https' : 'http')).split(',')[0].trim();
-    return /^[a-z0-9.-]+(?::\d+)?$/i.test(host) && /^https?$/.test(proto) ? `${proto}://${host}` : originOf(req);
+    return /^[a-z0-9.-]+(?::\d+)?$/i.test(host) && /^https?$/.test(proto) ? `${proto}://${host}` : null;
   }
   function originOf(req) {
+    if (pinnedOrigin) return pinnedOrigin;
     const o0 = String(req.headers.origin || '');
-    return /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(o0) ? o0 : 'https://knowbot.knowdrive.ai';
+    return /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(o0) ? o0 : publicOrigin || hostOriginOf(req) || 'http://localhost';
   }
 
   async function handle(req, res, url, p, m) {
@@ -5188,7 +5239,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!T.expiresAt && opts.expiresAt) T.expiresAt = opts.expiresAt;
     return answerFor(T, question, opts);
   }
-  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
+  return { handle, close, sweep, trials, ownerMode, expiryOf, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
     // a trial bot's answer on the API, AI agents, channels and the website widget (devapi): the Studio's own pipeline
     answerTrial, searchTrial, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */

@@ -3,10 +3,12 @@
 // reply against a bundle, GET /healthz says it is up. The engine itself is a separate module, fetched at build time
 // (scripts/fetch-engine.sh) and never part of this tree.
 //
-// Settings: ATTENDD_ADDR (default 127.0.0.1:7071), KNOWDRIVE_BASE_URL (default https://knowdrive.ai), KNOWDRIVE_API_KEY,
-// ATTENDD_TIMEOUT (default 20s), ATTENDD_SECTION=off (never read neighbouring atoms by vector), ATTENDD_FUSION=on (rank
-// with the engine's client-side deterministic RRF over separate fts and vector searches instead of KnowDB's own hybrid
-// search; default off: one search per ranked head instead of two).
+// Settings: ATTENDD_ADDR (default 127.0.0.1:7071), KNOWDRIVE_BASE_URL (default https://knowdrive.ai), KNOWDRIVE_API_KEY
+// or KNOWDRIVE_API_KEY_FILE (a bare token file, re-read on every KnowDrive call so a rotated token needs no restart; it
+// wins over KNOWDRIVE_API_KEY, as in the Node server), ATTENDD_TIMEOUT (default 20s), ATTENDD_SECTION=off (never read
+// neighbouring atoms by vector), ATTENDD_FUSION=on (rank with the engine's client-side deterministic RRF over separate
+// fts and vector searches instead of KnowDB's own hybrid search; default off: one search per ranked head instead of
+// two).
 // Question text is never logged.
 package main
 
@@ -14,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -163,8 +166,8 @@ type server struct {
 // newServer builds the engines. fusion swaps the ranked search for the engine's client-side RRF (resolve.NewRESTSearcher
 // with fuseHybridClientSide): an fts and a vector search per ranked head, run one after the other, fused with a
 // deterministic (score, atom id) order. Every other channel is NewEngine's.
-func newServer(base, key string, timeout time.Duration, fusion bool) *server {
-	kc := knowdb.New(base, knowdb.WithTokenSource(knowdb.StaticTokenSource(key)))
+func newServer(base string, tok knowdb.TokenSource, timeout time.Duration, fusion bool) *server {
+	kc := knowdb.New(base, knowdb.WithTokenSource(tok))
 	ranked := resolve.NewEngine(kc)
 	if fusion {
 		ranked.Searcher = resolve.NewRESTSearcher(kc, true)
@@ -174,7 +177,7 @@ func newServer(base, key string, timeout time.Duration, fusion bool) *server {
 	plain := &attend.Engine{Ranked: busyResolver{ranked}, Complete: busyResolver{&complete}, Tags: ranked, Exclude: isControl, FileTags: fileTags{ranked}}
 	full := *plain
 	full.Embed, full.Neighbours = embedder{kc}, ranked
-	return &server{full: &full, plain: plain, ranked: ranked, kc: kc, dist: newDistanceSearcher(base, key), timeout: timeout, fusion: fusion}
+	return &server{full: &full, plain: plain, ranked: ranked, kc: kc, dist: newDistanceSearcher(base, tok), timeout: timeout, fusion: fusion}
 }
 
 // rankMode names the ranked search in use, for /healthz and the per-call summary.
@@ -314,15 +317,15 @@ func apiBase(u string) string {
 func main() {
 	log.SetFlags(0)
 	addr := envOr("ATTENDD_ADDR", "127.0.0.1:7071")
-	key := os.Getenv("KNOWDRIVE_API_KEY")
-	if key == "" {
-		log.Fatal("attendd: KNOWDRIVE_API_KEY is not set")
+	tok, err := keySource(os.Getenv("KNOWDRIVE_API_KEY_FILE"), os.Getenv("KNOWDRIVE_API_KEY"))
+	if err != nil {
+		log.Fatal(err)
 	}
 	timeout, err := time.ParseDuration(envOr("ATTENDD_TIMEOUT", "20s"))
 	if err != nil {
 		log.Fatalf("attendd: ATTENDD_TIMEOUT: %v", err)
 	}
-	s := newServer(apiBase(envOr("KNOWDRIVE_BASE_URL", "https://knowdrive.ai")), key, timeout, fusionOn(os.Getenv("ATTENDD_FUSION")))
+	s := newServer(apiBase(envOr("KNOWDRIVE_BASE_URL", "https://knowdrive.ai")), tok, timeout, fusionOn(os.Getenv("ATTENDD_FUSION")))
 	if strings.EqualFold(os.Getenv("ATTENDD_SECTION"), "off") {
 		s.noSection.Store(true)
 	}
@@ -332,6 +335,34 @@ func main() {
 	log.Printf("attendd: listening on %s (ranking: %s, section: %t)", addr, s.rankMode(), !s.noSection.Load())
 	srv := &http.Server{Addr: addr, Handler: s.routes(), ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(srv.ListenAndServe())
+}
+
+// fileToken is a bare token file read on every call, so a rotated token is picked up without a restart.
+type fileToken string
+
+func (f fileToken) Token(context.Context) (string, error) {
+	b, err := os.ReadFile(string(f))
+	if err != nil {
+		return "", fmt.Errorf("attendd: KNOWDRIVE_API_KEY_FILE: %w", err)
+	}
+	if k := strings.TrimSpace(string(b)); k != "" {
+		return k, nil
+	}
+	return "", errors.New("attendd: KNOWDRIVE_API_KEY_FILE is empty")
+}
+
+// keySource picks the KnowDrive bearer: the key file when one is named (it must be readable at start), else the key.
+func keySource(file, key string) (knowdb.TokenSource, error) {
+	if file != "" {
+		if _, err := fileToken(file).Token(context.Background()); err != nil {
+			return nil, err
+		}
+		return fileToken(file), nil
+	}
+	if key == "" {
+		return nil, errors.New("attendd: KNOWDRIVE_API_KEY (or KNOWDRIVE_API_KEY_FILE) is not set")
+	}
+	return knowdb.StaticTokenSource(key), nil
 }
 
 func envOr(k, d string) string {
