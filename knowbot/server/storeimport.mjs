@@ -1358,6 +1358,21 @@ async function readPageSource(ctx, s) {
     if (url !== s.url && ctx.already(url, s.kind)) return;
   }
   let kind = s.kind;
+  // a product page whose address doesn't look like one (custom-built stores: /smart-thermostats/premium/) still says
+  // what it is in its Product JSON-LD: read it as a product, so it gets its card (photo, price) like a feed product
+  if (['page', 'help', 'collection', 'blog'].includes(kind) && /"@type"\s*:\s*\[?\s*"Product(?:Group)?"/.test(html) && (!ctx.kinds || ctx.kinds.has('product'))
+    && ctx.productCount < ctx.caps.maxProducts) {
+    const pd = readProductHtml(html, url, null, { requireLd: true });
+    if (pd?.record?.price != null || pd?.record?.offers || pd?.record?.image) {
+      pd.url = url;
+      ctx.seenProducts.add(urlKey(url)); ctx.productCount++;
+      report.productPagesRead++;
+      for (const p of pd.pdfs || []) addPdf(ctx, p);
+      ctx.progress('product');
+      await ctx.writer.add(pd);
+      return;
+    }
+  }
   if (kind === 'page' || kind === 'help') { const k2 = classifyUrl(url, { platform: ctx.det.platform, text: pre?.title || titleOfHtml(html) }); if (['faq', 'policy', 'help'].includes(k2)) kind = k2; }
   const doc = readPageHtml(html, url, { kind, title: pre?.title || null });
   for (const p of doc.pdfs) addPdf(ctx, p);

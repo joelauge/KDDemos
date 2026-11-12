@@ -455,6 +455,31 @@ describe('generic site', () => {
     assert.ok(Date.now() - t0 >= 200 * (starts.length - 1) - 50);
   });
 
+  test('a product page at an address that does not look like one (custom-built store) is read as a product with its card', async () => {
+    const host = 'thermo.test';
+    const ld = (b) => JSON.stringify({ '@context': 'https://schema.org', '@type': 'Product', name: 'Smart Thermostat Premium', sku: 'EB-PREM',
+      image: `${b}/img/premium.png`, brand: { '@type': 'Brand', name: 'Thermo' },
+      offers: { '@type': 'Offer', price: '259.99', priceCurrency: 'USD', availability: 'https://schema.org/InStock' } });
+    const w = await web({ [host]: {
+      '/robots.txt': { type: 'text/plain', body: (b) => `User-agent: *\nSitemap: ${b}/sitemap.xml\n` },
+      '/': { body: page('Thermo', '<h1>Thermo</h1>') },
+      '/sitemap.xml': { type: 'application/xml', body: (b) => urlset([`${b}/smart-thermostats/premium/`, `${b}/help/install`]) },
+      '/smart-thermostats/premium/': { body: (b) => page('Smart Thermostat Premium', '<h1>Smart Thermostat Premium</h1><p>Premium keeps every room comfortable with a built-in air quality monitor and a room sensor in the box.</p>', { head: `<script type="application/ld+json">${ld(b)}</script>` }) },
+      '/help/install': { body: page('Install', '<h1>Installing your thermostat</h1><p>Turn off power at the breaker, then remove your old thermostat and label each wire.</p>') },
+    } });
+    const { r, error } = await run(w.url(host));
+    assert.ifError(error);
+    assert.equal(r.platform, 'generic');
+    const prods = byKind(r, 'product');
+    assert.equal(prods.length, 1, JSON.stringify(r.files.map((f) => [f.kind, f.path])));
+    assert.match(text(prods[0]), /Smart Thermostat Premium price: 259\.99 USD/);
+    assert.match(text(prods[0]), /built-in air quality monitor/, 'the page copy is kept');
+    assert.ok(prods[0].card, 'a product card is built');
+    assert.equal(prods[0].card.title, 'Smart Thermostat Premium');
+    assert.match(String(prods[0].card.image || ''), /premium\.png$/);
+    assert.ok(r.files.some((f) => f.kind === 'help'), 'the help page stays a help page');
+  });
+
   test('429 with Retry-After: waits, slows down, retries the same page; the import still completes', async () => {
     const host = 'busy.test';
     let n = 0;
