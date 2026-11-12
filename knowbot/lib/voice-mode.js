@@ -20,8 +20,8 @@
 // with browser speech, a level that follows the spoken words) → listening. Muted: idle.
 // Works inside a Shadow DOM (its styles travel with it) and in a light-DOM page (every class is kbvm- prefixed).
 
-import { createOrb, createMeter, orbId, ORB_PRESETS } from './voice-orb.js?v=3b1a5da';
-import { micErrorMessage, downsampleToPcm16 } from './voice-widget.js?v=3b1a5da';
+import { createOrb, createMeter, orbId, ORB_PRESETS } from './voice-orb.js?v=7eb89ef';
+import { micErrorMessage, downsampleToPcm16 } from './voice-widget.js?v=7eb89ef';
 
 const CSS = `
 .kbvm{--vm-ink:#15151f;--vm-text:#33333f;--vm-mute:#5f6170;--vm-line:#dadce3;--vm-soft:#f4f4f7;--vm-bg:#fff;--vm-acc:var(--kbvm-accent,#4f46e5);--vm-on-acc:var(--kbvm-on-accent,#fff);--vm-bad:#b91c1c;--vm-badbg:#fef2f2;--vm-end:#b91c1c;
@@ -172,9 +172,9 @@ export function openVoiceMode(host, o = {}) {
   // the web chat's product cards (lib/widget.js) and their styles (lib/knowbot.css), loaded once, on the first product answer
   let cardsKit = null, prodSeq = 0;
   const loadCards = () => (cardsKit ||= Promise.all([
-    import('./widget.js?v=3b1a5da'),
+    import('./widget.js?v=7eb89ef'),
     new Promise((resolve) => {
-      const link = el('link', { rel: 'stylesheet', href: new URL('./knowbot.css?v=3b1a5da', import.meta.url).href });
+      const link = el('link', { rel: 'stylesheet', href: new URL('./knowbot.css?v=7eb89ef', import.meta.url).href });
       const t = setTimeout(resolve, 2500);
       const ok = () => { clearTimeout(t); resolve(); };
       link.addEventListener('load', ok); link.addEventListener('error', ok);
