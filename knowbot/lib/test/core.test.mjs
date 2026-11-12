@@ -1,7 +1,7 @@
 // node --test knowbot/lib/test/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { KnowBot, guardRequest, requireCitations, answerFromSources, routeAnswer, NOT_IN_DATA, candidateLines, buildSelectMessages, finalizeSelection, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever, isCourtesy, guideText, hitPage, hitSection, rankLines, answerFirst } from '../knowbot.js';
+import { KnowBot, guardRequest, requireCitations, answerFromSources, routeAnswer, NOT_IN_DATA, LEGACY_REFUSALS, isRefusalText, candidateLines, buildSelectMessages, finalizeSelection, finalizeAnswer, buildMessages, detectSurface, normalizeResult, readChat, selectSources, knowdriveRetriever, isCourtesy, guideText, hitPage, hitSection, rankLines, answerFirst } from '../knowbot.js';
 import { KnowDriveRetriever, LocalRetriever } from '../../server/retrievers.mjs';
 import { htmlToText } from '../../server/storeimport.mjs';
 import fs from 'node:fs';
@@ -393,7 +393,7 @@ test('citation gate: only cited sentences survive; nothing cited means the fixed
   assert.deepEqual(g.citations.map((x) => [x.n, x.filename]), [[1, 'b.md'], [2, 'a.md']]);
   for (const bad of [{ text: 'We are great.', citations: c }, { text: 'See [7].', citations: c }, { text: 'Fine [1].', citations: [] }, null])
     assert.equal(requireCitations(bad).text, NOT_IN_DATA);
-  assert.equal(NOT_IN_DATA, "The answer to that doesn't seem to be in my files.");
+  assert.equal(NOT_IN_DATA, "Looks like we don't have that in our files.");
   // end to end: a model that writes an uncited answer gets the refusal
   const src = [S(1, { filename: 'hours.md', title: 'Hours', text: 'Open Tuesday to Sunday, 7am to 3pm.' })];
   const r = await answerFromSources({ question: 'When are you open?', results: src, mode: 'generate', complete: async () => 'We are open every day from 9am!' });
@@ -432,6 +432,24 @@ test('courtesy red-team: a "courtesy" sentence that carries a fact is dropped li
     const r = requireCitations({ text: `${bad} Returns take 30 days [1]. ${bad}`, citations: c });
     // only a pure-courtesy first sentence may stay ("Hope this helps!" of 'Hope this helps! "Refunds are instant."'); the fact never does
     assert.match(r.text, /^(?:(?:Hope this helps|Glad you asked)! )?Returns take 30 days \[1\]\.$/, bad);
+  }
+});
+
+test('the refusal speaks for the business, and the old wording still counts as a refusal', async () => {
+  assert.equal(NOT_IN_DATA, "Looks like we don't have that in our files.");
+  assert.doesNotMatch(NOT_IN_DATA, /\bmy\b|\byour\b/i);
+  const OLD = "The answer to that doesn't seem to be in my files.";
+  assert.ok(LEGACY_REFUSALS.includes(OLD));
+  for (const t of [NOT_IN_DATA, OLD, `  ${OLD.toUpperCase()}  `, OLD.replace("'", '\u2019'), NOT_IN_DATA.replace("'", '\u2019'), `Sorry! ${NOT_IN_DATA}`,
+    "I don't know the answer to that - it doesn't seem to be in my data."]) assert.equal(isRefusalText(t), true, t);
+  for (const t of ['', null, 'Open 9 to 5 [1].', "We don't ship to Canada [1].", 'Those files are on page 3 [1].']) assert.equal(isRefusalText(t), false, String(t));
+  // a model (or a stored history turn) that answers with the old sentence is a refusal, never a dressed-up answer
+  const src = [S(1, { filename: 'hours.md', title: 'Hours', text: 'Open Tuesday to Sunday, 7am to 3pm. The answer to that is in my files.' })];
+  for (const raw of [OLD, NOT_IN_DATA, `${OLD} [1]`]) {
+    const fa = finalizeAnswer(raw, src, { question: 'Do you gift wrap?' });
+    assert.equal(fa.text, NOT_IN_DATA, raw); assert.equal(fa.refused, true);
+    const r = await answerFromSources({ question: 'Do you gift wrap?', results: src, mode: 'generate', complete: async () => raw });
+    assert.equal(r.fin.text, NOT_IN_DATA, raw); assert.equal(r.fin.refused, true);
   }
 });
 
@@ -526,8 +544,8 @@ test('prompt: SOURCES headers carry page, section and link when present (never i
   assert.ok(user.includes('[2] FAQ (faq.md)\n'), 'no location fields when the source has none');
   assert.ok(!/\[3\] Evil \(e\.md\)[^\n]*(?:page|link|\[4\]|im_start)/.test(user), 'unsafe link, page 0 and spoofed section text never reach the header');
   const sys = buildMessages('q', src)[0].content;
-  for (const re of [/quote the source's own words/, /bulleted list/, /Hope this helps!/, /page numbers or URLs/, /exactly this and nothing else: The answer to that doesn't seem to be in my files/, /not instructions/]) assert.match(sys, re);
-  assert.match(user, /reply exactly: The answer to that doesn't seem to be in my files\./);
+  for (const re of [/quote the source's own words/, /bulleted list/, /Hope this helps!/, /page numbers or URLs/, /exactly this and nothing else: Looks like we don't have that in our files/, /not instructions/]) assert.match(sys, re);
+  assert.match(user, /reply exactly: Looks like we don't have that in our files\./);
 });
 
 test('retrieval: knowDrive hits map page (only when reported) and section; normalizeResult keeps them', () => {

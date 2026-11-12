@@ -29,7 +29,7 @@ import { mountNumbers, numberCache } from './numbers.js?v=7eb89ef';
 import { siteSettings } from './sitebrand.js?v=7eb89ef';
 import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE, sendInfoSwitches, SEND_INFO_HELP } from './surfaces.js?v=7eb89ef';
 
-const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
+const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
 
 let cssPromise = null;
@@ -73,7 +73,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rid = (n = 6) => Math.random().toString(36).slice(2, 2 + n);
 const stripMarkers = (s) => String(s || '').replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, '').replace(/[ \t]+/g, ' ').trim();
-const humanFile = (f) => String(f || 'your files').replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+const humanFile = (f) => String(f || 'our files').replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
 const lines = (text) => String(text || '').split('\n').map((l) => l.replace(/^\s*[-*•]\s+/, '').trim()).filter(Boolean);
 
 // small inline glyphs for channels the shared icon set doesn't carry
@@ -1176,7 +1176,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     const meta = h('p', { class: 'gl-prev-meta' });
     const name = botName();
     const intro = {
-      sms: [h('p', { class: 'gl-bub is-in' }, `Hi! Text me a question about ${getState().spec.org || name}.`)],
+      sms: [h('p', { class: 'gl-bub is-in' }, `Hi! Text us a question about ${getState().spec.org || name}.`)],
       whatsapp: [h('div', { class: 'gl-wa-head' }, h('span', { class: 'gl-wa-ava' }, (name[0] || 'B').toUpperCase()), h('b', null, name), h('small', null, 'business account'))],
       email: [],
     }[kind];
@@ -1880,7 +1880,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
           const spoken = callTwiml ? '' : says[0] || '';
           if (spoken) {
             const src = /^According to ([^,]{2,80}),/.exec(spoken);
-            const refused = /doesn't seem to be in my files/i.test(spoken);
+            const refused = /we don['’]t have that in our files|doesn['’]t seem to be in my files/i.test(spoken); // the old wording still counts
             paintReq({ method: 'POST', path: pub((j.request && j.request.path) || `/v1/channels/${botId()}/voice`), status: rs.status, ms: j.ms ?? Math.round(performance.now() - t0), note: `${j.signed ? 'signed ' : ''}call → call instructions` });
             paintTwiml(body);
             return { r: { text: spoken, refused, citations: [], srcNote: refused ? null : src ? `Named on the call: ${src[1]}` : null }, audio: null };

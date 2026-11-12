@@ -39,7 +39,7 @@
 // Over any cap the start is refused with {type:'error', code:'busy'} and close code 1013.
 import { NOT_IN_DATA, formatSpoken, humanTitle } from './util.mjs';
 import { connectGemini, createToolRunner, systemInstruction as phoneSystemInstruction, toolDeclarations as phoneToolDeclarations, greetingFor as phoneGreeting,
-  sendInfoInstruction, sendInfoDeclaration } from './voice-live.mjs';
+  voiceGreeting, sendInfoInstruction, sendInfoDeclaration } from './voice-live.mjs';
 
 export const MAX_QUESTIONS_PER_SESSION = 40;
 let active = 0;
@@ -55,11 +55,8 @@ export function webVoiceEngine(env = {}) {
   return env.GEMINI_API_KEY ? 'gemini' : 'text';
 }
 
-export function webGreeting(botName, { offerSources = false } = {}) {
-  return offerSources
-    ? `Hi, I'm ${botName || 'KnowBot'}. I answer from my files, and I'm happy to send you the sources for anything I share by email or text before you go. What would you like to know?`
-    : `Hi, I'm ${botName || 'KnowBot'}. I answer from my files, and the sources show on screen. What would you like to know?`;
-}
+/** The web voice greeting (voice-live.mjs voiceGreeting). media: what this bot can send ({ email, text }). */
+export const webGreeting = (botName, media = null) => voiceGreeting(botName, media);
 
 export function webSystemInstruction({ botName, org, sendInfo = null }) {
   const who = botName || 'KnowBot';
@@ -78,7 +75,7 @@ Speaking style:
 - If the question is unclear, ask one short clarifying question.
 
 Session flow:
-- The session starts with the message "[visitor connected]". Greet the visitor with: "${webGreeting(botName, { offerSources: !!(sendInfo && (sendInfo.email || sendInfo.text)) })}"
+- The session starts with the message "[visitor connected]". Greet the visitor with: "${webGreeting(botName, sendInfo)}"
 - Typed messages from the visitor arrive as text; treat them exactly like spoken questions.${sendInfoInstruction(sendInfo, { who: 'visitor' })}`;
 }
 
@@ -259,7 +256,7 @@ export function handleWebVoice(ws, cx) {
       }
       if (closed) return;
     }
-    sendJson({ type: 'ready', engine, bot: { id: cx.botId, name: cx.botName || 'KnowBot' }, mode: phone ? 'phone' : 'web', greeting: phone ? phoneGreeting(cx.botName, { offerSources: !!(cx.sendInfo && cx.sendInfoMedia && (cx.sendInfoMedia.email || cx.sendInfoMedia.text)) }) : webGreeting(cx.botName, { offerSources: !!(cx.sendInfo && cx.sendInfoMedia && (cx.sendInfoMedia.email || cx.sendInfoMedia.text)) }), input: { rate: 16000, encoding: 'pcm16le' }, output: { rate: 24000, encoding: 'pcm16le' }, maxSeconds, ...(note ? { note } : {}) });
+    sendJson({ type: 'ready', engine, bot: { id: cx.botId, name: cx.botName || 'KnowBot' }, mode: phone ? 'phone' : 'web', greeting: (phone ? phoneGreeting : webGreeting)(cx.botName, cx.sendInfo ? cx.sendInfoMedia : null), input: { rate: 16000, encoding: 'pcm16le' }, output: { rate: 24000, encoding: 'pcm16le' }, maxSeconds, ...(note ? { note } : {}) });
     if (engine === 'gemini' && session) {
       sessionReady = true;
       session.sendText(phone ? '[call connected] A test call placed from the browser.' : '[visitor connected]');

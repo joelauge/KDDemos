@@ -249,10 +249,11 @@ describe('voice-live: prompt, tools, product links', () => {
     // answers are spoken without "According to ..." (shorter calls); the source is named only when asked
     assert.match(p, /without saying where it comes from \(no "According to \.\.\."/);
     assert.match(p, /If the caller asks where something comes from, name it from "source_titles"/);
-    assert.match(p, /I answer from my files\. What would you like to know\?/, 'no sending set up: no offer in the greeting');
+    assert.ok(p.includes('Greet the caller with: "Hi. I\'m Front Desk. I\'m here to get you quick answers. How can I help?"'), 'no sending set up: no offer in the greeting');
+    assert.doesNotMatch(p, /my files|your files/, 'the bot speaks for the business');
     // with sending: the greeting offers the sources at the end, and the prompt asks for a natural end-of-call offer
     const ps = systemInstruction({ botName: 'Front Desk', org: 'Acme', sendInfo: { email: true, text: true, callerKnown: true } });
-    assert.match(ps, /happy to send you the sources for anything I share by email or text at the end of the call/);
+    assert.ok(ps.includes("Hi. I'm Front Desk. I'm here to get you quick answers. I can send you text messages and emails too. How can I help?"));
     assert.match(ps, /Before the call ends .* offer to send them the transcript of your conversation and the sources for what you shared, by email or text/);
     assert.match(ps, /Say it in your own words/);
     assert.match(ps, /what "conversation" for the end-of-call offer/);
@@ -736,7 +737,7 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
       assert.ok(!setup.tools[0].functionDeclarations.some((f) => f.name === 'send_info'));
       const p = setup.systemInstruction.parts[0].text;
       assert.match(p, /This bot doesn't send messages/);
-      assert.doesNotMatch(p, /happy to send you the sources/);
+      assert.doesNotMatch(p, /I can send you/);
       // texts only off (this line can only text): the same, the bot never offers
       await setBot({ on: true, text: false });
       const c2 = await startCall(S, 'front-desk', 'CA51');

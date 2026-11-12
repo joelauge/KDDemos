@@ -229,8 +229,8 @@ for (const qq of ["what's your return window?", 'how long is the warranty?']) {
 add('test_questions', 'ask it about shipping to Canada', 'own-ready', { tools: ['ask_bot'], mustNotTools: ['kb_search'], cites: false }, { calls: [ask('Do you ship to Canada?', true)], reply: 'Asking your bot now.' });
 add('test_questions', 'what did it learn from my files?', 'own-ready', { cites: false, mentions: ['/returns|shipping|price/i'], mustNotTools: ['kb_search'] },
   { calls: [], reply: 'It read Returns Policy.pdf, Shipping FAQ.docx and Price List.xlsx. Try asking it something on the right.' });
-add('test_questions', 'what happens if a customer asks something not in my files?', 'samples-ready', { tools: ['kb_search'], cites: true, replyMust: ["/seem to be in my files|only from your files|refus/i"] },
-  { calls: [kb('what happens when files do not cover a question refusal sentence')], reply: q("seem to be in my files") });
+add('test_questions', 'what happens if a customer asks something not in my files?', 'samples-ready', { tools: ['kb_search'], cites: true, replyMust: ["/have that in our files|only from your files|refus/i"] },
+  { calls: [kb('what happens when files do not cover a question refusal sentence')], reply: q("have that in our files") });
 
 // ================================================================== 9. proof
 add('proof', 'run the proof run', 'samples-ready', { tools: ['run_proof'], actions: ['run_proof'], cites: false, mustNotActions: NEVER_EXEC }, { calls: [call('run_proof')], reply: 'Running the Proof Run on Lumen Help now.' });

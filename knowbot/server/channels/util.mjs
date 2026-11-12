@@ -2,7 +2,10 @@
 // grounded answer (the same answer object every channel gets from devapi.mjs's ask()).
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-export const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
+// The canonical refusal (lib/knowbot.js): the bot speaks for the business, "Looks like we don't have that in our files."
+// isRefusalText also recognises the earlier wordings, so stored answers keep counting as refusals.
+export { NOT_IN_DATA, LEGACY_REFUSALS, isRefusalText } from '../../lib/knowbot.js';
+import { NOT_IN_DATA } from '../../lib/knowbot.js';
 
 // ------------------------------------------------------------------ http
 export class ChannelError extends Error {
@@ -150,7 +153,7 @@ export function docTitle(title, file) {
   const fromFile = stem.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
   const own = t && t !== name && t !== stem ? t : '';
   if (own && /[A-Z]/.test(own)) return own;
-  return titleCase(own || fromFile) || 'Your files';
+  return titleCase(own || fromFile) || 'Our files';
 }
 /** A citation's display title (see docTitle). */
 export function humanTitle(c = {}) { return docTitle(c.title, c.file || c.filename); }

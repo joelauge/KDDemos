@@ -2576,7 +2576,7 @@ describe('answer failures say where they happened (step + reference); past the s
           const fin = ev.find((e) => e.event === 'final')?.data;
           assert.ok(fin, 'a final answer, not an error');
           assert.equal(fin.refused, true);
-          assert.equal(fin.text, "The answer to that doesn't seem to be in my files.");
+          assert.equal(fin.text, "Looks like we don't have that in our files.");
           assert.equal(fin.failure.step, step);
           assert.match(fin.failure.ref, /^[0-9a-f]{8}$/);
           assert.ok(!ev.some((e) => e.event === 'error'));

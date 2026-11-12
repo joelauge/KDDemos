@@ -116,13 +116,25 @@ export function claimStreamToken(token, callSid, botId) {
 
 // ------------------------------------------------------------------ prompt + tools
 export const MAX_TEXTS_PER_CALL = 3;
-/** The phone greeting. offerSources: this line can send email or text, so the caller hears they can get the sources at the end. */
-export function greetingFor(botName, { offerSources = false } = {}) {
-  const name = botName ? `${botName}. ` : '';
-  return offerSources
-    ? `Hi, you've reached ${name}I answer from my files, and I'm happy to send you the sources for anything I share by email or text at the end of the call. What would you like to know?`
-    : `Hi, you've reached ${name}I answer from my files. What would you like to know?`;
+/**
+ * What a voice greeting says the bot can send. media: { email, text } (what this bot can really send: its owner's
+ * "Send me this" switch and the server's channels), or the legacy { offerSources: true } (both).
+ */
+const sendMedia = (media) => (media?.offerSources ? { email: true, text: true } : { email: !!media?.email, text: !!media?.text });
+/**
+ * The owner's voice greeting, said for the business that set the bot up, on the web and on the phone:
+ * "Hi. I'm the Ultimate Game Master Assistant. I'm here to get you quick answers. I can send you text messages and
+ * emails too. How can I help?" The send sentence names only what this bot can send, and is left out when it sends nothing.
+ */
+export function voiceGreeting(botName, media = null) {
+  const name = String(botName || '').replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '') || 'KnowBot';
+  const intro = /^the\s/i.test(name) ? `I'm the ${name.replace(/^the\s+/i, '')}.` : `I'm ${name}.`;
+  const { email, text } = sendMedia(media);
+  const send = email && text ? ' I can send you text messages and emails too.' : text ? ' I can send you text messages too.' : email ? ' I can send you emails too.' : '';
+  return `Hi. ${intro} I'm here to get you quick answers.${send} How can I help?`;
 }
+/** The phone greeting: the same words as the web (voiceGreeting). media: what this line can send ({ email, text }). */
+export const greetingFor = (botName, media = null) => voiceGreeting(botName, media);
 const canSend = (sendInfo) => !!(sendInfo && (sendInfo.email || sendInfo.text));
 
 /**
@@ -132,7 +144,7 @@ const canSend = (sendInfo) => !!(sendInfo && (sendInfo.email || sendInfo.text));
 export function sendInfoInstruction(sendInfo, { who = 'caller' } = {}) {
   // the bot's owner switched "Send me this" off (sendInfo.off): never offer, and say so plainly when asked
   if (sendInfo?.off && !sendInfo.email && !sendInfo.text) {
-    return `\n\nSending the answer:\n- This bot doesn't send messages. If the ${who} asks you to text or email them anything, say plainly and kindly that this bot doesn't send messages, and that you're happy to repeat anything or answer another question. That is not a missing answer: never use the "not in my files" line for it. Never offer to send anything.`;
+    return `\n\nSending the answer:\n- This bot doesn't send messages. If the ${who} asks you to text or email them anything, say plainly and kindly that this bot doesn't send messages, and that you're happy to repeat anything or answer another question. That is not a missing answer: never use the "not in our files" line for it. Never offer to send anything.`;
   }
   if (!sendInfo || (!sendInfo.email && !sendInfo.text)) return '';
   const lines = [`- If the ${who} asks you to send, text or email them the information, you can send your last answer from the files, with its sources and a link to them. Don't offer it unprompted more than once.`];
@@ -172,7 +184,7 @@ Speaking style:
 - While a search is running, say at most a few words such as "One moment."
 
 Call flow:
-- The call starts with a message like "[call connected] Caller's number ends in 0378." Greet the caller with: "${greetingFor(botName, { offerSources: canSend(sendInfo) })}"
+- The call starts with a message like "[call connected] Caller's number ends in 0378." Greet the caller with: "${greetingFor(botName, sendInfo)}"
 - When the caller says goodbye or that they're done, say a short goodbye and then call end_call.${sendInfoInstruction(sendInfo)}`;
   if (!productLinks) return base;
   return `${base}

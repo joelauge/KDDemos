@@ -411,7 +411,7 @@ describe('Homepage search over HTTP', () => {
     assert.equal(typed.refused, false);
     assert.equal(typed.sendInfo.status, 'off');
     assert.match(typed.answer, /^This bot doesn't send messages/);
-    assert.doesNotMatch(typed.answer, /doesn't seem to be in my files/);
+    assert.doesNotMatch(typed.answer, /have that in our files|doesn't seem to be in my files/);
     // voice mode (text engine here): the same plain reply, and the greeting never offers to send
     const got = await new Promise((resolve, reject) => {
       const ws = new WebSocket(pub.endpoints.voice);
@@ -426,7 +426,7 @@ describe('Homepage search over HTTP', () => {
       });
       ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('socket failed')); });
     });
-    assert.doesNotMatch(got[0].greeting || '', /send you the sources/);
+    assert.doesNotMatch(got[0].greeting || '', /I can send you/);
     const v = got.find((m) => m.type === 'answer');
     assert.equal(v.refused, false);
     assert.equal(v.sendInfo?.status, 'off', JSON.stringify(v));

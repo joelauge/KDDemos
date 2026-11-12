@@ -49,7 +49,7 @@ export async function handleWhatsApp(cx) {
     if (!twilioValid(req, env.TWILIO_AUTH_TOKEN, params, env)) throw new ChannelError(403, 'bad_signature', 'X-Twilio-Signature did not verify.');
     const from = String(params.From || '').replace(/^whatsapp:/, '');
     const body = String(params.Body || '').trim();
-    if (!body) return sendXml(res, `<Message>${xml('Send me a question and I will answer from my files, with sources.')}</Message>`);
+    if (!body) return sendXml(res, `<Message>${xml("Send us a question and we'll answer from our files, with sources.")}</Message>`);
     if (cx.limited(`whatsapp|${from}`)) return sendXml(res, `<Message>${xml('You are sending questions very quickly. Try again in a minute.')}</Message>`);
     const si = await cx.sendInfo?.(body, { channel: 'whatsapp', callerKey: from });
     if (si) return sendXml(res, `<Message>${xml(si.reply)}</Message>`);

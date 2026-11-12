@@ -265,7 +265,7 @@ export function mountPhone(host, o = {}) {
     if (st.engine === 'gemini') {
       try { await startMic(); } catch (e) { showErr(micMessage(e)); setTyping(true); }
     } else {
-      addCap('bot', ready.greeting || `Hi, you've reached ${name}.`);
+      addCap('bot', ready.greeting || `Hi. I'm ${/^the\s/i.test(name) ? `the ${name.replace(/^the\s+/i, '')}` : name}. I'm here to get you quick answers. How can I help?`);
       speak(ready.greeting || '', () => listenText());
       if (!SR_CTOR) { showErr("This browser can't recognize speech. Tap Type to type what you would say."); setTyping(true); }
     }

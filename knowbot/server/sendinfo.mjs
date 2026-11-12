@@ -27,7 +27,7 @@
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { productCard, safeHttpUrl } from '../lib/knowbot.js';
+import { productCard, safeHttpUrl, isRefusalText } from '../lib/knowbot.js';
 import { emailMessage, textMessage, conversationEmail, conversationText, hostOf, isPdf } from './sendinfo-render.mjs';
 import { toE164, countryCodeOf, textableNumber } from './channels/shop.mjs';
 import { logSendEvent, hashCaller } from './questions.mjs';
@@ -213,7 +213,8 @@ export async function sendText(env, { from = null, to, body }, fetchImpl = fetch
 export function normalizeAnswer(a) {
   if (!a || typeof a !== 'object') return null;
   const text = String(a.answer ?? a.text ?? '');
-  const refused = !!a.refused || a.status === 'refused' || a.status === 'guard' || !text.trim();
+  // a stored refusal in any wording (the current one or an earlier one) with nothing cited is still a refusal
+  const refused = !!a.refused || a.status === 'refused' || a.status === 'guard' || !text.trim() || (isRefusalText(text) && !(Array.isArray(a.citations) && a.citations.length));
   const citations = (Array.isArray(a.citations) ? a.citations : []).filter((c) => c && Number.isInteger(Number(c.n))).map((c) => ({
     n: Number(c.n), file: c.file || c.filename || '', title: c.title || '', ...(c.url ? { url: c.url } : {}), ...(c.page ? { page: c.page } : {}),
     ...(c.section ? { section: c.section } : {}), excerpt: c.excerpt || c.quotes?.[0]?.text || '',

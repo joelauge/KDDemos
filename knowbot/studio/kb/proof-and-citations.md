@@ -16,7 +16,7 @@ Each source card under an answer shows a match score from 0 to 100. The match sc
 
 Source: /studio/
 
-When your files do not answer a question, KnowBot replies with exactly this sentence and nothing else: "The answer to that doesn't seem to be in my files." In Studio, a "Why?" view shows the closest passages it found and how far each was below the bot's floor.
+When your files do not answer a question, KnowBot replies with exactly this sentence and nothing else: "Looks like we don't have that in our files." In Studio, a "Why?" view shows the closest passages it found and how far each was below the bot's floor.
 
 ## The floor
 

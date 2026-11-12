@@ -23,7 +23,7 @@ const { chromium } = require('playwright');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCREENS = path.join(__dirname, 'screens');
 const FIXTURES = path.join(__dirname, 'fixtures');
-const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
+const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const SAMPLE_FILES = ['lumen-warranty-returns.md', 'lumen-service-plans.html', 'lumen-store-faq.txt', 'lumen-price-list-2026.md'];
 const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 

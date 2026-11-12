@@ -96,7 +96,7 @@ async function anthropicComplete(apiKey, model, messages, settings) {
     const r = CLAUDE_FALLBACK.test(model)
       ? await client.beta.messages.create({ ...req, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
       : await client.messages.create(req);
-    // A declined request answers nothing: KnowBot then gives its fixed "not in my data" reply.
+    // A declined request answers nothing: KnowBot then gives its fixed "not in our files" reply.
     if (r.stop_reason === 'refusal') return '';
     return textOf(r.content);
   } catch (e) { throw await anthropicError(e); }

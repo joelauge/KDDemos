@@ -13,7 +13,8 @@ import { startFakeLLM } from './fake-llm.mjs';
 import { flushQuestions, _resetQuestions } from '../questions.mjs';
 import { NOT_IN_DATA } from '../channels/util.mjs';
 import { acceptWebSocket } from '../channels/ws.mjs';
-import { webVoiceEngine, webSystemInstruction, webToolDeclarations, citationChips, activeWebVoiceSessions } from '../channels/webvoice.mjs';
+import { webVoiceEngine, webSystemInstruction, webToolDeclarations, citationChips, activeWebVoiceSessions, webGreeting } from '../channels/webvoice.mjs';
+import { greetingFor, voiceGreeting, systemInstruction as phoneSystemInstruction } from '../channels/voice-live.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY; // isolation rule 7.1
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -113,6 +114,35 @@ describe('webvoice: units', () => {
     assert.match(micErrorMessage({ name: 'NotReadableError' }), /busy in another app/);
     assert.match(micErrorMessage({ error: 'no-speech' }), /didn't hear anything/);
   });
+  test('greeting: the owner\'s words, the bot\'s name ("I\'m the ..." for a "The ..." name), and only what this bot can send', () => {
+    const G = "Hi. I'm the Ultimate Game Master Assistant. I'm here to get you quick answers.";
+    const variants = [
+      [{ email: true, text: true }, `${G} I can send you text messages and emails too. How can I help?`],
+      [{ email: false, text: true }, `${G} I can send you text messages too. How can I help?`],
+      [{ email: true, text: false }, `${G} I can send you emails too. How can I help?`],
+      [{ email: false, text: false }, `${G} How can I help?`],
+      [null, `${G} How can I help?`],
+      [{ email: false, text: false, off: true }, `${G} How can I help?`],
+    ];
+    for (const [media, want] of variants) {
+      assert.equal(webGreeting('The Ultimate Game Master Assistant', media), want, JSON.stringify(media));
+      assert.equal(greetingFor('The Ultimate Game Master Assistant', media), want, `phone ${JSON.stringify(media)}`);
+    }
+    assert.equal(voiceGreeting('Lumen Bikes', { email: true, text: true }), "Hi. I'm Lumen Bikes. I'm here to get you quick answers. I can send you text messages and emails too. How can I help?");
+    assert.equal(voiceGreeting('Lumen Bikes', { text: true }), "Hi. I'm Lumen Bikes. I'm here to get you quick answers. I can send you text messages too. How can I help?");
+    assert.equal(voiceGreeting('Lumen Bikes', { email: true }), "Hi. I'm Lumen Bikes. I'm here to get you quick answers. I can send you emails too. How can I help?");
+    assert.equal(voiceGreeting('Lumen Bikes', {}), "Hi. I'm Lumen Bikes. I'm here to get you quick answers. How can I help?");
+    assert.equal(voiceGreeting('the front desk'), "Hi. I'm the front desk. I'm here to get you quick answers. How can I help?", 'lowercase "the" after "I\'m"');
+    assert.equal(voiceGreeting('Theodore'), "Hi. I'm Theodore. I'm here to get you quick answers. How can I help?", 'a name starting with "The" letters is not "the"');
+    assert.equal(voiceGreeting(''), "Hi. I'm KnowBot. I'm here to get you quick answers. How can I help?", 'fallback name');
+    assert.equal(voiceGreeting('Acme Inc.'), "Hi. I'm Acme Inc. I'm here to get you quick answers. How can I help?", 'no double full stop');
+    assert.equal(greetingFor('Front Desk', { offerSources: true }), "Hi. I'm Front Desk. I'm here to get you quick answers. I can send you text messages and emails too. How can I help?", 'legacy offerSources = both');
+    for (const [media] of variants) for (const g of [webGreeting('Front Desk', media), greetingFor('Front Desk', media)]) assert.doesNotMatch(g, /files|sources|you've reached/i, 'no files or sources in the greeting');
+    // the live engine is told to say exactly this on connect, web and phone
+    assert.ok(webSystemInstruction({ botName: 'The Ultimate Game Master Assistant', sendInfo: { email: true, text: true } }).includes(`Greet the visitor with: "${G} I can send you text messages and emails too. How can I help?"`));
+    assert.ok(phoneSystemInstruction({ botName: 'The Ultimate Game Master Assistant', sendInfo: { email: false, text: true, callerKnown: true } }).includes(`Greet the caller with: "${G} I can send you text messages too. How can I help?"`));
+    assert.ok(phoneSystemInstruction({ botName: 'The Ultimate Game Master Assistant' }).includes(`Greet the caller with: "${G} How can I help?"`));
+  });
   test('engine: gemini only with a key (and not forced to text)', () => {
     assert.equal(webVoiceEngine({}), 'text');
     assert.equal(webVoiceEngine({ GEMINI_API_KEY: 'x' }), 'gemini');
@@ -124,7 +154,7 @@ describe('webvoice: units', () => {
     assert.match(p, /without saying where it comes from \(no "According to \.\.\."/);
     assert.match(p, /If the visitor asks where something comes from, name it from "source_titles"/);
     const ps = webSystemInstruction({ botName: 'Front Desk', org: 'Acme', sendInfo: { email: true, text: false } });
-    assert.match(ps, /happy to send you the sources for anything I share by email or text before you go/);
+    assert.ok(ps.includes('Greet the visitor with: "Hi. I\'m Front Desk. I\'m here to get you quick answers. I can send you emails too. How can I help?"'), 'email only');
     assert.match(ps, /Before the conversation ends .* transcript of your conversation and the sources for what you shared, by email/);
     assert.ok(p.includes(NOT_IN_DATA));
     assert.match(p, /Never answer from general knowledge/);
@@ -163,7 +193,8 @@ describe('webvoice: text engine (no GEMINI_API_KEY)', () => {
     const ready = await b.wait('ready');
     assert.equal(ready.engine, 'text');
     assert.equal(ready.bot.id, 'front-desk');
-    assert.match(ready.greeting, /answer from my files/);
+    assert.match(ready.greeting, /^Hi\. I'm .+\. I'm here to get you quick answers\.(?: I can send you [^.]+ too\.)? How can I help\?$/);
+    assert.doesNotMatch(ready.greeting, /files|sources/);
     b.send({ type: 'text', text: Q });
     const a = await b.wait('answer', 15000);
     assert.equal(a.refused, false);
@@ -214,7 +245,7 @@ describe('webvoice: Gemini Live engine', () => {
     _resetQuestions();
     G = await startFakeGemini(async ({ send, next }) => {
       seen.hello = (await next('text')).realtimeInput.text;
-      send({ serverContent: { outputTranscription: { text: 'Hi, I answer from my files.' }, modelTurn: { parts: [{ inlineData: { data: pcm(2400, 24000).toString('base64') } }] } } });
+      send({ serverContent: { outputTranscription: { text: "Hi. I'm here to get you quick answers." }, modelTurn: { parts: [{ inlineData: { data: pcm(2400, 24000).toString('base64') } }] } } });
       send({ serverContent: { turnComplete: true } });
       seen.audio = await next('audio');
       send({ serverContent: { inputTranscription: { text: Q } } });
@@ -301,7 +332,7 @@ describe('webvoice: phone mode (the Studio phone simulator)', () => {
     _resetQuestions();
     G = await startFakeGemini(async ({ send, next }) => {
       seen.hello = (await next('text')).realtimeInput.text;
-      send({ serverContent: { outputTranscription: { text: "Hi, you've reached Front Desk." }, modelTurn: { parts: [{ inlineData: { data: pcm(2400, 24000).toString('base64') } }] } } });
+      send({ serverContent: { outputTranscription: { text: "Hi. I'm Front Desk." }, modelTurn: { parts: [{ inlineData: { data: pcm(2400, 24000).toString('base64') } }] } } });
       send({ serverContent: { turnComplete: true } });
       seen.bye = (await next('text')).realtimeInput.text;
       send({ toolCall: { functionCalls: [{ id: 'h1', name: 'end_call', args: {} }] } });
@@ -318,7 +349,7 @@ describe('webvoice: phone mode (the Studio phone simulator)', () => {
     const ready = await b.wait('ready');
     assert.equal(ready.engine, 'gemini');
     assert.equal(ready.mode, 'phone');
-    assert.match(ready.greeting, /you've reached/i);
+    assert.match(ready.greeting, /^Hi\. I'm .+\. I'm here to get you quick answers\./);
     await until(() => seen.hello, 5000, 'call connected prompt');
     assert.match(seen.hello, /^\[call connected\]/);
     const setup = G.sessions[0].setup;
@@ -371,11 +402,11 @@ describe('webvoice: "Send me this" switched per bot (Gemini Live engine)', () =>
   test('on by default: the tool and the offer; off: neither, and a plain "doesn\'t send messages"; email only: the tool, email only', async () => {
     const on = await session();
     assert.deepEqual(on.tools, ['search_knowledge_base', 'send_info']);
-    assert.match(on.ready.greeting, /send you the sources/);
+    assert.match(on.ready.greeting, /I can send you/);
     await setBot({ on: false });
     const off = await session();
     assert.deepEqual(off.tools, ['search_knowledge_base']);
-    assert.doesNotMatch(off.ready.greeting, /send you the sources/);
+    assert.doesNotMatch(off.ready.greeting, /I can send you/);
     assert.match(off.prompt, /This bot doesn't send messages/);
     assert.doesNotMatch(off.prompt, /send_info/);
     await setBot({ on: true, text: false });

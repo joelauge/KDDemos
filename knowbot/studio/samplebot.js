@@ -79,7 +79,7 @@
 
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=7eb89ef';
 
-const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
+const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const STEP_ORDER = ['embed', 'search', 'rank', 'select', 'quote'];
 const PERSONAS = [
   { id: 'customer', label: 'Customer' },

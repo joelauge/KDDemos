@@ -179,10 +179,10 @@ describe('sendinfo switch: the conversation seam', () => {
     assert.deepEqual(webToolDeclarations({ org: 'Acme', sendInfo: off })[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base']);
     for (const p of [systemInstruction({ botName: 'Front Desk', org: 'Acme', sendInfo: off }), webSystemInstruction({ botName: 'Front Desk', org: 'Acme', sendInfo: off })]) {
       assert.match(p, /This bot doesn't send messages/);
-      assert.match(p, /never use the "not in my files" line for it/);
-      assert.doesNotMatch(p, /send_info|send you the sources/);
+      assert.match(p, /never use the "not in our files" line for it/);
+      assert.doesNotMatch(p, /send_info|I can send you/);
     }
-    assert.doesNotMatch(greetingFor('Front Desk', { offerSources: false }), /sources/);
+    assert.equal(greetingFor('Front Desk', { email: false, text: false }), "Hi. I'm Front Desk. I'm here to get you quick answers. How can I help?");
     assert.equal(sendInfoInstruction({ email: false, text: false }), '', 'the server cannot send: nothing said, as before');
     assert.match(sendInfoInstruction({ email: true, text: false }), /Texts aren't available here; offer an email instead/);
   });
@@ -288,12 +288,12 @@ describe('sendinfo switch: every surface through the server', () => {
   test('off: web voice (text engine) says it plainly, and the greeting never offers to send', async () => {
     await setBot({ on: false });
     const got = await voiceText('Can you text me that?');
-    assert.doesNotMatch(got.find((m) => m.type === 'ready').greeting, /send you the sources/);
+    assert.doesNotMatch(got.find((m) => m.type === 'ready').greeting, /I can send you/);
     const a = got.find((m) => m.type === 'answer');
     assert.equal(a.sendInfo.status, 'off');
     assert.equal(a.text, OFF_REPLY);
     await setBot({ on: true, email: true, text: true });
-    assert.match((await voiceText('Hello')).find((m) => m.type === 'ready').greeting, /send you the sources/, 'back on: the greeting offers again');
+    assert.match((await voiceText('Hello')).find((m) => m.type === 'ready').greeting, /I can send you/, 'back on: the greeting offers again');
   });
 
   test('email only / text only: the other medium is offered and used; the switched-off one never sends', async () => {

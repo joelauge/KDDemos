@@ -179,7 +179,7 @@ export function mountVoice(target, o = {}) {
   }
   function showChips(list, proofUrl, refused) {
     chips.textContent = '';
-    if (refused) { chips.append(el('li', { class: 'chip', text: 'Not in my sources' })); return; }
+    if (refused) { chips.append(el('li', { class: 'chip', text: 'Not in our sources' })); return; }
     for (const c of list || []) {
       const href = c.url || proofUrl || null;
       const inner = [el('b', { text: String(c.n) }), document.createTextNode(c.title || c.file || 'Source')];
@@ -252,12 +252,12 @@ export function mountVoice(target, o = {}) {
           agentLine.lastChild.textContent = agentText.trim();
         }
         break;
-      case 'searching': say('Looking in my sources…'); break;
-      case 'citations': showChips(m.citations, m.proofUrl, m.refused); say(m.refused ? 'Not in my sources.' : 'Answering from my sources.'); break;
+      case 'searching': say('Looking in our sources…'); break;
+      case 'citations': showChips(m.citations, m.proofUrl, m.refused); say(m.refused ? 'Not in our sources.' : 'Answering from our sources.'); break;
       case 'answer': {
         if (!m.refused) showChips(m.citations, m.proofUrl, false); else showChips([], null, true);
         addLog('agent', plain(m.text));
-        say(m.refused ? 'Not in my sources. Ask something else, or press the mic.' : 'Answered from my sources (links below). Ask a follow-up any time.');
+        say(m.refused ? 'Not in our sources. Ask something else, or press the mic.' : 'Answered from our sources (links below). Ask a follow-up any time.');
         speak(m.spoken);
         break;
       }
@@ -407,7 +407,7 @@ export function mountVoice(target, o = {}) {
     const li = addLog('user', text);
     if (engine === 'gemini') userLine = li; // the server echoes typed text as a (non-delta) user transcript
     sendJson({ type: 'text', text });
-    say('Looking in my sources…');
+    say('Looking in our sources…');
   }
 
   function paintMic() {

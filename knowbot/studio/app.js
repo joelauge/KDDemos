@@ -39,7 +39,7 @@ const V = '1';
 const { getState, setState, on, emit, mark } = store;
 const { icon, fileIcon } = icons;
 
-const NOT_IN_DATA = "The answer to that doesn't seem to be in my files.";
+const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const PROBE_Q = "What's the weather in Paris today?";
 const STEPS = [
   { key: 'purpose', label: 'Purpose' }, { key: 'sources', label: 'Sources' }, { key: 'learn', label: 'Learn' },

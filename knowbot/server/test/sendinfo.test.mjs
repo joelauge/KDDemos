@@ -80,6 +80,13 @@ describe('sendinfo: intent, addresses and messages', () => {
     assert.equal(emailFrom({ KNOWBOT_EMAIL_FROM: 'Answers <hi@mail.example>' }, 'Acme, Inc'), '"Acme, Inc" <hi@mail.example>');
     assert.ok(isStopWord('STOP') && isStopWord(' unsubscribe ') && !isStopWord('stop sending me texts about returns?'));
   });
+  test('a stored answer in the old refusal wording (no flag, nothing cited) is still a refusal; the new one too', () => {
+    for (const text of ["The answer to that doesn't seem to be in my files.", "Looks like we don't have that in our files."]) {
+      assert.equal(normalizeAnswer({ question: 'q', text, citations: [] }).refused, true, text);
+      assert.equal(normalizeAnswer({ question: 'q', answer: text }).refused, true, text);
+    }
+    assert.equal(normalizeAnswer({ question: 'q', answer: 'Open 9 to 5 [1].', citations: [{ n: 1, file: 'a.md' }] }).refused, false);
+  });
   test('the text fits 3 segments with the bot\'s name, the proof link and the opt-out line; the e-mail has the answer, quotes, sources and proof', () => {
     const long = { ...ANSWER, answer: Array.from({ length: 10 }, (_, i) => `- Line ${i} says something useful about returns and refunds for every order. [1]`).join('\n') };
     for (const a of [ANSWER, long]) {

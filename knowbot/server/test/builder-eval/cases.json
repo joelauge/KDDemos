@@ -4001,7 +4001,7 @@
     ],
     "cites": true,
     "replyMust": [
-     "/seem to be in my files|only from your files|refus/i"
+     "/have that in our files|only from your files|refus/i"
     ]
    },
    "gold": {
@@ -4013,7 +4013,7 @@
       }
      }
     ],
-    "reply": "{{quote:seem to be in my files}}"
+    "reply": "{{quote:have that in our files}}"
    }
   },
   {

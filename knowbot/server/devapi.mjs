@@ -37,7 +37,7 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sealKey, openKey, HAIKU_MODEL, queryVariantsOf } from './providers.mjs';
 import { logQuestion, questionInsights, NEVER_CITE_TAGS, parseQuestionPath, scrubQuestion, questionFromChat, hashCaller, CHANNELS } from './questions.mjs';
-import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, formatSpoken, docTitle, formatSms, formatWhatsApp, formatEmail, smsInfo } from './channels/util.mjs';
+import { ChannelError, channelStatus, publicBase, answerLines, splitSentences, NOT_IN_DATA, isRefusalText, formatSpoken, docTitle, formatSms, formatWhatsApp, formatEmail, smsInfo } from './channels/util.mjs';
 import { SMS_MAX } from './channels/sms.mjs';
 import { handleSms } from './channels/sms.mjs';
 import { handleVoice, phoneEngine } from './channels/voice.mjs';
@@ -608,7 +608,7 @@ export function createDevApi(o = {}) {
         }
       } else { try { text = JSON.parse(reply)?.choices?.[0]?.message?.content || ''; } catch { text = ''; } }
       if (!String(text).trim()) return;
-      const refused = /^\s*none\b/i.test(text) || text.includes(NOT_IN_DATA);
+      const refused = /^\s*none\b/i.test(text) || isRefusalText(text);
       logLive({ instance: body?.instance, question, outcome: refused ? 'refused' : 'answered', channel: 'web', callerKey });
     } catch { /* never affects the relay */ }
   }
@@ -688,7 +688,7 @@ ${p.citations.length ? `<section class="card" aria-labelledby="srch"><h2 class="
     return `<li id="s${c.n}"><div class="src"><span class="num mono">${c.n}</span><span class="t">${e(c.title || c.file)}</span></div><div class="meta mono"><span class="file">${e(String(c.file || '').split('/').pop())}</span>${c.similarity != null ? `<span>similarity ${e(Number(c.similarity).toFixed(2))}</span>` : ''}${qs.length ? `<span>${qs.length} line${qs.length === 1 ? '' : 's'} quoted</span>` : ''}</div>${(qs.length ? qs.map((x) => `<blockquote><mark>${e(x.text)}</mark>${x.contentHash ? `<span class="meta mono">content hash ${e(String(x.contentHash))}</span>` : ''}</blockquote>`) : c.excerpt ? [`<blockquote>${e(c.excerpt)}</blockquote>`] : []).join('')}</li>`;
   }).join('')}</ol></section>` : ''}
 ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(String(p.receipt.digest))}</span></p>` : ''}
-<footer><span>${e(bot)} answers only from its own files. Every sentence above is a line from the cited file; a question the files do not cover gets a plain “not in my files”.</span><span class="mono">Powered by KnowDrive</span></footer>
+<footer><span>${e(bot)} answers only from its own files. Every sentence above is a line from the cited file; a question the files do not cover gets a plain “not in our files”.</span><span class="mono">Powered by KnowDrive</span></footer>
 </main></body></html>`;
   }
 

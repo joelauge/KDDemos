@@ -344,7 +344,7 @@ export async function runAnswer(o) {
     const ref = randomBytes(4).toString('hex');
     log(`[answer] failed ref=${ref} channel=${channel} step=${stage}: ${e?.stack || e?.message || e}`);
     // past the search, a failure means the matches couldn't be turned into an answer: the honest result for the
-    // visitor is "not in my files" (what a weak match gets anyway), with the reference for the owner
+    // visitor is "not in our files" (what a weak match gets anyway), with the reference for the owner
     if (!PRE_SEARCH.has(stage) && !e?.noRecover) {
       return hidden(done({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: emptyProof(floor), why: null, guard: null,
         failure: { step: stage, ref, recovered: true }, latencyMs: { total: ms() } }));

@@ -244,7 +244,7 @@ try {
       email: [...document.querySelectorAll('#st-log [data-card="email-capture"], #st-log .st-email')].some((e) => e.offsetParent !== null),
       leads: document.getElementById('st-leads')?.offsetParent !== null }));
     check(cell, 'step 5: no chip for a step already done, no "Keep this bot" card, no Stats & Leads yet', !builderQuiet.chips.length && !builderQuiet.email && !builderQuiet.leads, JSON.stringify(builderQuiet));
-    check(cell, 'the refusal is the new canonical sentence', await page.evaluate(() => /The answer to that doesn't seem to be in my files\./.test(document.getElementById('sb-thread-slot').innerText)));
+    check(cell, 'the refusal is the new canonical sentence', await page.evaluate(() => /Looks like we don't have that in our files\./.test(document.getElementById('sb-thread-slot').innerText)));
     check(cell, '"Why?" is a plain text link (no border)', await page.evaluate(() => { const b = [...document.querySelectorAll('.pf-why-btn')].pop(); return !!b && getComputedStyle(b).borderTopWidth === '0px'; }));
     const viewA = await page.locator('#st-ftue').innerText();
     check(cell, 'view A: "Your bot is ready" + "Where should it answer?"', /Step 5 of 5/.test(await eyebrow()) && /Your bot is ready/.test(viewA) && /Where should it answer\?/.test(viewA));

@@ -17,7 +17,7 @@ export async function handleSms(cx) {
   if (!twilioValid(req, env.TWILIO_AUTH_TOKEN, params, env)) throw new ChannelError(403, 'bad_signature', 'X-Twilio-Signature did not verify.');
   const from = String(params.From || '');
   const body = String(params.Body || '').trim();
-  if (!body) return sendXml(res, `<Message>${xml('Text me a question and I will answer from my files, with sources.')}</Message>`);
+  if (!body) return sendXml(res, `<Message>${xml("Text us a question and we'll answer from our files, with sources.")}</Message>`);
   // STOP / START: the opt-out list "send me this" texts honour (the carrier confirms an opt-out itself, so no reply here)
   if (isStopWord(body)) { await cx.optOut?.(from); return sendXml(res, ''); }
   if (isStartWord(body)) { await cx.optIn?.(from); return sendXml(res, ''); }
