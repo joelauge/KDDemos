@@ -29,7 +29,7 @@
   const params = new URLSearchParams(HOSTED ? location.search : '');
   const BOT = String(d.bot || params.get('bot') || '').trim().toLowerCase();
   // Where each public host finds its KnowBot API: keep in step with lib/site-config.js HOSTED_APIS.
-  const HOSTED_APIS = { 'knowbot.knowdrive.ai': 'https://knowbot-api.joelauge.workers.dev' };
+  const HOSTED_APIS = { 'knowbot.knowdrive.ai': 'https://agent.knowbot.app' };
   const LOOPBACK = /^(localhost|127\.0\.0\.1|\[::1\])$/;
   const API = (() => {
     const ok = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.origin : null; } catch { return null; } };

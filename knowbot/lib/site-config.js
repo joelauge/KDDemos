@@ -1,7 +1,7 @@
 // Where each public host finds its KnowBot API (the Cloudflare Worker in cloudflare/).
-// Set the workers.dev URL printed by `wrangler deploy` (or a custom API domain) here.
+// The API's public domain (agent.knowbot.app, a custom domain on the Worker; its workers.dev URL keeps working for older embeds).
 export const HOSTED_APIS = {
-  'knowbot.knowdrive.ai': 'https://knowbot-api.joelauge.workers.dev',
+  'knowbot.knowdrive.ai': 'https://agent.knowbot.app',
 };
 export const hostedApi = () => {
   try { return (HOSTED_APIS[location.hostname] || '').replace(/\/+$/, '') || null; } catch { return null; }
