@@ -89,7 +89,9 @@ export function agentResult(a, { text, followUps = {}, proofUrl = null } = {}) {
   const sources = (a.refused ? [] : a.citations || []).map((c) => ({ n: c.n, title: c.title || c.file || `Source ${c.n}`, ...(c.url ? { url: c.url } : {}), quote: c.excerpt || (c.spans || [])[0] || '' }));
   const products = !a.refused && Array.isArray(a.products) ? a.products.map(cleanProduct).filter((p) => p.title || p.url) : [];
   const follow = a.refused ? null : followUpOf(answer, followUps);
-  return { answered, answer, sources, ...(products.length ? { products } : {}), ...(follow ? { follow_up: follow } : {}), ...(proofUrl ? { proof_url: proofUrl } : {}) };
+  // the source lines the answer rests on, word for word (the same lines the Studio, the chat and the channels quote)
+  const cited = a.refused ? [] : (a.proof?.lines || []).map((l) => l.text).filter(Boolean);
+  return { answered, answer, sources, ...(cited.length ? { cited_lines: cited } : {}), ...(products.length ? { products } : {}), ...(follow ? { follow_up: follow } : {}), ...(proofUrl ? { proof_url: proofUrl } : {}) };
 }
 
 /** The tool result's text: the answer, then a "Sources:" list of titles and links (and products, when there are any). */

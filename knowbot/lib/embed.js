@@ -86,6 +86,9 @@ const startChat = async ({ voice = null } = {}) => {
     voice: voice && voice.bot ? voice : undefined,
     engine,
     instance,
+    // answers come from the server's answer pipeline for this bot (the same as the Studio's); data-key for a trial bot
+    botId: botId || undefined,
+    key: d.key || undefined,
     guards: inst?.guards,
     persona: { name: d.name || inst?.botName || 'KnowBot', org: d.org || inst?.org || inst?.name || document.title || 'this organization' },
     title: d.title,

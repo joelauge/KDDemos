@@ -180,8 +180,8 @@ test('providers: the Anthropic default model is Claude Haiku 5.5; a short step w
   }
 });
 
-test('research effort: KNOWBOT_RESEARCH_EFFORT low|medium|high on the research step only; unset = the model default (no effort sent)', async () => {
-  assert.deepEqual(['low', 'MEDIUM', 'high', '', 'max', undefined].map(researchEffort), ['low', 'medium', 'high', null, null, null]);
+test('research effort: KNOWBOT_RESEARCH_EFFORT low|medium|high on the research step only; unset (or invalid) = low', async () => {
+  assert.deepEqual(['low', 'MEDIUM', 'high', '', 'max', undefined].map(researchEffort), ['low', 'medium', 'high', 'low', 'low', 'low']);
   const fake = await startFakeAnthropic();
   try {
     const run = async (effort) => {
@@ -190,8 +190,8 @@ test('research effort: KNOWBOT_RESEARCH_EFFORT low|medium|high on the research s
       await agent({ system: 's', messages: [{ role: 'user', content: 'q' }], max_tokens: 64 }).catch(() => null);
       return fake.requests.at(-1)?.body;
     };
-    assert.equal((await run(null)).output_config, undefined);
+    assert.deepEqual((await run(null)).output_config, { effort: 'low' });
     assert.deepEqual((await run('high')).output_config, { effort: 'high' });
-    assert.equal((await run('max')).output_config, undefined);
+    assert.deepEqual((await run('max')).output_config, { effort: 'low' });
   } finally { await fake.close(); }
 });

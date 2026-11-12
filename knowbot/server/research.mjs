@@ -3,15 +3,15 @@
 // against those lines). Without a key, or with KNOWBOT_RESEARCH=off, there is no agent and bots keep the select path.
 //
 // Settings (names only): ANTHROPIC_API_KEY (also the Builder's), KNOWBOT_RESEARCH_MODEL (default claude-haiku-5-5),
-// KNOWBOT_RESEARCH_EFFORT (low | medium | high; unset or anything else: the model's own default, no effort sent; it applies
-// to this research step only), KNOWBOT_RESEARCH=off, KNOWBOT_ANTHROPIC_BASE_URL (tests: a fake on 127.0.0.1).
+// KNOWBOT_RESEARCH_EFFORT (low | medium | high; unset or anything else: low, the fast default for a step every answer
+// waits on; it applies to this research step only), KNOWBOT_RESEARCH=off, KNOWBOT_ANTHROPIC_BASE_URL (tests: a fake on 127.0.0.1).
 import { createAnthropicComplete } from './builder/engine.mjs';
 
 export const RESEARCH_MODEL = 'claude-haiku-5-5';
-/** The research step's effort (Messages API output_config.effort), or null for the model's default. */
+/** The research step's effort (Messages API output_config.effort): KNOWBOT_RESEARCH_EFFORT when valid, else low. */
 export function researchEffort(v) {
   const e = String(v ?? '').trim().toLowerCase();
-  return ['low', 'medium', 'high'].includes(e) ? e : null;
+  return ['low', 'medium', 'high'].includes(e) ? e : 'low';
 }
 
 /**
@@ -30,7 +30,7 @@ export function createResearchAgent(env = {}, o = {}) {
   const agent = async (params, { signal } = {}) => {
     const t0 = Date.now();
     try {
-      const r = await complete({ model, ...params, ...(effort ? { output_config: { effort } } : {}) }, { signal });
+      const r = await complete({ model, ...params, output_config: { effort } }, { signal });
       return r;
     } catch (e) {
       log(`[research] ${model} failed after ${Date.now() - t0} ms: ${e?.status || ''} ${e?.message || e}`);

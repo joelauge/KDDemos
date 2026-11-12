@@ -27,8 +27,11 @@
 // (kind:config, so never searchable) or, without knowDrive, in <dataDir>/devkeys.json. Trial keys are stateless:
 // kb_trial_<payload>.<hmac>, scoped to one trial and expiring with it.
 //
-// Every answer goes through the same pipeline as the widget (guard → retrieval that excludes `questions` and
-// `kind:config` → lib answerFromSources → requireCitations) and is logged to the questions loop with its channel.
+// Every answer goes through the ONE answer pipeline (server/answer.mjs runAnswer), the same as the Studio's own ask: a
+// trial bot through the Studio's trial state (studio.answerTrial), a launched bot through its registry retriever
+// (liveAdapter; never a stored question or a `kind:config` file). It is logged to the questions loop with its channel.
+//   POST /v1/bots/:botId/web           the website chat widget (lib/widget.js): public, per-address limit, SSE with the
+//                                      pipeline's status steps; a trial bot while its Website chat switch is on
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -46,11 +49,12 @@ import { handleWhatsApp } from './channels/whatsapp.mjs';
 import { handleEmail } from './channels/email.mjs';
 import { googleConfig, transcribe, synthesize } from './channels/google.mjs';
 import { createResearchAgent } from './research.mjs';
-import { createEvidenceSelector, createResolver, selectForRetriever, isRefusal, isAnswerable, hashFor } from './evidence.mjs';
+import { createEvidenceSelector, selectForRetriever, isRefusal, hashFor } from './evidence.mjs';
 import { createSendInfo } from './sendinfo.mjs';
 import { orbOf } from './site.mjs';
 import { campaignOf, contactOf, newClickId, LINK_ID_RE, trackAnswer } from './leads.mjs';
 import { storePageHead } from './trials.mjs';
+import { runAnswer, AnswerError } from './answer.mjs';
 import { AGENT_CHANNEL, agentLimits, agentSettings, agentResult, toolResult, limitedResult, readAsk, mcpDispatch, agentManifest, llmsTxt, secondsToReset,
   limitMessage, OFF_MESSAGE, burstMessage, priceText, RPC } from './agents.mjs';
 
@@ -153,9 +157,6 @@ export function createDevApi(o = {}) {
   const researchAgent = o.researchAgent !== undefined ? o.researchAgent : createResearchAgent(env, { log });
   // the evidence selector (server/evidence.mjs; KNOWBOT_EVIDENCE=attend): when it answers, its passages replace the search
   const evidence = o.evidence !== undefined ? o.evidence : createEvidenceSelector(env, { log });
-  // resolve mode (KNOWBOT_EVIDENCE=resolve): the sidecar's ranked window replaces trialSearch's searches (a live bot's
-  // retriever does the same itself); everything after the search is unchanged
-  const resolver = o.resolver !== undefined ? o.resolver : createResolver(env, { log });
   // Claude Haiku 5.5 (server.mjs: available() when the server has an Anthropic key): AI-agent answers, live bots with no
   // model of their own on the Anthropic platform, and the hidden query rewrite. null: the local model and the rules.
   const haiku = o.haiku && typeof o.haiku.complete === 'function' ? o.haiku : null;
@@ -182,6 +183,7 @@ export function createDevApi(o = {}) {
     siteIp: Number(env.KNOWBOT_SITE_IP_RATE_LIMIT || 10),  // … and per visitor address
     siteKeyMs: Number(env.KNOWBOT_SITE_KEY_MS || 6 * 3600 * 1000), // a site key's life (never past its trial)
     channel: Number(env.KNOWBOT_CHANNEL_RATE_LIMIT || 12), // per caller per bot per channel
+    web: Number(env.KNOWBOT_WEB_RATE_LIMIT || 30),          // the website chat widget: questions per minute per visitor address
     ...(o.limits || {}),
   };
   // "send me this": one shared instance (server.mjs passes the same one to the Studio), else this module's own
@@ -396,199 +398,120 @@ export function createDevApi(o = {}) {
     return sims;
   }
 
-  async function trialSearch(t, question) {
-    const store = studio.store;
-    const none = [...NEVER_CITE_TAGS, 'kind:trial-spec'];
-    const disabled = new Set(Object.entries(t.spec.sources || {}).filter(([, v]) => v === false).map(([k]) => k));
-    const shared = t.T?.flags?.sharedSet && t.T?.flags?.sharedAt ? t.T.flags.sharedSet : null;
-    const filters = [{ all_of: [`trial:${t.id}`], none_of: none }, ...(shared ? [{ all_of: [`sample-set:${shared}`, 'kind:trial-sample'], none_of: none }] : [])];
-    const page = async (filter, mode) => {
-      const res = await kdFetch(`/api/v1/vector_stores/${encodeURIComponent(store)}/search`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, timeout: 10000,
-        body: JSON.stringify({ query: question, max_num_results: 12, mode, text: 'raw', filter, fields: 'tags,uri,score,text,file_id,metadata' }),
-      });
-      if (!res.ok) throw new ApiError(502, 'upstream', `knowDrive search failed (HTTP ${res.status})`);
-      const j = await res.json();
-      return Array.isArray(j.data) ? j.data : [];
-    };
-    // resolve mode: one ranked window over the trial's scope and its shared samples (ORed), resolve's order kept; each
-    // passage's similarity (its cosine with the question) is the floor's measure, as a vector hit's is. null: search.
-    const rw = resolver ? await resolver.resolve({ store, question, scopes: filters.map((f) => ({ tags_all: f.all_of, tags_none: f.none_of })), limit: 20, bot: t.id }) : null;
-    // production: a pure vector search under a narrow tag filter (one trial) can come back empty while hybrid, same
-    // filter, finds the atoms and still reports each hit's vector `distance`; keep only those (simOf scores by distance,
-    // never by the RRF score)
-    const pages = rw ? [rw.docs] : await Promise.all(filters.map(async (filter) => {
-      const v = await page(filter, 'vector');
-      if (v.length) return v;
-      return (await page(filter, 'hybrid')).filter((d) => d && d.distance != null && Number.isFinite(Number(d.distance)));
-    }));
-    const seen = new Set();
-    const hits = [];
-    for (const d of pages.flat()) {
-      const tags = Array.isArray(d.tags) ? d.tags.map(String) : null;
-      if (!tags) continue; // fail closed: an untagged hit cannot be proven in scope
-      const inScope = tags.includes(`trial:${t.id}`) || (shared && tags.includes(`sample-set:${shared}`) && tags.includes('kind:trial-sample'));
-      if (!inScope || none.some((x) => tags.includes(x)) || disabled.has(d.file_id) || isQuestionFile(d.filename)) continue;
-      const text = contentText(d);
-      if (!text) continue;
-      const k = `${d.file_id}|${sha256(text).slice(0, 16)}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      const filename = String(d.filename || '').split('/').pop();
-      hits.push({ file_id: d.file_id, filename, title: docTitle(d.attributes?.breadcrumb ? String(d.attributes.breadcrumb).split(' > ')[0] : '', filename), url: null, score: round4(simOf(d)), similarity: round4(simOf(d)), text,
-        ...(d.attributes?.breadcrumb ? { crumb: String(d.attributes.breadcrumb) } : {}),
-        ...(rw && d.content_hash ? { content_hash: d.content_hash } : {}) });
-    }
-    if (rw) Object.defineProperty(hits, 'receipt', { value: rw.digest, enumerable: false });
-    else hits.sort((a, b) => b.similarity - a.similarity);
-    return hits;
-  }
-
-  /** The selector's evidence for a trial bot, fenced like trialSearch (scope tags, disabled files, stored questions). */
-  async function trialEvidence(t, question) {
-    if (!evidence || !studio?.store) return null;
-    const none = [...NEVER_CITE_TAGS, 'kind:trial-spec'];
-    const disabled = new Set(Object.entries(t.spec.sources || {}).filter(([, v]) => v === false).map(([k]) => k));
-    const shared = t.T?.flags?.sharedSet && t.T?.flags?.sharedAt ? t.T.flags.sharedSet : null;
-    const scopes = [{ tags_all: [`trial:${t.id}`], tags_none: none }, ...(shared ? [{ tags_all: [`sample-set:${shared}`, 'kind:trial-sample'], tags_none: none }] : [])];
-    const sel = await evidence.select({ store: studio.store, question, scopes }).catch(() => null);
-    if (!sel || (!isRefusal(sel) && !isAnswerable(sel))) return null;
-    const results = sel.sources.filter((x) => !disabled.has(x.file_id) && !isQuestionFile(x.path)).map((x) => {
-      const filename = String(x.path || '').split('/').pop();
-      return { ...x, filename, title: docTitle(x.title ? String(x.title).split(' · ')[0] : '', filename), url: null, evidence: true };
-    });
-    if (isAnswerable(sel) && !results.length) return { ...sel, status: 'none_in_window', results: [] };
-    return { ...sel, results };
-  }
-
   // ---------------------------------------------------------------- the answer pipeline
   /**
-   * @returns {Promise<{ id, bot, botName, question, answer, refused, grounded, citations, proof, latencyMs, guard? }>}
+   * A launched bot's retrieval for the one answer pipeline (server/answer.mjs runAnswer): its registry retriever (its
+   * own knowDrive scope, folder or corpus), each hit's vector similarity where the retriever has one, the evidence
+   * selector when on, and product cards read from the cited sources. Stored questions and config files are never hits.
    */
+  function liveAdapter(retriever, lib) {
+    const seen = new Map(); // fileId → the retriever's result (cards, links)
+    let floorMin = null, source = null;
+    const toHit = (r, sim, extra = {}) => {
+      const fileId = r.file_id || r.filename;
+      if (!seen.has(fileId)) seen.set(fileId, r);
+      return { fileId, filename: r.filename, atomId: r.atom_id ?? r.atomId ?? null, seq: r.seq ?? null, text: String(r.text || ''), title: r.title || null, url: r.url || null,
+        page: r.page ?? null, section: r.section ?? null, crumb: r.crumb ?? null, similarity: sim == null ? null : sim, rrf: null, contentHash: r.content_hash || null, _r: r, ...extra };
+    };
+    const clean = (list) => (list || []).filter((x) => x && x.text && !isQuestionFile(x.filename));
+    const pageUrlOf = (r) => (r ? r.url || storePageHead(r.crumb || r.title, r.text)?.url || null : null);
+    return {
+      fileName: (id) => seen.get(id)?.filename || String(id || ''),
+      searched: () => ({ atoms: 0, files: 0 }),
+      async retrieve(q, { variant = false } = {}) {
+        // each live search applies the bot's own floor; a hit's similarity is its own chunk's vector similarity (never
+        // RRF); a hit only the keyword side found is labelled, not scored
+        const [ret, sims] = await Promise.all([retriever.search(q, 6), variant ? new Map() : liveSimilarities(retriever, q)]);
+        if (!variant) { floorMin = ret.floor?.min ?? null; source = ret.source || null; }
+        const vector = clean(ret.results).map((r) => toHit(r, sims.get(chunkKey(r.filename, r.text)) ?? null));
+        const known = vector.map((h) => h.similarity).filter((x) => typeof x === 'number');
+        const top = typeof ret.floor?.top === 'number' ? ret.floor.top : known.length ? Math.max(...known) : null;
+        return { vector, hybridOnly: [], top, floorMin, receipt: ret.receipt || null };
+      },
+      evidence: evidence ? async (q, signal) => {
+        const sel = await selectForRetriever(evidence, retriever, q, { signal });
+        if (!sel || isRefusal(sel)) return sel;
+        return { ...sel, hits: clean(sel.results).map((r) => toHit(r, null, { evidence: true })) };
+      } : null,
+      sources: async (hits) => ({ sources: hits.map((h) => ({ ...h._r, file_id: h.fileId, filename: h.filename, score: h._r?.score ?? h.similarity ?? 0 })), srcHit: hits }),
+      products: ({ text, cites }) => (typeof lib.productCards === 'function'
+        ? lib.productCards({ text, citations: cites.map((c) => ({ n: c.n, url: c.url || pageUrlOf(seen.get(c.fileId)), fileId: c.fileId })), sources: [...seen.values()].map((r) => ({ url: pageUrlOf(r), text: r.text })) }) : []),
+      get floorMin() { return floorMin; },
+      get source() { return source; },
+    };
+  }
+
   /**
-   * history: the conversation so far ([{q,a}] or chat messages), only to understand a follow-up (lib normalizeHistory
-   * keeps the last two exchanges). pin 'haiku': the answer runs on Claude Haiku 5.5 whatever the bot's own model (AI
-   * agents: cost control for metered answers).
+   * One question, any bot, any surface, through the one pipeline (server/answer.mjs): a trial bot through the Studio's
+   * own trial state (studio.answerTrial), a launched bot through its registry retriever. history: the conversation so
+   * far ([{q,a}] or chat messages), only to understand a follow-up. pin 'haiku': a launched bot's answer runs on Claude
+   * Haiku 5.5 whatever its own model (AI agents: cost control for metered answers); a trial bot already answers on the
+   * Studio's engine. cards: product cards (web surfaces only, the website voice mode included; SMS and phone calls never).
+   * @returns {Promise<{ id, bot, botName, question, answer, refused, grounded, citations, proof, latencyMs, timings, tokens, guard?, failure? }>}
    */
-  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval, cards = false, pin = null } = {}) {
+  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval, onEvent, cards = false, pin = null } = {}) {
     const t0 = performance.now();
     const lib = await o.loadLib();
     const q = String(question || '').replace(/\s+/g, ' ').trim().slice(0, MAX_Q);
-    const hist = typeof lib.normalizeHistory === 'function' ? lib.normalizeHistory(history) : [];
-    let persona, profile, results = [], sims = new Map(), floor = null, retriever = null, mode = 'select', complete, settings = { ...CANON, ...(lib.CANONICAL || {}) };
-    const onHaiku = pin === 'haiku' && haikuOn();
-    if (target.kind === 'trial') {
-      const s = target.spec;
-      persona = { name: s.name || 'KnowBot', org: s.org || s.name || 'this company', ...(s.instructions ? { instructions: s.instructions } : {}) };
-      profile = 'general';
-      floor = Number(s.floor) || 0.7;
-      // the Studio's own answering engine (its provider: Claude Haiku 5.5 in production), so a trial bot answers the same
-      // on the API and its channels as in the Studio
-      complete = onHaiku ? (m, c) => haiku.complete(m, c?.settings || settings)
-        : typeof studio?.answerComplete === 'function' ? async (m, c) => (await studio.answerComplete(m, c?.settings || settings))?.raw ?? ''
-          : (m, c) => o.llmComplete(m, c?.settings || settings);
-    } else {
-      const inst = target.inst;
-      persona = { name: 'KnowBot', org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}), ...(inst.instructions ? { instructions: inst.instructions } : {}) };
-      profile = inst.guards || 'general';
-      mode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
-      const provider = inst.provider || 'local';
-      complete = onHaiku ? (m, c) => haiku.complete(m, c?.settings || settings)
-        : pin === 'haiku' && provider === 'anthropic' ? (m, c) => o.completeWith(provider, registry.providerKey(provider), HAIKU_MODEL, m, c?.settings || settings)
-          : provider === 'local'
-            ? (m, c) => o.llmComplete(m, c?.settings || settings, inst.model || llmModel)
-            : (m, c) => o.completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
-      retriever = registry.retriever(inst.id);
-    }
-    // the hidden query rewrite: one short Claude Haiku call when the server has the key, else the deterministic rules
-    const rewrite = haikuOn() ? (m, c) => haiku.complete(m, c?.settings) : null;
-    const canExpand = queryVariants > 0 && typeof lib.expandQuery === 'function' && typeof lib.fuseKept === 'function';
+    const settings = { ...CANON, ...(lib.CANONICAL || {}) };
     // Token metering: every model call's full prompt (system + grounding context + history + question) and its output.
     // A provider that reports usage ({usage:{prompt_tokens, completion_tokens}} on its result) is counted exactly;
     // otherwise the count is an estimate (chars / 4) and the response says so (knowbot.usageEstimated).
     const meter = { calls: 0, prompt: 0, completion: 0, real: { prompt: 0, completion: 0, calls: 0 } };
     const msgText = (m) => (Array.isArray(m) ? m : [m]).map((x) => (typeof x === 'string' ? x : `${x?.role || ''}: ${typeof x?.content === 'string' ? x.content : JSON.stringify(x?.content ?? '')}`)).join('\n');
-    const outText = (r) => (typeof r === 'string' ? r : String(r?.text ?? r?.content ?? r?.choices?.[0]?.message?.content ?? ''));
-    const rawComplete = complete;
-    complete = async (m, c) => {
+    const outText = (r) => (typeof r === 'string' ? r : String(r?.raw ?? r?.text ?? r?.content ?? r?.choices?.[0]?.message?.content ?? ''));
+    const metered = (fn) => async (m, c) => {
       meter.calls++;
       meter.prompt += approxTokens(msgText(m)) + 4 * (Array.isArray(m) ? m.length : 1); // + per-message chat framing
-      const r = await rawComplete(m, c);
+      const r = await fn(m, c);
       const u = r && typeof r === 'object' ? r.usage : null;
       if (u && Number.isFinite(Number(u.prompt_tokens))) { meter.real.calls++; meter.real.prompt += Number(u.prompt_tokens); meter.real.completion += Number(u.completion_tokens) || 0; }
       meter.completion += approxTokens(outText(r));
       return r;
     };
-    // In select mode an unreachable model falls back to the keyword selector rather than failing the answer.
-    const safeComplete = mode === 'select' ? async (m, c) => { try { return await complete(m, c); } catch (e) { log(`[devapi] model failed (${e.message}); keyword fallback`); return ''; } } : complete;
-
-    // A hit's similarity is its own chunk's vector similarity; a hit only the keyword side found is labelled, not scored.
-    const hitView = (r) => {
-      const sim = sims.get(chunkKey(r.filename, r.text));
-      return { file: r.filename, similarity: round4(sim ?? null), ...(sim == null ? { label: r.evidence ? 'selected passage' : 'keyword match' } : {}), excerpt: String(r.text || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+    let last = null;
+    const events = (ev, data) => {
+      if (ev === 'retrieval') {
+        last = data;
+        onRetrieval?.(data.guard ? { hits: [], floor: { min: null, top: null }, ms: 0, guard: data.guard }
+          : { hits: (data.hits || []).slice(0, 6).map((h) => ({ file: h.file, similarity: h.similarity, ...(h.similarity == null ? { label: h.label } : {}), excerpt: String(h.excerpt || '').slice(0, 200), title: h.title || null, kept: !!h.kept })),
+            floor: data.floor, ms: data.ms });
+      }
+      onEvent?.(ev, data);
     };
-    const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(q, persona, { profile }) : null;
-    let fin = guard, tRet = performance.now(), top = null, candidates = [], sel = null, resolvedReceipt = null, expansion = null;
-    let standalone = q;
-    if (!guard) {
-      // the hidden expansion: the question rewritten to stand alone (with the history) + alternative phrasings, all
-      // searched in parallel against this bot's own scope and fused (reciprocal rank); the floor reads the best
-      // similarity any of them found, so a question nothing answers is still refused
-      const ex = canExpand ? await lib.expandQuery({ question: q, history: hist, complete: rewrite, variants: queryVariants }) : null;
-      if (ex) standalone = ex.standalone || q;
-      // resolve mode: the answer is drawn from resolve's receipted window for the question, so no variants are mixed in
-      const queries = ex && !resolver ? ex.queries : [q];
-      // the evidence selector, when on and answering, replaces the search below (and the research agent's search tool);
-      // it takes one question, so it gets the standalone one (no variants)
-      sel = target.kind === 'trial' ? await trialEvidence(target, standalone) : await selectForRetriever(evidence, retriever, standalone);
-      const tX = performance.now();
-      if (sel) {
-        results = isRefusal(sel) ? [] : sel.results;
-        candidates = results.slice(0, 5);
-      } else if (target.kind === 'trial') {
-        const lists = await Promise.all(queries.map((x, i) => (i ? trialSearch(target, x).catch(() => []) : trialSearch(target, x))));
-        // the six hits the answer reads (above the floor) are chosen by the fusion and keep the question's own order
-        const hits = lists.length > 1 ? lib.fuseKept(lists, { k: 6, keep: (h) => h.similarity >= floor, fill: ex.source !== 'model' }) : lists[0];
-        // (resolve mode keeps resolve's order, so the best similarity is not always first)
-        top = hits.length ? Math.max(...hits.map((h) => h.similarity)) : 0;
-        resolvedReceipt = lists[0].receipt || null;
-        candidates = hits.slice(0, 5);
-        results = hits.filter((h) => h.similarity >= floor).slice(0, 6);
-        for (const h of hits) { sims.set(h.filename, Math.max(sims.get(h.filename) ?? 0, h.similarity)); sims.set(chunkKey(h.filename, h.text), Math.max(sims.get(chunkKey(h.filename, h.text)) ?? 0, h.similarity)); }
+    let final, adapter = null;
+    try {
+      if (target.kind === 'trial') {
+        if (typeof studio?.answerTrial !== 'function') throw new ApiError(503, 'no_store', 'Trial bots need the Studio (a knowDrive store) on this server.');
+        final = await studio.answerTrial(target.id, q, { history, channel, cards, onEvent: events, wrapComplete: metered, expiresAt: target.expiresAt });
       } else {
-        // each live search applies the bot's own floor; a variant that finds nothing above it adds nothing
-        const [ret, s, ...more] = await Promise.all([retriever.search(q, 6), liveSimilarities(retriever, q), ...queries.slice(1).map((x) => retriever.search(x, 6).catch(() => null))]);
-        sims = s;
-        resolvedReceipt = ret.receipt || null;
-        // never cite a stored question or a config file, whatever the retriever returned
-        const lists = [ret, ...more].filter(Boolean).map((r) => (r.results || []).filter((x) => x && x.text && !isQuestionFile(x.filename)));
-        results = lists.length > 1 ? lib.fuseKept(lists, { k: 6, fill: ex.source !== 'model' }) : lists[0];
-        const tops = [ret, ...more].filter(Boolean).map((r) => r.floor?.top).filter((x) => typeof x === 'number');
-        top = tops.length ? Math.max(...tops) : (sims.size ? Math.max(...sims.values()) : null);
-        floor = ret.floor?.min ?? null;
-        candidates = results.slice(0, 5);
+        const inst = target.inst;
+        const persona = { name: 'KnowBot', org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}), ...(inst.instructions ? { instructions: inst.instructions } : {}) };
+        const mode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
+        const provider = inst.provider || 'local';
+        const onHaiku = pin === 'haiku' && haikuOn();
+        const call = onHaiku ? (m, st) => haiku.complete(m, st || settings)
+          : pin === 'haiku' && provider === 'anthropic' ? (m, st) => o.completeWith(provider, registry.providerKey(provider), HAIKU_MODEL, m, st || settings)
+            : provider === 'local' ? (m, st) => o.llmComplete(m, st || settings, inst.model || llmModel)
+              : (m, st) => o.completeWith(provider, registry.providerKey(provider), inst.model, m, st || settings);
+        // in select mode an unreachable model falls back to the keyword selector rather than failing the answer
+        const complete = mode === 'select' ? async (m, st) => { try { return await call(m, st); } catch (e) { log(`[devapi] model failed (${e.message}); keyword fallback`); return ''; } } : call;
+        adapter = liveAdapter(registry.retriever(inst.id), lib);
+        final = await runAnswer({ question: q, history, channel, persona, profile: inst.guards || 'general', floor: 0, adapter, complete: metered(complete),
+          rewrite: haikuOn() ? metered((m, c) => haiku.complete(m, c?.settings)) : null, variants: queryVariants, research: mode === 'select' ? researchAgent : null,
+          mode, settings, voice: inst.voice ?? true, cards, onEvent: events, log });
       }
-      if (ex) expansion = { queries: queries.length, ms: ex.ms + Math.round(performance.now() - tX), source: ex.source };
-      tRet = performance.now();
-      onRetrieval?.({ hits: (results.length ? results : candidates).slice(0, 6).map((r) => ({ ...hitView(r), title: r.title || null, kept: results.includes(r) })),
-        floor: { min: floor, top: round4(top) }, ms: Math.round(tRet - t0) });
-      // voice: every bot answers as a kind librarian (lib guideText): where it found it, the exact words, one opener/closer
-      // the selector found nothing that answers it: the fixed refusal, no model call
-      if (sel && isRefusal(sel)) fin = { text: NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false };
-      else {
-        const r = await lib.answerFromSources({ question: q, standalone, results, complete: safeComplete, search: !sel && retriever ? (x) => retriever.search(x, 6) : undefined, persona, minScore: 0, k: 6,
-          history: hist, mode, settings, voice: target.inst?.voice ?? true, evidenceOnly: !!sel,
-          ...(mode === 'select' && researchAgent ? { research: researchAgent, onResearch: (e) => { if (e.type === 'error') log(`[api] research failed: ${e.message}`); } } : {}) });
-        fin = r.fin;
-        // the answer verdict (lib judgeAnswer): only the closing follow-up changes ("That covers part of it…")
-        if (fin && !fin.refused && mode === 'select' && lib.judgeAnswer) fin = lib.applyVerdict(fin, await lib.judgeAnswer({ complete: safeComplete, question: standalone, text: fin.text }));
-      }
-    } else onRetrieval?.({ hits: [], floor: { min: null, top: null }, ms: 0, guard: guard.guard || 'guard' });
-
-    const refused = !!fin.refused;
+    } catch (e) {
+      if (e instanceof ApiError || e?.status === 404) throw e instanceof ApiError ? e : new ApiError(404, 'bot_not_found', e.message);
+      if (e instanceof AnswerError) throw new ApiError(502, 'upstream', `This bot's files couldn't be searched just now (ref ${e.ref}).`);
+      throw e;
+    }
+    const refused = !!final.refused;
+    const guard = final.guard || null;
     // A courtesy opener never hedges right before a verbatim quote on the API and channels ("I think I found …" → "Good news, I found …").
-    // CONTRACT-GAP: lib/knowbot.js (owner Q) OPENERS still contains the hedging form for Studio; drop it there to align every surface.
-    const text = refused && !guard ? NOT_IN_DATA : String(fin.text || '').replace(/^I think I found what you(?:'|’)re looking for!/, "Good news, I found what you're looking for!");
+    const text = refused && !guard ? NOT_IN_DATA : String(final.text || '').replace(/^I think I found what you(?:'|’)re looking for!/, "Good news, I found what you're looking for!");
+    const cites = (final.citations || []).map((c) => ({ n: c.n, filename: c.file, file_id: c.fileId, title: c.title, url: c.url, page: c.page, section: c.section, snippet: c.excerpt, similarity: c.similarity }));
+    const passages = (final.hits || []).map((h) => ({ file_id: h.fileId, text: h.text, content_hash: h.contentHash || null }));
     const lines = refused ? [] : answerLines(text, { markdown: true });
     // The verbatim quote of a cited line is the span inside “…” right before its [n] (the librarian voice wraps the source's
     // exact words in curly quotes and names the document around them); a cited line with no such span is quoted whole,
@@ -601,48 +524,43 @@ export function createDevApi(o = {}) {
       const t = stripMarks(l).replace(/^\s*[-*•]\s+/, '').replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)/g, '$1');
       return n && !isCourtesy(t) ? [{ n, text: t }] : [];
     }).filter((x) => x.n && x.text)
-      .map((x) => { const c = (fin.citations || []).find((y) => y.n === x.n); const h = (sel || resolvedReceipt) && c?.file_id ? hashFor(results, c.file_id, x.text) : null;
+      .map((x) => { const c = cites.find((y) => y.n === x.n); const h = c?.file_id ? hashFor(passages, c.file_id, x.text) : null;
         return { ...x, file: c?.filename || null, ...(c?.file_id ? { fileId: c.file_id } : {}), ...(h ? { contentHash: h } : {}) }; });
     // One footnote, one verbatim span: excerpt is the FIRST line quoted under [n] exactly as written (never two lines
     // stitched together); every line quoted under [n] is listed, each verbatim, in spans (and in proof.quoted).
-    const citations = refused ? [] : (fin.citations || []).map((c) => {
+    const citations = refused ? [] : cites.map((c) => {
       const qs = quoted.filter((x) => x.n === c.n).map((x) => x.text);
       const snip = String(c.snippet || '').replace(/\s+/g, ' ').trim();
       return { n: c.n, file: c.filename, title: docTitle(c.title, c.filename), excerpt: qs[0] || snip, spans: qs.length ? qs : snip ? [snip] : [], ...(c.url ? { url: c.url } : {}),
         ...(Number.isInteger(c.page) && c.page > 0 ? { page: c.page } : {}), ...(typeof c.section === 'string' && c.section.trim() ? { section: c.section.trim() } : {}),
-        similarity: round4(sims.get(c.filename) ?? null) };
+        similarity: round4(c.similarity ?? null) };
     });
-    const hits = (refused ? candidates : results).slice(0, 6).map(hitView);
-    // product cards (web surfaces only: the web chat, the Homepage search and the website's voice mode ask with cards;
-    // SMS and phone calls never)
-    let products = [];
-    if (cards && !refused && (fin.citations || []).length) {
-      const pageUrlOf = (r) => (r ? r.url || storePageHead(r.crumb || r.title, r.text)?.url || null : null);
-      const resultOf = (fid) => results.find((r) => r.file_id === fid);
-      const cites = fin.citations.map((c) => ({ n: c.n, url: c.url || pageUrlOf(resultOf(c.file_id)), fileId: c.file_id }));
-      try {
-        products = target.kind === 'trial'
-          ? (await studio?.productsFor?.(target.id, { text, cites })) || []
-          : typeof lib.productCards === 'function' ? lib.productCards({ text, citations: cites, sources: results.map((r) => ({ url: pageUrlOf(r), text: r.text })) }) : [];
-      } catch (e) { log(`[devapi] product cards failed: ${e.message}`); products = []; }
-    }
+    const rv = last && !last.guard ? last : null;
+    const hits = (rv?.hits || []).filter((h) => refused || h.kept).slice(0, refused ? 5 : 6)
+      .map((h) => ({ file: h.file, similarity: h.similarity, ...(h.similarity == null ? { label: h.label } : {}), excerpt: String(h.excerpt || '').slice(0, 200) }));
+    const floor = { min: rv?.floor?.min ?? null, top: rv?.floor?.top ?? null };
+    // the source lines the answer quotes (the same on every surface): the parity check reads these
+    const sourceLines = refused ? [] : (final.proof?.quotedLines || []).map((x) => ({ n: x.n, text: x.text, file: x.file }));
+    const products = cards && !refused ? final.products || [] : [];
     const latencyMs = Math.round(performance.now() - t0);
     // usage: exact when every model call reported it; else estimated from the full prompt actually sent (or, when no
     // model ran, from the question, history and retrieved context the answer was built from)
     const exact = meter.calls > 0 && meter.real.calls === meter.calls;
-    const ctxChars = (results.length ? results : candidates).reduce((n, r) => n + String(r.text || '').length, 0);
-    const histChars = hist.reduce((n, m) => n + String(m.q || '').length + String(m.a || '').length, 0);
+    const ctxChars = (final.hits || []).reduce((n, r) => n + String(r.text || '').length, 0);
+    const histChars = (Array.isArray(history) ? history : []).reduce((n, m) => n + String(m?.q || m?.content || '').length + String(m?.a || '').length, 0);
     const tokens = exact
       ? { prompt: meter.real.prompt, completion: meter.real.completion, estimated: false, modelCalls: meter.calls }
       : { prompt: meter.calls ? meter.prompt : Math.ceil((q.length + histChars + ctxChars) / 4) + 8, completion: Math.max(meter.completion, approxTokens(text)), estimated: true, modelCalls: meter.calls };
     const out = {
       id: `ans_${rid(16)}`, bot: target.id, botName: target.name, question: q, answer: text, refused, grounded: !refused && citations.length > 0, citations,
       ...(products.length ? { products } : {}),
-      ...(fin?.verdict ? { verdict: fin.verdict } : {}),
-      proof: { hits, quoted, floor: { min: floor, top: round4(top) }, ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : resolvedReceipt ? { receipt: { digest: resolvedReceipt } } : {}) }, latencyMs, retrievalMs: Math.round(tRet - t0), tokens, ...(guard ? { guard: guard.guard || 'guard' } : {}),
+      ...(final.verdict ? { verdict: final.verdict } : {}),
+      proof: { hits, quoted, lines: sourceLines, floor, ...(final.proof?.receipt ? { receipt: final.proof.receipt } : {}) }, latencyMs, retrievalMs: final.latencyMs?.retrieve ?? 0, tokens,
+      timings: final.timings, ...(guard ? { guard } : {}), ...(final.failure ? { failure: { step: final.failure.step, ref: final.failure.ref } } : {}),
     };
     // internal only (logs, tests): how many ways the files were searched; never part of a public answer
-    if (expansion) Object.defineProperty(out, 'expansion', { value: expansion, enumerable: false });
+    if (rv?.searched?.ways > 1) Object.defineProperty(out, 'expansion', { value: { queries: rv.searched.ways, ms: rv.searched.waysMs }, enumerable: false });
+    if (adapter) Object.defineProperty(out, 'retrievalSource', { value: adapter.source, enumerable: false });
     logAnswer(target, out, channel, callerKey);
     return out;
   }
@@ -909,19 +827,21 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     return { question: q, history };
   }
   /** The answer text as the API returns it: prose with inline [n] (the Studio's form) or, with format:"bullets", one claim per line. */
-  const answerText = (a, format = 'prose') => (a.refused ? a.answer : format === 'bullets' ? bulletsAnswer(a.answer) || a.answer : proseAnswer(a.answer) || a.answer);
+  const answerText = (a, format = 'prose') => (a.refused || format === 'markdown' ? a.answer : format === 'bullets' ? bulletsAnswer(a.answer) || a.answer : proseAnswer(a.answer) || a.answer);
   /** The streamed pieces of answerText: concatenating every piece's `raw` gives exactly answerText. */
   const answerPieces = (a, format = 'prose') => {
     if (a.refused) return [{ raw: a.answer, n: [] }];
+    // markdown (the website widget): the answer's own lines, as the Studio shows them
+    if (format === 'markdown') return String(a.answer).split('\n').filter((l) => l.trim()).map((l, i) => ({ raw: `${i ? '\n' : ''}${l}`, text: stripMarks(l).replace(/^\s*[-*•]\s+/, ''), n: [...l.matchAll(/\[(\d{1,3})\]/g)].map((m) => Number(m[1])) }));
     const lines = answerLines(a.answer, { markdown: true });
     const parts = format === 'bullets' ? answerText(a, 'bullets').split('\n').filter((l) => l.trim()) : lines.map(proseSentence).filter(Boolean);
     return parts.map((t, i) => ({ raw: `${i ? (format === 'bullets' ? '\n' : ' ') : ''}${t}`, text: stripMarks(t).replace(/^\s*[-*•]\s+/, ''), n: [...t.matchAll(/\[(\d{1,3})\]/g)].map((m) => Number(m[1])) }));
   };
-  const formatOf = (body) => (String(body?.format || '').toLowerCase() === 'bullets' ? 'bullets' : 'prose');
+  const formatOf = (body) => { const f = String(body?.format || '').toLowerCase(); return f === 'bullets' || f === 'markdown' ? f : 'prose'; };
   const publicAnswer = (a, req, format = 'prose') => ({
     id: a.id, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: a.bot, question: a.question, answer: answerText(a, format), format: a.refused ? 'text' : format, citations: a.citations.map(({ similarity, ...c }) => c),
-    refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
-    ...(a.guard ? { guard: a.guard } : {}), ...(!a.refused && a.products?.length ? { products: a.products } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
+    refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, lines: a.proof.lines || [], floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
+    ...(a.guard ? { guard: a.guard } : {}), ...(a.failure ? { failure: a.failure } : {}), ...(!a.refused && a.products?.length ? { products: a.products } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
   });
   const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title}${c.page ? `, page ${c.page}` : ''}${c.section ? `, “${c.section}”` : ''} — ` : ''}${c.file}${c.url ? ` <${c.url}>` : ''}`).join('\n')}`.trim());
 
@@ -957,7 +877,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     const proofUrl = a.refused ? null : proofUrlFor(req, a.proofId);
     rememberAnswer(siKey, { ...a, proofUrl }, req);
     const r = { ...a, question };
-    const out = { channel, question, refused: !!a.refused, proofUrl, citations: publicAnswer(a, req).citations || [] };
+    const out = { channel, question, refused: !!a.refused, proofUrl, citations: publicAnswer(a, req).citations || [], lines: (a.proof.lines || []).map((l) => l.text) };
     if (channel === 'sms') out.text = formatSms(r, proofUrl, SMS_MAX);
     else if (channel === 'whatsapp') out.text = formatWhatsApp(r, proofUrl);
     else { const e = formatEmail(r, { proofUrl, botName: target.name || 'KnowBot', question }); out.text = e.text; out.html = e.html; out.subject = `Re: ${question.slice(0, 120)}`; out.from = target.name || 'KnowBot'; }
@@ -972,23 +892,49 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     const target = await resolveTarget(botId, who);
     const channel = who.scope === 'site' ? 'site' : typeof body.channel === 'string' && CHANNELS.includes(body.channel) ? body.channel : 'api';
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${String(body.user).slice(0, 80)}` : who.keyId;
-    const format = formatOf(body);
+    return chatTurn(req, res, { target, question, history, channel, callerKey, format: formatOf(body), stream: body.stream === true });
+  }
+
+  /**
+   * POST /v1/bots/:id/web {question, history?, stream?, format?, user?}: the website chat widget (lib/widget.js, the
+   * one-line embed). Public like the widget itself, limited per visitor address; a trial bot answers here while its
+   * Website chat switch is on (spec.surfaces 'webchat'), or for its own key. The same pipeline, proof and "send me this"
+   * as /chat; the stream also carries the pipeline's status steps so the widget can say what it is doing.
+   */
+  async function webChat(req, res, botId) {
+    const ip = ipOf(req);
+    const rl = limit(`web:${ip}`, limits.web);
+    if (rl.limited) throw new ApiError(429, 'rate_limit_exceeded', `Too many questions at once. Try again in ${rl.retryAfter}s.`, {}, { 'retry-after': String(rl.retryAfter) });
+    const body = await bodyJson(req);
+    const { question, history } = readConversation(body);
+    const who = bearerOf(req) ? await authKey(req, botId, { site: true }) : null;
+    const target = await resolveTarget(botId, who);
+    if (target.kind === 'trial' && !who && Array.isArray(target.spec?.surfaces) && !target.spec.surfaces.includes('webchat')) {
+      throw new ApiError(403, 'chat_off', 'The website chat is switched off for this bot.');
+    }
+    const visitor = typeof body.user === 'string' && body.user ? String(body.user).slice(0, 80) : ip;
+    return chatTurn(req, res, { target, question, history, channel: 'web', callerKey: `web:${visitor}`, format: formatOf(body), stream: body.stream === true, status: true });
+  }
+
+  /** One chat turn (JSON or SSE) for /chat and /web: "send me this", else the answer pipeline. */
+  async function chatTurn(req, res, { target, question, history, channel, callerKey, format, stream, status = false }) {
     const siKey = `${target.id}|${channel}|${callerKey}`;
     const si = await sendInfoTurn(req, target, { key: siKey, question, history, channel, callerKey });
     if (si) {
       const out = sendInfoAnswer(target, question, si);
-      if (body.stream !== true) return send(res, 200, out);
+      if (!stream) return send(res, 200, out);
       sseHead(res);
       const frame = (id, event, data) => `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
       res.write(frame(1, 'delta', { text: si.reply, n: [], raw: si.reply }) + frame(2, 'final', out) + frame(3, 'done', { latencyMs: 0 }));
       return res.end();
     }
-    if (body.stream === true) {
+    if (stream) {
       sseHead(res);
       let n = 0;
       const emit = (event, data) => { try { res.write(`id: ${++n}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {} };
       try {
-        const a = await askOnce(req, target, question, { history, channel, callerKey, cards: true, siKey, onRetrieval: (r) => emit('retrieval', r) });
+        const a = await askOnce(req, target, question, { history, channel, callerKey, cards: true, siKey, onRetrieval: (r) => emit('retrieval', r),
+          onEvent: status ? (ev, d) => { if (ev === 'status' && d?.step) emit('status', { step: d.step }); } : undefined });
         for (const piece of answerPieces(a, format)) emit('delta', { text: piece.text ?? piece.raw, n: piece.n, raw: piece.raw });
         emit('final', publicAnswer(a, req, format));
         emit('done', { latencyMs: a.latencyMs });
@@ -1006,8 +952,8 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
    * One question through the answer pipeline, its proof saved (and, with siKey, remembered for "send me this"): the ONE
    * path /v1/bots/:id/chat and the AI-agent endpoints (MCP `ask`, POST /v1/bots/:id/ask) share.
    */
-  async function askOnce(req, target, question, { history = [], channel = 'api', callerKey = null, cards = true, siKey = null, onRetrieval, pin = null } = {}) {
-    const a = await answer(target, question, { history, channel, callerKey, cards, onRetrieval, pin });
+  async function askOnce(req, target, question, { history = [], channel = 'api', callerKey = null, cards = true, siKey = null, onRetrieval, onEvent, pin = null } = {}) {
+    const a = await answer(target, question, { history, channel, callerKey, cards, onRetrieval, onEvent, pin });
     a.proofId = a.refused ? null : saveProof(a, channel);
     if (siKey) rememberAnswer(siKey, a, req);
     return a;
@@ -1166,7 +1112,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     const id = `chatcmpl-${rid(24)}`, created = Math.floor(now() / 1000), modelName = who.bot;
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${body.user}` : who.keyId;
     const format = formatOf(body);
-    const ext = (a) => ({ citations: a.citations.map(({ similarity, ...c }) => c), refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) },
+    const ext = (a) => ({ citations: a.citations.map(({ similarity, ...c }) => c), refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, lines: a.proof.lines || [], floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) },
       ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}), latencyMs: a.latencyMs, usageEstimated: a.tokens ? !!a.tokens.estimated : true });
     // real provider usage when every model call reported it; otherwise an estimate from the FULL prompt sent to the model
     // (system, grounding context, history, question: chars / 4), flagged knowbot.usageEstimated so metering can tell
@@ -1284,7 +1230,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   // ---------------------------------------------------------------- phone: Twilio Media Streams WebSocket (voice-live.mjs)
   /** Retrieval only (no answer, nothing logged): the bot's own scope. The phone channel's product-handle lookup. */
   async function searchRaw(target, q) {
-    if (target.kind === 'trial') return (await trialSearch(target, q)).slice(0, 6).map((h) => ({ text: h.text, file: h.filename, title: h.title }));
+    if (target.kind === 'trial') return (await studio.searchTrial(target.id, q)).slice(0, 6);
     const ret = await registry.retriever(target.inst.id).search(q, 6);
     return (ret.results || []).filter((r) => r && r.text && !isQuestionFile(r.filename)).map((r) => ({ text: r.text, file: r.filename, title: r.title || null }));
   }
@@ -1683,10 +1629,10 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
       return agentDiscovery(req, res, decodeURIComponent(mt[1]), mt[2]);
     }
-    if ((mt = /^\/v1\/bots\/([^/]+)\/(chat|voice|preview)$/.exec(p))) {
+    if ((mt = /^\/v1\/bots\/([^/]+)\/(chat|web|voice|preview)$/.exec(p))) {
       if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only');
       const botId = decodeURIComponent(mt[1]);
-      return mt[2] === 'chat' ? botChat(req, res, botId) : mt[2] === 'preview' ? botPreview(req, res, botId) : botVoice(req, res, botId);
+      return mt[2] === 'chat' ? botChat(req, res, botId) : mt[2] === 'web' ? webChat(req, res, botId) : mt[2] === 'preview' ? botPreview(req, res, botId) : botVoice(req, res, botId);
     }
     if ((mt = /^\/v1\/channels\/([^/]+)\/?$/.exec(p))) {
       if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');

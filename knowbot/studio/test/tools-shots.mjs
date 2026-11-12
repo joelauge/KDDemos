@@ -76,6 +76,29 @@ try {
   check('embed: the chat bubble has a voice-mode mic by default', r.mic === true, JSON.stringify(r));
   r = await probe('data-chat="on" data-voice="off" data-homepage="off"');
   check('embed: data-voice="off" removes the mic from the chat bubble', r.chat && r.mic === false, JSON.stringify(r));
+  {
+    // the chat bubble answers through the server's one pipeline (POST /v1/bots/:id/web), never by assembling an answer
+    // in the browser (/api/search + /api/chat): the same answer, word for word, as the Studio's own ask
+    const Q = 'How long is the frame warranty?';
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await ctx.newPage();
+    const urls = [];
+    page.on('request', (rq) => urls.push(new URL(rq.url()).pathname));
+    await page.goto(homeUrl, { waitUntil: 'load' });
+    await page.waitForSelector('.kb-launcher', { timeout: 15000 });
+    await page.click('.kb-launcher');
+    await page.fill('.kb-input', Q);
+    await page.press('.kb-input', 'Enter');
+    await page.waitForSelector('.kb-msg.kb-bot:not(.kb-pending):not(.kb-greet) .kb-sources, .kb-msg.kb-bot.kb-refused', { timeout: 30000 }).catch(() => null);
+    // the answer as the widget received it (its conversation memory) and the sources it lists
+    const shown = await page.evaluate(() => { const m = [...document.querySelectorAll('.kb-msg.kb-bot:not(.kb-greet)')].pop(); return { text: window.knowbot?.bot?.history?.at(-1)?.content || '', sources: m?.querySelectorAll('.kb-sources li').length || 0 }; });
+    await ctx.close();
+    const ev = (await (await api(`/api/studio/trials/${t.trialId}/ask`, { method: 'POST', headers: H({ 'content-type': 'application/json' }), body: JSON.stringify({ question: Q }) })).text())
+      .split('\n\n').find((f) => /^event: final$/m.test(f));
+    const fin = JSON.parse(/^data: (.*)$/m.exec(ev)[1]);
+    check('widget: asks the server pipeline (/v1/bots/:id/web), not /api/search + /api/chat', urls.some((u) => u.endsWith(`/v1/bots/${t.trialId}/web`)) && !urls.some((u) => /\/api\/(?:search|chat)$/.test(u)), urls.filter((u) => u.includes('/api/')).join(' '));
+    check('widget: the same answer and sources as the Studio', !fin.refused && shown.sources === fin.citations.length && shown.text === fin.text, `${shown.sources} vs ${fin.citations.length}\n${shown.text}\n${fin.text}`);
+  }
   line = `<script type="module" src="${dev.url}/lib/embed.js" data-instance="nobot" data-api="${dev.url}"></script>`;
   r = await probe(null);
   check('embed: an old one-line snippet (no saved switches) is the chat bubble, as before', r.chat && !r.homepage && !r.voice, JSON.stringify(r));

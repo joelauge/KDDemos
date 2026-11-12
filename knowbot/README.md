@@ -91,8 +91,10 @@ cite identical paths.
         data-org="The Ultimate Game Master"></script>
 ```
 
-`data-mode` is `widget`, `inline` (with `data-target="#el"`) or `fullpage`. `data-engine="webllm"` runs the model in
-the visitor's browser on WebGPU instead of the server.
+`data-mode` is `widget`, `inline` (with `data-target="#el"`) or `fullpage`. The widget asks the server's one answer
+pipeline (`POST /api/v1/bots/:bot/web`, `server/answer.mjs`), the same one the Studio, the API, AI agents and every channel
+use, so a question gets the same answer everywhere. `data-engine="webllm"` runs the model in the visitor's browser on
+WebGPU instead (the only case the browser assembles an answer itself).
 
 ## How citation is guaranteed
 
@@ -128,8 +130,9 @@ lines, and summaries are verified against those lines and the visitor's own word
 | Setting | Default | Meaning |
 |---|---|---|
 | `KNOWBOT_QUERY_VARIANTS` | `4` | Alternative searches per question besides itself, so at most 5 searches. `0` turns expansion off. |
-| `KNOWBOT_WIDGET_ENGINE` | `haiku` | `/api/chat` (the website widget) answers with Claude Haiku 5.5 when the server has an Anthropic key, and falls back to the local model on errors. `local` keeps the local model. |
-| `KNOWBOT_RESEARCH_EFFORT` | model default | `low`, `medium` or `high`, sent as `output_config.effort` on the research step only. |
+| `KNOWBOT_WIDGET_ENGINE` | `haiku` | `/api/chat` (the library's browser-assembled mode) answers with Claude Haiku 5.5 when the server has an Anthropic key, and falls back to the local model on errors. `local` keeps the local model. |
+| `KNOWBOT_RESEARCH_EFFORT` | `low` | `low`, `medium` or `high`, sent as `output_config.effort` on the research step only. |
+| `KNOWBOT_WEB_RATE_LIMIT` | `30` | Website widget questions per minute per visitor address (`/v1/bots/:bot/web`). |
 
 AI-agent answers (MCP `ask`, `POST /v1/bots/:id/ask`) always run on Claude Haiku 5.5 when the server has the key,
 whatever the bot's own model. The Anthropic platform's default model for bots is `claude-haiku-5-5`.

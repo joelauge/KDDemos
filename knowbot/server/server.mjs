@@ -18,7 +18,7 @@ import { logSendEvent } from './questions.mjs';
 import { phoneSessions } from './channels/voice-live.mjs';
 import { activeWebVoiceSessions } from './channels/webvoice.mjs';
 import { createResearchAgent } from './research.mjs';
-import { createEvidenceSelector, createResolver, selectForRetriever, isRefusal } from './evidence.mjs';
+import { createEvidenceSelector, createResolver } from './evidence.mjs';
 
 /**
  * The header the Cloudflare Worker sends on internal calls to this server (GET /api/internal/busy): an HMAC of a fixed
@@ -277,7 +277,8 @@ export function createKnowBotServer(opts = {}) {
     const res = await fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
-      body: JSON.stringify({ model: m.id, messages, stream: false, ...settings }),
+      // reasoning_effort is a hosted-model setting (Claude): never sent to the local model
+      body: JSON.stringify({ model: m.id, messages, stream: false, ...Object.fromEntries(Object.entries(settings || {}).filter(([k]) => k !== 'reasoning_effort')) }),
       signal: AbortSignal.timeout(Number(env.LLM_TIMEOUT_MS || 300000)),
     }).catch((e) => {
       if (e.name === 'TimeoutError') throw new HttpError(504, `LLM timed out after ${Number(env.LLM_TIMEOUT_MS || 300000)}ms`);
@@ -288,55 +289,30 @@ export function createKnowBotServer(opts = {}) {
     return j?.choices?.[0]?.message?.content ?? '';
   }
 
-  async function canonical({ question, sessionId, turnId, history, instance }) {
-    const lib = await loadLib();
+  /**
+   * POST /api/canonical: one live bot's answer in the library's Answer shape. It runs the one answer pipeline
+   * (server/answer.mjs through devapi.answer: guard, search with the hidden expansion, select or the bot's generate
+   * mode, citation gate, table interpretation, verdict), so it answers exactly as the widget, the API and the channels do.
+   */
+  async function canonical({ question, sessionId, turnId, history, instance, callerKey = null }) {
     await registry.ready;
     const inst = registry.get(instance);
-    const retriever = registry.retriever(inst.id);
-    const persona = { ...DEFAULT_PERSONA, org: inst.org || inst.name, ...(inst.botName ? { name: inst.botName } : {}), ...(inst.instructions ? { instructions: inst.instructions } : {}) };
-    const k = 6;
-    const minScore = Number(env.KNOWBOT_MIN_SCORE || 0);
-    const settings = { ...CANONICAL, ...(lib.CANONICAL || {}) };
-    const t0 = performance.now();
-    const guard = typeof lib.guardRequest === 'function' ? lib.guardRequest(question, persona, { profile: inst.guards || 'general' }) : null;
-    // the evidence selector, when on and answering, replaces the search: its passages are the answer's only evidence
-    const sel = guard ? null : await selectForRetriever(evidence, retriever, question);
-    const ret = guard ? { source: 'guard', results: [] } : sel ? { source: 'knowdrive', results: sel.results } : await retriever.search(question, k);
-    const tRet = performance.now();
-    const results = ret.results;
+    const target = { kind: 'live', id: inst.id, inst, name: inst.botName || inst.name || inst.org || inst.id };
+    const a = await devapi.answer(target, question, { history: Array.isArray(history) ? history : [], channel: 'web', callerKey, cards: true });
     const surface = { kind: 'api', device: 'desktop', host: 'server', path: '/api/canonical', referrer: '', embedded: false, channel: 'api', lang: 'en', ua: `node/${process.versions.node}`, instance: inst.id };
     // type stays 'openai' (the wire protocol) for the local model; hosted platforms also name the provider.
     const engine = { type: 'openai', model: inst.model || llmModel, ...(inst.provider ? { provider: inst.provider } : {}) };
-
-    // Same path as KnowBot.ask() in lib/knowbot.js: guard -> retrieval -> answerFromSources (select mode by default).
-    let fin = guard, tGen = tRet;
-    // the selector found nothing that answers it: the fixed refusal, no model call
-    if (!guard && sel && isRefusal(sel)) fin = { text: lib.NOT_IN_DATA, citations: [], grounded: false, refused: true, fallback: false };
-    else if (!guard) {
-      const provider = inst.provider || 'local';
-      const complete = provider === 'local'
-        ? (m, c) => llmComplete(m, c?.settings || settings, inst.model || llmModel)
-        : (m, c) => completeWith(provider, registry.providerKey(provider), inst.model, m, c?.settings || settings);
-      const answerMode = inst.answerMode || env.KNOWBOT_ANSWER_MODE || 'select';
-      const r = await lib.answerFromSources({ question, results, complete, search: sel ? undefined : (x) => retriever.search(x, k), persona, minScore, k, evidenceOnly: !!sel,
-        history: Array.isArray(history) ? history : [], mode: answerMode, settings,
-        // the hidden query expansion (lib answerFromSources: the alternatives are searched and fused with these results)
-        expand: queryVariants, rewrite: haiku?.available?.() ? (m, c) => haiku.complete(m, c?.settings) : null,
-        ...(answerMode === 'select' && researchAgent ? { research: researchAgent } : {}),
-        // Owner rule: every live bot answers as a kind librarian (opener, "In “Title”, page N, it says: “…” [1].", closer).
-        // An instance may opt out with voice:false; anything else (unset included) gets the guide voice.
-        voice: inst.voice ?? true });
-      fin = r.fin; tGen = performance.now();
-    }
-    const latencyMs = { retrieval: Math.round(tRet - t0), generation: Math.round(tGen - tRet), total: Math.round(performance.now() - t0) };
+    const latencyMs = { retrieval: a.retrievalMs, generation: Math.max(0, a.latencyMs - a.retrievalMs), total: a.latencyMs };
+    const citations = a.citations.map((c) => ({ n: c.n, filename: c.file, title: c.title, url: c.url ?? null, snippet: c.excerpt, ...(c.page ? { page: c.page } : {}), ...(c.section ? { section: c.section } : {}) }));
     const answer = {
-      ...fin,
-      ...(sel?.receipt?.digest ? { receipt: { digest: sel.receipt.digest } } : ret.receipt ? { receipt: { digest: ret.receipt } } : {}),
-      latencyMs, engine, surface,
+      text: a.answer, citations, grounded: a.grounded, refused: a.refused, fallback: false, ...(a.guard ? { guard: a.guard } : {}), ...(a.products?.length ? { products: a.products } : {}),
+      ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}),
+      latencyMs, timings: a.timings, engine, surface,
       sessionId: sessionId ?? null,
       turnId: turnId ?? `canonical.${randomUUID().slice(0, 8)}`,
     };
-    const retrieval = { source: ret.source, count: results.length, topScore: results[0]?.score ?? null };
+    const results = a.proof.hits;
+    const retrieval = { source: a.retrievalSource || (a.guard ? 'guard' : null), count: results.length, topScore: a.proof.floor.top ?? results[0]?.similarity ?? null };
     const event = {
       v: 1, type: 'canonical', ts: Date.now(), sessionId: answer.sessionId, turnId: answer.turnId, surface,
       question, text: answer.text, citations: answer.citations, grounded: answer.grounded, refused: answer.refused,
@@ -646,8 +622,8 @@ export function createKnowBotServer(opts = {}) {
           const question = typeof body.question === 'string' ? body.question.trim() : '';
           if (!question) throw new HttpError(400, 'question is required');
           if (question.length > 4000) throw new HttpError(400, 'question too long');
-          const answer = await canonical({ question, sessionId: body.sessionId, turnId: body.turnId, history: body.history, instance: body.instance });
-          devapi.logLive({ instance: body.instance, question, outcome: answer.refused ? 'refused' : 'answered', citations: answer.citations, channel: 'web', callerKey: body.sessionId || clientIp(req) });
+          // the question is logged by the pipeline (channel 'web'), as every surface's is
+          const answer = await canonical({ question, sessionId: body.sessionId, turnId: body.turnId, history: body.history, instance: body.instance, callerKey: body.sessionId || clientIp(req) });
           return send(res, 200, answer);
         }
 

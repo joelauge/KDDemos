@@ -1949,6 +1949,11 @@ export class KnowBot {
     this.instance = o.instance ? String(o.instance) : null;
     this.retriever = createRetriever(o.retriever ?? (this.instance ? { type: 'server', instance: this.instance } : undefined), this.apiBase);
     this.engine = createEngine(o.engine, this.apiBase);
+    // The server's own answer pipeline (POST <api>/api/v1/bots/:id/web, server/answer.mjs): what the Studio, the API, AI
+    // agents and every channel answer with, so the widget answers the same question the same way. The browser only
+    // assembles an answer itself when the page asks for it: a custom retriever, or a model it runs (webllm) or names (openai).
+    this.botId = o.botId ? String(o.botId) : this.instance;
+    this.pipeline = o.pipeline !== false && this.engine.type === 'server' && (o.retriever == null || o.retriever.type === 'server');
     this.surface = detectSurface({ ...(o.surface && o.surface !== 'auto' ? o.surface : {}), ...(this.instance ? { instance: this.instance } : {}) });
     this.sessionId = o.sessionId || sessionIdFor(this.surface.kind);
     this.telemetry = new Telemetry(o.telemetry ?? true, this.apiBase);
@@ -1972,6 +1977,7 @@ export class KnowBot {
   async ask(question, o = {}) {
     const q = String(question ?? '').trim();
     if (!q) throw new Error('KnowBot.ask: empty question');
+    if (this.pipeline) return this.askServer(q, o);
     this.start();
     const turnId = `${this.sessionId}.${++this.turns}`, t0 = now();
     this.emit({ type: 'message.user', turnId, text: q });
@@ -2009,6 +2015,68 @@ export class KnowBot {
     this.emit({ type: 'message.bot', turnId, text: fin.text, citations: fin.citations, grounded: fin.grounded, refused: fin.refused,
       latencyMs: answer.latencyMs, engine: answer.engine,
       retrieval: { source, count: pool.length, topScore: results[0]?.score ?? null } });
+    return answer;
+  }
+  /** The bot to ask on the server: data-bot / data-instance, else the server's default bot (GET /api/config). */
+  async serverBot(signal) {
+    if (this.botId) return this.botId;
+    const j = await (await fetch(`${this.apiRoot()}/api/config`, { signal })).json().catch(() => null);
+    this.botId = j?.instance?.id ? String(j.instance.id) : null;
+    if (!this.botId) throw new Error('KnowBot: no bot to ask');
+    return this.botId;
+  }
+  apiRoot() { return trimSlash(this.apiBase).replace(/\/api$/, ''); }
+  /** One question through the server's answer pipeline, streamed (status steps, the answer's lines, the final answer). */
+  async askServer(q, o = {}) {
+    this.start();
+    const turnId = `${this.sessionId}.${++this.turns}`, t0 = now();
+    this.emit({ type: 'message.user', turnId, text: q });
+    o.onStatus?.({ phase: 'retrieving' });
+    const bot = await this.serverBot(o.signal);
+    const res = await fetch(`${this.apiRoot()}/api/v1/bots/${encodeURIComponent(bot)}/web`, {
+      method: 'POST', credentials: 'omit', signal: o.signal,
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...(this.opts.key ? { authorization: `Bearer ${this.opts.key}` } : {}) },
+      body: JSON.stringify({ question: q, history: this.history.slice(-4), stream: true, format: 'markdown', user: this.sessionId }),
+    });
+    if (res.status === 429) throw new Error('Lots of questions right now. Wait a few seconds and try again.');
+    if (!res.ok || !res.body) {
+      let m = null; try { m = (await res.json())?.error?.message; } catch { /* not JSON */ }
+      throw new Error(m || "Couldn't answer right now. Try again in a moment.");
+    }
+    let text = '', final = null, err = null, t1 = null;
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const r = await reader.read();
+      buf += r.done ? dec.decode() : dec.decode(r.value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+        const ev = /^event: (.*)$/m.exec(frame)?.[1];
+        let data = null; try { data = JSON.parse(/^data: (.*)$/m.exec(frame)?.[1] || 'null'); } catch { /* a keep-alive */ }
+        if (ev === 'status' && data?.step) o.onStatus?.({ phase: ['select', 'quote'].includes(data.step) ? 'generating' : 'retrieving', step: data.step });
+        else if (ev === 'retrieval') { t1 ??= now(); o.onStatus?.({ phase: 'answering' }); }
+        else if (ev === 'delta' && data) { text += data.raw ?? data.text ?? ''; o.onToken?.(data.raw ?? '', text); }
+        else if (ev === 'final') final = data;
+        else if (ev === 'error') err = data?.message;
+      }
+      if (r.done) break;
+    }
+    if (!final) throw new Error(err || "Couldn't answer right now. Try again in a moment.");
+    const t2 = now();
+    const citations = (final.citations || []).map((c) => ({ n: c.n, title: c.title, url: c.url || null, filename: c.file, snippet: c.excerpt || '',
+      ...(c.page ? { page: c.page } : {}), ...(c.section ? { section: c.section } : {}) }));
+    const answer = {
+      text: String(final.answer ?? ''), citations, grounded: !!final.grounded, refused: !!final.refused, fallback: false,
+      products: final.refused ? [] : Array.isArray(final.products) ? final.products : [],
+      ...(final.proofUrl ? { proofUrl: final.proofUrl } : {}), ...(final.sendInfo ? { sendInfo: final.sendInfo } : {}),
+      latencyMs: { retrieval: ms(t0, t1 ?? t2), generation: ms(t1 ?? t2, t2), total: ms(t0, now()) },
+      engine: { type: 'server', model: null }, surface: this.surface, sessionId: this.sessionId, turnId,
+    };
+    this.history.push({ role: 'user', content: q }, { role: 'assistant', content: answer.text });
+    this.history = this.history.slice(-4);
+    this.emit({ type: 'message.bot', turnId, text: answer.text, citations, grounded: answer.grounded, refused: answer.refused,
+      latencyMs: answer.latencyMs, engine: answer.engine, retrieval: { source: 'server', count: citations.length, topScore: final.proof?.floor?.top ?? null } });
     return answer;
   }
   reset() { this.history = []; }
@@ -2071,7 +2139,8 @@ export function tabularShare(texts = []) {
   const t = texts.map((x) => String(x || '').trim()).filter(Boolean);
   return t.length ? t.filter((x) => TAB_KV.test(x) || TAB_ROW.test(x) || TAB_CSV.test(x)).length / t.length : 0;
 }
-export const INTERPRET_SETTINGS = Object.freeze({ max_tokens: 320, temperature: 0 });
+// short and low effort: one or two sentences (the reply is verified against the cells, never trusted)
+export const INTERPRET_SETTINGS = Object.freeze({ max_tokens: 160, temperature: 0, reasoning_effort: 'low' });
 export function buildInterpretMessages(question, lines, persona = {}) {
   return [
     { role: 'system', content: `You are ${persona.name || 'a helpful assistant'}${persona.org ? ` for ${persona.org}` : ''}. The numbered lines are fields or rows from a table (a spreadsheet, CSV or JSON record). Answer the question in one or two short, plain sentences, the way a helpful person would explain it: pick the fields that answer the question and add useful context (for example what, how many, where). Do not list every field. Use ONLY values that appear in the lines, copied exactly (numbers, names, codes). End each sentence with the marker of a line it relies on, like [L12]. Reply with the sentences only.` },
@@ -2083,7 +2152,7 @@ export function buildInterpretMessages(question, lines, persona = {}) {
  * fields, else fin unchanged. lines: the candidate lines ({n, source, text}) fin.selected points at; sources: their
  * passages. complete(messages, settings) → string | {raw}. Never throws; never waits longer than timeoutMs.
  */
-export async function interpretTabular({ fin, lines = [], sources = [], question = '', ask = '', persona = {}, complete, timeoutMs = 6000 } = {}) {
+export async function interpretTabular({ fin, lines = [], sources = [], question = '', ask = '', persona = {}, complete, timeoutMs = 4000 } = {}) {
   // ask: the question as the model reads it (a follow-up rewritten to stand alone); question: the visitor's own words,
   // the only words besides the quoted cells a sentence may restate (verifySummary)
   if (!fin || fin.refused || fin.summary || typeof complete !== 'function') return fin;

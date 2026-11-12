@@ -28,6 +28,7 @@ import { promises as fsp, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as kbLib from '../lib/knowbot.js';
 import { createResearchAgent } from './research.mjs';
+import { runAnswer, emptyProof } from './answer.mjs';
 import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAnswerable } from './evidence.mjs';
 import { fileStage, safeRelPath, MAX_UPLOAD_BYTES } from './instances.mjs';
 import { completeWith, PROVIDERS, queryVariantsOf } from './providers.mjs';
@@ -362,7 +363,7 @@ export function hitAllowed(h, trialId, exclude = []) {
   return ![...ALWAYS_EXCLUDE, ...exclude].some((t) => h.tags.includes(t));
 }
 
-function locatorOf(h, atomsTotal) {
+export function locatorOf(h, atomsTotal) {
   if (h.page != null) return `p.${h.page}`;
   if (h.slide != null) return `slide ${h.slide}`;
   if (h.sheet != null && h.row != null) return `${h.sheet} · row ${h.row}`;
@@ -407,7 +408,7 @@ export function findOffset(hay, needle) {
   }
   return [map[j], map[j + nn.length - 1] + 1];
 }
-const isDerivedLine = (t) => /;\s/.test(t) && (String(t).match(/[^;:]{1,60}:\s[^;]+/g) || []).length >= 2;
+export const isDerivedLine = (t) => /;\s/.test(t) && (String(t).match(/[^;:]{1,60}:\s[^;]+/g) || []).length >= 2;
 
 // ------------------------------------------------------------------------------------------- spec
 const TONES = ['friendly', 'neutral', 'formal'], LENGTHS = ['short', 'normal'], AUDIENCES = ['customers', 'employees', 'students'];
@@ -815,13 +816,6 @@ export function lineScore(question, lineText, atomSimilarity, qTerms = lineTerms
   const sim = Number.isFinite(Number(atomSimilarity)) && atomSimilarity != null ? Number(atomSimilarity) : 0.55;
   return 0.5 * sim + 0.5 * (0.55 + 0.4 * cov);
 }
-// CONTRACT-GAP (r3): server/devapi.mjs (owner F) gets its select-mode text through lib requireCitations, which splits a
-// quoted line at the dot of an e-mail domain or URL ("example with photos…") and keeps only a multi-sentence line's
-// last sentence. It should run `citeQuotedLines(fin, lib.requireCitations)` (exported below) the way the Studio /ask
-// path does. The sample files keep one answer sentence per line so dev and test runs are already clean.
-// CONTRACT-GAP: server/devapi.mjs (/v1 chat + channels, not owner A) answers through lib.answerFromSources and does not
-// call keepRelevantLines; with a real model it should filter fin.selected through keepRelevantLines(…, { isIntro }) the way
-// the Studio /ask path does. The fake model (server/test/fake-llm.mjs) already refuses to pad, so dev/test runs are clean.
 /** Self-describing intro sentences ("This page explains exactly what is covered…"): never a supporting line. */
 export const GENERIC_LINE_RE = /\b(?:this|the following|our)\s+(?:page|policy|document|guide|section|faq|list|handbook|article|sheet|site)\s+(?:explains|covers|describes|lists|sets out|tells|shows|is written|answers)\b|\bit is written in plain\b/i;
 /**
@@ -1922,7 +1916,7 @@ export function createStudio(o = {}) {
     const searchable = new Set(files.filter((f) => f.replay && ['vectorizing', 'ready'].includes(f.stage)).map((f) => f.id));
     const sharedOk = (h) => !!h.tags && h.tags.includes(`sample-set:${sharedSet}`) && h.tags.includes('kind:trial-sample') && !ALWAYS_EXCLUDE.some((t) => h.tags.includes(t)) && searchable.has(h.fileId);
     const ok = (h) => (hitAllowed(h, T.id, disabledTags) || convertedHitOk(T, h, disabledTags) || (sharedSet && sharedOk(h))) && !disabledIds.has(h.fileId);
-    // a hidden alternative phrasing (retrieveExpanded): one hybrid search per scope (one knowDrive call: hybrid hits carry
+    // a hidden alternative phrasing (server/answer.mjs): one hybrid search per scope (one knowDrive call: hybrid hits carry
     // their vector distance even under a narrow filter), scored by that distance, never by RRF; the same fences
     if (variant) {
       const [hb, shb] = await Promise.all([rawSearch(query, 'hybrid', vectorK, filter, signal), sharedSet ? rawSearch(query, 'hybrid', vectorK, sharedFilter, signal) : []]);
@@ -1991,27 +1985,6 @@ export function createStudio(o = {}) {
     }
     const top = merged.length ? Math.max(...merged.map((h) => h.similarity ?? 0)) : 0;
     return { vector: merged, hybridOnly, top, files };
-  }
-
-  /**
-   * retrieve() for a question and its hidden alternatives (lib expandQuery): the first query (the question as it stands
-   * alone) gets the full search (vector + hybrid + clauses), each alternative one hybrid search scored by vector
-   * distance (one knowDrive call per scope), all in parallel. The vector lists are fused by reciprocal rank, one row per atom keeping its best
-   * similarity, so the floor reads the best evidence any phrasing found (and still refuses when none clears it). Resolve
-   * mode keeps its receipted window for the question alone. → retrieve()'s shape + { ways, waysMs }.
-   */
-  async function retrieveExpanded(T, queries, { files, signal, floor = 0, fill = false } = {}) {
-    const t0 = performance.now();
-    if (queries.length < 2 || (resolver && store)) return { ...(await retrieve(T, queries[0], { files, signal })), ways: 1, waysMs: 0 };
-    const [main, ...alts] = await Promise.all([retrieve(T, queries[0], { files, signal }),
-      ...queries.slice(1).map((q) => retrieve(T, q, { files, signal, variant: true, vectorK: 8 }).catch(() => null))]);
-    const keyOf = (h) => h.atomId || `${h.fileId}|${h.seq}|${sha1(normText(h.text).slice(0, 200))}`;
-    // the six hits the answer reads (above the floor) are chosen by the fusion and keep the main search's order
-    const vector = kbLib.fuseKept([main.vector, ...alts.filter(Boolean).map((x) => x.vector)], { k: 6, keep: (h) => (h.similarity ?? 0) >= floor, keyOf, copy: false, fill });
-    const inV = new Set(vector.map(keyOf));
-    const hybridOnly = main.hybridOnly.filter((h) => !inV.has(keyOf(h)));
-    const top = vector.length ? Math.max(...vector.map((h) => h.similarity ?? 0)) : 0;
-    return { ...main, vector, hybridOnly, top, ways: queries.length, waysMs: Math.round(performance.now() - t0) };
   }
 
   /**
@@ -2480,16 +2453,10 @@ export function createStudio(o = {}) {
     res.on('close', () => { if (!res.writableFinished) ac.abort(); });
     res.writeHead(200, SSE_HEADERS);
     let n = 0;
-    // the step the answer is on (status events), so a failure can say where it happened
-    let stage = 'start';
-    const emit = (event, data) => {
-      if (event === 'status' && data?.step) { stage = data.step; if (o.faultAt === stage) throw new Error(`injected fault at ${stage}`); }   // tests only
-      if (!ac.signal.aborted) writeFrame(res, ++n, event, data);
-    };
+    const emit = (event, data) => { if (!ac.signal.aborted) writeFrame(res, ++n, event, data); };
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, pingMs); ping.unref?.();
     const ms = () => Math.round(performance.now() - t0);
     const spec = T.spec;
-    const persona = { name: spec.name, org: spec.org || spec.name, instructions: spec.instructions };
     const base = { version: spec.version, question };
     const finish = (final) => {
       emit('final', final);
@@ -2515,223 +2482,58 @@ export function createStudio(o = {}) {
         return;
       }
     }
-    try {
-      // 1. guard
-      const g = kbLib.guardRequest(question, persona, { profile: 'general' });
-      if (g) {
-        return finish({ ...base, text: g.text, refused: true, status: 'guard', citations: [], proof: emptyProof(spec.floor), why: null, guard: g.guard || 'guard',
-          latencyMs: { retrieve: 0, select: 0, quote: 0, total: ms() } });
-      }
-      // 2. search
-      emit('status', { step: 'embed', t: ms() });
-      const files = await filesOf(T);
-      // the hidden expansion: the follow-up rewritten to stand alone (with the thread's last two exchanges) plus
-      // alternative phrasings, searched in parallel; the visitor only ever sees their own question
-      const ex = queryVariants ? await kbLib.expandQuery({ question, history, complete: rewriteComplete(), signal: ac.signal, variants: queryVariants }) : null;
-      const standalone = ex?.standalone || question;
-      const queries = ex ? [standalone, ...ex.queries.filter((x) => x !== standalone)] : [question];
-      emit('status', { step: 'search', t: ms() });
-      const floor = spec.floor;
-      // the evidence selector, when on and answering, replaces the search (and the research agent's search tool); it
-      // takes one question, so it gets the standalone one (the alternatives are for the searches below)
-      const sel = await evidenceSelect(T, standalone, files, ac.signal);
-      if (ac.signal.aborted) { clearInterval(ping); return; }
-      let receipt = sel?.receipt?.digest ? { digest: sel.receipt.digest } : null;
-      if (sel && isRefusal(sel)) {
-        const tRet0 = ms();
-        const ready0 = files.filter((f) => f.enabled && f.stage === 'ready');
-        emit('retrieval', { ms: tRet0, searched: { atoms: files.filter((f) => f.enabled).reduce((s, f) => s + (f.vectorized || 0), 0), files: ready0.length }, floor: { min: floor, top: 0 }, hits: [] });
-        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: 0, ...(receipt ? { receipt } : {}) },
-          why: { best: 0, floor, candidates: [], reason: sel.status === 'underspecified' ? 'the question names nothing to look for' : 'nothing in the files answers the question' },
-          closeMiss: null, guard: null, latencyMs: { retrieve: tRet0, select: 0, quote: 0, total: ms() } });
-      }
-      const r = sel ? { vector: sel.hits, hybridOnly: [], top: floor, files } : await retrieveExpanded(T, queries, { files, signal: ac.signal, floor, fill: ex?.source !== 'model' });
-      // resolve mode: the receipt of the ranked windows the answer was drawn from (proof page), as with the selector's
-      if (!receipt && r.receipt) receipt = { digest: r.receipt };
-      const tRet = ms();
-      // 3. normalize, join, keep
-      const top = r.top;
-      const above = sel ? [...sel.hits] : r.vector.filter((h) => (h.similarity ?? 0) >= floor).slice(0, 6);
-      const kept = [...above];
-      if (!sel && top >= floor) for (const h of r.hybridOnly.filter((x) => x.hybridRank <= 3)) if (kept.length < 6) { h.keyword = true; kept.push(h); }
-      const shown = [...kept, ...r.vector.filter((h) => !kept.includes(h)), ...r.hybridOnly.filter((h) => !kept.includes(h))].slice(0, sel ? kept.length : 12);
-      if (!sel) await resolveAtoms(T, shown);
-      const fileName = (id) => files.find((f) => f.id === id)?.name || '';
-      const hitView = (h, i) => ({
-        rank: i + 1, fileId: h.fileId, file: fileName(h.fileId), atomId: h.atomId, seq: h.seq, similarity: h.similarity == null ? null : round4(h.similarity),
-        rrf: h.rrf == null ? null : round4(h.rrf), match: pct(h.similarity), label: h.evidence ? 'selected passage' : h.similarity == null ? 'keyword match' : 'match',
-        excerpt: clip(oneLine(h.text), 240), kept: kept.includes(h), locator: locatorOf(h, h.atomsTotal),
-      });
-      emit('status', { step: 'rank', t: ms() });
-      const ready = files.filter((f) => f.enabled && f.stage === 'ready');
-      // ways: how many phrasings were searched (the Proof trace's "searched N ways"); never in the visitor's answer
-      emit('retrieval', { ms: tRet, searched: { atoms: files.filter((f) => f.enabled).reduce((s, f) => s + (f.vectorized || 0), 0), files: ready.length, ...(r.ways > 1 ? { ways: r.ways, waysMs: (ex?.ms || 0) + (r.waysMs || 0) } : {}) },
-        floor: { min: floor, top: round4(top) }, hits: shown.map(hitView) });
-      // 4. floor refusal
-      if (top < floor || !kept.length) {
-        const cands = r.vector.slice(0, 5).map((h) => ({ file: fileName(h.fileId), similarity: round4(h.similarity ?? 0), match: pct(h.similarity), excerpt: clip(oneLine(h.text), 200) }));
-        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: 0, ...(receipt ? { receipt } : {}) },
-          why: { best: round4(top), floor, candidates: cands }, closeMiss: closeMissOf(top, floor, question), guard: null, latencyMs: { retrieve: tRet, select: 0, quote: 0, total: ms() } });
-      }
-      // 5. select
-      const titleOf = (h) => (h.crumb ? h.crumb.split(' > ')[0] : '') || titleFromName(fileName(h.fileId));
-      // librarian voice: every source carries where it lives (page, section, link) so the answer can point there
-      let { sources, srcHit } = await answerSources(T, kept, { titleOf, fileName });
-      // each source remembers its hit (non-enumerable): research can add sources from new searches
-      const tagHits = (src, hits) => src.forEach((x, i) => Object.defineProperty(x, '_hit', { value: hits[i], enumerable: false, configurable: true }));
-      tagHits(sources, srcHit);
-      let lines = kbLib.candidateLines(sources);
-      const lineView = (l) => {
-        const h = srcHit[l.source];
-        const derived = isDerivedLine(l.text) && !h.text.includes(l.text.replace(/…$/, ''));
-        return { L: l.n, fileId: h.fileId, atomId: h.atomId, text: clip(l.text, 320), offset: derived ? null : findOffset(h.text, l.text), derived };
-      };
-      emit('status', { step: 'select', t: ms() });
-      const tSel0 = ms();
-      let raw = '', model = 'keyword-fallback';
-      // research first (when the server has the agent): reads whole passages, may search the files again
-      let rfin = null;
-      if (researchAgent) {
-        // with the selector's evidence the agent quotes only from those passages: no search tool
-        const searchMore = sel ? undefined : async (q) => {
-          const r2 = await retrieve(T, q, { files, signal: ac.signal });
-          const hits = [...r2.vector.filter((h) => (h.similarity ?? 0) >= floor * 0.85).slice(0, 8), ...r2.hybridOnly.filter((x) => x.hybridRank <= 3)];
-          await resolveAtoms(T, hits);
-          const got = await answerSources(T, hits, { titleOf, fileName });
-          tagHits(got.sources, got.srcHit);
-          return got.sources;
-        };
-        rfin = await kbLib.researchAnswer({ question, standalone, history, sources, search: searchMore, searchTool: !sel, agent: researchAgent, persona, voice: true, k: 8, signal: ac.signal,
-          onEvent: (e) => { if (e.type === 'search') emit('research', { query: e.query, t: ms() }); else if (e.type === 'error') log(`[studio] research failed: ${e.message}`); } }).catch((e) => { log(`[studio] research failed: ${e?.message}`); return null; });
-        if (ac.signal.aborted) { clearInterval(ping); return; }
-        if (rfin) {
-          sources = rfin.sources; srcHit = sources.map((x) => x._hit); lines = rfin.allLines;
-          model = researchAgent.model || 'research';
-        }
-      }
-      emit('lines', { count: lines.length, items: lines.slice(0, 12).map(lineView) });
-      if (!rfin) try {
-        const out = await withTimeout(selectComplete(kbLib.buildSelectMessages(standalone, lines, persona, { history, asked: question }), { ...kbLib.SELECT_SETTINGS }), 20000);
-        raw = String(out.raw ?? ''); model = out.model || model;
-      } catch (e) { raw = ''; model = 'keyword-fallback'; log(`[studio] select failed (${e.message}); keyword fallback`); }
-      if (ac.signal.aborted) { clearInterval(ping); return; }
-      let fin0;
-      if (rfin) { const { lines: _l, allLines: _a, sources: _s, ...rest } = rfin; fin0 = rest; }
-      else { fin0 = kbLib.finalizeSelection(raw, lines, sources, { question: standalone, voice: true }); if (fin0.fallback) model = 'keyword-fallback'; }
-      // keep only lines that answer the question themselves (within LINE_MARGIN of the best selected line); research
-      // picks spans on purpose (a name line and its price line), so they are kept as chosen
-      if (!rfin && !fin0.refused && (fin0.selected || []).length > 1) {
-        const keep = keepRelevantLines(standalone, fin0.selected, (L) => lines[L - 1]?.text || '', (L) => srcHit[lines[L - 1]?.source]?.similarity ?? floor, LINE_MARGIN,
-          { isIntro: (L) => { const h = srcHit[lines[L - 1]?.source]; return !!h && Number(h.seq) <= 2 && !!h.crumb && !h.crumb.includes(' > '); } });
-        if (keep.length && keep.length < fin0.selected.length) {
-          const fb = fin0.fallback;
-          fin0 = { ...kbLib.finalizeSelection(keep.map((L) => `L${L}`).join(', '), lines, sources, { question: standalone, voice: true }), fallback: fb };
-        }
-      }
-      emit('selected', { lines: fin0.selected ?? [], ms: ms() - tSel0, model, ...(fin0.research ? { research: fin0.research } : {}), ...(fin0.summary ? { summary: true } : {}) });
-      const tSel = ms() - tSel0;
-      // 6. quote
-      emit('status', { step: 'quote', t: ms() });
-      const tQ0 = ms();
-      let fin = citeQuotedLines(fin0, kbLib.requireCitations);
-      // table rows (CSV / spreadsheet / JSON fields): one plain, verified sentence instead of the raw cells
-      if (!fin.refused && !fin0.summary && kbLib.interpretTabular) {
-        const t = await kbLib.interpretTabular({ fin: { ...fin, selected: fin0.selected }, lines, sources, question, ask: standalone, persona, complete: (m, st) => selectComplete(m, st) });
-        if (ac.signal.aborted) { clearInterval(ping); return; }
-        if (t.tabular) { fin = t; fin0 = { ...fin0, summary: t.summary, tabular: true }; }
-      }
-      // the answer verdict (does it answer the core question?): sets the closing follow-up, never removes a cited fact
-      let verdict = null;
-      if (!fin.refused && kbLib.judgeAnswer) {
-        verdict = await kbLib.judgeAnswer({ complete: (m, st) => selectComplete(m, st), question: standalone, text: fin.text });
-        if (ac.signal.aborted) { clearInterval(ping); return; }
-        fin = kbLib.applyVerdict(fin, verdict);
-      }
-      if (fin.refused) {
-        const cands = r.vector.slice(0, 5).map((h) => ({ file: fileName(h.fileId), similarity: round4(h.similarity ?? 0), match: pct(h.similarity), excerpt: clip(oneLine(h.text), 200) }));
-        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: { ...emptyProof(floor), candidates: lines.length, ...(receipt ? { receipt } : {}) },
-          why: { best: round4(top), floor, candidates: cands, reason: 'no line answered the question' }, closeMiss: closeMissOf(top, floor, question), guard: null, latencyMs: { retrieve: tRet, select: tSel, quote: 0, total: ms() } });
-      }
-      const quotes = [];
-      for (const L of fin0.selected || []) {
-        const line = lines[L - 1];
-        if (!line) continue;
-        const h = srcHit[line.source], src = sources[line.source];
-        if (!h || !src) continue;   // a line whose passage lost its search hit is never quoted (never a crash)
-        const c = fin.citations.find((x) => x.file_id === src.file_id);
-        if (!c) continue;
-        const lv = lineView(line);
-        quotes.push({ n: c.n, L, text: line.text, fileId: h.fileId, file: src.filename, atomId: h.atomId, seq: h.seq, offset: lv.offset, derived: lv.derived, hit: h, ...(h.contentHash ? { contentHash: h.contentHash } : {}) });
-      }
-      // product cards: started now (the paced lines below give a photo lookup its time), awaited before the final
-      const productsP = productsFor(T, { text: fin.text, cites: fin.citations.map((c) => ({ url: c.url, fileId: c.file_id })) }).catch((e) => { log(`[studio] product cards failed: ${e.message}`); return []; });
-      const outLines = String(fin.text).split('\n').filter((l) => l.trim());
-      // proof claims: the cited lines only (a courtesy opener/closer is not a claim, and a "Here's what “X” says [1]:"
-      // pointer line only names the place), each matched to its quote by marker and quoted text, never by position
-      const claimLines = outLines.map((l) => quotedLineParts(l)).filter((x) => !x.courtesyOnly && /\[\d{1,3}\]/.test(x.body) && !/\[\d{1,3}\]:\s*$/.test(x.body));
-      // an interpreted table answer states the row in its own words (verified), so its cells are not unsupported claims
-      const unsupported = fin0.tabular ? 0 : Math.max(0, (fin0.selected || []).length - claimLines.length);
-      // server-paced presentation of the real final text (40 ms per line), not generation
-      for (const l of outLines) {
-        if (ac.signal.aborted) break;
-        emit('delta', { text: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: [...l.matchAll(/\[(\d{1,3})\]/g)].map((m) => Number(m[1])) });
-        await sleep(40, ac.signal);
-      }
-      const citations = fin.citations.map((c) => {
-        const qs = quotes.filter((q) => q.n === c.n);
-        const h = qs[0]?.hit || srcHit.find((x) => x.fileId === c.file_id);
-        return { n: c.n, fileId: c.file_id, file: c.filename, title: c.title, ...(c.url ? { url: c.url } : {}), ...(c.page ? { page: c.page } : {}), ...(c.section ? { section: c.section } : {}), atomId: h?.atomId ?? null, seq: h?.seq ?? null, excerpt: clip(oneLine(h?.text || c.snippet || ''), 240),
-          offset: qs[0]?.offset ?? null, locator: h ? locatorOf(h, h.atomsTotal) : null, similarity: h?.similarity == null ? null : round4(h.similarity), match: pct(h?.similarity),
-          quotes: qs.map((q) => ({ L: q.L, text: q.text, offset: q.offset, derived: q.derived })) };
-      });
-      const usedQ = new Set();
-      const summaryText = fin0.summary ? String(fin0.summary).trim() : null;
-      const claims = claimLines.map((x) => {
-        const l = x.body;
-        const bare = (t) => String(t).replace(/\s*\[\d{1,3}\]/g, '').replace(/\s+/g, ' ').trim();
-        if (summaryText && bare(l) === bare(summaryText)) {
-          const sn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null;
-          return { sentence: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: sn, quote: null, file: null, locator: null, summary: true,
-            verified: true, check: 'every number, price, date and name in it is in the quoted lines' };
-        }
-        const nn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null;
-        const flat = l.replace(/“/g, '‘').replace(/”/g, '’');
-        const has = (q) => { const t = voiceQuote(q.text); return !!t && (flat.includes(t.slice(0, 60)) || l.includes(q.text.replace(/…$/, '').slice(0, 40))); };
-        const q = quotes.find((y) => !usedQ.has(y) && y.n === nn && has(y)) || quotes.find((y) => !usedQ.has(y) && has(y));
-        if (q) usedQ.add(q);
-        return { sentence: l.replace(/^\s*-\s+/, '').replace(/\s*\[\d{1,3}\]/g, '').trim(), n: nn ?? q?.n ?? null, quote: q?.text ?? null, file: q?.file ?? null,
-          locator: q ? locatorOf(q.hit, q.hit.atomsTotal) : null, verified: !!q && (q.offset != null || q.derived) };
-      });
-      const quotedLines = quotes.map((q) => ({ n: q.n, L: q.L, text: q.text, file: q.file, fileId: q.fileId, atomId: q.atomId, offset: q.offset, ...(q.contentHash ? { contentHash: q.contentHash } : {}) }));
-      const tQ = ms() - tQ0;
-      // fixer r3: the Proof Run checks the answer says what was asked (sample questions carry expected substrings)
-      // CONTRACT-GAP: studio/samplebot.js evaluate() (not owner A) passes a row on status 'grounded' + unsupported 0; it
-      // should also fail the row when final.check.ok === false (reason in final.check.reason), so a grounded-but-wrong
-      // answer can never earn a "passed" stamp.
-      const check = answerCheck(question, quotes.map((q) => q.text), await expectedFor(T, files, question));
-      const products = await productsP;
-      return finish({ ...base, text: fin.text, refused: false, status: 'grounded', citations, check, ...(verdict ? { verdict } : {}), ...(products.length ? { products } : {}),
-        proof: { quotedLines, claims, verified: { claims: claims.length, verified: claims.filter((c) => c.verified).length }, unsupported, candidates: lines.length, picked: fin0.selected || [], floor, ...(receipt ? { receipt } : {}) },
-        why: null, guard: null, latencyMs: { retrieve: tRet, select: tSel, quote: tQ, total: ms() } });
-    } catch (e) {
-      if (ac.signal.aborted) { clearInterval(ping); return; }
-      // every failure is logged with its step and a short reference the Studio shows, so it can be traced
-      const ref = randomBytes(4).toString('hex');
-      log(`[studio] ask failed ref=${ref} trial=${T.id} step=${stage}: ${e?.stack || e?.message || e}`);
-      // past the search, a failure means the matches couldn't be turned into an answer: the honest result for the
-      // visitor is "not in my files" (what a weak match gets anyway), with the reference for the owner
-      if (!(e instanceof StudioError) && (stage === 'rank' || stage === 'select' || stage === 'quote')) {
-        return finish({ ...base, text: kbLib.NOT_IN_DATA, refused: true, status: 'refused', citations: [], proof: emptyProof(spec.floor ?? 0), why: null, guard: null,
-          failure: { step: stage, ref, recovered: true }, latencyMs: { total: ms() } });
-      }
+    // one pipeline (server/answer.mjs) for every surface: the Studio paces the answer's lines (40 ms per line) as they go out
+    const final = await answerFor(T, question, { history, signal: ac.signal, channel: 'studio', paceMs: 40, onEvent: emit }).catch((e) => e);
+    if (ac.signal.aborted || final == null) { clearInterval(ping); return; }
+    if (final instanceof Error) {
       clearInterval(ping);
-      const code = e instanceof StudioError ? e.code : 'upstream';
+      const cause = final.cause || final;
+      const code = cause instanceof StudioError ? cause.code : 'upstream';
+      const step = final.step || 'start', ref = final.ref || randomBytes(4).toString('hex');
       const STEP_COPY = { start: 'Your bot couldn’t start answering.', embed: 'Your bot couldn’t read the question.', search: 'Your files couldn’t be searched just now.' };
-      emit('error', { code, step: stage, ref, message: e instanceof StudioError ? e.message : (STEP_COPY[stage] || 'Your bot hit an error answering this.') + " Your question wasn't lost." });
+      emit('error', { code, step, ref, message: cause instanceof StudioError ? cause.message : (STEP_COPY[step] || 'Your bot hit an error answering this.') + " Your question wasn't lost." });
       emit('done', { latencyMs: ms(), error: true });
       try { res.end(); } catch {}
+      return;
     }
+    return finish({ ...base, ...final });
   }
+
+  /**
+   * One trial bot's retrieval for the answer pipeline (server/answer.mjs runAnswer): its scope (own files, the shared
+   * samples once the replay reached them, the bucket after convert), the evidence selector or resolve mode when on, the
+   * librarian's sources (page links from the store import) and its product cards.
+   */
+  function trialAdapter(T, files) {
+    const fileName = (id) => files.find((f) => f.id === id)?.name || '';
+    const titleOf = (h) => (h.crumb ? h.crumb.split(' > ')[0] : '') || titleFromName(fileName(h.fileId));
+    return {
+      expandable: !(resolver && store),
+      fileName,
+      searched: () => ({ atoms: files.filter((f) => f.enabled).reduce((s, f) => s + (f.vectorized || 0), 0), files: files.filter((f) => f.enabled && f.stage === 'ready').length }),
+      retrieve: (q, { signal, variant = false } = {}) => retrieve(T, q, { files, signal, ...(variant ? { variant: true, vectorK: 8 } : {}) }),
+      evidence: evidence && store ? (q, signal) => evidenceSelect(T, q, files, signal) : null,
+      resolveAtoms: (hits) => resolveAtoms(T, hits),
+      sources: (hits) => answerSources(T, hits, { titleOf, fileName }),
+      products: ({ text, cites }) => productsFor(T, { text, cites }),
+      expected: (q) => expectedFor(T, files, q),
+      closeMiss: (best, q) => closeMissOf(best, T.spec.floor, q),
+    };
+  }
+  /**
+   * A trial bot's answer through the one pipeline, whatever surface asks: the Studio (SSE above), the developer API, AI
+   * agents, channels and the website widget (server/devapi.mjs). wrapComplete (devapi) meters every model call.
+   */
+  async function answerFor(T, question, { history = [], signal, channel = 'studio', paceMs = 0, onEvent, wrapComplete = (f) => f, cards = true } = {}) {
+    const spec = T.spec;
+    const files = await filesOf(T);
+    const rw = rewriteComplete();
+    return runAnswer({ question, history, signal, channel, paceMs, onEvent, log, faultAt: o.faultAt,
+      persona: { name: spec.name, org: spec.org || spec.name, instructions: spec.instructions }, floor: spec.floor, adapter: trialAdapter(T, files),
+      complete: wrapComplete((m, st) => selectComplete(m, st)), rewrite: rw ? wrapComplete(rw) : null,
+      variants: queryVariants, research: researchAgent, cards });
+  }
+
   // ------------------------------------------------------------------------- "Enter a Store URL" (storeimport.mjs)
   /**
    * The website import runs as ONE background job per trial (T.storeJob). It survives the request closing.
@@ -3311,7 +3113,6 @@ export function createStudio(o = {}) {
   /** A refusal the files nearly answered (best ≥ floor − 0.06, not a probe): the Builder offers [Add a file] [Rephrase it for me]. */
   const closeMissOf = (best, floor, q) => (best != null && best < floor && best >= floor - CLOSE_MISS && !PROBES.includes(q) && !PROBE_BACKUPS.includes(q)
     ? { best: round4(best), floor, gap: round4(floor - best) } : null);
-  const emptyProof = (floor) => ({ quotedLines: [], claims: [], verified: { claims: 0, verified: 0 }, unsupported: 0, candidates: 0, picked: [], floor });
   function recordAnswer(T, final, label, source = 'visitor') {
     const status = final.status;
     if (status === 'grounded') T.grounded++;
@@ -5369,9 +5170,27 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!T.rows) { try { await refreshRows(T); } catch { /* the index still answers */ } }
     return productsFor(T, args);
   }
+  /** Retrieval only (no answer, nothing logged) for a trial bot: the phone channel's product-handle lookup (devapi). */
+  async function searchTrial(trialId, q) {
+    if (!enabled || !TRIAL_ID_RE.test(String(trialId || '')) || deletedTrials.has(trialId)) return [];
+    const T = trialFor(trialId);
+    await loadSpecDoc(T);
+    const files = await filesOf(T);
+    const r = await retrieve(T, q, { files });
+    const name = (id) => files.find((f) => f.id === id)?.name || '';
+    return r.vector.map((h) => ({ text: h.text, file: name(h.fileId), title: (h.crumb ? h.crumb.split(' > ')[0] : '') || titleFromName(name(h.fileId)) }));
+  }
+  /** A trial bot's answer for another surface (devapi), through the same pipeline and trial state as the Studio's. */
+  async function answerTrial(trialId, question, opts = {}) {
+    if (!enabled || !TRIAL_ID_RE.test(String(trialId || '')) || deletedTrials.has(trialId)) fail(404, 'not_found', 'No such trial.');
+    const T = trialFor(trialId);
+    await loadSpecDoc(T);
+    if (!T.expiresAt && opts.expiresAt) T.expiresAt = opts.expiresAt;
+    return answerFor(T, question, opts);
+  }
   return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
-    // a trial bot's answering engine for the API and its channels (devapi): the same as the Studio's select step
-    answerComplete: (messages, settings) => selectComplete(messages, settings), flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
+    // a trial bot's answer on the API, AI agents, channels and the website widget (devapi): the Studio's own pipeline
+    answerTrial, searchTrial, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };
