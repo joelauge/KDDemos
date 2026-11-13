@@ -2,8 +2,8 @@
 // studio/kb/*.md sections. Used in tests and as the fallback when the knowDrive-backed KB (kb.mjs createBuilderKb) is
 // not usable. Same result shape as kb.mjs search(): { sources:[{ n, name, title, section, page, text, similarity }], top }.
 //
-// The pricing passage is always present (owner rule 2: building and testing are free with no account; launching is a
-// KnowDrive account at $549/month or $5,490/year (one plan: Website, KnowBot number and Email, every feature included),
+// The pricing passage is always present (owner rule 2: building and testing are free with no account; launching is the
+// KnowBot plan at $549/month or $5,490/year (one plan: Website, KnowBot number and Email, every feature included),
 // first 30 days free, credit card required at signup, cancel anytime;
 // studio/kb/pricing-and-trial.md is the full source). Only the checkout URL is configurable.
 import { readdirSync, readFileSync } from 'node:fs';
@@ -17,8 +17,8 @@ const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 export function pricingPassage({ price = 549, yearly = 5490, trialDays = 30, checkoutUrl = '' } = {}) {
   const money = (n) => `$${Number(n).toLocaleString('en-US')}`;
   return { name: 'pricing', title: 'KnowBot pricing', section: 'The price to launch', page: checkoutUrl || null,
-    text: `Building and testing a bot in KnowBot Studio is free and needs no account. To launch, you start a KnowDrive account at ${money(price)} per month`
-      + `${yearly ? `, or ${money(yearly)} per year` : ''}. One plan includes all three tools: Website, KnowBot number and Email, with every feature. The first ${trialDays} days are free. A credit card is required at signup. You can cancel anytime.` };
+    text: `Building and testing a bot in KnowBot Studio is free and needs no account. To launch, you subscribe to the KnowBot plan at ${money(price)} per month`
+      + `${yearly ? `, or ${money(yearly)} per year` : ''}. One plan includes all three tools: Website, KnowBot number and Email, with every feature. The first ${trialDays} days are free. A credit card is required at signup. You can cancel anytime. Your bot's files are kept in your own KnowDrive account, which is free to create.` };
 }
 
 /** Sections of studio/kb/*.md: [{ name, title, section, page, text }]. Missing folder -> []. */

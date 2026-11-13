@@ -39,7 +39,7 @@ import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
-import { createBilling } from './billing.mjs';
+import { createBilling, checkoutModeOf } from './billing.mjs';
 import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
 import { agentLimits, agentSettings, priceText as agentPriceText } from './agents.mjs';
 import { sendInfoSwitches, sendInfoAllow, cleanSendInfo } from './sendinfo.mjs';
@@ -1256,7 +1256,7 @@ export function createStudio(o = {}) {
   // Resolve mode (KNOWBOT_EVIDENCE=resolve): the sidecar's ranked search replaces retrieve()'s searches only; the floor,
   // refusal, research/select, citations and proof below run unchanged on its passages. null keeps today's searches.
   const resolver = o.resolver !== undefined ? o.resolver : createResolver(env, { log });
-  const localKb = createLocalKb({ pricing: { checkoutUrl: checkoutBase } });
+  const localKb = createLocalKb({ pricing: { checkoutUrl: checkoutModeOf(env) === 'knowdrive' ? checkoutBase : '' } }); // our own checkout has no public page to cite
   let remoteKb = null;
   try { remoteKb = enabled && store && o.builderKb !== false ? createBuilderKb({ kdJson, store, log, now }) : null; } catch (e) { log(`[studio] builder kb: ${e.message}`); }
   if (remoteKb) { const t = setTimeout(() => { Promise.resolve(remoteKb.ensure()).catch(() => {}); }, 3000); t.unref?.(); }

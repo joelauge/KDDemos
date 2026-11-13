@@ -826,7 +826,7 @@ function priceIntent(text, label) {
     return;
   }
   if (isLive()) {
-    localSay(`${botName()} is already live: your plan is active, so there's nothing more to pay here. Manage billing in your KnowDrive dashboard.`, { reply: true, chips: [
+    localSay(`${botName()} is already live: your plan is active, so there's nothing more to pay here. To change or cancel it, open Manage billing in the ⋯ menu.`, { reply: true, chips: [
       { id: 'live_copy', label: 'Copy embed code', kind: 'primary', local: true, run: () => { copyText(embedSnippet()); toast({ kind: 'info', text: 'Embed code copied' }); } },
       { id: 'channels', label: 'Set up channels', local: true, run: () => openGoLive('channels') },
     ] });
