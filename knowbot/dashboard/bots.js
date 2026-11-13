@@ -4,7 +4,7 @@
 // Server values are written with textContent only (via h()). The admin token lives in localStorage and is sent
 // only as an Authorization header, and only to a trusted server (tokenTarget): never logged, never put in a URL.
 
-import { hostedApi } from '../lib/site-config.js?v=503d17b';
+import { hostedApi } from '../lib/site-config.js?v=71c8469';
 
 const TOKEN_KEY = 'knowbot-admin-token';
 const MAX_BYTES = 95 * 1024 * 1024; // server MAX_UPLOAD_BYTES (Cloudflare request bodies stop at 100 MB)
@@ -461,11 +461,11 @@ export function mountBots(ctx) {
     if (canvas || canvasErr === 'loading') return;
     canvasErr = 'loading'; paintCanvasState();
     if (!document.querySelector('link[data-flow-css]')) {
-      const { FLOW_CSS } = await import('./flow-canvas.js?v=503d17b').catch(() => ({ FLOW_CSS: null }));
-      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=503d17b"]'));
+      const { FLOW_CSS } = await import('./flow-canvas.js?v=71c8469').catch(() => ({ FLOW_CSS: null }));
+      if (FLOW_CSS) document.head.insertBefore(h('link', { rel: 'stylesheet', href: FLOW_CSS, 'data-flow-css': '' }), document.querySelector('link[href="./bots.css?v=71c8469"]'));
     }
     try {
-      const { createCanvas } = await import('./flow-canvas.js?v=503d17b');
+      const { createCanvas } = await import('./flow-canvas.js?v=71c8469');
       const el = $('#flow-canvas'); rc(el);
       canvas = await createCanvas(el);
       canvasErr = '';
