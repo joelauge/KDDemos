@@ -583,7 +583,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         feats);
       chGrid.append(h('div', { role: 'listitem', class: 'gl-toolitem' }, card));
     });
-    panel.append(intro, chGrid, sendInfoCard(), h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
+    panel.append(intro, chGrid, sendInfoCard(), voiceSetupCard(), h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
     motion.stagger($$('.gl-tool', chGrid), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring', fill: 'backwards' }, 60);
     paintSwitches();
     paintCardStatus();
@@ -593,6 +593,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if ('surfaces' in d.patch) { paintSwitches(); if (toolOfCh(cur.channel).id === 'website') paintWebsiteLine(); }
       if ('agents' in d.patch) { paintSwitches(); paintAgentAccess(); }
       if ('sendInfo' in d.patch) paintSendInfo();
+      if ('voiceSetup' in d.patch) paintVoiceSetup();
     });
     cleanups.push(off);
     loadDev().then(() => { if (!closing && cur.tab === 'channels') { idPill.querySelector('code').textContent = botId(); paintCardStatus({ animate: true }); paintSendInfo(); renderDetail(cur.channel, { quiet: true }); } });
@@ -662,6 +663,124 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     st.textContent = !s.on || !n ? 'Off' : n === 2 ? 'Email and text' : em ? 'Email only' : 'Text only';
     st.className = `chip ${s.on && n ? 'green' : 'gray'} is-label gl-si-state`;
     siCard.classList.toggle('is-off', !s.on || !n);
+  }
+
+  // ------------------------------------------------------------ Voice (spec.voiceSetup; server/channels/voice-brain.mjs)
+  // How the bot sounds and what it does when it can't help, on calls and in website voice: the voice, the language it
+  // answers in, taking a message (a lead) when it can't answer, and handing a call to a person in business hours.
+  // Customer-facing copy never names the voice or phone provider.
+  let vsCard = null;
+  const VS_VOICES = [['Zephyr', 'Bright'], ['Puck', 'Upbeat'], ['Charon', 'Informative'], ['Kore', 'Firm'], ['Fenrir', 'Excitable'], ['Leda', 'Youthful'], ['Orus', 'Firm'],
+    ['Aoede', 'Breezy'], ['Callirrhoe', 'Easy-going'], ['Autonoe', 'Bright'], ['Enceladus', 'Breathy'], ['Iapetus', 'Clear'], ['Umbriel', 'Easy-going'], ['Algieba', 'Smooth'],
+    ['Despina', 'Smooth'], ['Erinome', 'Clear'], ['Algenib', 'Gravelly'], ['Rasalgethi', 'Informative'], ['Laomedeia', 'Upbeat'], ['Achernar', 'Soft'], ['Alnilam', 'Firm'],
+    ['Schedar', 'Even'], ['Gacrux', 'Mature'], ['Pulcherrima', 'Forward'], ['Achird', 'Friendly'], ['Zubenelgenubi', 'Casual'], ['Vindemiatrix', 'Gentle'], ['Sadachbia', 'Lively'],
+    ['Sadaltager', 'Knowledgeable'], ['Sulafat', 'Warm']];
+  const VS_LANGS = [['auto', 'Match the caller'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'], ['nl', 'Dutch'],
+    ['pl', 'Polish'], ['sv', 'Swedish'], ['tr', 'Turkish'], ['ru', 'Russian'], ['uk', 'Ukrainian'], ['ar', 'Arabic'], ['hi', 'Hindi'], ['ja', 'Japanese'], ['ko', 'Korean'],
+    ['zh', 'Chinese'], ['vi', 'Vietnamese'], ['id', 'Indonesian'], ['th', 'Thai'], ['tl', 'Filipino']];
+  const VS_DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
+  const vsSpec = () => {
+    const v = getState().spec?.voiceSetup;
+    const o = v && typeof v === 'object' ? v : {};
+    return { voice: o.voice || 'Kore', language: o.language || 'auto', takeMessages: o.takeMessages !== false, transfer: o.transfer && o.transfer.number ? o.transfer : null };
+  };
+  const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } };
+  /** "+1 (415) 555-0100" → "+14155550100"; a 10-digit number is taken as a US/Canada number; else null. */
+  const toE164 = (raw) => {
+    const d = String(raw || '').trim().replace(/[\s().-]/g, '');
+    if (/^\+[1-9]\d{7,14}$/.test(d)) return d;
+    if (/^\d{10}$/.test(d)) return `+1${d}`;
+    if (/^1\d{10}$/.test(d)) return `+${d}`;
+    return null;
+  };
+  function setVoiceSetup(patch, said) {
+    const cur = getState().spec?.voiceSetup && typeof getState().spec.voiceSetup === 'object' ? getState().spec.voiceSetup : {};
+    const next = { ...cur, ...patch };
+    setState({ spec: { ...getState().spec, voiceSetup: next } }, 'spec:plan');
+    emit('spec:request', { patch: { voiceSetup: patch }, by: 'user', quiet: true });
+    paintVoiceSetup();
+    if (said) announce(said, 'polite');
+  }
+  function voiceSetupCard() {
+    const sel = (id, label, opts, onChange) => {
+      const s = h('select', { class: 'gl-input gl-vs-select', id }, ...opts.map(([v, t]) => h('option', { value: v }, t)));
+      s.addEventListener('change', () => onChange(s.value));
+      return h('div', { class: 'gl-vs-field' }, h('label', { class: 'gl-vs-label', for: id }, label), s);
+    };
+    const msg = h('input', { type: 'checkbox', role: 'switch', class: 'gl-switch-in', id: 'gl-vs-msg', 'aria-describedby': 'gl-vs-msg-d' });
+    msg.addEventListener('change', () => setVoiceSetup({ takeMessages: msg.checked }, msg.checked ? 'Your bot offers to take a message when it can\'t answer.' : 'Your bot no longer takes messages.'));
+    const num = h('input', { type: 'tel', class: 'gl-input', id: 'gl-vs-num', autocomplete: 'off', inputmode: 'tel', placeholder: '+1 415 555 0100', 'aria-describedby': 'gl-vs-num-d' });
+    const zone = h('input', { type: 'text', class: 'gl-input', id: 'gl-vs-tz', autocomplete: 'off', spellcheck: 'false', list: 'gl-vs-tzs' });
+    const zones = (() => { try { return Intl.supportedValuesOf('timeZone'); } catch { return ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney']; } })();
+    const tzList = h('datalist', { id: 'gl-vs-tzs' }, ...zones.map((z) => h('option', { value: z })));
+    const start = h('input', { type: 'time', class: 'gl-input', id: 'gl-vs-start', step: '900' });
+    const end = h('input', { type: 'time', class: 'gl-input', id: 'gl-vs-end', step: '900' });
+    const days = h('div', { class: 'gl-vs-days', role: 'group', 'aria-label': 'Days' }, ...VS_DAYS.map(([d, t]) => h('label', { class: 'gl-vs-day' }, h('input', { type: 'checkbox', value: d, dataset: { day: d } }), h('span', null, t))));
+    const err = h('p', { class: 'gl-vs-err', id: 'gl-vs-err', role: 'alert', hidden: true });
+    const save = h('button', { type: 'button', class: 'btn btn-primary gl-vs-save', id: 'gl-vs-save' }, 'Save hand-off');
+    const clear = h('button', { type: 'button', class: 'btn btn-ghost gl-vs-clear', id: 'gl-vs-clear' }, 'Remove');
+    save.addEventListener('click', () => {
+      const number = toE164(num.value);
+      const picked = $$('input[data-day]', days).filter((x) => x.checked).map((x) => x.dataset.day);
+      const bad = !number ? 'Enter the full number with its country code, like +1 415 555 0100.' : !zone.value.trim() ? 'Pick a time zone.' : !start.value || !end.value || start.value === end.value ? 'Pick when your team starts and stops taking calls.' : !picked.length ? 'Pick at least one day.' : '';
+      err.textContent = bad; err.hidden = !bad;
+      num.setAttribute('aria-invalid', String(!number));
+      if (bad) { (number ? zone : num).focus(); return; }
+      num.value = number;
+      setVoiceSetup({ transfer: { number, timezone: zone.value.trim(), days: picked, start: start.value, end: end.value } }, `Calls can be handed to ${number} during your hours. Your bot always asks the caller first.`);
+    });
+    clear.addEventListener('click', () => { num.value = ''; err.hidden = true; setVoiceSetup({ transfer: null }, 'Hand-off removed. Callers who ask for a person can leave their number for a callback.'); });
+    vsCard = h('section', { class: 'card gl-si gl-vs', id: 'gl-vs', 'aria-labelledby': 'gl-vs-t' },
+      h('div', { class: 'gl-si-head' },
+        h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: icon('mic', 18) }),
+        h('div', { class: 'gl-si-text' }, h('h3', { class: 'gl-si-t', id: 'gl-vs-t' }, 'Voice'),
+          h('p', { class: 'gl-si-help', id: 'gl-vs-help' }, 'How your bot sounds on calls and in website voice, and what it does when it can\'t help. It always speaks for your business and answers only from your files.')),
+        h('span', { class: 'chip gray is-label gl-si-state gl-vs-state', 'aria-hidden': 'true' })),
+      h('div', { class: 'gl-vs-body' },
+        h('div', { class: 'gl-vs-row' },
+          sel('gl-vs-voice', 'Voice', VS_VOICES.map(([v, st]) => [v, `${v} · ${st}${v === 'Kore' ? ' (default)' : ''}`]), (v) => setVoiceSetup({ voice: v }, `Your bot now speaks with the ${v} voice.`)),
+          sel('gl-vs-lang', 'Answers in', VS_LANGS, (v) => setVoiceSetup({ language: v }, v === 'auto' ? 'Your bot answers in the language the caller speaks.' : `Your bot answers in ${VS_LANGS.find((x) => x[0] === v)?.[1]}.`))),
+        h('p', { class: 'gl-si-sub gl-vs-note', id: 'gl-vs-lang-d' }, 'Match the caller: it replies in the language people speak to it. Answers are translated faithfully from your files; nothing is added.'),
+        h('div', { class: 'gl-si-row is-main', dataset: { si: 'gl-vs-msg' } },
+          h('label', { class: 'gl-switch', for: 'gl-vs-msg' }, msg, h('span', { class: 'gl-switch-ui', 'aria-hidden': 'true' }), h('span', { class: 'gl-feat-name' }, 'Take a message when it can\'t answer')),
+          h('p', { class: 'gl-si-sub', id: 'gl-vs-msg-d' }, '')),
+        h('fieldset', { class: 'gl-vs-handoff', id: 'gl-vs-handoff' },
+          h('legend', { class: 'gl-vs-label' }, 'Hand calls to a person'),
+          h('p', { class: 'gl-si-sub gl-vs-note', id: 'gl-vs-num-d' }, 'During these hours, a caller who asks for a person (or whom your bot can\'t help) is offered a transfer to this number. Your bot always asks first. Outside these hours, and on your website, it offers a callback instead.'),
+          h('div', { class: 'gl-vs-row' },
+            h('div', { class: 'gl-vs-field' }, h('label', { class: 'gl-vs-label', for: 'gl-vs-num' }, 'Transfer number'), num),
+            h('div', { class: 'gl-vs-field' }, h('label', { class: 'gl-vs-label', for: 'gl-vs-tz' }, 'Time zone'), zone, tzList)),
+          days,
+          h('div', { class: 'gl-vs-row gl-vs-hours' },
+            h('div', { class: 'gl-vs-field' }, h('label', { class: 'gl-vs-label', for: 'gl-vs-start' }, 'From'), start),
+            h('div', { class: 'gl-vs-field' }, h('label', { class: 'gl-vs-label', for: 'gl-vs-end' }, 'Until'), end)),
+          err,
+          h('div', { class: 'gl-vs-actions' }, save, clear))));
+    paintVoiceSetup({ fill: true });
+    return vsCard;
+  }
+  function paintVoiceSetup({ fill = false } = {}) {
+    if (!vsCard) return;
+    const v = vsSpec();
+    $('#gl-vs-voice', vsCard).value = v.voice;
+    $('#gl-vs-lang', vsCard).value = v.language;
+    $('#gl-vs-msg', vsCard).checked = v.takeMessages;
+    $('#gl-vs-msg-d', vsCard).textContent = v.takeMessages
+      ? 'On: when it can\'t answer, your bot offers to take a name and an email or number so your team can follow up. Each message is a lead in Stats & Leads. It never promises when you\'ll reply.'
+      : 'Off: when it can\'t answer, your bot offers to help with something else.';
+    if (fill || v.transfer) {
+      const t = v.transfer;
+      $('#gl-vs-num', vsCard).value = t?.number || '';
+      $('#gl-vs-tz', vsCard).value = t?.timezone || localZone();
+      $('#gl-vs-start', vsCard).value = t?.start || '09:00';
+      $('#gl-vs-end', vsCard).value = t?.end || '17:00';
+      const on = new Set(t?.days || ['mon', 'tue', 'wed', 'thu', 'fri']);
+      for (const x of $$('input[data-day]', vsCard)) x.checked = on.has(x.dataset.day);
+    }
+    $('#gl-vs-clear', vsCard).hidden = !v.transfer;
+    const st = $('.gl-vs-state', vsCard);
+    st.textContent = `${v.voice}${v.transfer ? ' · hand-off on' : ''}`;
+    st.className = 'chip green is-label gl-si-state gl-vs-state';
   }
   /** Every switch shows the saved (or optimistic) spec.surfaces; the last feature on can't be switched off. */
   function paintSwitches() {
