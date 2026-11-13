@@ -1104,7 +1104,9 @@ export function mount(ctx) {
         if (getState().proof?.status !== 'running') emit('proof:run', { mini: true });
         await done;
       }
-      const showText = !fromServerTurn;
+      // the Builder already said it (the test run's own result turn): the card arrives without repeating the line
+      const saidIt = [...document.querySelectorAll('#st-log .st-msg-a')].slice(-3).some((m) => /is built and saved/.test(m.textContent || ''));
+      const showText = !fromServerTurn && !saidIt;
       focusNextCard = userPick;
       pickFocus = userPick ? ae : null;
       autoStageNext = true;

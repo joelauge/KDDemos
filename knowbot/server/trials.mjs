@@ -3418,7 +3418,8 @@ export function createStudio(o = {}) {
   }
   const EMIT_TYPES = new Set(['golive:open']); // fixer r7: client store events a chip may emit (studio/app.js onChip)
   const ACTION_TYPES = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples', 'import_store', 'open_setup']);
-  const botName = (T) => T.spec.name || 'Your bot';
+  // the placeholder ("SampleBot") is never said to the visitor or sent to checkout: an unnamed bot is "Your bot"
+  const botName = (T) => (T.spec.name && T.spec.name !== 'SampleBot' ? T.spec.name : 'Your bot');
   /** Enabled files still learning (not Ready, not Failed): a Proof Run waits for them. */
   const learningOf = (files) => files.filter((f) => f.enabled && !TERMINAL.has(f.stage));
   const proofPassed = (T) => !!(T.proofDone && !T.proofDone.mini && !T.proofDone.partial && T.proofDone.total > 0 && T.proofDone.passed === T.proofDone.total);
@@ -4032,7 +4033,7 @@ export function createStudio(o = {}) {
         T.flags.proofQueued = false; T.flags.proofRetries = 0;
         T.proofDone = { at: now(), passed, total: totalQ, mini }; saveSpecSoon(T);
         if (totalQ && passed < totalQ) return { reply: `${passed} of ${totalQ} passed. Open the failed rows to see why. Usually it's a file that's still processing.`, chips: [C('proof', 'Run it again', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
-        const head = `Proof Run passed. ${name} is ready to go live.`;
+        const head = 'Proof Run passed.';   // the launch line that follows names the bot (said once)
         const l = launchFlow(T, files);
         return { ...l, reply: `${head}\n\n${l.reply}` };
       }
@@ -4041,7 +4042,8 @@ export function createStudio(o = {}) {
       case 'returned': {
         const atoms = files.reduce((s, f) => s + (f.atoms || 0), 0);
         const tests = T.proofDone ? `, ${T.proofDone.passed}/${T.proofDone.total} tests passed` : '';
-        return { reply: files.length ? `Welcome back. ${name} is where you left it (${plural(files.length, 'file')}, ${atomsN(atoms)}${tests}).` : `Welcome back. ${name} is saved: add files whenever you're ready.`, chips: stepChips(T, files) };
+        void atoms;
+        return { reply: files.length ? `Welcome back. ${name} is where you left it: ${plural(files.length, 'file')}${tests}. Ask it something, or launch it when you're ready.` : `Welcome back. ${name} is saved: add files whenever you're ready.`, chips: stepChips(T, files) };
       }
       case 'spec_edit': {
         const lastQ = lastQuestion(T);
@@ -4676,7 +4678,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 <body><main><h1>${htmlEsc(title)}</h1><p>${htmlEsc(body)}</p>${back ? `<p><a href="${htmlEsc(back)}">Back to KnowBot Studio</a></p>` : ''}</main>
 <script nonce="${nonce}">(function(){var o=${JSON.stringify(origin || '')};try{if(window.opener&&o){window.opener.postMessage(${msg},o);setTimeout(function(){window.close();},${ok ? 400 : 4000});}}catch(e){}})();</script></body></html>`;
     res.writeHead(ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
-      'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` });
+      'content-security-policy': `default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` });
     res.end(html);
   }
   async function kdCallback(req, res, url) {

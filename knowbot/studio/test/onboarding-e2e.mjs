@@ -210,8 +210,10 @@ async function askFirstStarter(page, vp) {
   await pane(page, vp, 'bot');
   // what a new visitor is offered: the guide's "Ask: …" button, else the first suggested question
   const sel = '.st-ftue button.btn-primary, .st-ftue-card button.btn-primary, #sb-suggest-slot .sb-chip:not(.sb-chip-probe)';
-  await page.waitForFunction((sel) => [...document.querySelectorAll(sel)].some((b) => b.offsetParent && /\S/.test(b.innerText) && !/off-topic/i.test(b.innerText)), sel, { timeout: 60000 });
-  const b = page.locator(sel).filter({ hasNotText: /off-topic/i }).locator('visible=true').first();
+  const isQ = (t) => /^Ask:|\?\s*$/.test(t.trim()) && !/off-topic/i.test(t);
+  await page.waitForFunction(([sel, src]) => { const isQ = new Function('t', src); return [...document.querySelectorAll(sel)].some((b) => b.offsetParent && isQ(b.innerText)); }, [sel, `return /^Ask:|\\?\\s*$/.test(t.trim()) && !/off-topic/i.test(t);`], { timeout: 90000 });
+  const b = page.locator(sel).filter({ hasText: /^Ask:|\?\s*$/ }).filter({ hasNotText: /off-topic/i }).locator('visible=true').first();
+  void isQ;
   const q = (await b.innerText()).trim().replace(/^Ask:\s*/, '');
   const before = (await st(page)).thread.length;
   await b.click();
@@ -491,9 +493,15 @@ async function liveJourney(browser, vp) {
   await step(page, bucket, 'launch', async () => {
     await pane(page, vp, 'setup');
     await page.locator('#st-price').click();
-    await page.locator('.kda-dialog, .co-cta:visible').first().waitFor({ timeout: 20000 });
+    await page.locator('.kda-dialog, .co-cta:visible, #st-log .st-chip:has-text("Launch with samples anyway")').first().waitFor({ timeout: 60000 });
   });
-  await step(page, bucket, 'launch-confirm', async () => {
+  await step(page, bucket, 'launch-confirm', async (rec) => {
+    const anyway = page.locator('#st-log .st-chip:visible', { hasText: /Launch with samples anyway/ });
+    if (!(await page.locator('.kda-dialog').count()) && await anyway.count()) {
+      rec.notes.push('sample-only bot: Launch first asks to add own files; chose "Launch with samples anyway"');
+      await anyway.last().click();
+      await page.locator('.kda-dialog, .co-cta:visible').first().waitFor({ timeout: 60000 });
+    }
     if (!(await page.locator('.kda-dialog').count())) await page.locator('.co-cta:visible').filter({ hasText: /^Launch/ }).last().click();
     await page.locator('.kda-dialog').waitFor({ timeout: 20000 });
     await page.locator('#kda-create, #kda-move, #kda-continue').first().waitFor({ timeout: 20000 });

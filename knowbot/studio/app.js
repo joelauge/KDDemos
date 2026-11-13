@@ -1828,7 +1828,8 @@ function fallbackFor(input, err) {
     case 'checkout_dismissed': return { text: `No problem, ${name} is saved for 7 days. Launch whenever you're ready.`, chips: [L('launch', `Launch · ${priceText()}`, { kind: 'primary', action: { type: 'show_launch' } }), L('keep', 'Keep testing', { run: focusBotComposer })] };
     case 'returned': {
       const tests = s.proof?.score ? `, ${s.proof.score.answered + s.proof.score.refused}/${s.proof.score.total + s.proof.score.probes} tests` : '';
-      return { text: `Welcome back. ${name} is where you left it (${files.length} file${files.length === 1 ? '' : 's'}, ${motion.fmtNum(atoms)} atoms${tests}).`,
+      void atoms;
+      return { text: `Welcome back. ${name} is where you left it: ${files.length} file${files.length === 1 ? '' : 's'}${tests ? `, ${tests.slice(2)} passed` : ''}. Ask it something, or launch it when you're ready.`,
         chips: [L('ask', 'Ask it a question', { run: focusBotComposer }), L('run_proof', 'Try to trip it up', { action: { type: 'run_proof' } }), L('launch', `Launch · ${priceText()}`, { kind: 'primary', action: { type: 'show_launch' } })] };
     }
     case 'spec_edit': return { text: 'Saved. Your bot uses the new settings from the next answer.', chips: [L('reask', 'Ask it again', { run: focusBotComposer }), L('open_spec', 'Open bot spec', { action: { type: 'open_spec' } })] };
@@ -4517,9 +4518,10 @@ on('file:stage', (d) => {
   }
   if (f.stalledFor >= 45000 && !stalled.has(f.localId)) {
     stalled.add(f.localId);
-    const stage = { uploaded: 'uploading', extracted: 'chunking', chunked: 'atomizing', atomized: 'encoding your knowledge', vectorizing: 'encoding your knowledge' }[f.phase] || 'extracting';
-    if (!narrationQuiet()) localSay(`**${f.name}** is still ${stage === 'uploading' ? 'extracting' : stage}. Big PDFs and audio can take a few minutes. You can test with the files that are ready.`, { key: `stall:${f.name}`, chips: [
-      { id: 'ask', label: 'Ask a question', run: focusBotComposer, local: true },
+    const anyReady = getState().fileOrder.some((id) => getState().files[id]?.phase === 'ready');
+    // plain words, what happens next, and only the actions that work right now (no "Ask" before any file is ready)
+    if (!narrationQuiet()) localSay(`Still reading **${f.name}**. Most files take a minute or two; big PDFs and audio can take a few minutes. Nothing is lost if you leave: it keeps going.${anyReady ? ' You can already ask about the files that are ready.' : ''}`, { key: `stall:${f.name}`, chips: [
+      ...(anyReady ? [{ id: 'ask', label: 'Ask a question', run: focusBotComposer, local: true }] : []),
       { id: 'add_more', label: 'Add more files', action: { type: 'request_upload' }, local: true },
     ] });
   }
