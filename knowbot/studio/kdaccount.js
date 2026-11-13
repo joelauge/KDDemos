@@ -174,9 +174,13 @@ export function createKdStep(ctx, { h, $$ }) {
         h('p', { class: 'kda-fine' }, 'Free to create. It opens in a small window; you come straight back here.'));
     } else if (state === 'waiting') {
       setSteps('account');
-      const again = M.url ? h('a', { class: 'co-link kda-link', href: M.url, target: '_blank', rel: 'opener', id: 'kda-open' }, 'Open the sign-in window again') : null;
-      b.append(h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), 'Finish signing in to KnowDrive in the other window…'),
-        h('p', { class: 'kda-alt' }, again, again ? ' · ' : null, link('Cancel', () => { try { M.popup?.close(); } catch { /* ignore */ } render('start'); }, 'kda-cancel')));
+      // onboarding (live run): a new KnowDrive account is confirmed by email, and that link ends on KnowDrive's own site,
+      // not back here. So the wait says what to expect and gives the one way to finish: sign in again, now with a password.
+      const again = M.url ? h('a', { class: 'co-cta kda-cta', href: M.url, target: '_blank', rel: 'opener', id: 'kda-open' }, h('span', { class: 'co-cta-label' }, 'I\u2019ve set my password: continue'), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 15) })) : null;
+      b.append(h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), 'Finish in the KnowDrive window…'),
+        h('p', { class: 'kda-fine' }, 'New to KnowDrive? It emails you a link to set your password. Once that\u2019s done, come back here and continue.'),
+        again,
+        h('p', { class: 'kda-alt' }, link('Cancel', () => { try { M.popup?.close(); } catch { /* ignore */ } render('start'); }, 'kda-cancel')));
       poll();
     } else if (state === 'blocked') {
       setSteps('account');
@@ -203,7 +207,7 @@ export function createKdStep(ctx, { h, $$ }) {
         h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), `Moving ${plural(total, 'file')} into your KnowDrive account…`),
         h('div', { class: 'kda-bar', role: 'progressbar', 'aria-label': 'Files moved', 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(ready), 'aria-valuetext': `${ready} of ${total} ready` },
           h('span', { style: { width: `${pct}%` } })),
-        h('p', { class: 'kda-fine', id: 'kda-progress' }, `${ready} of ${total} ready. You can close this; it keeps going.`));
+        h('p', { class: 'kda-fine', id: 'kda-progress' }, `${ready} of ${total} ready. Usually a minute or two. You can close this: it keeps going, and Launch picks up where it left off.`));
       poll();
     } else if (state === 'partial') {
       setSteps('files');

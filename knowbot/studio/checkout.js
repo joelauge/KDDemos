@@ -1096,7 +1096,9 @@ export function mount(ctx) {
     launching = true;
     try {
       // Mini proof first so the card always shows real stats (3 in-scope + 1 probe, about 6 s).
+      let testedNow = false;
       if (!getState().milestones.proofRun && getState().proof?.status !== 'done' && readyFiles().length) {
+        testedNow = true;
         const done = new Promise((resolve) => {
           const un = on('proof:done', () => { un(); resolve(true); });
           setTimeout(() => { un(); resolve(false); }, MINI_PROOF_WAIT);
@@ -1106,7 +1108,8 @@ export function mount(ctx) {
       }
       // the Builder already said it (the test run's own result turn): the card arrives without repeating the line
       const saidIt = [...document.querySelectorAll('#st-log .st-msg-a')].slice(-3).some((m) => /is built and saved/.test(m.textContent || ''));
-      const showText = !fromServerTurn && !saidIt;
+      // a test run just ran for this launch: its own result turn ("All N tests passed. Your bot is built and saved…") says it
+      const showText = !fromServerTurn && !saidIt && !testedNow;
       focusNextCard = userPick;
       pickFocus = userPick ? ae : null;
       autoStageNext = true;
@@ -1495,14 +1498,14 @@ export function mount(ctx) {
       meter.hidden = !(st === 'checking' || st === 'pending');
       skel.hidden = st !== 'checking';
       const email = getState().trial.email;
-      if (st === 'checking') { title.textContent = `Activating ${botName()}…`; text.textContent = 'Checking with KnowDrive'; }
+      if (st === 'checking') { title.textContent = `Activating ${botNameMid()}…`; text.textContent = 'Confirming your payment with KnowDrive, usually a few seconds'; }
       else if (st === 'pending') { title.textContent = 'Payment received? We\'re finishing setup.'; text.textContent = 'Checking again automatically every 5 s · usually under a minute'; }
       else if (st === 'slow') { title.textContent = 'Taking longer than usual: we\'ll email you'; text.textContent = `We'll email ${email || 'you'} the moment ${botName()} is live. Keep testing meanwhile: your bot is saved.`; }
-      else if (st === 'done') { title.textContent = 'Payment confirmed'; text.textContent = `${botName()} moved to your KnowDrive account.`; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
+      else if (st === 'done') { title.textContent = 'Payment confirmed. Thank you!'; text.textContent = `${botName()} now answers from your KnowDrive account.`; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
       paintClock();
       clearInterval(tick);
       if (st === 'checking' || st === 'pending') tick = setInterval(() => { if (!card.isConnected) { clearInterval(tick); return; } paintClock(); }, 1000);
-      if (changed) live.textContent = st === 'checking' ? `Activating ${botName()}. Checking with KnowDrive.` : `${title.textContent} ${text.textContent}`;
+      if (changed) live.textContent = st === 'checking' ? `Activating ${botNameMid()}. Confirming your payment with KnowDrive.` : `${title.textContent} ${text.textContent}`;
       if (changed && st !== 'checking' && !motion.reduced()) motion.animate(card, [{ transform: 'translateY(3px)', opacity: .6 }, { transform: 'none', opacity: 1 }], { duration: motion.DUR[2], easing: 'out' });
     }
     update(data);

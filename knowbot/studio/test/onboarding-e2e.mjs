@@ -549,7 +549,7 @@ async function liveJourney(browser, vp) {
     rec.notes.push(`window: ${new URL(popup.url()).origin}${new URL(popup.url()).pathname}`);
   }, { page: () => popup || page, external: true });
   await step(page, bucket, 'studio-waiting-for-sign-in', async () => {
-    await page.locator('.kda-body', { hasText: /Finish signing in|other window/i }).waitFor({ timeout: 10000 });
+    await page.locator('.kda-body', { hasText: /Finish signing in|Finish in the KnowDrive window|other window/i }).waitFor({ timeout: 10000 });
   }, { allowNoAction: true });
   await step(page, bucket, 'checkout-before-account', async (rec) => {
     // what a visitor gets if they try to reach checkout without an account (the API is the real one)
