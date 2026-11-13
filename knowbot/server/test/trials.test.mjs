@@ -82,6 +82,7 @@ async function boot({ env = {}, studio = {}, speed = 3, kdKey = true, kdOpts = {
     KNOWDRIVE_BASE_URL: kd.url, ...(kdKey ? { KNOWDRIVE_API_KEY: 'fake-key' } : {}), KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials', KNOWBOT_STUDIO_SAMPLE_MODE: 'live',
     KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen',
     KNOWBOT_KD_ACCOUNTS: 'off', // the checkout and convert tests here are the unlinked path; server/test/kdaccount.test.mjs covers the linked one
+    KNOWBOT_CHECKOUT: 'knowdrive', // the signed-link checkout (the fallback switch); server/test/billing.test.mjs covers our own checkout
     ...env,
   };
   const kb = createKnowBotServer({ root: ROOT, dataDir, quiet: true, watch: false, trustProxy: true, env: fullEnv,
