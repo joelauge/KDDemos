@@ -580,9 +580,10 @@ async function journey(browser, dev, cell) {
   if (await email.count()) { await email.fill('smoke@example.com'); }
   const cont = page.locator('#co-modal-slot button', { hasText: /Continue to secure checkout/i }).first();
   if (await cont.count()) await press(cont, 'Continue to checkout');
-  const deadline = Date.now() + 8000;
-  while (!checkoutUrl && Date.now() < deadline) await page.waitForTimeout(150);
-  check('13-checkout', 'redirect URL has trial= and bot=Lumen+Help', !!checkoutUrl && checkoutUrl.startsWith('https://knowdrive.ai/signup') && /[?&]trial=/.test(checkoutUrl) && /[?&]bot=Lumen(\+|%20)Help/.test(checkoutUrl), { detail: checkoutUrl || 'no navigation' });
+  // our own checkout page (the dev server's fake payments), never knowdrive.ai: the plan, for this bot
+  const atPay = await page.waitForURL(/\/pay\/cs_/, { timeout: 8000 }).then(() => true).catch(() => false);
+  const payText = atPay ? (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ') : '';
+  check('13-checkout', 'redirect opens our checkout page for the KnowBot plan and Lumen Help', atPay && !checkoutUrl && /KnowBot/.test(payText) && /Lumen Help: today \$0\. First 30 days free, then \$549 per month/.test(payText), { detail: checkoutUrl || page.url() + ' ' + payText.slice(0, 160) });
   if (cell.mobile) {
     const tt = await page.evaluate(() => {
       const bad = [];
