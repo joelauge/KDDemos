@@ -39,6 +39,7 @@ import { createBuilderEngine, createAnthropicComplete, withSourceLine } from './
 import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
+import { createBilling } from './billing.mjs';
 import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
 import { agentLimits, agentSettings, priceText as agentPriceText } from './agents.mjs';
 import { sendInfoSwitches, sendInfoAllow, cleanSendInfo } from './sendinfo.mjs';
@@ -1657,6 +1658,21 @@ export function createStudio(o = {}) {
     },
     saveTrial: (T, { soon = false } = {}) => (soon ? saveSpecSoon(T) : flushSpec(T)),
     onChange: (T, state) => pushEvent(T, 'number', { number: state }) });
+  // The KnowBot plan (server/billing.mjs): our own hosted checkout for the one plan, the webhook that launches the bot
+  // once it is paid for, the bot's billing status (T.flags.billing) and "Manage billing". The KnowDrive account stays a
+  // free account; the old signed link to knowdrive.ai is only used with KNOWBOT_CHECKOUT=knowdrive.
+  const billing = createBilling({ env, log, now, fail, prices: { month: PRICE, year: PRICE_YEAR }, botName: (T) => botName(T),
+    loadTrial: async (id) => {
+      if (!TRIAL_ID_RE.test(String(id || '')) || deletedTrials.has(id)) return null;
+      const T = trialFor(id);
+      if (!T.expiresAt) T.expiresAt = now() + DAY; // like the admin convert: expiry only matters for tags already set
+      await loadSpecDoc(T);
+      return T;
+    },
+    saveTrial: (T) => flushSpec(T),
+    // the same convert the admin route runs: a linked bot's account is its KnowDrive account (the customer-store model)
+    launch: (T, { customerId } = {}) => convert(T, { account: kdReady(T) ? T.kdLink.account : String(customerId || 'knowbot').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), bucketId: `bot-${T.id.slice(3, 15)}` }),
+    onChange: (T, state) => pushEvent(T, 'billing', { billing: state }) });
   // fixer r7 (D2): who set each identity field. A field the person set (typed in the Builder or edited in the spec) is
   // never overwritten by a sample set's draft; the draft only fills fields that still hold their default.
   const PROVENANCE_FIELDS = ['name', 'org', 'tone', 'length', 'greeting', 'purpose', 'audience'];
@@ -5075,6 +5091,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         agents: (({ freePerDay, pricePer1k, currency }) => ({ freePerDay, pricePer1k, currency, priceText: `${agentPriceText(pricePer1k)} per 1,000 agent answers` }))(agentLimits(env)),
         // launch asks for a KnowDrive account first (the bot's files move into the store it owns)
         kd: { available: !!kdAcct, required: kdRequired },
+        // where "Continue to secure checkout" goes: hosted (our own checkout page), knowdrive (the old link) or off
+        checkout: { mode: billing.mode(), available: billing.mode() !== 'off' },
       });
     }
     // the payments webhook (no trial token: verified by its Stripe-Signature; the session's metadata names the bot)
@@ -5082,6 +5100,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       allow('POST');
       const raw = await o.readRaw(req, 512 * 1024);
       return sendJson(res, 200, await numbers.webhook(raw, req.headers['stripe-signature']));
+    }
+    // the plan's payments webhook (no trial token: verified by its Stripe-Signature; the metadata names the bot)
+    if (a === 'billing' && id === 'webhook' && !sub) {
+      allow('POST');
+      const raw = await o.readRaw(req, 512 * 1024);
+      return sendJson(res, 200, await billing.webhook(raw, req.headers['stripe-signature']));
     }
     // the KnowDrive sign-in popup's redirect (no trial token: the sealed state names the trial)
     if (a === 'kd' && id === 'callback' && !sub) { allow('GET'); return kdCallback(req, res, url); }
@@ -5162,9 +5186,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!sub) {
       if (m === 'GET') {
         await resumeStoreJob(T); // an import a restart interrupted goes on as soon as its bot is opened
+        await billing.confirmSoon(T); // back from checkout before the webhook: the payment is looked up, the bot launched
         const files = await filesOf(T, { maxAgeMs: 0 });
         return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
-          convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email, kd: kdPublic(T),
+          convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email, kd: kdPublic(T), billing: billing.pub(T),
           restoreKey: signRestore(T.id, T.expiresAt), shareLink: shareLinkOf(req, T, selfOriginOf(req)), ...(T.converted ? { token: signToken(T.id, T.expiresAt) } : {}) });
       }
       if (m === 'PATCH') {
@@ -5459,6 +5484,19 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const interval = body.interval == null || body.interval === 'month' ? 'month' : body.interval === 'year' ? 'year' : fail(400, 'bad_request', 'interval: must be month or year', { field: 'interval' });
       const surfaces = Array.isArray(T.spec.surfaces) && T.spec.surfaces.length ? T.spec.surfaces : ['webchat'];
       const each = interval === 'year' ? PRICE_YEAR : PRICE;
+      const mode = billing.mode();
+      if (mode === 'off') fail(503, 'checkout_unavailable', "Checkout isn't available yet. Your bot is saved; please try again soon.");
+      if (mode === 'hosted') {
+        // our own checkout: back to the Studio's "Activating…" (launched=1, the restore key so it also lands on another
+        // device) when paid, back to the Launch sheet when cancelled
+        limitTrialAndIp(T, req, 'planpay', 10, 30, 'checkouts');
+        const back = `${originOf(req)}/studio/?t=${T.id}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
+        const r = await billing.startCheckout(T, { interval, email, kdAccount, successUrl: `${back}&launched=1#launched`, cancelUrl: `${back}&launch=1#launch` });
+        T.checkoutStartedAt = new Date(now()).toISOString();
+        await flushSpec(T);
+        log(`[studio] checkout started ${T.id} (${botName(T)})`);
+        return sendJson(res, 200, { url: r.url, mode });
+      }
       const u = new URL(checkoutBase);
       u.searchParams.set('trial', T.id);
       u.searchParams.set('bot', botName(T));
@@ -5480,7 +5518,13 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       T.checkoutStartedAt = new Date(now()).toISOString();
       await flushSpec(T);
       log(`[studio] checkout started ${T.id} (${botName(T)})`);
-      return sendJson(res, 200, { url: u.toString() });
+      return sendJson(res, 200, { url: u.toString(), mode });
+    }
+    // the plan's billing: its status, the return check (a paid checkout the webhook has not reported yet), Manage billing
+    if (sub === 'billing') {
+      if (!fid) { allow('GET'); return sendJson(res, 200, { mode: billing.mode(), converted: !!T.converted, billing: billing.pub(T) }); }
+      if (fid === 'confirm') { allow('POST'); limitTrialAndIp(T, req, 'billconfirm', 30, 60, 'payment checks'); return sendJson(res, 200, await billing.confirm(T, (await readBody(req).catch(() => ({})))?.sessionId)); }
+      if (fid === 'portal') { allow('POST'); limitTrialAndIp(T, req, 'billportal', 10, 30, 'billing pages'); return sendJson(res, 200, await billing.portal(T, `${originOf(req)}/studio/?t=${T.id}#billing`)); }
     }
     fail(404, 'not_found', `no such endpoint ${p}`);
   }
@@ -5639,7 +5683,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!T.expiresAt && opts.expiresAt) T.expiresAt = opts.expiresAt;
     return answerFor(T, question, opts);
   }
-  return { handle, close, sweep, trials, numbers, signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
+  return { handle, close, sweep, trials, numbers, billing, billingPaused: (flags) => billing.paused(flags), signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
     // a trial bot's answer on the API, AI agents, channels and the website widget (devapi): the Studio's own pipeline
     answerTrial, searchTrial, kdFetchFor, kd: kdAcct, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */

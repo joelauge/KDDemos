@@ -359,6 +359,9 @@ export function createDevApi(o = {}) {
       if (!spec && T?.spec) spec = T.spec;
       if (!spec) throw new ApiError(404, 'bot_not_found', `No bot "${id}".`);
       if (expiresAt && expiresAt <= now()) throw new ApiError(404, 'bot_not_found', 'This trial expired and its files were deleted.');
+      // the plan ended and its grace period is over (server/billing.mjs): the bot stops answering publicly. Its owner,
+      // signed in to the Studio, can still open and test it; nothing is deleted.
+      if (studio.billingPaused?.(flags || T?.flags || null) && !(who?.kind === 'trial' && !who.scope)) throw new ApiError(402, 'bot_paused', 'This bot is paused right now. Please check back later.');
       // flags (e.g. the Shopify store import that turns on texted product links) also when only the saved doc is loaded
       return { kind: 'trial', id, T, spec, flags: flags || T?.flags || null, expiresAt: expiresAt || now() + 86400000, name: spec.name || 'Your bot' };
     }
