@@ -21,7 +21,7 @@
 // Works inside a Shadow DOM (its styles travel with it) and in a light-DOM page (every class is kbvm- prefixed).
 
 import { createOrb, createMeter, orbId, ORB_PRESETS } from './voice-orb.js?v=581e55b';
-import { micErrorMessage, downsampleToPcm16 } from './voice-widget.js?v=581e55b';
+import { micErrorMessage, downsampleToPcm16, createBargeIn, rmsOf, BARGE_RESUME_MS } from './voice-widget.js?v=581e55b';
 
 const CSS = `
 .kbvm{--vm-ink:#15151f;--vm-text:#33333f;--vm-mute:#5f6170;--vm-line:#dadce3;--vm-soft:#f4f4f7;--vm-bg:#fff;--vm-acc:var(--kbvm-accent,#4f46e5);--vm-on-acc:var(--kbvm-on-accent,#fff);--vm-bad:#b91c1c;--vm-badbg:#fef2f2;--vm-end:#b91c1c;
@@ -255,7 +255,10 @@ export function openVoiceMode(host, o = {}) {
       proc = inCtx.createScriptProcessor(4096, 1, 1);
       proc.onaudioprocess = (e) => {
         if (muted || stopped || ws?.readyState !== 1) return;
-        const pcm = downsampleToPcm16(e.inputBuffer.getChannelData(0), rate, 16000);
+        const frame = e.inputBuffer.getChannelData(0);
+        // barge-in: the visitor talking over the bot pauses its voice at once (the server's "interrupted" then drops it)
+        if (barge.feed(rmsOf(frame), playing.size > 0 && !bargedAt)) bargeIn();
+        const pcm = downsampleToPcm16(frame, rate, 16000);
         pending.push(pcm); pendingLen += pcm.length;
         if (pendingLen < 1600) return; // 100 ms
         const out = new Int16Array(pendingLen);
@@ -317,9 +320,30 @@ export function openVoiceMode(host, o = {}) {
     synthTimer = setTimeout(() => { if (!started) fallback(); }, 1500);
     synth.speak(u);
   }
+  // barge-in (local voice activity while the bot speaks): pause the bot's audio now rather than wait a round trip for the
+  // server's "interrupted". If the model goes on anyway (a cough, not a question) the audio resumes where it paused.
+  const barge = createBargeIn();
+  let bargedAt = 0, bargeTimer = 0, bargeIns = 0;
+  function bargeIn() {
+    if (!outCtx || !playing.size) return;
+    bargedAt = performance.now();
+    bargeIns++;
+    root.dataset.bargeIns = String(bargeIns);
+    try { outCtx.suspend(); } catch { /* ignore */ }
+    clearTimeout(bargeTimer);
+    bargeTimer = setTimeout(endBarge, BARGE_RESUME_MS);
+  }
+  function endBarge() {
+    clearTimeout(bargeTimer);
+    if (!bargedAt) return;
+    bargedAt = 0;
+    barge.reset();
+    try { outCtx?.resume(); } catch { /* ignore */ }
+  }
   function stopSpeaking() {
     for (const s of playing) { try { s.stop(); } catch { /* ignore */ } }
     playing.clear(); playHead = 0;
+    endBarge();
     clearTimeout(synthTimer);
     try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
   }
@@ -513,4 +537,4 @@ export function openVoiceMode(host, o = {}) {
   };
 }
 
-export { ORB_PRESETS };
+export { ORB_PRESETS, createBargeIn, rmsOf, BARGE_RESUME_MS };

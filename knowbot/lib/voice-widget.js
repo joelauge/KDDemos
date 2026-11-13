@@ -121,6 +121,33 @@ const plain = (s) => String(s || '').replace(/\[(\d{1,3})\]/g, '').replace(/\[([
  * @param {string} [o.lang]      recognition / synthesis language (text engine), default the page's
  * @param {'auto'|'text'} [o.engine]
  */
+/** Root-mean-square level of one mic frame (Float32 samples, -1..1). */
+export function rmsOf(frame) {
+  let s = 0;
+  for (let i = 0; i < frame.length; i++) s += frame[i] * frame[i];
+  return frame.length ? Math.sqrt(s / frame.length) : 0;
+}
+/** How long the bot's voice stays paused after a local barge-in with no "interrupted" from the server (a false alarm). */
+export const BARGE_RESUME_MS = 900;
+/**
+ * Local voice activity while the bot speaks. feed(rms, speaking) once per mic frame (~85 ms); true once the mic has been
+ * clearly above its noise floor (learned while the bot is quiet) for `frames` frames in a row. The browser's echo
+ * cancellation keeps the bot's own voice out of the mic; the floor and the minimum keep residue from tripping it.
+ */
+export function createBargeIn({ ratio = 4, min = 0.03, frames = 2 } = {}) {
+  let floor = 0.004, run = 0;
+  return {
+    feed(rms, speaking) {
+      // the floor learns from quiet frames only (speech between answers never raises it)
+      if (!speaking) { if (rms < floor * 3 || rms < 0.01) floor = Math.min(0.02, floor * 0.9 + rms * 0.1); run = 0; return false; }
+      run = rms > Math.max(min, floor * ratio) ? run + 1 : 0;
+      return run >= frames;
+    },
+    reset() { run = 0; },
+    get floor() { return floor; },
+  };
+}
+
 export function mountVoice(target, o = {}) {
   const host = typeof target === 'string' ? document.querySelector(target) : target;
   const inline = !!host;
@@ -299,10 +326,28 @@ export function mountVoice(target, o = {}) {
     playing.add(src);
     src.onended = () => playing.delete(src);
   }
+  // barge-in: the visitor talking over the bot pauses its voice at once; the server's "interrupted" then drops it (or,
+  // with none, it resumes where it paused)
+  const barge = createBargeIn();
+  let bargedAt = 0, bargeTimer = 0;
+  function bargeIn() {
+    if (!outCtx || !playing.size) return;
+    bargedAt = performance.now();
+    try { outCtx.suspend(); } catch {}
+    clearTimeout(bargeTimer);
+    bargeTimer = setTimeout(endBarge, BARGE_RESUME_MS);
+  }
+  function endBarge() {
+    clearTimeout(bargeTimer);
+    if (!bargedAt) return;
+    bargedAt = 0; barge.reset();
+    try { outCtx?.resume(); } catch {}
+  }
   function stopSpeaking() {
     for (const s of playing) { try { s.stop(); } catch {} }
     playing.clear();
     playHead = 0;
+    endBarge();
     try { window.speechSynthesis?.cancel(); } catch {}
     agentText = ''; agentLine = null;
     stopChipGlow();
@@ -339,6 +384,7 @@ export function mountVoice(target, o = {}) {
       for (let i = 0; i < f32.length; i += 8) peak = Math.max(peak, Math.abs(f32[i]));
       mic.style.setProperty('--lvl', Math.min(1, peak * 3).toFixed(2));
       if (!listening) return;
+      if (barge.feed(rmsOf(f32), playing.size > 0 && !bargedAt)) bargeIn();
       const pcm = downsampleToPcm16(f32, rate, 16000);
       pending.push(pcm); pendingLen += pcm.length;
       if (pendingLen >= flushAt) {
