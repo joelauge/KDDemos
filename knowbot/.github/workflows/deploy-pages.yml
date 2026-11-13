@@ -1,0 +1,61 @@
+# Deploys the website (Studio, dashboard, site/, lib/, demos) to GitHub Pages.
+#
+# Source carries no cache stamps. This workflow copies the site out of the checkout, stamps every script/style
+# reference with ?v=<commit sha> (scripts/build-site.mjs -> stamp-assets.mjs), crawls the stamped copy
+# (check-site.mjs: nothing a page loads may be missing or unstamped) and publishes that copy.
+#
+# ONE-TIME SWITCH (repository owner): Settings -> Pages -> Build and deployment -> Source: "GitHub Actions"
+# (today: "Deploy from a branch"). Until then this workflow builds and checks the site but does not publish it, and
+# Pages keeps serving the branch as it is. The custom domain (knowbot.knowdrive.ai) is a repository setting and is
+# kept by the switch; the CNAME file stays in the site as well.
+#
+# No secrets are used. The API container is deployed separately (deploy-cloudflare.yml).
+name: Deploy site to GitHub Pages
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish even if the Pages source could not be read (only works once Source is "GitHub Actions")'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency: { group: pages, cancel-in-progress: false }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.source.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Build the stamped site and check every reference
+        run: node scripts/build-site.mjs "$RUNNER_TEMP/site" "${GITHUB_SHA::7}"
+      - name: Is Pages set to deploy from GitHub Actions?
+        id: source
+        env: { GH_TOKEN: '${{ github.token }}', FORCE: '${{ inputs.publish }}' }
+        run: |
+          if [ "$FORCE" = "true" ]; then echo "publish=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          type=$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq .build_type 2>/dev/null || echo unknown)
+          if [ "$type" = "workflow" ]; then echo "publish=true" >> "$GITHUB_OUTPUT"; else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Pages source is \"$type\", not GitHub Actions: the site was built and checked but NOT published. Pages still serves the branch as committed. Switch Settings -> Pages -> Source to \"GitHub Actions\" to publish stamped builds."
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.source.outputs.publish == 'true'
+        with: { path: '${{ runner.temp }}/site' }
+  deploy:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

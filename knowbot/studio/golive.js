@@ -23,11 +23,11 @@
 // the free daily limit and paid access (spec.agents.paid, metered), and a Try it over the plain HTTP ask. The phone's Try it is a phone you can call in the browser (./phonesim.js), on the same Gemini Live
 // engine and phone prompt as a real call.
 
-import { mountWidget } from './kdw.js?v=71c8469';
-import { apiForScriptHost } from '../lib/site-config.js?v=71c8469';
-import { mountNumbers, numberCache } from './numbers.js?v=71c8469';
-import { siteSettings } from './sitebrand.js?v=71c8469';
-import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE, sendInfoSwitches, SEND_INFO_HELP } from './surfaces.js?v=71c8469';
+import { mountWidget } from './kdw.js';
+import { apiForScriptHost } from '../lib/site-config.js';
+import { mountNumbers, numberCache } from './numbers.js';
+import { siteSettings } from './sitebrand.js';
+import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE, sendInfoSwitches, SEND_INFO_HELP } from './surfaces.js';
 
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition || null) : null;
@@ -40,7 +40,7 @@ export function ensureCss() {
     if (document.querySelector('link[data-gl-css]')) { resolve(); return; }
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = new URL('./golive.css?v=71c8469', import.meta.url).href;
+    link.href = new URL('./golive.css', import.meta.url).href;
     link.dataset.glCss = '1';
     link.onload = () => resolve();
     link.onerror = () => resolve();
@@ -1528,7 +1528,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if (vm) return;
       msgs.hidden = true; af.form.hidden = true; vbox.hidden = false; vbox.textContent = 'Starting voice mode…';
       try {
-        const [d, { openVoiceMode }] = await Promise.all([loadDev(), import(`${siteBase}lib/voice-mode.js?v=e3d6fc1`)]);
+        const [d, { openVoiceMode }] = await Promise.all([loadDev(), import(`${siteBase}lib/voice-mode.js`)]);
         if (vbox.hidden) return;
         if (d.status !== 'ok' || !d.key) { vbox.textContent = 'Voice mode needs your trial key; it is not available right now.'; setTimeout(endVoice, 2500); return; }
         const view = await (api.getSite?.() || Promise.resolve(null)).catch(() => null);
@@ -1594,7 +1594,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(note, host);
     let sim = null, stopped = false;
     voices.push({ stop() { stopped = true; try { sim && sim.stop(); } catch { /* ignore */ } sim = null; } });
-    loadDev().then(() => import('./phonesim.js?v=71c8469')).then(({ mountPhone }) => {
+    loadDev().then(() => import('./phonesim.js')).then(({ mountPhone }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.remove(); voices.push(voiceTry(el, { mode: 'phone' })); return; }
@@ -1609,7 +1609,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     el.append(note, host);
     let widget = null, stopped = false;
     voices.push({ stop() { stopped = true; try { widget && widget.destroy(); } catch { /* ignore */ } widget = null; } });
-    loadDev().then(() => import(`${siteBase}lib/voice-launcher.js?v=e3d6fc1`)).then(({ mountVoiceLauncher }) => {
+    loadDev().then(() => import(`${siteBase}lib/voice-launcher.js`)).then(({ mountVoiceLauncher }) => {
       if (stopped || closing) return;
       const d = dev();
       if (d.status !== 'ok' || !d.key) { note.textContent = 'The voice assistant needs your trial key; it is not available right now. The clip endpoint below still works.'; return; }

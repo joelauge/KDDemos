@@ -20,7 +20,7 @@ import { startDevServer } from './dev-server.mjs';
 
 const STUDIO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const srcCache = new Map();
-/** 'ingest.js?v=1' + char position -> 'ingest.js:123' (LoAF reports char offsets, not lines) */
+/** 'ingest.js?v=<stamp>' + char position -> 'ingest.js:123' (LoAF reports char offsets, not lines) */
 function where(src, ch) {
   const f = String(src || '').split('?')[0];
   if (!f || !(ch >= 0)) return f || '?';

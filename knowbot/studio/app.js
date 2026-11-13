@@ -20,22 +20,22 @@
 // CONTRACT-GAP (A): after convert, GET /trials/:id lists no files (they were retagged to the account bucket), so a
 //   reload of a live bot has an empty map; B's Live turn says where the files are.
 //
-// Siblings are imported WITHOUT a cache stamp so every module (C, D, E included) shares one store instance.
-// The lazily mounted owner modules carry the stamp (?v=V).
+// Source carries no cache stamp: the deploy stamps every module reference alike (scripts/stamp-assets.mjs), so each
+// module (C, D, E included) is loaded from one address and shares one store instance. The lazily mounted owner modules
+// are named as whole relative-path literals (mountModules) so the stamper sees them.
 
-import * as store from './store.js?v=71c8469';
-import * as api from './api.js?v=71c8469';
-import * as motion from './motion.js?v=71c8469';
-import * as icons from './icons.js?v=71c8469';
-import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, SURFACE_TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js?v=71c8469';
-import { mountShapes } from './shapes.js?v=71c8469';
-import { mountBuilderPane } from './builderpane.js?v=71c8469';
-import { siteSettings } from './sitebrand.js?v=71c8469';
-import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js?v=71c8469';
-import { openLeads } from './leads.js?v=71c8469';
-import { mountFtue } from './ftue.js?v=71c8469';
+import * as store from './store.js';
+import * as api from './api.js';
+import * as motion from './motion.js';
+import * as icons from './icons.js';
+import { normalizeSurfaces, surfacesText, planTotals, money, featureLabel, SURFACE_TOOLS, PRICE_MONTH, PRICE_YEAR } from './surfaces.js';
+import { mountShapes } from './shapes.js';
+import { mountBuilderPane } from './builderpane.js';
+import { siteSettings } from './sitebrand.js';
+import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js';
+import { openLeads } from './leads.js';
+import { mountFtue } from './ftue.js';
 
-const V = '1';
 const { getState, setState, on, emit, mark } = store;
 const { icon, fileIcon } = icons;
 
@@ -141,7 +141,7 @@ function announce(text, region = 'polite') {
   setTimeout(() => { el.textContent = String(text || ''); }, 30);
 }
 
-const ctx = { store, api, motion, icons, slots, announce, V };
+const ctx = { store, api, motion, icons, slots, announce };
 store.setCardContext(ctx);
 window.__studio = ctx;   // debugging + smoke-test hooks (read-only use)
 ctx.builder = { pendingDecision: (k) => { const m = pendingDecision(k); return m ? m.decision : null; }, messages: () => messages.map((m) => ({ role: m.role, decision: m.decision || null, chips: (m.chips || []).length })) };
@@ -740,7 +740,7 @@ function initFtue(fresh) {
       openStats: () => openLeads(),
       openSetup: () => openSetup({}),
       saveSurfaces: (list) => updateSpec({ surfaces: normalizeSurfaces(list) }, { by: 'user', source: 'landing', quiet: true }),
-      websiteLine: () => import('./golive.js?v=71c8469').then((m) => m.websiteLine(ctx)),
+      websiteLine: () => import('./golive.js').then((m) => m.websiteLine(ctx)),
       isLive,
       onDismiss: () => toast({ kind: 'info', text: 'Guide hidden. Bring it back any time from ⋯ → Show the guide.' }),
       // the guide is done or dismissed: the Builder's held "Keep this bot" offer comes now
@@ -5456,18 +5456,18 @@ function mountModules() {
   // perf (r3): the three modules download in parallel but mount one per frame (each mount builds a lot of DOM; two in
   // one frame made a long animation frame on a throttled CPU)
   const go = async () => {
-    const list = [['ingest', 'ingest.js'], ['samplebot', 'samplebot.js'], ['checkout', 'checkout.js']];
-    const ps = list.map(([, file]) => import(`./${file}?v=${V}`).catch((err) => err));
+    const list = [['ingest', './ingest.js'], ['samplebot', './samplebot.js'], ['checkout', './checkout.js']];
+    const ps = list.map(([, file]) => import(file).catch((err) => err));
     for (let i = 0; i < list.length; i++) {
-      const [name, file] = list[i];
+      const [name] = list[i];
       const m = await ps[i];
       if (name !== 'ingest') await asyncCss();
       try {
         if (m instanceof Error) throw m;
-        if (typeof m.mount !== 'function') throw new Error(`${file} has no mount()`);
+        if (typeof m.mount !== 'function') throw new Error(`${name}.js has no mount()`);
         mods[name] = m.mount(ctx) || {};
       } catch (err) {
-        console.error(`[studio] ${file} failed to mount; the rest of the studio keeps working`, err);
+        console.error(`[studio] ${name}.js failed to mount; the rest of the studio keeps working`, err);
         mods[name] = null;
       }
       if (i < list.length - 1) await nextPaint();

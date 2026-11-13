@@ -360,7 +360,7 @@ button { font: inherit; color: inherit; }
     status.textContent = '';
     try {
       const [{ openVoiceMode }] = await Promise.all([
-        import(new URL('../lib/voice-mode.js?v=71c8469', SRC).href),
+        import(new URL('../lib/voice-mode.js', SRC).href),
         // a fresh key when this one is about to run out (it lives a few hours)
         !ownerKey && Date.parse(site.keyExpiresAt || '') < Date.now() + 120000 ? loadSite().then((x) => { site = { ...site, ...x }; }).catch(() => {}) : null,
       ]);

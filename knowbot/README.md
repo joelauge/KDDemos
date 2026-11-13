@@ -156,6 +156,7 @@ max_tokens 400, seed 7.
 ## Public hosting (knowbot.knowdrive.ai + Cloudflare)
 
 - **Static site:** GitHub Pages serves this repo's root at `knowbot.knowdrive.ai` (`CNAME`, `.nojekyll`; light mode by default).
+  Source carries no cache stamps: `.github/workflows/deploy-pages.yml` builds a stamped copy on every push to `main` (`scripts/build-site.mjs`: every script/style reference gets `?v=<commit>`, then a crawl checks nothing a page loads is missing) and publishes it once Pages' Source is set to "GitHub Actions". While Pages still deploys from the branch, stamp the commit that gets published by hand (`npm run stamp`, never on a working branch; `npm run stamp:strip` undoes it, `npm run stamp:check` proves a tree is clean).
 - **API:** `cloudflare/` deploys a Worker (`knowbot-api`) in front of one Cloudflare Container (`standard-4`, 4 vCPU / 12 GiB) that runs llama.cpp `llama-server` with Qwen2.5-1.5B-Instruct Q4_K_M plus the unchanged Node server. It is the same model and code as every judged round. The container sleeps after 15 minutes idle; the first request after that wakes it in roughly 5–20 s.
 - **Deploy:** `.github/workflows/deploy-cloudflare.yml` runs on push to `main` (or manually) once the repo secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `KNOWDRIVE_API_KEY` exist. Locally: `cd cloudflare && npm install && npx wrangler deploy` (needs Docker).
 - **Wire the pages to it:** put the deployed Worker URL in `lib/site-config.js` (`HOSTED_APIS['knowbot.knowdrive.ai']`). The dashboard and demos then use it by default.
