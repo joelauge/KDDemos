@@ -332,7 +332,7 @@ async function journey(browser, dev, cell) {
   // the visitor's view is calm: no match scores, no chip row (they live in Proof view); the DOM still carries the
   // source chips with their match, so the match range is checked from textContent
   const srcText = await page.evaluate(() => [...document.querySelectorAll('#sb-thread-slot .sb-srcrow')].map((r) => r.textContent).join(' '));
-  const matches = [...srcText.matchAll(/match\s*(\d{1,3})/gi)].map((m) => Number(m[1]));
+  const matches = [...srcText.matchAll(/(\d{1,3})%\s*match|match\s*(\d{1,3})/gi)].map((m) => Number(m[1] || m[2]));
   check('05-first-answer', 'source chips carry match 55–99 (Proof view)', matches.some((n) => n >= 55 && n <= 99), { detail: matches.slice(0, 6).join(',') });
   check('05-first-answer', 'bot view shows no match scores', !/match\s*\d{1,3}/i.test(threadText), { detail: threadText.slice(0, 80) });
   // r7: chips are named "<visible text>: citation, atom n" (axe label-content-name-mismatch), so select by data-n

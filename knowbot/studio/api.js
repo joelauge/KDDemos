@@ -255,6 +255,8 @@ export async function getTrial() {
   const r = await request('GET', trialPath(), { root: true });
   const t = T();
   if (r.restoreKey && r.restoreKey !== t.restoreKey) setState({ trial: { ...T(), restoreKey: r.restoreKey } }, 'trial:restoreKey');
+  // a launched bot gets a long-lived token (its 7-day trial token would lapse): kept like any other token
+  if (r.token && r.token !== T().token) setState({ trial: { ...T(), token: r.token, expiresAt: r.expiresAt || T().expiresAt } }, 'trial:token');
   return { ...r, trial: { ...t, id: r.trialId || t.id, expiresAt: r.expiresAt || t.expiresAt, converted: !!r.converted, email: r.email ?? t.email } };
 }
 

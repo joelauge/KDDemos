@@ -833,7 +833,7 @@ export function mount(ctx) {
     n ? h('span', { class: 'sb-src-n sb-num' }, String(n)) : h('i', { class: 'sb-src-dot', 'aria-hidden': 'true' }),
     fico(meta.kind, 14),
     h('span', { class: 'sb-src-name' }, mid(hit.file || meta.name, isMobile() ? 18 : 26)),
-    h('span', { class: 'sb-src-m sb-num' }, m == null ? 'keyword match' : `match ${m}`));
+    h('span', { class: 'sb-src-m sb-num' }, m == null ? 'word match' : `${m}% match`));
     return b;
   }
 
@@ -872,7 +872,7 @@ export function mount(ctx) {
       m == null
         ? h('span', { class: 'pf-kw' }, 'keyword match')
         : h('span', { class: 'pf-meter', 'aria-hidden': 'true' }, h('i', { style: { transform: `scaleX(${Math.max(0, Math.min(1, (raw ?? 0) / 100))})` } })),
-      m == null ? null : h('span', { class: 'pf-match sb-num' }, `match ${m}`)));
+      m == null ? null : h('span', { class: 'pf-match sb-num' }, `${m}% match`)));
     card._snip = snip;
     card._hit = hit;
     card._excerpt = excerpt;
@@ -1235,7 +1235,7 @@ export function mount(ctx) {
     // a context line that is a markdown table row reads as prose ("Model · Type · Price"), never raw pipes
     parts.before = cleanExcerpt(parts.before); parts.after = cleanExcerpt(parts.after);
     // r5: two lines (file, then locator · match) that wrap inside the popover's width, never past its border
-    const locBits = [c.locator, c.match == null ? 'keyword match' : `match ${c.match}`].filter(Boolean);
+    const locBits = [c.locator, c.match == null ? 'word match' : `${c.match}% match`].filter(Boolean);
     const where = citeLoc(c.cit);
     const link = httpUrl(c.cit?.url);
     const dl = isDownload(link);
@@ -1982,7 +1982,7 @@ export function mount(ctx) {
       h('tr', null, h('th', null, 'File'), h('th', null, 'Atom'), h('th', null, 'Match')), cands.map((r) => h('tr', null, h('td', null, r.c.file), h('td', null, r.loc || ''), h('td', null, r.m ?? ''))));
     const closest = h('div', { class: 'pf-closest' }, h('p', { class: 'pf-closest-h' }, 'Closest atoms (not used)'),
       h('ul', null, cands.slice(0, 3).map((r) => h('li', null,
-        h('span', { class: 'pf-closest-f' }, label(r, 'pf-closest-name'), h('span', { class: 'pf-closest-m sb-num' }, r.m == null ? 'keyword match' : `match ${r.m}`)),
+        h('span', { class: 'pf-closest-f' }, label(r, 'pf-closest-name'), h('span', { class: 'pf-closest-m sb-num' }, r.m == null ? 'word match' : `${r.m}% match`)),
         h('span', { class: 'pf-closest-x' }, clip(cleanExcerpt(r.c.excerpt), 150))))));
     const reason = why.reason ? ` The closest lines didn't answer the question.` : '';
     const gap = why.best == null ? null : belowBy(Number(why.best), flSim);
@@ -2512,9 +2512,9 @@ export function mount(ctx) {
     const titleBits = h('div', { class: 'pf-dtitle' },
       h('h2', { id: drawer.titleId, tabindex: '-1' }, h('span', { class: 'pf-dico', style: { '--hue': hueVar(data.hue) }, dataset: { hf: data.fileId || '', hn: data.file || '' } }, fico(data.kind, 16)), h('span', { class: 'pf-dname' }, mid(data.file, isMobile() ? 26 : 34))),
       // r4: one line, never wrapping inside a value ("floor" / "70"): each value is a nowrap unit, the locator ellipsizes
-      h('p', { class: 'pf-dsub sb-num', title: [data.locator, m == null ? 'keyword match' : `match ${m}`, `floor ${pct(data.floor)}`].filter(Boolean).join(' · ') },
+      h('p', { class: 'pf-dsub sb-num', title: [data.locator, m == null ? 'word match' : `${m}% match`, `floor ${pct(data.floor)}`].filter(Boolean).join(' · ') },
         data.locator ? h('span', { class: 'pf-dsub-loc' }, data.locator) : null,
-        h('span', { class: 'pf-dsub-v' }, m == null ? 'keyword match' : `match ${m}`),
+        h('span', { class: 'pf-dsub-v' }, m == null ? 'word match' : `${m}% match`),
         h('span', { class: 'pf-dsub-v' }, `floor ${pct(data.floor)}`)),
       atomLabel ? h('p', { class: 'pf-did' }, copyBtn) : null);
     const close = h('button', { type: 'button', class: 'pf-close', 'aria-label': 'Close receipt', onclick: () => closeDrawer() }, ico('close', 18));
@@ -2691,6 +2691,7 @@ export function mount(ctx) {
       unsupported, verifiedPct: claims ? Math.round((100 * verified) / claims) : 100 };
   }
   const isDone = (r) => r.status === 'pass' || r.status === 'fail';
+  const botNameOf = () => { const n = getState().spec?.name; return n && n !== 'SampleBot' ? n : 'your bot'; };
 
   async function runProof({ mini = false } = {}) {
     if (prun && prun.status === 'running') { if (prun.inst?.el) prun.inst.el.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() }); return; }
@@ -2710,7 +2711,7 @@ export function mount(ctx) {
     prun = { id: uid('prun'), rows, status: 'running', mini, startedAt: Date.now(), inst: null, group: null };
     setState({ proof: { status: 'running', rows: rows.map((r) => ({ ...r })), score: null } }, 'proof:start');
     prun.group = buildGroup(prun);
-    emit('setup:post', { role: 'assistant', text: `Proof Run: ${plural(proofQs.length, 'question')} written from your files, plus ${probes.length} it should refuse. Two at a time; every row links to its receipt.`,
+    emit('setup:post', { role: 'assistant', text: `Testing ${botNameOf()}: ${plural(proofQs.length, 'question')} from your files, plus ${probes.length} it should refuse because your files don't cover ${probes.length === 1 ? 'it' : 'them'}. Tap any row to see the answer and where it came from.`,
       card: { type: 'scorecard', data: { runId: prun.id, rows: rows.map((r) => ({ ...r })), score: null, status: 'running' } } });
     say(`Proof Run started: ${rows.length} questions.`);
     const my = prun;
@@ -2730,7 +2731,7 @@ export function mount(ctx) {
     await Promise.all([worker(), worker()]);
     if (my !== prun) return;
     my.status = 'done';
-    const score = proofScore(rows);
+    const score = { ...proofScore(rows), mini: !!my.mini };   // a full run on a small corpus has fewer than 8 questions: still the full run
     setState({ proof: { status: 'done', rows: rows.map((r) => ({ ...r })), score } }, 'proof:done');
     progress(my, true);
     mark('proofRun');
@@ -3339,7 +3340,7 @@ export function mount(ctx) {
   async function openVoice() {
     if (voiceLayer) return;
     const host = dom.bot || dom.composer;
-    const name = getState().spec?.name || 'Your bot';
+    const name = getState().spec?.name && getState().spec.name !== 'SampleBot' ? getState().spec.name : 'Your bot';
     const body = h('div', { class: 'sb-voice-body' }, h('p', { class: 'sb-voice-load', role: 'status' }, 'Starting voice mode…'));
     const layer = h('div', { class: 'sb-voice', 'data-surface': 'webchat' },
       h('div', { class: 'sb-voice-head' }, h('span', { class: 'sb-voice-t' }, 'Voice mode'), h('span', { class: 'sb-voice-sub' }, `${name} · web chat`)), body);
@@ -3496,7 +3497,7 @@ export function mount(ctx) {
   function renderComposerMeta() {
     const r = readiness();
     const spec = getState().spec || {};
-    const name = spec.name || 'your bot';
+    const name = spec.name && spec.name !== 'SampleBot' ? spec.name : 'your bot';
     const m = isMobile();
     ta.placeholder = r.ready.length ? (m ? `Ask ${name}…` : `Ask ${name} anything about your files`) : r.total ? (m ? 'Ready soon…' : 'Your bot can answer once a file is ready…') : (m ? 'Add a file first…' : 'Add a file and your bot can answer from it…');
     ta.setAttribute('aria-label', `Ask ${name}`);

@@ -283,7 +283,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
   const { getState, setState, emit, on } = store;
   const icon = (n, s = 16) => icons.icon(n, s);
   const modal = slots.modal || document.getElementById('co-modal-slot');
-  const botName = helpers.botName || (() => getState().spec.name || 'Your bot');
+  const botName = helpers.botName || (() => { const n = getState().spec.name; return n && n !== 'SampleBot' ? n : 'Your bot'; });
   const copyButton = helpers.copyButton;
   const cleanups = [];
   const isMobile = () => matchMedia('(max-width: 899px)').matches;

@@ -422,7 +422,7 @@ export function mount(ctx) {
   const body = h('div', { class: 'in-body' }, cap, rowsEl);
   // Drag (or arrow-key) the bottom edge to give the file list more or less of the pane; double-click resets.
   const SIZE_KEY = 'kb-studio-sources-h';
-  const sizer = h('div', { class: 'in-sizer', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal', 'aria-label': 'Resize sources', title: 'Drag to resize · double-click to reset' }, h('span', { class: 'in-sizer-grip', 'aria-hidden': 'true' }));
+  const sizer = h('div', { class: 'in-sizer', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal', 'aria-label': 'Resize sources', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', title: 'Drag to resize · double-click to reset' }, h('span', { class: 'in-sizer-grip', 'aria-hidden': 'true' }));
   panel.append(head, tracker, body, sizer, empty, chip, chipDesc);
   intakeSlot.innerHTML = '';
   intakeSlot.append(panel);
@@ -453,7 +453,8 @@ export function mount(ctx) {
   const sizeBounds = () => { const ph = paneOf()?.clientHeight || window.innerHeight; return [120, Math.max(160, ph - 220)]; };
   function applySize(px, save) {
     if (px == null) {
-      intakeSlot.style.removeProperty('--in-user-h'); delete intakeSlot.dataset.userh; sizer.removeAttribute('aria-valuenow');
+      intakeSlot.style.removeProperty('--in-user-h'); delete intakeSlot.dataset.userh;
+      { const [lo, hi] = sizeBounds(); sizer.setAttribute('aria-valuemin', String(lo)); sizer.setAttribute('aria-valuemax', String(hi)); sizer.setAttribute('aria-valuenow', String(Math.round(Math.min(hi, Math.max(lo, intakeSlot.offsetHeight || lo))))); }   // a focusable separator always has a value (axe)
       if (save) { try { localStorage.removeItem(SIZE_KEY); } catch {} }
       return;
     }

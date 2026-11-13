@@ -100,10 +100,19 @@ async function layoutAudit(page) {
         while (c && c !== document.body) { const cs = getComputedStyle(c); if (cs.position === 'fixed' || cs.position === 'sticky') { chrome = true; break; } c = c.parentElement; }
         if (scrolls && chrome) continue;
         if (scrolls && !p.contains(hit)) continue; // covered by a sibling pane's overlay while this pane scrolls
+        // the phone's Builder peek sits over the Builder tab on purpose: it IS the way to that tab
+        if (hit.closest('.st-peek') && el.closest('#st-tab-setup')) continue;
         out.push(`covered: "${name(el)}" is under "${name(hit)}"`);
       }
       const cs = getComputedStyle(el);
       if (el.tagName === 'BUTTON' && cs.overflow !== 'visible' && el.scrollWidth > el.clientWidth + 2 && cs.textOverflow !== 'ellipsis') out.push(`clipped text: "${name(el)}"`);
+    }
+    // the top layer's primary button must be reachable without hunting: in a dialog it is on screen
+    if (layer !== document.body) {
+      for (const b of [...layer.querySelectorAll('.co-cta, .btn-primary, button[type=submit]')].filter(visible)) {
+        const r = b.getBoundingClientRect();
+        if (r.top > vh - 8) out.push(`primary button below the fold: "${name(b)}" starts at ${Math.round(r.top)}px of ${vh}`);
+      }
     }
     return [...new Set(out)].slice(0, 12);
   });
@@ -304,11 +313,11 @@ async function localJourney(browser, dev, vp, files) {
     await b.waitFor({ state: 'visible', timeout: 10000 });
     await b.click();
     // Launch first shows what you get (the launch sheet); its one primary button continues to the account step
-    await page.locator('.kda-dialog, #co-modal-slot .co-cta').first().waitFor({ timeout: 15000 });
+    await page.locator('.kda-dialog, .co-cta:visible').first().waitFor({ timeout: 15000 });
   });
 
   await step(page, bucket, 'launch-confirm', async () => {
-    if (!(await page.locator('.kda-dialog').count())) await page.locator('#co-modal-slot .co-cta').filter({ hasText: /^Launch/ }).last().click();
+    if (!(await page.locator('.kda-dialog').count())) await page.locator('.co-cta:visible').filter({ hasText: /^Launch/ }).last().click();
     await page.locator('.kda-dialog').waitFor({ timeout: 15000 });
     await page.locator('#kda-create').waitFor({ timeout: 15000 });
   });
@@ -393,7 +402,7 @@ async function localJourney(browser, dev, vp, files) {
 
   // the restore link a visitor would use on another device: what the Studio offers after launch
   const link = await page.evaluate(() => {
-    const a = [...document.querySelectorAll('input[readonly], a')].map((x) => x.value || x.href || '').find((v) => /[?&]t=tr_[^&]+&k=/.test(v));
+    const a = [...document.querySelectorAll('input[readonly], a, .co-backin [title]')].map((x) => x.value || x.href || x.title || '').find((v) => /[?&]t=tr_[^&]+&k=/.test(v));
     return a || null;
   }).catch(() => null);
 
@@ -482,10 +491,10 @@ async function liveJourney(browser, vp) {
   await step(page, bucket, 'launch', async () => {
     await pane(page, vp, 'setup');
     await page.locator('#st-price').click();
-    await page.locator('.kda-dialog, #co-modal-slot .co-cta').first().waitFor({ timeout: 20000 });
+    await page.locator('.kda-dialog, .co-cta:visible').first().waitFor({ timeout: 20000 });
   });
   await step(page, bucket, 'launch-confirm', async () => {
-    if (!(await page.locator('.kda-dialog').count())) await page.locator('#co-modal-slot .co-cta').filter({ hasText: /^Launch/ }).last().click();
+    if (!(await page.locator('.kda-dialog').count())) await page.locator('.co-cta:visible').filter({ hasText: /^Launch/ }).last().click();
     await page.locator('.kda-dialog').waitFor({ timeout: 20000 });
     await page.locator('#kda-create, #kda-move, #kda-continue').first().waitFor({ timeout: 20000 });
   });

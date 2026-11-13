@@ -177,7 +177,7 @@ function renderHeader() {
     h('span', { class: 'st-avatar', 'aria-hidden': 'true' }),
     h('span', { class: 'st-botchip-name' }),
     h('span', { class: 'st-botchip-edit', 'aria-hidden': 'true', html: icon('edit', 13) }));
-  const botchipDesc = h('span', { id: 'st-botchip-desc', class: 'st-sr' }, 'Opens the bot spec: name, tone and sources');
+  const botchipDesc = h('span', { id: 'st-botchip-desc', class: 'st-sr' }, 'Change its name, tone and sources');
   const net = h('span', { id: 'st-net', class: 'chip amber is-label no-dot st-pill st-pill-net', role: 'status', hidden: true });
   const trial = h('span', { id: 'st-trialpill', class: 'chip green is-label no-dot st-pill st-pill-trial', hidden: true });
   const kbd = h('button', { type: 'button', id: 'st-kbd', class: 'st-kbd', hidden: true, 'aria-describedby': 'st-kbd-desc', title: 'Command palette', onclick: () => openPalette() },
@@ -279,7 +279,9 @@ function toggleMotion() {
   toast({ kind: 'info', text: motion.reduced() ? 'Reduced motion on. Everything still shows, nothing moves.' : 'Full motion on.' });
 }
 
-function botName() { return getState().spec.name || 'SampleBot'; }
+// the server's placeholder name ("SampleBot") never reaches the screen: an unnamed bot is "Your bot" ("your bot" mid-sentence)
+function botName() { const n = getState().spec.name; return n && n !== 'SampleBot' ? n : 'Your bot'; }
+function botNameMid() { const n = getState().spec.name; return n && n !== 'SampleBot' ? n : 'your bot'; }
 function displayInitials(spec) {
   const a = spec.avatar || {};
   if (a.initials && !(a.initials === 'SB' && spec.name !== 'SampleBot')) return a.initials;
@@ -300,6 +302,7 @@ function updateIdentity() {
     chip.classList.toggle('is-placeholder', placeholder);
     // r10: the placeholder name never shows ("SampleBot" appearing, then flipping): "Your bot" until it has its own
     $('.st-botchip-name', chip).textContent = placeholder ? 'Your bot' : spec.name;
+    chip.setAttribute('aria-label', placeholder ? 'Your bot' : spec.name);   // equals the visible text (WCAG 2.5.3)
     paintAvatar($('.st-avatar', chip), spec);
   }
   const head = $('#st-bothead');
@@ -352,7 +355,7 @@ function testedBot() {
 const launchChipLabel = () => (testedBot() ? `Launch · ${priceText()}` : 'Launch');
 let activatingUntil = 0, activatingTimer = 0, launchIntent = false;
 // r7 (D8): the Builder's subtitle follows the bot's life: setup copy until it is live, then where it is managed
-function setupSubtitle() { return getState().trial.converted ? 'Your bot is live · managed in KnowDrive' : 'Sets up your bot with you · no account needed'; }
+function setupSubtitle() { return getState().trial.converted ? 'Your bot is live · managed in KnowDrive' : 'Builds your bot with you · free to try'; }
 function syncSetupSubtitle() { setText($('#st-setup-sub') || $('.st-setup-title p'), setupSubtitle()); }
 // r7 (D8): "activating since" survives a reload (sessionStorage): a reload mid-activation resumes E's poll and card
 // instead of greeting the visitor with "Welcome back" and setup chips.
@@ -1116,9 +1119,10 @@ function polishCopy(text) {
   });
   t = t.replace(/\bProof Run passed\./g, (all) => {
     const sc = getState().proof?.score;
-    if (!sc || (sc.total || 0) >= 8) return all;   // only the full 8 + 3 run is "the Proof Run"
+    if (!sc) return all;
     const n = (sc.total || 0) + (sc.probes || 0), ok = (sc.answered || 0) + (sc.refused || 0);
-    return `Quick check passed (${ok}/${n}).`;
+    // plain words: how many tests, and that it passed them all
+    return sc.mini === false || (sc.mini == null && (sc.total || 0) >= 8) ? `All ${n} tests passed.` : `Quick check passed (${ok} of ${n}).`;
   });
   t = t.replace(/, built for ([^(.\n]+?) \(([a-z]+)\)/g, (all, org, tone) => {
     const o = org.trim();
@@ -1489,7 +1493,10 @@ function staleEvent(ev) {
     case 'file_ready': case 'files_queued': case 'file_atomized':
       if (narrationQuiet()) return true;
       // r10: while the guide shows reading progress, the Builder keeps no per-file "x is ready" commentary
-      if (guideFlag() && ev.type !== 'files_queued') return true;
+      // ...except the one turn that names a bot built from the visitor's own files ("Call it Northwind Guide?"): without
+      // it the bot launched as the placeholder name
+      const namingTurn = ev.type === 'file_atomized' && !allSampleFiles() && getState().spec.name === 'SampleBot';
+      if (guideFlag() && ev.type !== 'files_queued' && !namingTurn) return true;
       // r8 (D2): once the "All N files ready" summary is posted, a late per-file progress turn would arrive out of
       // order ("x is ready" after "All 4 ready"): dropped unless it still carries the naming offer (own files)
       if (ev.type === 'file_atomized' && learn && learn.complete && (allSampleFiles() || getState().spec.name !== 'SampleBot')) return true;
@@ -1592,7 +1599,7 @@ function fixQueuedCopy(rec, d) {
   let t = rec.text;
   if (n === 1) t = t.replace(/\bread them\b/, 'read it');
   const by = Number(d.bytes) || 0;
-  if (by) t = t.replace(/\((?:[\d.]+ (?:KB|MB|B)) of 100(?: MB)?\)/, `(${fmtSize(by)} of 100 MB)`);
+  if (by) t = t.replace(/\((?:[\d.]+ (?:KB|MB|B)) of (?:your )?100(?: MB)?\)/, `(${fmtSize(by)} of your 100 MB)`);
   if (t === rec.text) return;
   rec.text = t; rec.textEl.innerHTML = md(t); rec.srEl.textContent = plain(t); saveLog();
 }
@@ -1790,7 +1797,7 @@ function fallbackFor(input, err) {
   switch (ev?.type) {
     case 'samples_attached': return { text: "Loading Lumen Bikes' sample docs (warranty, service plans, store FAQ, price list). While they learn, I've drafted your bot:",
       chips: [L('looks_good', 'Looks good', { send: 'Looks good', local: false }), L('rename', 'Rename it', { action: { type: 'open_spec' } }), L('formal', 'Make it more formal', { send: 'Make it more formal', local: false })] };
-    case 'files_queued': { const n = Number(d.n ?? files.length) || files.length; const by = Number(d.bytes) || queuedBytes(); return { text: `Got ${n} file${n === 1 ? '' : 's'}${by ? ` (${fmtSize(by)} of 100 MB)` : ''}. I'll read ${n === 1 ? 'it' : 'them'} first so I can suggest a name that fits.`,
+    case 'files_queued': { const n = Number(d.n ?? files.length) || files.length; const by = Number(d.bytes) || queuedBytes(); return { text: `Got ${n} file${n === 1 ? '' : 's'}${by ? ` (${fmtSize(by)} of your 100 MB)` : ''}. I'll read ${n === 1 ? 'it' : 'them'} first so I can suggest a name that fits.`,
       chips: [L('open_spec', 'Open bot spec', { action: { type: 'open_spec' } })] }; }
     case 'file_atomized': return { text: `**${d.name || 'Your file'}**: ${d.atoms ?? atoms} atoms so far.`,
       chips: [L('formal', 'Make it more formal', { send: 'Make it more formal', local: false }), L('add_more', 'Add more files', { action: { type: 'request_upload' } })] };
@@ -1804,7 +1811,7 @@ function fallbackFor(input, err) {
     }
     case 'file_failed': return { text: `**${d.name || 'A file'}** couldn't be processed. ${d.error?.message || d.message || 'Try it again, or replace it.'}`,
       chips: [L('show_files', 'Show my files', { run: () => { emit('intake:open', {}); if (isMobile()) setTab('bot'); } }), L('upload', 'Upload another file', { action: { type: 'request_upload' } })] };
-    case 'first_answer': return { text: `That's your first cited answer: ${d.k ?? 1} quote${(d.k ?? 1) === 1 ? '' : 's'} from ${d.f ?? 1} file${(d.f ?? 1) === 1 ? '' : 's'}${d.top != null && detailsOn() ? `, top match ${Math.round((d.top > 1 ? d.top : d.top * 100))}` : ''}. Hover the [1] to see the exact line. Now try to break it.`,
+    case 'first_answer': return { text: `That's your first cited answer: ${d.k ?? 1} quote${(d.k ?? 1) === 1 ? '' : 's'} from ${d.f ?? 1} file${(d.f ?? 1) === 1 ? '' : 's'}${d.top != null && detailsOn() ? `, top match ${Math.round((d.top > 1 ? d.top : d.top * 100))}` : ''}. Hover the [1] to see the exact line. Next: ask something your files don't cover.`,
       chips: [L('ask_probe', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBE_Q } }), L('run_proof', 'Try to trip it up', { action: { type: 'run_proof' } }), L('shorter', 'Make answers shorter', { send: 'Make answers shorter', local: false })] };
     case 'refusal': return { text: detailsOn() ? `Exactly right: nothing in your files scored above the ${pct(d.floor ?? s.spec.floor)} floor${d.best != null ? ` (best was ${pctBelow(d.best, d.floor ?? s.spec.floor)})` : ''}, so it refused instead of guessing. That refusal is the feature.`
       : "Nothing in your files covers that, so it said it doesn't know. That's exactly what you want.",
@@ -1917,8 +1924,9 @@ function launchOpen(source, extra = {}) {
       // Launch intent before any Proof Run: run the full 8 + 3 with its scorecard in view, so the receipt reports the
       // Proof Run the Builder advertises (E's launch flow waits for proof:done while it runs).
       // r7 (D2): the Builder says so first: the person asked to launch, and gets told why a test run comes before it
-      announce('Running your Proof Run first, so your launch receipt shows real tests.');
-      localSay("Running your **Proof Run** first (8 questions from your files plus 3 it must refuse), so your launch receipt shows real tests. The launch sheet opens right after.", { chips: [] });
+      announce('Testing your bot first. The launch details open right after.');
+      localSay("First, a quick test so you launch knowing it works: I'll ask it questions from your files, plus a few it should refuse. The launch details open right after.", { chips: [] });
+      if (getState().proof?.status !== 'running') emit('proof:run', { mini: false });
       const t0 = Date.now();
       while (getState().proof?.status !== 'running' && Date.now() - t0 < 2500) await sleep(60);
     }
@@ -2916,7 +2924,7 @@ function paletteCommands() {
     { id: 'add', label: 'Add files', ico: 'upload', run: () => { emit('intake:open', {}); if (store.listenerCount('intake:pick')) emit('intake:pick', {}); else fallbackPick(); } },
     { id: 'samples', label: 'Use sample files', ico: 'bolt', run: () => dispatchAction({ type: 'attach_samples' }, { fromClick: true }) },
     { id: 'store', label: 'Enter your website (import products, help pages, policies)', ico: 'link', run: () => dispatchAction({ type: 'import_store' }, { fromClick: true }) },
-    { id: 'ask', label: `Ask ${botName()}…`, ico: 'chat', run: focusBotComposer },
+    { id: 'ask', label: `Ask ${botNameMid()}…`, ico: 'chat', run: focusBotComposer },
     { id: 'proof', label: 'Run Proof Run', ico: 'flask', run: () => dispatchAction({ type: 'run_proof' }) },
     { id: 'view', label: getState().ui.view === 'proof' ? 'Switch to Bot view' : 'Toggle Proof view', ico: 'shieldCheck', run: () => setView(getState().ui.view === 'proof' ? 'bot' : 'proof', 'toggle') },
     { id: 'spec', label: 'Open bot spec', ico: 'edit', run: () => openSpec() },
@@ -4814,7 +4822,7 @@ on('answer:final', (d) => {
     sendEvent('refusal', { best: fin.why?.best ?? null, floor: fin.why?.floor ?? getState().spec.floor, question: fin.question || a?.question });
   }, 1500);
 });
-on('proof:done', (d) => { sendEvent('proof_done', { score: d?.score || null }); updateSpine(); });
+on('proof:done', (d) => { sendEvent('proof_done', { score: d?.score || null, ...(d?.score?.mini ? { mini: true } : {}) }); updateSpine(); });
 on('proof:progress', (d) => { const inst = cardInstances.get('scorecard'); if (inst?.inst?.update) inst.inst.update({ ...(inst.data || {}), rows: d?.rows || [] }); });
 on('checkout:dismissed', () => sendEvent('checkout_dismissed', {}));
 on('trial:expired', () => { if (booted) onExpired(); });   // during boot, boot() shows the expired state itself
@@ -5416,7 +5424,7 @@ function landingSurfaces(list) {
   const surfaces = normalizeSurfaces(list);
   if (!same(surfaces, normalizeSurfaces(getState().spec?.surfaces))) updateSpec({ surfaces }, { by: 'user', source: 'landing', quiet: true });
   if (same(surfaces, ['webchat'])) return;
-  localSay(`Noted: ${botName() === 'SampleBot' ? 'your bot' : botName()} will answer on ${surfacesText(surfaces)}. Every one of them answers from the same sources you give it, with citations. Change it anytime: say "add email" or "just web chat", or open the bot spec.`, { chips: [] });
+  localSay(`Noted: ${botNameMid()} will answer on ${surfacesText(surfaces)}. Each one answers only from the files you add. You can change this later in Set up.`, { chips: [] });
 }
 
 function explainCanonical() {
