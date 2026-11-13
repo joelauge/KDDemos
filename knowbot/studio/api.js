@@ -7,8 +7,8 @@
 //   expired in the store and emits 'trial:expired' {status, code}; B posts the ExpiredCard.
 // - No custom request headers other than content-type, authorization and x-filename (Worker CORS).
 
-import { hostedApi } from '../lib/site-config.js?v=581e55b';
-import { getState, setState, emit, batch } from './store.js?v=581e55b';
+import { hostedApi } from '../lib/site-config.js?v=e353b9e';
+import { getState, setState, emit, batch } from './store.js?v=e353b9e';
 
 export class ApiError extends Error {
   constructor(message, { status = 0, code = 'network', retryAfter = null, detail = null } = {}) {

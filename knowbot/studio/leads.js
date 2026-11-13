@@ -7,9 +7,9 @@
 // Self-contained (its own dialog, styles in leads.css loaded on first open), so app.js only adds the entry points:
 // the header button, the ⋯ menu item, the command palette and the "What people ask" card. Customer-facing copy never
 // names a provider.
-import * as api from './api.js?v=581e55b';
-import { getState } from './store.js?v=581e55b';
-import { icon } from './icons.js?v=581e55b';
+import * as api from './api.js?v=e353b9e';
+import { getState } from './store.js?v=e353b9e';
+import { icon } from './icons.js?v=e353b9e';
 
 const CHANNELS = [
   ['web', 'Website chat'], ['site', 'Homepage search'], ['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['email', 'Email'],
@@ -35,7 +35,7 @@ function h(tag, attrs, ...kids) {
 let cssReady = null;
 function ensureCss() {
   if (cssReady) return cssReady;
-  const href = new URL('./leads.css?v=581e55b', import.meta.url);
+  const href = new URL('./leads.css?v=e353b9e', import.meta.url);
   href.search = new URL(import.meta.url).search;
   if (document.querySelector(`link[data-kb-leads]`)) return (cssReady = Promise.resolve());
   cssReady = new Promise((resolve) => {
