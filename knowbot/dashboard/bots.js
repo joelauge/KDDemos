@@ -2,7 +2,9 @@
 // BUCKET = the knowDrive files sharing one tag (nested buckets are f1:/f2: tags). BOT = a chat instance that searches and cites only its ENABLED linked
 // buckets — many-to-many: a bucket can feed any number of bots, a bot can draw on any number of buckets.
 // Server values are written with textContent only (via h()). The admin token lives in localStorage and is sent
-// only as an Authorization header: never logged, never put in a URL.
+// only as an Authorization header, and only to a trusted server (tokenTarget): never logged, never put in a URL.
+
+import { hostedApi } from '../lib/site-config.js?v=e353b9e';
 
 const TOKEN_KEY = 'knowbot-admin-token';
 const MAX_BYTES = 95 * 1024 * 1024; // server MAX_UPLOAD_BYTES (Cloudflare request bodies stop at 100 MB)
@@ -59,11 +61,24 @@ export function mountBots(ctx) {
   function authOk() { if (I.auth !== 'ok') { I.auth = 'ok'; I.authMsg = ''; paintToken(); refresh(); } }
   const errMsg = (j, status) => str(j && j.error && (j.error.message || j.error), 400) || `Server answered ${status}`;
   const loopback = () => /^https?:\/\/(localhost|127\.|\[::1\])/.test(S.apiBase);
+  /**
+   * The admin token only ever goes to a server this page trusts: its own origin, the hosted API configured for this
+   * host (lib/site-config.js), or a loopback server when the page itself is served from loopback. A ?api= link naming
+   * any other server still works read-only, but never receives the token (GitLab #6).
+   */
+  const LOOP_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/;
+  function tokenTarget() {
+    let u; try { u = new URL(S.apiBase, location.href); } catch { return false; }
+    if (u.origin === location.origin) return true;
+    if (hostedApi() && u.origin === new URL(hostedApi()).origin) return true;
+    return LOOP_HOST.test(u.hostname) && LOOP_HOST.test(location.hostname);
+  }
+  const authHeader = () => (I.token && tokenTarget() ? { authorization: `Bearer ${I.token}` } : {});
   const editable = () => G.canManage && I.auth !== 'bad' && I.auth !== 'off' && (!!I.token || loopback() || I.auth === 'ok');
 
   async function api(path, { method = 'GET', json, admin = true, timeout = 30000 } = {}) {
     const headers = {};
-    if (admin && I.token) headers.authorization = `Bearer ${I.token}`;
+    if (admin) Object.assign(headers, authHeader());
     if (json !== undefined) headers['content-type'] = 'application/json';
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeout);
     let r;
@@ -83,7 +98,7 @@ export function mountBots(ctx) {
       x.open('POST', `${S.apiBase}/api/buckets/${encodeURIComponent(item.bucket)}/files`);
       x.setRequestHeader('content-type', item.file.type || 'application/octet-stream');
       x.setRequestHeader('x-filename', encodeURIComponent(item.rel));
-      if (I.token) x.setRequestHeader('authorization', `Bearer ${I.token}`);
+      for (const [k, v] of Object.entries(authHeader())) x.setRequestHeader(k, v);
       x.timeout = 15 * 60 * 1000;
       x.upload.onprogress = (e) => { if (e.lengthComputable) { item.pct = e.loaded / e.total; paint(); } };
       x.onload = () => {
@@ -1145,7 +1160,7 @@ export function mountBots(ctx) {
     const load = async () => {
       again.disabled = true; body.setAttribute('aria-busy', 'true');
       try {
-        const r = await fetch(`${S.apiBase}/api/instances/${encodeURIComponent(b.id)}/insights?limit=8`, { headers: I.token ? { authorization: `Bearer ${I.token}` } : {} });
+        const r = await fetch(`${S.apiBase}/api/instances/${encodeURIComponent(b.id)}/insights?limit=8`, { headers: authHeader() });
         let j = null; try { j = await r.json(); } catch { /* not JSON */ }
         if (!r.ok) {
           body.setAttribute('aria-busy', 'false');
