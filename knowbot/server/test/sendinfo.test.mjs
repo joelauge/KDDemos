@@ -213,11 +213,20 @@ describe('sendinfo: the phone tool (send_info)', () => {
       sendInfo: ({ via, to, answer }) => si.send({ botId: 'front-desk', botName: 'Front Desk', channel: 'phone', via, to, answer, callerKey: '+14155550199' }) });
     assert.equal((await run({ name: 'send_info', args: { channel: 'text' } })).status, 'nothing_to_send');
     await run({ name: 'search_knowledge_base', args: { query: Q } });
-    const t = await run({ name: 'send_info', args: { channel: 'text' } });
+    // read back before anything is sent (U2): the first call returns what to say; only the confirmed one sends
+    const rb = await run({ name: 'send_info', args: { channel: 'text' } });
+    assert.equal(rb.status, 'confirm_first');
+    assert.equal(rb.read_back, 'the number ending in zero one nine nine');
+    assert.equal(calls.length, 0, 'nothing sent before the read-back is confirmed');
+    const t = await run({ name: 'send_info', args: { channel: 'text', confirmed: true } });
     assert.deepEqual(t, { status: 'ok', sent_by: 'text', sent_to_last_four: '0199' });
     assert.match(calls[0].url, /Messages\.json$/);
     assert.equal(new URLSearchParams(calls[0].body).get('To'), '+14155550199');
-    const e = await run({ name: 'send_info', args: { channel: 'email', to: 'jo@example.com' } });
+    // confirmed:true for an address that was never read back still gets the read-back first
+    const e0 = await run({ name: 'send_info', args: { channel: 'email', to: 'jo@example.com', confirmed: true } });
+    assert.equal(e0.status, 'confirm_first');
+    assert.equal(e0.read_back, 'j o, at e x a m p l e, dot, c o m');
+    const e = await run({ name: 'send_info', args: { channel: 'email', to: 'jo@example.com', confirmed: true } });
     assert.equal(e.status, 'ok');
     assert.match(calls[1].url, /\/emails$/);
     assert.equal((await run({ name: 'send_info', args: { channel: 'email', to: 'jo at example' } })).status, 'invalid');

@@ -8,19 +8,30 @@
 //
 // Grounding: the model must call search_knowledge_base before any answer. That tool runs the bot's OWN answer pipeline
 // (devapi.mjs answer(): the bot's sources and scope, the librarian voice, the citation gate, the canonical refusal) and
-// returns the answer already spoken with its attribution ("According to the Shipping page, …"). The model reads that,
-// never its own knowledge. Each search is logged to the questions loop with channel 'phone'.
+// returns (voice-brain.mjs toolAnswer) a short spoken-style answer the model may rephrase, the rest ("more", offered
+// rather than read), and the exact facts it may not change; never its own knowledge. Each search is logged to the
+// questions loop with channel 'phone'. Natural conversation (voice-brain.mjs): an acknowledgement while it searches (the
+// search runs NON_BLOCKING where the model supports it), a search started on the caller's partial words (reused when the
+// final question matches), instant answers for the bot's most-asked questions, a facts guard on what was said, read-back
+// before anything is sent, message-taking and callback requests (leads), and a hand-off to a person in business hours
+// (transfer_call: Twilio REST updates the live call with <Dial>, only after the caller said yes, once the line played).
 // Tools: search_knowledge_base, end_call (hang up after the goodbye), send_product_link (only when the bot has a Shopify
 // store: see shop.mjs; items[] of up to 5 products in ONE cart link; at most 3 texts per call), send_info ("send me this":
 // the last answer from the files, by text or e-mail, through server/sendinfo.mjs; offered only when the server can send).
 // This is the phone channel's only engine: without GEMINI_API_KEY the call webhook says the line isn't set up and hangs up.
 // Security: the media WebSocket must present, in its first "start" message, the one-time token the signed webhook issued
 // for that CallSid and bot; anything else is closed before a Gemini session is opened.
-// Settings (names only): GEMINI_API_KEY, GEMINI_LIVE_MODEL (default gemini-3.8-live), GEMINI_VOICE (default Kore),
-// GEMINI_LIVE_URL (tests / proxies), TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN (hang-up, texts), TWILIO_FROM_NUMBER (texts).
+// Settings (names only): GEMINI_API_KEY, GEMINI_LIVE_MODEL (default gemini-3.8-live), GEMINI_VOICE (default Kore; a bot's
+// own spec.voiceSetup.voice wins), GEMINI_LIVE_URL (tests / proxies), TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN (hang-up,
+// transfer, texts), TWILIO_FROM_NUMBER (texts), KNOWBOT_VOICE_SPECULATE (default on), KNOWBOT_VOICE_SPECULATE_MAX
+// (default 2 per turn), KNOWBOT_VOICE_INSTANT (default on), KNOWBOT_VOICE_INSTANT_MAX (default 5 per bot),
+// KNOWBOT_VOICE_ASYNC_TOOLS (default: by model), KNOWBOT_VOICE_SILENCE_MS (turn-end silence, default 600).
 import { randomUUID } from 'node:crypto';
 import { NOT_IN_DATA, formatSpoken, humanTitle } from './util.mjs';
 import { createShop, toE164, handleInText, textableNumber, describeLines, MAX_LINK_ITEMS } from './shop.mjs';
+import { contactOf } from '../leads.mjs';
+import { toolAnswer, conversationRules, takeMessageDeclaration, transferDeclaration, createReadBack, unsupportedFigures, createSpeculator,
+  asyncToolsSupported, silenceMs, voiceSetupOf, withinHours, isE164 } from './voice-brain.mjs';
 
 // ------------------------------------------------------------------ audio (Twilio 8 kHz μ-law ⇄ Gemini PCM16 LE)
 const MULAW_BIAS = 0x84;
@@ -148,9 +159,10 @@ export function sendInfoInstruction(sendInfo, { who = 'caller' } = {}) {
   }
   if (!sendInfo || (!sendInfo.email && !sendInfo.text)) return '';
   const lines = [`- If the ${who} asks you to send, text or email them the information, you can send your last answer from the files, with its sources and a link to them. Don't offer it unprompted more than once.`];
-  if (sendInfo.text && sendInfo.callerKnown) lines.push(`- For a text, offer: "I can text that to the number you're calling from." Confirm using the last four digits you were given ("to the number ending in 0378?") and get a yes. If they give a different mobile number, read it back digit by digit and get a yes.`);
-  else if (sendInfo.text) lines.push(`- For a text, ask for their mobile number, read it back digit by digit and get a yes.`);
-  if (sendInfo.email) lines.push(`- For an email, ask for their email address, spell it back to them and get a yes before sending.`);
+  if (sendInfo.text && sendInfo.callerKnown) lines.push(`- For a text, offer: "I can text that to the number you're calling from." Confirm using the last four digits you were given ("to the number ending in 0378?") and get a yes. If they give a different mobile number, read it back digit by digit in groups and get a yes.`);
+  else if (sendInfo.text) lines.push(`- For a text, ask for their mobile number, read it back digit by digit in groups and get a yes.`);
+  if (sendInfo.email) lines.push(`- For an email, ask for their email address, spell it back to them and get a yes before sending (spell the letters where it could be misheard).`);
+  lines.push(`- send_info checks this for you: called without confirmed, it returns "read_back" (the number or address as it should be read back). Say it exactly and ask if it's right. On a yes, call send_info again with confirmed true; on a no, ask for it again.`);
   if (!sendInfo.email) lines.push(`- Email isn't available here; offer a text instead.`);
   if (!sendInfo.text) lines.push(`- Texts aren't available here; offer an email instead.`);
   lines.push(`- Only after they confirm, call send_info with channel "text" or "email" and "to" set to the number or address they confirmed${sendInfo.text && sendInfo.callerKnown ? ' (leave "to" empty to text the number they are calling from)' : ''}. Use what "conversation" for the end-of-${who === 'visitor' ? 'conversation' : 'call'} offer (the transcript and the sources for everything you shared), what "last_answer" when they ask for one answer.`);
@@ -159,33 +171,37 @@ export function sendInfoInstruction(sendInfo, { who = 'caller' } = {}) {
   lines.push(`- Before the ${end} ends (they say goodbye, thanks, or that they're done), if you answered at least one question from the files and haven't sent anything yet, first offer to send them the transcript of your conversation and the sources for what you shared, by ${sendInfo.email && sendInfo.text ? 'email or text' : sendInfo.email ? 'email' : 'text'}. Say it in your own words, briefly and warmly, the way a person would (for example: "Before you go, want me to send you a transcript of our chat and the sources for what I shared?"). Never use the same wording twice, and don't press if they say no.`);
   return `\n\nSending the answer:\n${lines.join('\n')}`;
 }
-export const sendInfoDeclaration = () => ({ name: 'send_info', description: 'Send the caller, by text or email, either the transcript of this conversation with the sources for every answer you gave (what "conversation"), or your last answer with its sources (what "last_answer"). Only after they asked for it or accepted your offer, and confirmed the number or address.',
+export const sendInfoDeclaration = () => ({ name: 'send_info', description: 'Send the caller, by text or email, either the transcript of this conversation with the sources for every answer you gave (what "conversation"), or your last answer with its sources (what "last_answer"). Only after they asked for it or accepted your offer. The first call returns the read-back to confirm; call again with confirmed true after they say yes.',
   parameters: { type: 'OBJECT', properties: {
     channel: { type: 'STRING', enum: ['text', 'email'], description: 'text or email.' },
     what: { type: 'STRING', enum: ['conversation', 'last_answer'], description: 'conversation: the transcript and the sources for everything shared (the end-of-call offer). last_answer: just the last answer and its sources.' },
     to: { type: 'STRING', description: 'The mobile number or email address the caller confirmed, as they said it. Empty to text the number they are calling from.' },
+    confirmed: { type: 'BOOLEAN', description: 'True only after you read back the number or address and they said yes.' },
   }, required: ['channel'] } });
 
-export function systemInstruction({ botName, org, productLinks = false, sendInfo = null }) {
+/**
+ * The phone prompt. asyncSearch: the search runs NON_BLOCKING (voice-brain.mjs asyncToolsSupported); takeMessages: the
+ * bot may take a message on a refusal; transfer: 'now' (a transfer number, inside business hours) | 'callback' | null;
+ * language: 'auto' | a language code (voice-brain.mjs VOICE_LANGUAGES).
+ */
+export function systemInstruction({ botName, org, productLinks = false, sendInfo = null, asyncSearch = false, takeMessages = false, transfer = null, language = 'auto' }) {
   const who = botName || 'KnowBot';
   const orgName = org || botName || 'this business';
   const base = `You are ${who}, the phone assistant for ${orgName}, speaking with a caller on a live phone call. You are a kind librarian: you answer only from ${orgName}'s own files.
 
 Grounding rules:
 - Before answering ANY question, call search_knowledge_base. Write the query as a complete standalone question, filling in anything the caller referred to earlier (for "how much is it?", name the product).
-- The tool returns "say": the answer from the files, already worded for the phone. Speak it as given, without saying where it comes from (no "According to ...": it keeps the call short${canSend(sendInfo) ? ', and the sources can be sent at the end' : ''}). If the caller asks where something comes from, name it from "source_titles". You may leave out filler, but never change, round or add any fact, number, date, price or name.
-- If the tool returns status "not_in_data", say exactly: "${NOT_IN_DATA}" Then offer to help with something else.
+- The tool returns the answer from the files ("answer", sometimes "more", and the exact "facts"). Say it without saying where it comes from (no "According to ...": it keeps the call short${canSend(sendInfo) ? ', and the sources can be sent at the end' : ''}). If the caller asks where something comes from, name it from "source_titles".
+- If the tool returns status "not_in_data", say exactly: "${NOT_IN_DATA}"
 - Never answer from general knowledge, never guess, and never answer a question you did not search for.
 
 Speaking style:
 - Short replies; the caller can ask a follow-up.
 - Never read out file names, URLs, citation numbers or links.
-- If the question is unclear, ask one short clarifying question.
-- While a search is running, say at most a few words such as "One moment."
 
 Call flow:
 - The call starts with a message like "[call connected] Caller's number ends in 0378." Greet the caller with: "${greetingFor(botName, sendInfo)}"
-- When the caller says goodbye or that they're done, say a short goodbye and then call end_call.${sendInfoInstruction(sendInfo)}`;
+- When the caller says goodbye or that they're done, say a short goodbye and then call end_call.${conversationRules({ who: 'caller', asyncSearch, send: canSend(sendInfo) ? sendInfo : null, takeMessages, transfer, language })}${sendInfoInstruction(sendInfo)}`;
   if (!productLinks) return base;
   return `${base}
 
@@ -203,13 +219,20 @@ Texting product links:
 - Never read out the link itself.`;
 }
 
-export function toolDeclarations({ org, productLinks = false, sendInfo = null }) {
+/** The search tool, shared by the phone and the web: NON_BLOCKING (the model keeps talking while it runs) when async. */
+export const searchDeclaration = (orgName, { asyncSearch = false } = {}) => ({ name: 'search_knowledge_base',
+  description: `Search ${orgName}'s own files and get the answer to speak, with its source. Required before answering any question.`,
+  parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'A complete, standalone question, in the language of the files.' } }, required: ['query'] },
+  ...(asyncSearch ? { behavior: 'NON_BLOCKING' } : {}) });
+
+export function toolDeclarations({ org, productLinks = false, sendInfo = null, asyncSearch = false, takeMessages = false, transfer = null }) {
   const orgName = org || 'this business';
   const fns = [
-    { name: 'search_knowledge_base', description: `Search ${orgName}'s own files and get the answer to speak, with its source. Required before answering any question.`,
-      parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'A complete, standalone question in plain English.' } }, required: ['query'] } },
+    searchDeclaration(orgName, { asyncSearch }),
     { name: 'end_call', description: 'Hang up after you have said goodbye to the caller.', parameters: { type: 'OBJECT', properties: {} } },
   ];
+  if (takeMessages) fns.splice(1, 0, takeMessageDeclaration({ phone: true }));
+  if (transfer === 'now') fns.splice(1, 0, transferDeclaration());
   if (sendInfo && (sendInfo.email || sendInfo.text)) fns.splice(1, 0, sendInfoDeclaration());
   if (productLinks) {
     fns.splice(1, 0, { name: 'send_product_link', description: 'Text the caller ONE link that puts the listed products in a new cart and opens checkout. Only after the caller agreed and confirmed the number.',
@@ -244,11 +267,19 @@ export function twilioRest(env = {}, { from = null } = {}) {
     canText: !!(sid && tok && fromNumber),
     fromNumber,
     hangUp: (callSid) => post(`/Calls/${encodeURIComponent(callSid)}.json`, { Status: 'completed' }),
+    /** Hand the live call to a person: the call leaves the media stream and dials `number` (E.164 only). */
+    transfer: (callSid, number) => post(`/Calls/${encodeURIComponent(callSid)}.json`, { Twiml: transferTwiml(number) }),
     sendSms: (to, body) => {
       if (!fromNumber) throw new Error('TWILIO_FROM_NUMBER is not set');
       return post('/Messages.json', { From: fromNumber, To: to, Body: body });
     },
   };
+}
+
+/** The TwiML a transferred call runs: dial the owner's number (validated E.164; nothing else is ever put in it). */
+export function transferTwiml(number) {
+  if (!isE164(number)) throw new Error('transfer number must be E.164');
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Dial answerOnBridge="true">${number}</Dial></Response>`;
 }
 
 // ------------------------------------------------------------------ tools (shared by the call bridge and scripts/voice-live-test.mjs)
@@ -260,7 +291,7 @@ export function twilioRest(env = {}, { from = null } = {}) {
  * @param {(to: string) => boolean} [o.textAllowed]  per-destination / per-bot text quota (devapi.mjs); false → 'texts are limited'
  */
 export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNumber = '', sendSms = null, shopDomain = null, textAllowed = null, sendInfo = null, env = {}, botName = '', org = '', log = () => {}, fromNumber = null, getTranscript = () => [],
-  linkUtm = null, trackProductLink = null }) {
+  linkUtm = null, trackProductLink = null, sendMedia = null, onScreen = false, takeMessage = null }) {
   const lineNumber = fromNumber || env.TWILIO_FROM_NUMBER;
   let textsSent = 0;
   let lastAnswer = null; // the last grounded answer on this call: what send_info sends for what "last_answer"
@@ -268,6 +299,10 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
   const seen = []; // retrieved text this call (citation excerpts + urls), for product handle lookup
   const answers = []; // {query, refused, spoken, citations:[{n,title,file}]} for the call log
   const names = [botName, org].filter(Boolean);
+  const readBack = createReadBack();
+  let sentSomething = false;
+  let allowed = []; // what the bot may say figures from since the caller's last question (the facts guard)
+  const lastFour = () => toE164(callerNumber)?.slice(-4) || '';
   const findHandle = async (name) => {
     const inSeen = (list) => {
       const want = new Set(String(name || '').toLowerCase().split(/\W+/).filter((w) => w.length > 2));
@@ -294,27 +329,51 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
       for (const c of r.citations || []) seen.push({ text: c.excerpt || '', url: c.url || '', file: c.file || '', title: humanTitle(c) });
       for (const h of r.proof?.hits || []) seen.push({ text: h.excerpt || '', file: h.file || '' });
       const spoken = r.refused ? NOT_IN_DATA : formatSpoken(r, 450, { names, attribute: false });
-      answers.push({ query, refused: !!r.refused, spoken, citations: (r.citations || []).map((c) => ({ n: c.n, title: humanTitle(c), file: c.file })) });
-      if (r.refused) return { status: 'not_in_data', say: NOT_IN_DATA };
+      answers.push({ query, refused: !!r.refused, spoken, citations: (r.citations || []).map((c) => ({ n: c.n, title: humanTitle(c), file: c.file })), ...(r.instant ? { instant: true } : {}) });
+      // the answer to say (short first, "more" offered), the exact facts, and the titles it came from: no raw excerpts
+      // the model could read beyond the answer, and no page addresses (product handles come from this call's `seen` list)
+      const out = toolAnswer(r, { names, onScreen, send: sendInfo ? sendMedia : null, takeMessages: !!takeMessage, questionsSoFar: answers.filter((x) => !x.refused).length, sentSomething });
+      allowed.push(query, out.answer || '', out.more || '', ...(out.facts || []), ...(out.related || []), ...(out.options || []));
+      if (r.refused) return out;
       lastAnswer = r;
       grounded.push(r);
-      // only the answer to speak and the titles it came from: no raw excerpts (prices, figures) the model could read
-      // from beyond the answer, and no page addresses (product handles come from this call's own `seen` list)
-      return { status: 'ok', say: spoken, source_titles: [...new Set((r.citations || []).slice(0, 4).map((c) => humanTitle(c)))] };
+      return out;
     }
     if (call?.name === 'send_info') {
       // "send me this" (server/sendinfo.mjs): validation, rate limits, the opt-out list and delivery live there
       if (!sendInfo) return { status: 'error', retryable: false, reason: 'Sending is not set up on this line.' };
       if (!lastAnswer) return { status: 'nothing_to_send', reason: 'There is no answer from the files on this call yet. Ask what they would like to know first.' };
       const via = String(args.channel || '').toLowerCase() === 'email' ? 'email' : 'text';
-      const to = String(args.to || '').trim() || (via === 'text' ? callerNumber : '');
+      const said = String(args.to || '').trim();
+      const to = said || (via === 'text' ? callerNumber : '');
       if (!to) return { status: via === 'email' ? 'need_email_address' : 'need_phone_number', reason: via === 'email' ? 'Ask for their email address and spell it back.' : 'Ask for their mobile number and read it back.' };
+      // read back before sending: the first call returns what to say, the confirmed one sends
+      const rb = readBack.check(said, { confirmed: args.confirmed === true, lastFour: said ? '' : lastFour() });
+      if (rb) { allowed.push(rb, said); return { status: 'confirm_first', read_back: rb, reason: 'Say read_back exactly and ask if it is right. After a yes, call send_info again with confirmed true; after a no, ask for it again.' }; }
       let r;
       const convo = String(args.what || 'conversation') !== 'last_answer';
       try { r = await sendInfo({ via, to, answer: lastAnswer, ...(convo ? { answers: [...grounded], transcript: (getTranscript() || []).slice(-200) } : {}) }); } catch (e) { log(`[voice-live] ${callSid} send_info failed: ${e.message}`); return { status: 'error', retryable: false, reason: "It couldn't be sent." }; }
       log(`[voice-live] ${callSid} send_info by ${via}: ${r.status}`);
+      if (r.status === 'sent') sentSomething = true;
       if (r.status === 'sent') return { status: 'ok', sent_by: via, ...(via === 'text' ? { sent_to_last_four: String(r.to || '').replace(/\D/g, '').slice(-4) } : {}) };
       return { status: r.status, retryable: r.status === 'invalid', reason: r.reply };
+    }
+    if (call?.name === 'take_message') {
+      // a message or callback request for the team (a lead): only when the owner left message-taking on
+      if (!takeMessage) return { status: 'error', retryable: false, reason: 'Messages are not taken here. Offer to help with something else.' };
+      const kind = String(args.kind || '') === 'callback' ? 'callback' : 'message';
+      const said = String(args.contact || '').trim();
+      const c = contactOf(said || callerNumber || '');
+      if (!c) return { status: kind === 'callback' ? 'need_phone_number' : 'need_contact', reason: kind === 'callback' ? 'Ask for the phone number to call back and read it back.' : 'Ask for an email address or phone number, and read it back.' };
+      if (kind === 'callback' && c.type !== 'phone') return { status: 'need_phone_number', reason: 'A callback needs a phone number. Ask for it and read it back.' };
+      const rb = readBack.check(said, { confirmed: args.confirmed === true, lastFour: said ? '' : lastFour() });
+      if (rb) { allowed.push(rb, said); return { status: 'confirm_first', read_back: rb, reason: 'Say read_back exactly and ask if it is right. After a yes, call take_message again with confirmed true; after a no, ask for it again.' }; }
+      let r;
+      try { r = await takeMessage({ kind, name: String(args.name || '').trim().slice(0, 80), contact: c.value, question: String(args.question || '').trim().slice(0, 500), preferredTime: String(args.preferred_time || '').trim().slice(0, 80) }); }
+      catch (e) { log(`[voice-live] ${callSid} take_message failed: ${e.message}`); return { status: 'error', retryable: false, reason: "The message couldn't be saved." }; }
+      if (!r) return { status: 'error', retryable: false, reason: "The message couldn't be saved." };
+      log(`[voice-live] ${callSid} ${kind} taken (${c.type})`);
+      return { status: 'ok', note: 'Saved for our team. Tell them briefly; never promise when or whether they will reply.' };
     }
     if (call?.name === 'send_product_link') {
       if (!shop) return { status: 'error', retryable: false, reason: 'Product links are not set up for this bot.' };
@@ -354,6 +413,9 @@ export function createToolRunner({ ask, searchRaw = null, callSid = '', callerNu
   }
   runTool.answers = answers;
   runTool.textsSent = () => textsSent;
+  /** What the bot may say figures from since the caller's last question; reset when a new question starts. */
+  runTool.allowed = () => allowed;
+  runTool.newTurn = () => { allowed = []; };
   return runTool;
 }
 
@@ -366,8 +428,9 @@ export function geminiSettings(env = {}) {
  * Opens a Live session and resolves once the server sent setupComplete.
  * → { sendAudio(base64Pcm16k), sendText(text), sendToolResponse(functionResponses), close() }
  */
-export function connectGemini(env, { systemInstruction: sys, tools, onMessage, onClose, timeoutMs = 10000 }) {
+export function connectGemini(env, { systemInstruction: sys, tools, onMessage, onClose, timeoutMs = 10000, voice = null }) {
   const g = geminiSettings(env);
+  if (voice) g.voice = voice; // the bot's own voice (spec.voiceSetup), else GEMINI_VOICE, else Kore
   if (!g.apiKey) return Promise.reject(new Error('GEMINI_API_KEY is not set'));
   if (typeof WebSocket !== 'function') return Promise.reject(new Error('this Node has no global WebSocket (Node 22+ needed)'));
   return new Promise((resolve, reject) => {
@@ -390,6 +453,8 @@ export function connectGemini(env, { systemInstruction: sys, tools, onMessage, o
         generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: g.voice } } } },
         systemInstruction: { parts: [{ text: sys }] },
         tools,
+        // the model's own turn detection, with a shorter end-of-turn silence than its default (answers start sooner)
+        realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: silenceMs(env) } },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
       } });
@@ -403,6 +468,29 @@ export function connectGemini(env, { systemInstruction: sys, tools, onMessage, o
     ws.addEventListener('error', (e) => { if (!ready) { clearTimeout(timer); reject(new Error(`Gemini Live connection failed${e?.message ? `: ${e.message}` : ''}`)); } });
     ws.addEventListener('close', (e) => { clearTimeout(timer); if (!ready) reject(new Error(`Gemini Live closed during setup (${e.code}${e.reason ? ` ${e.reason}` : ''})`)); else onClose?.(e); });
   });
+}
+
+/**
+ * Runs one toolCall message's function calls and sends their responses. Blocking tools answer together, as before; a
+ * NON_BLOCKING search (asyncSearch) answers on its own as soon as it is ready, scheduled WHEN_IDLE (the model finishes
+ * its acknowledgement, then speaks the answer), so a slow search never holds up another tool.
+ */
+export function respondToTools(calls, run, { asyncSearch = false, send, log = () => {}, cancelled = null }) {
+  const one = async (call) => {
+    log(`tool ${call.name}(${JSON.stringify(call.args || {}).slice(0, 200)})`);
+    let response;
+    try { response = await run(call); } catch (e) { response = { status: 'error', reason: e.message }; }
+    if (response == null) response = { status: 'error', reason: `Unknown tool ${call.name}` };
+    if (asyncSearch && call.name === 'search_knowledge_base') response = { ...response, scheduling: 'WHEN_IDLE' };
+    return { id: call.id, name: call.name, response };
+  };
+  // a NON_BLOCKING call the model cancelled (the caller interrupted it: toolCallCancellation) gets no response
+  const out = (list) => { list = cancelled ? list.filter((r) => !cancelled.has(r.id)) : list; if (list.length) { try { send(list); } catch (e) { log(`tool response failed: ${e.message}`); } } };
+  const async = asyncSearch ? calls.filter((c) => c.name === 'search_knowledge_base') : [];
+  for (const c of async) one(c).then((r) => out([r]));
+  const rest = calls.filter((c) => !async.includes(c));
+  if (rest.length) return Promise.all(rest.map(one)).then(out);
+  return Promise.resolve();
 }
 
 // ------------------------------------------------------------------ cost limits (every open call holds a Gemini Live session)
@@ -443,6 +531,16 @@ export function handleMediaStream(twilioWs, cx) {
   // a bot on its own KnowBot number: the call can't outlast its credit (at least a minute, to say goodbye)
   if (Number(cx.maxSeconds) > 0) lim.maxSeconds = Math.min(lim.maxSeconds, Math.max(60, Number(cx.maxSeconds)));
   const botKey = String(cx.botId || '');
+  // the bot's voice settings (Set up → Voice): voice, language, message-taking, transfer number and hours
+  const setup = voiceSetupOf(cx.voiceSetup, { defaultVoice: geminiSettings(env).voice });
+  const asyncSearch = asyncToolsSupported(geminiSettings(env).model, env);
+  const now = cx.now || (() => Date.now());
+  // a person: transfer during business hours (call control needed); otherwise a callback request (a lead)
+  const transferMode = () => (setup.transfer && rest.canHangUp && withinHours(setup.transfer, now()) ? 'now' : setup.takeMessages && cx.takeMessage ? 'callback' : null);
+  let transferRequested = null, transferMark = 0, transferred = false;
+  const cancelled = new Set();
+  const spec = !/^(0|false|no|off)$/i.test(String(env.KNOWBOT_VOICE_SPECULATE ?? '1')) && cx.ask
+    ? createSpeculator({ run: (q) => cx.ask(q, { speculative: true }), maxPerTurn: Math.max(1, Number(env.KNOWBOT_VOICE_SPECULATE_MAX) || 2), log: (m) => log(`${m} (${callSid})`) }) : null;
   let streamSid = null, callSid = null, callerNumber = '';
   let session = null, sessionReady = false, pendingAudio = [];
   let toTwilio = createGeminiToTwilio();
@@ -454,6 +552,7 @@ export function handleMediaStream(twilioWs, cx) {
   let runShared = null;
   const transcript = []; // {role:'caller'|'agent', text}
   const ungrounded = []; // {question, text}
+  const unsupported = []; // {question, text, figures, ref}: the facts guard
 
   const sendToTwilio = (msg) => { if (twilioWs.readyState === 1) twilioWs.send(JSON.stringify(msg)); };
   const closeAll = () => {
@@ -469,7 +568,8 @@ export function handleMediaStream(twilioWs, cx) {
     }
     try { session?.close(); } catch {}
     if (twilioWs.readyState === 1) twilioWs.close(1000, 'call ended');
-    cx.onEnd?.({ callSid, transcript, answers: runShared?.answers || [], textsSent: runShared?.textsSent?.() || 0, ungrounded });
+    spec?.endTurn();
+    cx.onEnd?.({ callSid, transcript, answers: runShared?.answers || [], textsSent: runShared?.textsSent?.() || 0, ungrounded, unsupported, speculation: spec ? { ...spec.stats } : null, transferred });
   };
   // a socket that never sends a valid "start" is closed (no Gemini session is ever opened for it)
   const startTimer = setTimeout(() => { if (!started) { log('[voice-live] media stream closed: no start message'); closeAll(); } }, Number(cx.startTimeoutMs || 10000));
@@ -483,8 +583,36 @@ export function handleMediaStream(twilioWs, cx) {
     closeAll();
   }
   const queueHangupMark = () => { hangupMark += 1; sendToTwilio({ event: 'mark', streamSid, mark: { name: `hangup-${hangupMark}` } }); };
+  // the transfer: once the "connecting you" line has played (Twilio echoes the mark), the call leaves this stream and
+  // dials the owner's number (Twilio REST, the same call control as the hang-up)
+  async function doTransfer() {
+    if (transferred || !transferRequested || closed) return;
+    transferred = true;
+    const number = transferRequested;
+    try { await rest.transfer(callSid, number); log(`[voice-live] ${callSid} transferred to ***${number.slice(-4)}`); cx.onTransfer?.({ callSid, number }); }
+    catch (e) { log(`[voice-live] ${callSid} transfer failed: ${e.message}`); transferred = false; transferRequested = null; try { session?.sendText('[transfer failed] The transfer did not go through. Apologise briefly and offer to take a message instead.'); } catch {} return; }
+    closeAll();
+  }
+  const queueTransferMark = () => { transferMark += 1; sendToTwilio({ event: 'mark', streamSid, mark: { name: `transfer-${transferMark}` } }); };
+  // the bot's own pipeline, or the search already started on the caller's words (the speculative search), when it matches
+  async function askFor(query) {
+    const hit = spec?.take(query);
+    if (hit) {
+      const a = await hit.promise.catch(() => null);
+      if (a) { a.speculativeMs = hit.aheadMs; return typeof a.commit === 'function' ? a.commit() : a; }
+    }
+    return cx.ask(query);
+  }
 
   async function runTool(call) {
+    if (call.name === 'transfer_call') {
+      if (call.args?.caller_agreed !== true) return { status: 'ask_first', reason: 'Ask the caller whether they want to be put through, and only transfer after a clear yes.' };
+      if (transferMode() !== 'now') return { status: 'unavailable', reason: setup.takeMessages && cx.takeMessage ? 'Our team is not available right now. Offer a callback: take_message with kind "callback".' : 'Our team is not available right now. Offer to help with something else.' };
+      transferRequested = setup.transfer.number;
+      // the mark goes out when the model's turn (the "connecting you" line) is complete; a lost mark falls back to a timer
+      setTimeout(doTransfer, Number(cx.transferFallbackMs || 8000)).unref?.();
+      return { status: 'ok', note: 'Tell the caller in a few words that you are connecting them now, then stop talking.' };
+    }
     if (call.name === 'end_call') {
       hangupRequested = true;
       // hang up once Twilio has played everything queued so far (it echoes the mark); a fallback timer covers a lost mark
@@ -501,20 +629,17 @@ export function handleMediaStream(twilioWs, cx) {
 
   function onGeminiMessage(msg) {
     if (msg.toolCall?.functionCalls?.length) {
-      Promise.all(msg.toolCall.functionCalls.map(async (call) => {
-        log(`[voice-live] ${callSid} tool ${call.name}(${JSON.stringify(call.args || {}).slice(0, 200)})`);
-        let response;
-        try { response = await runTool(call); } catch (e) { response = { status: 'error', reason: e.message }; }
-        return { id: call.id, name: call.name, response };
-      })).then((functionResponses) => { try { session?.sendToolResponse(functionResponses); } catch (e) { log(`[voice-live] tool response failed: ${e.message}`); } });
+      respondToTools(msg.toolCall.functionCalls, runTool, { asyncSearch, cancelled, send: (r) => session?.sendToolResponse(r), log: (m) => log(`[voice-live] ${callSid} ${m}`) });
       return;
     }
+    if (msg.toolCallCancellation?.ids) { for (const id of msg.toolCallCancellation.ids) cancelled.add(id); return; }
     const c = msg.serverContent;
     if (!c) return;
     if (c.inputTranscription?.text) {
       // the caller speaking again after the agent finished a turn starts a new question: it needs a new search
-      if (!callerTurnOpen) { callerTurnOpen = true; searchedSinceCaller = false; }
+      if (!callerTurnOpen) { callerTurnOpen = true; searchedSinceCaller = false; runShared?.newTurn?.(); }
       callerText += c.inputTranscription.text;
+      spec?.partial(callerText);
     }
     if (c.outputTranscription?.text) agentText += c.outputTranscription.text;
     if (c.interrupted) { sendToTwilio({ event: 'clear', streamSid }); toTwilio = createGeminiToTwilio(); }
@@ -526,8 +651,20 @@ export function handleMediaStream(twilioWs, cx) {
     }
     if (c.turnComplete) {
       if (hangupRequested) queueHangupMark();
+      if (transferRequested && !transferred) queueTransferMark();
       if (!agentText.trim()) return; // a turn that only issued a tool call: keep the caller's words for the answer turn
       const said = agentText.trim(), asked = callerText.trim();
+      // the facts guard: a figure the bot said that is in none of the search results, the question or a read-back
+      if (searchedSinceCaller) {
+        const figs = unsupportedFigures(said, [...(runShared?.allowed?.() || []), asked, toE164(callerNumber) || '']);
+        if (figs.length) {
+          const ref = Math.random().toString(16).slice(2, 10);
+          log(`[voice-live] ${callSid} facts guard ref=${ref}: said ${figs.join(', ')} not in the facts`);
+          const u = { question: asked, text: said, figures: figs, ref };
+          unsupported.push(u);
+          try { cx.onUnsupported?.(u); } catch (e) { log(`[voice-live] facts guard log failed: ${e.message}`); }
+        }
+      }
       if (asked) transcript.push({ role: 'caller', text: asked });
       transcript.push({ role: 'agent', text: said });
       if (!searchedSinceCaller && hasFigure(said, { lastFour: toE164(callerNumber)?.slice(-4) || '' })) {
@@ -538,15 +675,19 @@ export function handleMediaStream(twilioWs, cx) {
       }
       callerTurnOpen = false;
       callerText = ''; agentText = '';
+      spec?.endTurn();
     }
   }
 
   async function openSession() {
     const productLinks = !!cx.shopDomain && rest.canText;
     const sendInfo = cx.sendInfo && cx.sendInfoMedia ? { ...cx.sendInfoMedia, callerKnown: !!toE164(callerNumber) } : null;
+    const takeMessages = !!(setup.takeMessages && cx.takeMessage);
+    const transfer = transferMode();
     session = await connectGemini(env, {
-      systemInstruction: systemInstruction({ botName: cx.botName, org: cx.org, productLinks, sendInfo }),
-      tools: toolDeclarations({ org: cx.org || cx.botName, productLinks, sendInfo }),
+      systemInstruction: systemInstruction({ botName: cx.botName, org: cx.org, productLinks, sendInfo, asyncSearch, takeMessages, transfer, language: setup.language }),
+      tools: toolDeclarations({ org: cx.org || cx.botName, productLinks, sendInfo, asyncSearch, takeMessages, transfer }),
+      voice: setup.voice,
       onMessage: onGeminiMessage,
       onClose: () => { sessionReady = false; closeAll(); },
     });
@@ -590,9 +731,10 @@ export function handleMediaStream(twilioWs, cx) {
         lifeTimer.unref?.();
         cx.onStart?.({ callSid, from: callerNumber });
         const sendSms = rest.canText ? async (to, body) => { const r = await rest.sendSms(to, body); try { cx.onTextSent?.({ to, body }); } catch { /* metering only */ } return r; } : null;
-        runShared = createToolRunner({ ask: cx.ask, searchRaw: cx.searchRaw, callSid, callerNumber, sendSms,
+        runShared = createToolRunner({ ask: askFor, searchRaw: cx.searchRaw, callSid, callerNumber, sendSms,
           shopDomain: rest.canText ? cx.shopDomain : null, textAllowed: cx.textAllowed || null, sendInfo: cx.sendInfo || null, env, botName: cx.botName, org: cx.org, log, fromNumber: rest.fromNumber, getTranscript: () => transcript,
-          linkUtm: cx.linkUtm || null, trackProductLink: cx.trackProductLink || null });
+          linkUtm: cx.linkUtm || null, trackProductLink: cx.trackProductLink || null, sendMedia: cx.sendInfoMedia || null,
+          takeMessage: setup.takeMessages && cx.takeMessage ? (m) => cx.takeMessage({ ...m, callSid }) : null });
         log(`[voice-live] ${callSid} media stream started (bot ${cx.botId})`);
         openSession().catch((e) => { log(`[voice-live] ${callSid} could not open a Gemini session: ${e.message}`); closeAll(); });
         break;
@@ -606,6 +748,7 @@ export function handleMediaStream(twilioWs, cx) {
       }
       case 'mark':
         if (hangupRequested && msg.mark?.name === `hangup-${hangupMark}`) hangUp();
+        if (transferRequested && msg.mark?.name === `transfer-${transferMark}`) doTransfer();
         break;
       case 'stop':
         closeAll();
@@ -614,5 +757,5 @@ export function handleMediaStream(twilioWs, cx) {
     }
   });
   twilioWs.on('close', () => closeAll());
-  return { transcript, get callSid() { return callSid; } };
+  return { transcript, get callSid() { return callSid; }, get speculation() { return spec ? { ...spec.stats } : null; } };
 }

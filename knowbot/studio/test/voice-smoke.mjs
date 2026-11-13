@@ -12,11 +12,17 @@
 //     light and dark; no page errors; the overlay still leaks no globals;
 //   - product cards in the chat bubble's voice mode (lib/embed.js, a bot that imported the fake store), desktop and phone:
 //     a product answer shows the web chat's cards under the spoken answer (new-tab links, named, focusable, inside the
-//     panel), its product page is not repeated as a source chip, nothing spoken holds a URL; a policy answer shows no cards.
+//     panel), its product page is not repeated as a source chip, nothing spoken holds a URL, and the spoken answer says
+//     it is on screen; a policy answer shows no cards;
+//   - barge-in (live engine, a stub voice socket): the visitor talking over the bot pauses its voice at once, before the
+//     server's "interrupted"; "interrupted" then stops it; a false alarm resumes;
+//   - the Studio's Voice settings (Set up): the voice picker (30 voices, Kore by default), the reply language, the
+//     message-taking switch, and the hand-off number and hours (a bad number is refused in words), each saved to the spec.
 //
 //   node studio/test/voice-smoke.mjs                    # screenshots to studio/test/screens/voice/ (not committed)
 //   VOICE_SHOTS=/some/dir node studio/test/voice-smoke.mjs
 import path from 'node:path';
+import os from 'node:os';
 import http from 'node:http';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -279,6 +285,121 @@ try {
     await ctx.close();
   }
 
+
+  // ------------------------------------------------------------------ barge-in: local voice activity stops the bot's voice (N7)
+  {
+    // a continuous tone as the fake microphone (the default fake device only beeps), and a stub voice socket that
+    // plays the live engine: ready, then the bot's 24 kHz voice for a few seconds
+    const wav = path.join(os.tmpdir(), `kb-barge-tone-${process.pid}.wav`);
+    const rate = 16000, secs = 12, n = rate * secs;
+    const buf = Buffer.alloc(44 + n * 2);
+    buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVE', 8); buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
+    buf.writeUInt32LE(rate, 24); buf.writeUInt32LE(rate * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34); buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
+    for (let i = 0; i < n; i++) buf.writeInt16LE(Math.round(9000 * Math.sin((2 * Math.PI * 300 * i) / rate)), 44 + i * 2);
+    await fsp.mkdir(path.dirname(wav), { recursive: true });
+    await fsp.writeFile(wav, buf);
+    const b2 = await chromium.launch({ headless: !process.env.HEADED, args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`, '--autoplay-policy=no-user-gesture-required'] });
+    try {
+      const ctx = await b2.newContext({ viewport: { width: 900, height: 800 } });
+      const page = await ctx.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      await page.goto(`${dev.url}/lib/voice-orb.js`, { waitUntil: 'load' });
+      const r = await page.evaluate(async () => {
+        document.body.innerHTML = '<div id="host" style="max-width:480px"></div>';
+        const sent = [];
+        class StubSocket extends EventTarget {
+          constructor() { super(); this.readyState = 0; this.binaryType = 'arraybuffer'; window.__stub = this; setTimeout(() => { this.readyState = 1; this.dispatchEvent(new Event('open')); }, 10); }
+          send(m) {
+            if (typeof m !== 'string') { sent.push('audio'); return; }
+            const j = JSON.parse(m); sent.push(j.type);
+            if (j.type === 'start') setTimeout(() => this.emit({ type: 'ready', engine: 'gemini', bot: { id: 'b', name: 'Test' }, greeting: 'Hi.', input: { rate: 16000 }, output: { rate: 24000 } }), 10);
+          }
+          emit(o) { this.dispatchEvent(new MessageEvent('message', { data: typeof o === 'string' ? o : o instanceof ArrayBuffer ? o : JSON.stringify(o) })); }
+          speak(ms) { // the bot's voice: 100 ms chunks of a 24 kHz tone
+            for (let k = 0; k < ms / 100; k++) { const pcm = new Int16Array(2400); for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(6000 * Math.sin((2 * Math.PI * 440 * i) / 24000)); this.emit(pcm.buffer); }
+          }
+          close() { this.readyState = 3; }
+        }
+        window.WebSocket = StubSocket;
+        const { openVoiceMode } = await import('/lib/voice-mode.js');
+        const vm = openVoiceMode(document.getElementById('host'), { endpoint: 'wss://stub.invalid/voice', name: 'Test' });
+        window.__vm = vm;
+        const wait = (fn, ms = 8000) => new Promise((res) => { const t0 = performance.now(); (function poll() { const v = fn(); if (v || performance.now() - t0 > ms) return res(v); setTimeout(poll, 30); })(); });
+        await wait(() => vm.engine === 'gemini' && sent.includes('audio'));
+        const t0 = performance.now();
+        window.__stub.speak(4000); // the bot starts a 4 s answer while the visitor keeps talking
+        const barged = await wait(() => Number(vm.el.dataset.bargeIns || 0) >= 1, 3000);
+        const tBarge = Math.round(performance.now() - t0);
+        const stateAtBarge = vm.el.dataset.state;
+        window.__stub.emit({ type: 'interrupted' });
+        await wait(() => vm.el.dataset.state !== 'speaking', 2000);
+        return { barged: !!barged, tBarge, stateAtBarge, after: vm.el.dataset.state, bargeIns: vm.el.dataset.bargeIns, sentAudio: sent.filter((x) => x === 'audio').length };
+      });
+      check('barge-in', 'the visitor talking over the bot pauses its voice locally, well before a server round trip would', r.barged && r.tBarge < 1000, JSON.stringify(r));
+      check('barge-in', '"interrupted" then stops the answer and the orb listens again', r.after !== 'speaking', JSON.stringify(r));
+      check('barge-in', 'the mic keeps streaming while the bot speaks (the server hears the interruption too)', r.sentAudio >= 1, JSON.stringify(r));
+      check('barge-in', 'no page errors', !errors.length, errors.join(' | '));
+      await ctx.close();
+    } finally { await b2.close(); await fsp.rm(wav, { force: true }); }
+  }
+
+  // ------------------------------------------------------------------ the Studio's Voice settings (N8, U5, U6, U9)
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light', deviceScaleFactor: 2 });
+    await ctx.addInitScript(() => { try { localStorage.setItem('kb-landing', 'skip'); } catch { /* ignore */ } });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const H = { authorization: `Bearer ${t.token}` };
+    const saved = async () => (await (await api(`/api/studio/trials/${t.trialId}`, { headers: H })).json()).spec?.voiceSetup || null;
+    await page.goto(`${dev.studioUrl}?t=${t.trialId}&k=${encodeURIComponent(t.restoreKey)}`, { waitUntil: 'load' });
+    await page.waitForTimeout(1200);
+    await page.evaluate(() => { const b = document.querySelector('.st-seg-setup'); if (b) { b.hidden = false; b.click(); } });
+    await page.waitForSelector('#gl-vs', { timeout: 20000 });
+    await page.locator('#gl-vs').scrollIntoViewIfNeeded();
+    const first = await page.evaluate(() => {
+      const q = (x) => document.querySelector(x);
+      return { voices: [...q('#gl-vs-voice').options].map((o) => o.value), voice: q('#gl-vs-voice').value, lang: q('#gl-vs-lang').value, langs: q('#gl-vs-lang').options.length,
+        msg: q('#gl-vs-msg').checked, role: q('#gl-vs-msg').getAttribute('role'), labelled: !!q('label[for="gl-vs-voice"]') && !!q('label[for="gl-vs-lang"]') && !!q('label[for="gl-vs-num"]'), text: q('#gl-vs').textContent };
+    });
+    check('voice-setup', 'the voice picker: 30 voices, Kore by default; the language defaults to the caller\'s; message-taking on', first.voices.length === 30 && first.voice === 'Kore' && first.lang === 'auto' && first.langs > 10 && first.msg && first.role === 'switch' && first.labelled, JSON.stringify({ ...first, text: undefined }));
+    check('voice-setup', 'no vendor names', !/\b(?:Gemini|Google|Twilio)\b/.test(first.text), first.text.slice(0, 300));
+    await page.selectOption('#gl-vs-voice', 'Puck');
+    await page.waitForTimeout(900);
+    check('voice-setup', 'choosing a voice saves it', (await saved())?.voice === 'Puck', JSON.stringify(await saved()));
+    await page.selectOption('#gl-vs-lang', 'es');
+    await page.waitForTimeout(900);
+    check('voice-setup', 'choosing a language saves it', (await saved())?.language === 'es', JSON.stringify(await saved()));
+    await page.click('label[for="gl-vs-msg"]');
+    await page.waitForTimeout(900);
+    const off = await saved();
+    check('voice-setup', 'the message-taking switch saves off, and says what happens instead', off?.takeMessages === false && /offers to help with something else/.test(await page.textContent('#gl-vs-msg-d')), JSON.stringify(off));
+    await page.click('label[for="gl-vs-msg"]');
+    await page.waitForTimeout(700);
+    await page.fill('#gl-vs-num', '555-01');
+    await page.click('#gl-vs-save');
+    await page.waitForTimeout(400);
+    const bad = await page.evaluate(() => ({ err: document.querySelector('#gl-vs-err').textContent, shown: !document.querySelector('#gl-vs-err').hidden, inv: document.querySelector('#gl-vs-num').getAttribute('aria-invalid') }));
+    check('voice-setup', 'a bad transfer number is refused in words and never saved', bad.shown && /country code/.test(bad.err) && bad.inv === 'true' && !(await saved())?.transfer, JSON.stringify(bad));
+    await page.fill('#gl-vs-num', '(415) 555-0100');
+    await page.fill('#gl-vs-tz', 'America/New_York');
+    await page.fill('#gl-vs-start', '08:30');
+    await page.fill('#gl-vs-end', '18:00');
+    await page.click('label.gl-vs-day:has(input[data-day="sat"])');
+    await page.click('#gl-vs-save');
+    await page.waitForTimeout(1000);
+    const tr = (await saved())?.transfer;
+    check('voice-setup', 'the hand-off saves an E.164 number, time zone, days and hours', tr?.number === '+14155550100' && tr.timezone === 'America/New_York' && tr.start === '08:30' && tr.end === '18:00'
+      && tr.days.join(',') === 'mon,tue,wed,thu,fri,sat' && (await page.inputValue('#gl-vs-num')) === '+14155550100', JSON.stringify(tr));
+    await page.locator('#gl-vs').screenshot({ path: path.join(SHOTS, 'studio-voice-settings.png') });
+    await page.click('#gl-vs-clear');
+    await page.waitForTimeout(900);
+    check('voice-setup', 'Remove takes the hand-off away', !(await saved())?.transfer, JSON.stringify(await saved()));
+    check('voice-setup', 'no page errors', !errors.length, errors.join(' | '));
+    await ctx.close();
+  }
+
   // ------------------------------------------------------------------ product cards in the chat bubble's voice mode
   {
     const s = await (await api('/api/studio/trials', { method: 'POST' })).json();
@@ -342,6 +463,7 @@ try {
         check(cell, 'the cards use the shared styles, scroll sideways inside the panel, no page overflow', !!got && got.display === 'flex' && /auto|scroll/.test(got.ox) && got.inPanel && !got.pageOverflow, JSON.stringify(got && { display: got.display, ox: got.ox, inPanel: got.inPanel, pageOverflow: got.pageOverflow }));
         check(cell, 'the product page is not repeated as a source chip', !!got && !got.chipLinks.some((h) => /\/products\/commuter-lite/.test(h)) && !got.chipText.some((t) => /Commuter Lite|https?:/.test(t)), JSON.stringify(got && [got.chipLinks, got.chipText]));
         check(cell, 'the orb is not clipped at the top of the panel', !!got && got.orbTop);
+        check(cell, 'with product cards on screen, the spoken answer says so (U8)', !!got && got.spoken.some((x) => /I've put it on your screen\./.test(x)), JSON.stringify(got && got.spoken));
         check(cell, 'nothing spoken or captioned holds a URL', !!got && got.spoken.length > 0 && got.spoken.every((t) => !/https?:|www\./i.test(t)) && !/https?:|www\./i.test(got.cap), JSON.stringify(got && { spoken: got.spoken, cap: got.cap }));
         await page.waitForTimeout(400);
         await page.screenshot({ path: path.join(SHOTS, `bubble-voice-cards-${v.name}.png`) });

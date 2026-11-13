@@ -216,7 +216,9 @@ function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, ci
   const ch = cleanChannel(channel), oc = cleanOutcome(outcome);
   // dedupe: same scope + same caller + same normalized question + same channel within the window
   // (the same person asking by SMS and then WhatsApp is two channels' worth of signal)
-  const dk = `${scopeKey}|${from || '-'}|${hash}|${ch}`;
+  // (a flagged review entry, e.g. the voice facts guard on a question just answered, is its own entry)
+  const flagKey = (Array.isArray(flags) ? flags : [flags]).filter(Boolean).join(',');
+  const dk = `${scopeKey}|${from || '-'}|${hash}|${ch}${flagKey ? `|flag:${flagKey}` : ''}`;
   const last = seen.get(dk);
   if (last != null && at - last < cfg.dedupeMs) return { logged: false, skipped: 'duplicate' };
   // per-scope daily cap

@@ -55,6 +55,7 @@ import { orbOf } from './site.mjs';
 import { campaignOf, contactOf, newClickId, LINK_ID_RE, trackAnswer } from './leads.mjs';
 import { storePageHead } from './trials.mjs';
 import { runAnswer, AnswerError } from './answer.mjs';
+import { createInstantAnswers, voiceSetupOf } from './channels/voice-brain.mjs';
 import { AGENT_CHANNEL, agentLimits, agentSettings, agentResult, toolResult, limitedResult, readAsk, mcpDispatch, agentManifest, llmsTxt, secondsToReset,
   limitMessage, OFF_MESSAGE, burstMessage, priceText, RPC } from './agents.mjs';
 
@@ -449,7 +450,7 @@ export function createDevApi(o = {}) {
    * Studio's engine. cards: product cards (web surfaces only, the website voice mode included; SMS and phone calls never).
    * @returns {Promise<{ id, bot, botName, question, answer, refused, grounded, citations, proof, latencyMs, timings, tokens, guard?, failure? }>}
    */
-  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval, onEvent, cards = false, pin = null } = {}) {
+  async function answer(target, question, { history = [], channel = 'api', callerKey = null, onRetrieval, onEvent, cards = false, pin = null, noLog = false } = {}) {
     const t0 = performance.now();
     const lib = await o.loadLib();
     const q = String(question || '').replace(/\s+/g, ' ').trim().slice(0, MAX_Q);
@@ -561,7 +562,8 @@ export function createDevApi(o = {}) {
     // internal only (logs, tests): how many ways the files were searched; never part of a public answer
     if (rv?.searched?.ways > 1) Object.defineProperty(out, 'expansion', { value: { queries: rv.searched.ways, ms: rv.searched.waysMs }, enumerable: false });
     if (adapter) Object.defineProperty(out, 'retrievalSource', { value: adapter.source, enumerable: false });
-    logAnswer(target, out, channel, callerKey);
+    // noLog: a voice answer not used yet (a speculative search, an instant answer being prepared): logged when used
+    if (!noLog) logAnswer(target, out, channel, callerKey);
     return out;
   }
 
@@ -1244,6 +1246,78 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   async function meterOf(target) {
     try { return (await studio?.numbers?.meterFor?.(target)) || null; } catch (e) { log(`[channels] credit lookup for ${target.id} failed: ${e.message}`); return null; }
   }
+  // ---------------------------------------------------------------- live voice (web and phone): settings, answers, messages
+  /** The bot's voice settings (spec.voiceSetup; a launched bot: its linked Studio bot's, else its own). */
+  const voiceSetupFor = (target) => {
+    if (!target) return voiceSetupOf(null);
+    if (target.kind === 'trial') return target.spec?.voiceSetup || null;
+    const linked = target.inst?.numberTrial ? studio?.trials?.get?.(target.inst.numberTrial)?.spec : null;
+    return linked?.voiceSetup ?? target.inst?.voiceSetup ?? null;
+  };
+  const voiceOn = (k, d = true) => (env[k] == null || env[k] === '' ? d : !/^(0|false|no|off)$/i.test(String(env[k])));
+  /** The bot's most-asked questions that were answered (question insights), most asked first. */
+  async function topAsked(target, limit = 8) {
+    const scope = target.kind === 'trial'
+      ? { kd: kd ? { ...kd, store: studio?.store } : null, store: studio?.store, scopeTags: [`trial:${target.id}`] }
+      : { kd, store: kd?.store, scopeTags: [`bot:${target.id}`] };
+    if (!scope.kd || !scope.store) return [];
+    const r = await questionInsights({ ...scope, limit, semantic: false, suggest: false });
+    return (r?.top || []).filter((t) => t.outcome === 'answered' && t.q).map((t) => t.q);
+  }
+  // instant answers for each bot's most-asked questions (voice-brain.mjs); keyed per bot and kind (web voice shows
+  // product cards, the phone does not); rebuilt in the background when the files change
+  const instantTargets = new Map();
+  const instant = createInstantAnswers({
+    top: (key) => { const t = instantTargets.get(key); return t ? topAsked(t.target) : []; },
+    answerFor: (key, q) => { const t = instantTargets.get(key); return answer(t.target, q, { channel: t.channel, cards: t.cards, noLog: true }); },
+    max: Math.max(0, Number(env.KNOWBOT_VOICE_INSTANT_MAX ?? 5)), log,
+  });
+  const instantKey = (target, channel, cards) => `${target.id}|${channel}|${cards ? 'cards' : 'plain'}`;
+  function warmInstant(target, channel, cards) {
+    if (!voiceOn('KNOWBOT_VOICE_INSTANT') || !(Number(env.KNOWBOT_VOICE_INSTANT_MAX ?? 5) > 0)) return;
+    const key = instantKey(target, channel, cards);
+    instantTargets.set(key, { target, channel, cards });
+    track(instant.warm(key).catch((e) => log(`[voice] instant answers for ${target.id} failed: ${e.message}`)));
+  }
+  /**
+   * One live-voice question: an instant answer when it matches one of the bot's most-asked questions, else the bot's own
+   * pipeline. speculative: not logged, saved or remembered until a.commit() (the search started on the caller's partial
+   * words, used only when the final question matches). → the answer (with proofUrl once committed).
+   */
+  async function voiceAsk(req, target, question, { channel, callerKey = null, cards = false, speculative = false, history = [] } = {}) {
+    const q = String(question || '').slice(0, MAX_Q);
+    const hit = voiceOn('KNOWBOT_VOICE_INSTANT') ? instant.match(instantKey(target, channel, cards), q) : null;
+    let a;
+    if (hit) {
+      a = { ...hit.a, id: `ans_${rid(16)}`, question: scrubQuestion(q), latencyMs: 0, instant: true, timings: { ...(hit.a.timings || {}), total: 0, instant: true } };
+      log(`[voice] ${target.id} instant answer (sim ${hit.sim.toFixed(2)}) for "${q.slice(0, 60)}"`);
+    } else a = await answer(target, q, { channel, callerKey, cards, history, noLog: true });
+    let done = false;
+    const commit = () => {
+      if (done) return a;
+      done = true;
+      logAnswer(target, a, channel, callerKey);
+      a.proofId = a.refused ? null : saveProof(a, channel);
+      a.proofUrl = proofUrlFor(req, a.proofId);
+      rememberAnswer(`${target.id}|${channel}|${callerKey}`, a, req);
+      return a;
+    };
+    if (!speculative) return commit();
+    Object.defineProperty(a, 'commit', { value: commit, enumerable: false, configurable: true });
+    return a;
+  }
+  /** A message or callback request taken by the voice bot (take_message): a lead with the unanswered question. */
+  function voiceMessage(target, channel, { kind = 'message', name = '', contact, question = '', preferredTime = '', callerKey = null } = {}) {
+    if (!leads) return null;
+    const parts = [question && `Asked: ${question}`, name && `Name: ${name}`, kind === 'callback' && preferredTime && `Call back: ${preferredTime}`].filter(Boolean);
+    return leads.lead({ botId: leadBotOf(target), channel, value: contact, question: parts.join(' · '), consent: kind === 'callback' ? 'callback_request' : 'left_message',
+      session: callerKey ? hashCaller(callerKey) : null, ...(name ? { name } : {}), ...(preferredTime ? { note: preferredTime } : {}) });
+  }
+  /** The facts guard (voice-brain.mjs): a figure the bot said that is not in the facts, flagged for the owner to review. */
+  const voiceUnsupported = (target, channel, callerKey) => ({ question, text, figures, ref }) => logAnswer(target,
+    { question: question || '(question not transcribed)', refused: false, citations: [], proof: { floor: { top: null } } }, channel, callerKey,
+    { flags: ['unsupported_figure'], note: `ref ${ref}: said ${(figures || []).join(', ')} not in the facts. ${String(text || '').slice(0, 240)}` });
+
   // ---------------------------------------------------------------- phone: Twilio Media Streams WebSocket (voice-live.mjs)
   /** Retrieval only (no answer, nothing logged): the bot's own scope. The phone channel's product-handle lookup. */
   async function searchRaw(target, q) {
@@ -1273,8 +1347,13 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       // like the typed search and the chat bubble (only when the bot can email or text; sendinfo.mjs rate limits apply),
       // and each visitor keeps their own caller key (their address)
       const media = siMedia(target);
+      // instant answers for this bot's most-asked questions: prepared in the background while the visitor says hello
+      warmInstant(target, 'voice', true);
       handleWebVoice(ws, {
         env, log, botId: target.id, botName: target.name, org: target.inst?.org || target.spec?.org || null, callerKey: `ip:${ip}`, ip,
+        voiceSetup: voiceSetupFor(target),
+        takeMessage: leads ? ({ kind, name, contact, question, preferredTime, callerKey }) => voiceMessage(target, 'voice', { kind, name, contact, question, preferredTime, callerKey }) : null,
+        onUnsupported: (u) => voiceUnsupported(target, 'voice', `ip:${ip}`)(u),
         authorize: async (key) => {
           if (key) {
             const who = await authKey({ headers: { authorization: `Bearer ${key}` } }, target.id, { site: true });
@@ -1284,14 +1363,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
           if (target.kind === 'live') return { keyId: null };
           throw new ApiError(401, 'missing_api_key', 'A trial bot needs its trial key (kb_trial_…) in the start message.');
         },
-        ask: async (question, { callerKey, cards = false }) => {
-          // cards: the website's voice mode shows the cited products' cards under the spoken answer (like web chat)
-          const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'voice', callerKey, cards });
-          a.proofId = a.refused ? null : saveProof(a, 'voice');
-          a.proofUrl = proofUrlFor(req, a.proofId);
-          rememberAnswer(`${target.id}|voice|${callerKey}`, a, req);
-          return a;
-        },
+        // cards: the website's voice mode shows the cited products' cards under the spoken answer (like web chat);
+        // speculative: the search started on the visitor's partial words (logged only when used)
+        ask: (question, { callerKey, cards = false, speculative = false }) => voiceAsk(req, target, question, { channel: 'voice', callerKey, cards, speculative }),
         // "send me this": typed turns (text engine) and the send_info tool (live engine; the visitor confirms out loud)
         get sendInfoMedia() { return media; },
         get maybeSendInfo() { return (question, { callerKey }) => sendInfoTurn(req, target, { key: `${target.id}|voice|${callerKey}`, question, channel: 'voice', callerKey }); },
@@ -1318,7 +1392,12 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       const ws = acceptWebSocket(req, socket, head, { maxMessage: 256 * 1024 });
       if (!ws) return;
       let callStart = 0;
+      warmInstant(target, 'phone', false);
       handleMediaStream(ws, {
+        voiceSetup: voiceSetupFor(target),
+        takeMessage: leads ? ({ kind, name, contact, question, preferredTime }) => voiceMessage(target, 'phone', { kind, name, contact, question, preferredTime, callerKey: ws.callerKey || null }) : null,
+        onUnsupported: (u) => voiceUnsupported(target, 'phone', ws.callerKey || null)(u),
+        onTransfer: () => log(`[voice-live] ${target.id}: call handed to the team's number`),
         // on its own KnowBot number: texts go out from that number, and the call is metered (minutes rounded up)
         fromNumber: meter?.phoneNumber || null, maxSeconds: meter ? meter.secondsLeft() : 0,
         onTextSent: meter ? ({ body }) => { meter.charge('text', Math.max(1, smsInfo(body).segments), 'call-text').catch(() => {}); } : null,
@@ -1327,12 +1406,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         // texts cost the owner money: at most PHONE_TEXTS_PER_NUMBER per destination per 24 h and PHONE_TEXTS_PER_DAY per bot
         // (the per-number quota spans every bot on this server: one Twilio account pays for all of them)
         textAllowed: (to) => !limit(`sms-to:${hashCaller(to)}`, phoneTexts.perNumberDay, DAY_MS).limited && !limit(`sms-bot:${target.id}`, phoneTexts.perBotDay, DAY_MS).limited,
-        ask: async (question) => {
-          const a = await answer(target, String(question || '').slice(0, MAX_Q), { channel: 'phone', callerKey: ws.callerKey || null });
-          a.proofId = a.refused ? null : saveProof(a, 'phone');
-          a.proofUrl = proofUrlFor(req, a.proofId);
-          return a;
-        },
+        ask: (question, { speculative = false } = {}) => voiceAsk(req, target, question, { channel: 'phone', callerKey: ws.callerKey || null, speculative }),
         // "send me this" on a call: the send_info tool (texts default to the verified caller ID; the caller confirms first)
         sendInfoMedia: siMedia(target),
         sendInfo: ({ via, to, answer: ans, answers, transcript }) => sendInfo.send({ ...siOf(target), channel: 'phone', via, to, answer: ans, answers, transcript, callerKey: ws.callerKey || null, proofUrlFor: proofLinkFor(req, target, 'phone'), trackLink: trackerFor(req, target, 'phone') }),

@@ -7,8 +7,10 @@
 //   gemini  (GEMINI_API_KEY set): voice-to-voice through Gemini Live. The browser streams 16 kHz PCM16 mono as binary
 //           frames; the model's 24 kHz PCM16 speech comes back as binary frames. The model must call
 //           search_knowledge_base, which runs the bot's OWN answer pipeline (devapi answer(): its sources and scope, the
-//           librarian voice, the citation gate, the canonical refusal) and returns the answer already spoken with its
-//           attribution ("According to the Shipping page, ..."). Each search also sends the citations to the browser.
+//           librarian voice, the citation gate, the canonical refusal) and returns a short spoken-style answer, the rest
+//           ("more"), the exact facts and on-screen hints (voice-brain.mjs toolAnswer). Each search also sends the
+//           citations to the browser. Speculative search, instant answers, the facts guard, read-back and message-taking
+//           (take_message, a lead) are shared with the phone (voice-brain.mjs).
 //           Gemini client, audio handling and tool runner are reused from voice-live.mjs (the phone engine).
 //   text    (no GEMINI_API_KEY, Gemini unreachable, or the client asks for it): the browser recognizes speech itself
 //           (Web Speech API) or the visitor types, sends {type:'text'}, and gets the cited answer + the spoken form to
@@ -39,9 +41,12 @@
 // Over any cap the start is refused with {type:'error', code:'busy'} and close code 1013.
 import { NOT_IN_DATA, formatSpoken, humanTitle } from './util.mjs';
 import { connectGemini, createToolRunner, systemInstruction as phoneSystemInstruction, toolDeclarations as phoneToolDeclarations, greetingFor as phoneGreeting,
-  voiceGreeting, sendInfoInstruction, sendInfoDeclaration } from './voice-live.mjs';
+  voiceGreeting, sendInfoInstruction, sendInfoDeclaration, searchDeclaration, respondToTools, geminiSettings } from './voice-live.mjs';
+import { conversationRules, takeMessageDeclaration, voiceSetupOf, asyncToolsSupported, createSpeculator, unsupportedFigures } from './voice-brain.mjs';
 
 export const MAX_QUESTIONS_PER_SESSION = 40;
+/** What the browser-speech engine adds when product cards are on screen (the live engine says it in its own words). */
+export const ON_SCREEN_LINE = "I've put it on your screen.";
 let active = 0;
 const activeByBot = new Map();
 const activeByIp = new Map();
@@ -58,32 +63,36 @@ export function webVoiceEngine(env = {}) {
 /** The web voice greeting (voice-live.mjs voiceGreeting). media: what this bot can send ({ email, text }). */
 export const webGreeting = (botName, media = null) => voiceGreeting(botName, media);
 
-export function webSystemInstruction({ botName, org, sendInfo = null }) {
+/**
+ * The website voice prompt. asyncSearch: NON_BLOCKING search; takeMessages: message-taking and callback requests on a
+ * refusal or when they ask for a person (the web has no call to transfer); language: 'auto' | a language code.
+ */
+export function webSystemInstruction({ botName, org, sendInfo = null, asyncSearch = false, takeMessages = false, language = 'auto' }) {
   const who = botName || 'KnowBot';
   const orgName = org || botName || 'this business';
+  const canSend = !!(sendInfo && (sendInfo.email || sendInfo.text));
   return `You are ${who}, the voice assistant on ${orgName}'s website, speaking with a visitor through their browser microphone. You are a kind librarian: you answer only from ${orgName}'s own files. The visitor sees the sources on screen while you speak.
 
 Grounding rules:
 - Before answering ANY question, call search_knowledge_base. Write the query as a complete standalone question, filling in anything the visitor referred to earlier.
-- The tool returns "say": the answer from the files, already worded to be spoken. Speak it as given, without saying where it comes from (no "According to ...": the sources are on screen${sendInfo && (sendInfo.email || sendInfo.text) ? ' and can be sent at the end' : ''}). If the visitor asks where something comes from, name it from "source_titles". You may leave out filler, but never change, round or add any fact, number, date, price or name.
-- If the tool returns status "not_in_data", say exactly: "${NOT_IN_DATA}" Then offer to help with something else.
+- The tool returns the answer from the files ("answer", sometimes "more", and the exact "facts"). Say it without saying where it comes from (no "According to ...": the sources are on screen${canSend ? ' and can be sent at the end' : ''}). If the visitor asks where something comes from, name it from "source_titles".
+- If the tool returns status "not_in_data", say exactly: "${NOT_IN_DATA}"
 - Never answer from general knowledge, never guess, and never answer a question you did not search for.
 
 Speaking style:
 - Short replies; the visitor can ask a follow-up.
 - Never read out file names, URLs, citation numbers or links (they are on screen).
-- If the question is unclear, ask one short clarifying question.
 
 Session flow:
 - The session starts with the message "[visitor connected]". Greet the visitor with: "${webGreeting(botName, sendInfo)}"
-- Typed messages from the visitor arrive as text; treat them exactly like spoken questions.${sendInfoInstruction(sendInfo, { who: 'visitor' })}`;
+- Typed messages from the visitor arrive as text; treat them exactly like spoken questions.${conversationRules({ who: 'visitor', asyncSearch, onScreen: true, send: canSend ? sendInfo : null, takeMessages, transfer: takeMessages ? 'callback' : null, language })}${sendInfoInstruction(sendInfo, { who: 'visitor' })}`;
 }
 
-export function webToolDeclarations({ org, sendInfo = null }) {
+export function webToolDeclarations({ org, sendInfo = null, asyncSearch = false, takeMessages = false }) {
   return [{ functionDeclarations: [
-    { name: 'search_knowledge_base', description: `Search ${org || 'this business'}'s own files and get the answer to speak, with its source. Required before answering any question.`,
-      parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'A complete, standalone question in plain English.' } }, required: ['query'] } },
+    searchDeclaration(org || 'this business', { asyncSearch }),
     ...(sendInfo && (sendInfo.email || sendInfo.text) ? [sendInfoDeclaration()] : []),
+    ...(takeMessages ? [takeMessageDeclaration()] : []),
   ] }];
 }
 
@@ -127,29 +136,47 @@ export function handleWebVoice(ws, cx) {
   const pendingAudio = [];
   const transcript = [];
   let userText = '', agentText = '';
+  // the bot's voice settings (Set up → Voice), the model's async tools, the speculative search and the facts guard
+  const setup = voiceSetupOf(cx.voiceSetup, { defaultVoice: geminiSettings(env).voice });
+  const asyncSearch = asyncToolsSupported(geminiSettings(env).model, env);
+  const takeMessages = !!(setup.takeMessages && cx.takeMessage);
+  let spec = null, searchedThisTurn = false, newTurn = true;
+  const unsupported = [];
+  const cancelled = new Set(); // NON_BLOCKING calls the model cancelled (toolCallCancellation): never answered
 
   const sendJson = (o) => { if (ws.readyState === 1) ws.send(JSON.stringify(o)); };
   const closeAll = (reason = 'closed', code = 1000) => {
     if (closed) return;
     closed = true;
     clearTimeout(startTimer); clearTimeout(lifeTimer); clearTimeout(hangupTimer);
+    spec?.endTurn();
     try { session?.close(); } catch {}
     if (counted) { active -= 1; bump(activeByBot, botKey, -1); if (ipKey) bump(activeByIp, ipKey, -1); counted = false; }
     sendJson({ type: 'end', reason });
     if (ws.readyState === 1) ws.close(code, reason);
-    cx.onEnd?.({ sid, engine, transcript, questions });
+    cx.onEnd?.({ sid, engine, transcript, questions, unsupported, speculation: spec ? { ...spec.stats } : null });
   };
   const fail = (code, message, wsCode = 1008) => { sendJson({ type: 'error', code, message }); closeAll(code, wsCode); };
   const startTimer = setTimeout(() => { if (!started) fail('no_start', 'Send {"type":"start"} first.'); }, Number(cx.startTimeoutMs || 10000));
   startTimer.unref?.();
   let lifeTimer = null;
 
-  // the bot's own pipeline; every answer is counted against the session's question budget
-  async function ask(q) {
-    questions += 1;
-    if (questions > MAX_QUESTIONS_PER_SESSION) throw Object.assign(new Error('question limit reached'), { limit: true });
+  // the bot's own pipeline; every answer is counted against the session's question budget (a speculative search once it
+  // is used; the guesses themselves are capped per turn by the speculator)
+  async function ask(q, { speculative = false } = {}) {
+    if (!speculative) questions += 1;
+    if (questions > MAX_QUESTIONS_PER_SESSION || (speculative && questions >= MAX_QUESTIONS_PER_SESSION)) throw Object.assign(new Error('question limit reached'), { limit: true });
     // product cards ride along on the website's voice mode (shown, never spoken); the phone simulator stays voice-only
-    return cx.ask(String(q || '').slice(0, 1000), { callerKey, cards: !phone });
+    return cx.ask(String(q || '').slice(0, 1000), { callerKey, cards: !phone, ...(speculative ? { speculative: true } : {}) });
+  }
+  // the search already started on the visitor's words (speculative), when the model's query is the same or very close
+  async function askFor(q) {
+    const hit = spec?.take(q);
+    if (hit) {
+      const a = await hit.promise.catch(() => null);
+      if (a) { questions += 1; a.speculativeMs = hit.aheadMs; return typeof a.commit === 'function' ? a.commit() : a; }
+    }
+    return ask(q);
   }
   const names = [cx.botName, cx.org].filter(Boolean);
 
@@ -167,7 +194,9 @@ export function handleWebVoice(ws, cx) {
     try { a = await ask(q); } catch (e) {
       return sendJson({ type: 'error', code: e.limit ? 'question_limit' : 'answer_failed', message: e.limit ? 'This session has reached its question limit. Start a new one to keep going.' : "Couldn't answer right now. Please try again." });
     }
-    const spoken = a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false });
+    // product cards on screen (U8): say so rather than leave the details unspoken
+    const onScreen = !a.refused && !phone && productList(a).length ? ` ${ON_SCREEN_LINE}` : '';
+    const spoken = a.refused ? NOT_IN_DATA : `${formatSpoken(a, 450, { names, attribute: false })}${onScreen}`;
     transcript.push({ role: 'user', text: q }, { role: 'agent', text: spoken });
     sendJson({ type: 'answer', question: q, text: a.refused ? NOT_IN_DATA : a.answer, spoken, refused: !!a.refused, citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a) });
   }
@@ -181,25 +210,28 @@ export function handleWebVoice(ws, cx) {
       if (!hangupTimer) { hangupTimer = setTimeout(() => closeAll('hangup'), Number(cx.hangupFallbackMs || 15000)); hangupTimer.unref?.(); }
       return { status: 'ok', note: 'The call will end after your goodbye finishes playing.' };
     }
-    if (call?.name === 'send_info') return runShared(call);
+    if (call?.name === 'send_info' || call?.name === 'take_message') return runShared(call);
     if (call?.name !== 'search_knowledge_base') return { status: 'error', reason: `Unknown tool ${call?.name}` };
     if (!call.args?.query && userText.trim()) call.args = { ...call.args, query: userText.trim() };
     const query = String(call.args?.query || '').trim();
+    searchedThisTurn = true;
     sendJson({ type: 'searching', query });
     return runShared(call);
   }
   function onGeminiMessage(msg) {
     if (msg.toolCall?.functionCalls?.length) {
-      Promise.all(msg.toolCall.functionCalls.map(async (call) => {
-        let response;
-        try { response = await runTool(call); } catch (e) { response = { status: 'error', reason: e.message }; }
-        return { id: call.id, name: call.name, response };
-      })).then((functionResponses) => { try { session?.sendToolResponse(functionResponses); } catch (e) { log(`[webvoice] ${sid} tool response failed: ${e.message}`); } });
+      respondToTools(msg.toolCall.functionCalls, runTool, { asyncSearch, cancelled, send: (r) => session?.sendToolResponse(r), log: (m) => log(`[webvoice] ${sid} ${m}`) });
       return;
     }
+    if (msg.toolCallCancellation?.ids) { for (const id of msg.toolCallCancellation.ids) cancelled.add(id); return; }
     const c = msg.serverContent;
     if (!c) return;
-    if (c.inputTranscription?.text) { userText += c.inputTranscription.text; sendJson({ type: 'transcript', role: 'user', text: c.inputTranscription.text, delta: true }); }
+    if (c.inputTranscription?.text) {
+      if (newTurn) { newTurn = false; searchedThisTurn = false; runShared?.newTurn?.(); }
+      userText += c.inputTranscription.text;
+      spec?.partial(userText);
+      sendJson({ type: 'transcript', role: 'user', text: c.inputTranscription.text, delta: true });
+    }
     if (c.outputTranscription?.text) { agentText += c.outputTranscription.text; sendJson({ type: 'transcript', role: 'agent', text: c.outputTranscription.text, delta: true }); }
     if (c.interrupted) sendJson({ type: 'interrupted' });
     for (const part of c.modelTurn?.parts || []) {
@@ -209,17 +241,34 @@ export function handleWebVoice(ws, cx) {
     if (c.turnComplete) {
       sendJson({ type: 'turn_complete' });
       if (!agentText.trim()) return; // a turn that only issued a tool call: keep the visitor's words for the answer turn
+      // the facts guard: a figure said that is in none of the search results, the question or a read-back
+      if (searchedThisTurn) {
+        const figs = unsupportedFigures(agentText, [...(runShared?.allowed?.() || []), userText]);
+        if (figs.length) {
+          const ref = Math.random().toString(16).slice(2, 10);
+          log(`[webvoice] ${sid} facts guard ref=${ref}: said ${figs.join(', ')} not in the facts`);
+          const u = { question: userText.trim(), text: agentText.trim(), figures: figs, ref };
+          unsupported.push(u);
+          try { cx.onUnsupported?.(u); } catch (e) { log(`[webvoice] facts guard log failed: ${e.message}`); }
+        }
+      }
       if (userText.trim()) transcript.push({ role: 'user', text: userText.trim() });
       transcript.push({ role: 'agent', text: agentText.trim() });
       userText = ''; agentText = '';
+      newTurn = true;
+      spec?.endTurn();
     }
   }
   async function openGemini() {
     // "send me this": the browser has no caller number, so a text needs the number they say (and confirm)
     const sendInfo = cx.sendInfo && cx.sendInfoMedia ? { ...cx.sendInfoMedia, callerKnown: false } : null;
+    // the phone simulator has no call to transfer: asking for a person becomes a callback request
+    const transfer = takeMessages ? 'callback' : null;
     const s = await connectGemini(env, {
-      systemInstruction: phone ? phoneSystemInstruction({ botName: cx.botName, org: cx.org, productLinks: false, sendInfo }) : webSystemInstruction({ botName: cx.botName, org: cx.org, sendInfo }),
-      tools: phone ? phoneToolDeclarations({ org: cx.org || cx.botName, productLinks: false, sendInfo }) : webToolDeclarations({ org: cx.org || cx.botName, sendInfo }),
+      systemInstruction: phone ? phoneSystemInstruction({ botName: cx.botName, org: cx.org, productLinks: false, sendInfo, asyncSearch, takeMessages, transfer, language: setup.language })
+        : webSystemInstruction({ botName: cx.botName, org: cx.org, sendInfo, asyncSearch, takeMessages, language: setup.language }),
+      tools: phone ? phoneToolDeclarations({ org: cx.org || cx.botName, productLinks: false, sendInfo, asyncSearch, takeMessages, transfer }) : webToolDeclarations({ org: cx.org || cx.botName, sendInfo, asyncSearch, takeMessages }),
+      voice: setup.voice,
       onMessage: onGeminiMessage,
       onClose: () => { sessionReady = false; closeAll('model_closed'); },
       timeoutMs: Number(cx.geminiTimeoutMs || 10000),
@@ -246,10 +295,14 @@ export function handleWebVoice(ws, cx) {
     engine = msg.engine === 'text' ? 'text' : webVoiceEngine(env);
     let note;
     if (engine === 'gemini') {
-      runShared = createToolRunner({ ask: (q) => ask(q).then((a) => {
-        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false }), citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a) });
+      runShared = createToolRunner({ ask: (q) => askFor(q).then((a) => {
+        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false }), citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a), ...(a.instant ? { instant: true } : {}) });
         return a;
-      }), sendInfo: cx.sendInfo ? (x) => cx.sendInfo({ ...x, callerKey }) : null, env, botName: cx.botName, org: cx.org, callSid: sid, log, getTranscript: () => transcript });
+      }), sendInfo: cx.sendInfo ? (x) => cx.sendInfo({ ...x, callerKey }) : null, env, botName: cx.botName, org: cx.org, callSid: sid, log, getTranscript: () => transcript,
+        sendMedia: cx.sendInfo ? cx.sendInfoMedia : null, onScreen: !phone, takeMessage: takeMessages ? (m) => cx.takeMessage({ ...m, callerKey }) : null });
+      if (!/^(0|false|no|off)$/i.test(String(env.KNOWBOT_VOICE_SPECULATE ?? '1'))) {
+        spec = createSpeculator({ run: (q) => ask(q, { speculative: true }), maxPerTurn: Math.max(1, Number(env.KNOWBOT_VOICE_SPECULATE_MAX) || 2), log: (m) => log(`${m} (${sid})`) });
+      }
       try { session = await openGemini(); } catch (e) {
         log(`[webvoice] ${sid} Gemini Live unavailable (${e.message}); text engine`);
         engine = 'text'; note = 'Live voice is unavailable right now, so your browser recognizes and speaks instead.';
@@ -292,5 +345,5 @@ export function handleWebVoice(ws, cx) {
     }
   });
   ws.on('close', () => closeAll('closed'));
-  return { sid, transcript, get engine() { return engine; } };
+  return { sid, transcript, get engine() { return engine; }, get speculation() { return spec ? { ...spec.stats } : null; } };
 }

@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { promises as fsp, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as kbLib from '../lib/knowbot.js';
+import { bumpFilesEpoch, cleanVoiceSetup } from './channels/voice-brain.mjs';
 import { createResearchAgent } from './research.mjs';
 import { runAnswer, emptyProof } from './answer.mjs';
 import { createEvidenceSelector, createResolver, combineDigests, isRefusal, isAnswerable } from './evidence.mjs';
@@ -415,7 +416,9 @@ export const isDerivedLine = (t) => /;\s/.test(t) && (String(t).match(/[^;:]{1,6
 
 // ------------------------------------------------------------------------------------------- spec
 const TONES = ['friendly', 'neutral', 'formal'], LENGTHS = ['short', 'normal'], AUDIENCES = ['customers', 'employees', 'students'];
-const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces', 'agents', 'sendInfo']);
+const SPEC_KEYS = new Set(['name', 'avatar', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'email', 'surfaces', 'agents', 'sendInfo', 'voiceSetup']);
+// voiceSetup: the live voice bots' settings (server/channels/voice-brain.mjs): {voice, language, takeMessages, transfer}.
+// Absent = the default voice (Kore), language auto, message-taking on, no transfer number. Not material.
 // sendInfo: "Send me this" (server/sendinfo.mjs): {on, email, text}. A visitor may ask the bot to email or text them an
 // answer with its sources (each request is a lead). On unless the owner turns it off (absent = on, both media), and only
 // for the media the server can send. Not material: the answers never change with it.
@@ -536,6 +539,10 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
         try { next.sendInfo = cleanSendInfo(patch.sendInfo, next.sendInfo); } catch (e) { bad('sendInfo', e.message); }
         break;
       }
+      case 'voiceSetup': {
+        try { next.voiceSetup = cleanVoiceSetup(patch.voiceSetup, next.voiceSetup); } catch (e) { bad('voiceSetup', e.message); }
+        break;
+      }
       case 'email': {
         const e = String(patch.email ?? '').trim();
         if (e && (e.length > 254 || !EMAIL_RE.test(e))) bad('email', 'is not a valid email address');
@@ -547,7 +554,7 @@ export function validatePatch(patch, spec, { floorMin = 0.7 } = {}) {
   }
   const diff = [];
   const dflt = (k, v) => (k === 'sendInfo' ? sendInfoSwitches(v) : v ?? (k === 'surfaces' ? ['webchat'] : k === 'agents' ? { public: true, paid: false } : undefined));
-  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar', 'surfaces', 'agents', 'sendInfo']) {
+  for (const k of ['name', 'org', 'purpose', 'audience', 'tone', 'length', 'greeting', 'starters', 'floor', 'sources', 'avatar', 'surfaces', 'agents', 'sendInfo', 'voiceSetup']) {
     if (JSON.stringify(dflt(k, spec[k])) !== JSON.stringify(dflt(k, next[k]))) diff.push({ field: k, from: spec[k], to: next[k] });
   }
   const material = diff.some((d) => MATERIAL.includes(d.field));
@@ -1307,6 +1314,7 @@ export function createStudio(o = {}) {
     return rows;
   }
   async function ingest({ storePath, tags, mime, bytes, signal, via = null }) {
+    bumpFilesEpoch(); // a bot's files change: its cached instant voice answers are stale (voice-brain.mjs)
     const fd = new FormData();
     // knowDrive /ingest is a batch endpoint: every text part after mime_type counts as a file part (a `path` part
     // would be stored as its own file), and mime_type must precede the file parts. The store path rides on the
@@ -1330,6 +1338,7 @@ export function createStudio(o = {}) {
    * parts; each file's store path is its part's filename). → the created rows, in part order.
    */
   async function ingestMany({ tags, mime, items, signal }) {
+    bumpFilesEpoch();
     const fd = new FormData();
     fd.append('tags', tags.join(','));
     if (mime) fd.append('mime_type', mime);
@@ -1347,6 +1356,7 @@ export function createStudio(o = {}) {
   }
   async function batchTags(fileIds, add, remove) {
     if (!fileIds.length) return 0;
+    bumpFilesEpoch();
     let n = 0;
     for (let i = 0; i < fileIds.length; i += 100) {
       const j = await kdJson('/api/v1/files/batch_tags', { method: 'POST', headers: { 'content-type': 'application/json', 'x-vector-store-id': store },
@@ -1356,6 +1366,7 @@ export function createStudio(o = {}) {
     return n;
   }
   async function deleteRow(id, via = null) {
+    bumpFilesEpoch();
     const res = await kdFetch(`/api/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE', via }).catch((e) => fail(502, 'upstream', `knowDrive delete failed: ${e.message}`));
     if (!res.ok && res.status !== 404) fail(502, 'upstream', `knowDrive delete: HTTP ${res.status}`);
   }
@@ -4807,6 +4818,11 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (sendInfoOut.sendInfo && body.bot && o.registry?.update) {
       try { await o.registry.update(String(body.bot), { sendInfo: sendInfoOut.sendInfo }); }
       catch (e) { log(`[studio] convert ${T.id}: could not set "Send me this" on bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
+    }
+    // the voice settings (spec.voiceSetup) move with the bot too
+    if (T.spec.voiceSetup && body.bot && o.registry?.update) {
+      try { await o.registry.update(String(body.bot), { voiceSetup: T.spec.voiceSetup }); }
+      catch (e) { log(`[studio] convert ${T.id}: could not set the voice settings on bot ${String(body.bot).slice(0, 64)}: ${e.message}`); }
     }
     // convert may name the launched bot (body.bot): it gets the storefront at once
     if (shop.shopDomain && body.bot && o.registry?.update) {

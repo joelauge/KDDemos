@@ -723,6 +723,23 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .gl-si-media { padding-left: 0; border-left: 0; padding-top: 8px; border-top: 1px dashed var(--line); }
   .gl-si-row .gl-switch { min-height: 44px; }
 }
+/* Voice (spec.voiceSetup): voice, language, message-taking, hand-off to a person */
+.gl-vs-body { display: grid; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); min-width: 0; }
+.gl-vs-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; min-width: 0; }
+.gl-vs-field { display: grid; gap: 4px; min-width: 0; }
+.gl-vs-label { font-size: 12.5px; font-weight: 600; color: var(--strong); padding: 0; }
+.gl-vs-note { margin: 0; }
+.gl-vs-handoff { display: grid; gap: 10px; margin: 0; padding: 12px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; }
+.gl-vs-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.gl-vs-day { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; cursor: pointer; }
+.gl-vs-day input { margin: 0; }
+.gl-vs-err { margin: 0; font-size: 12.5px; color: var(--red, #b91c1c); }
+.gl-vs-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 640px) {
+  .gl-vs-row { grid-template-columns: minmax(0, 1fr); }
+  .gl-vs-day { min-height: 44px; }
+  .gl-vs-actions .btn { min-height: 44px; }
+}
 @container (max-width: 820px) { .gl-inline .gl-si-body { grid-template-columns: minmax(0, 1fr); } .gl-inline .gl-si-media { padding-left: 0; border-left: 0; } }
 
 /* ------------------------------------------------------------------ AI agents (the fourth tool; server/agents.mjs) */
