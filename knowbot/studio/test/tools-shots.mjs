@@ -7,19 +7,20 @@
 //   3. AI agents: the card's MCP address, its public / paid switches, and its Try it (POST /v1/bots/:id/ask), plus the
 //      MCP endpoint itself (initialize, tools/list, tools/call) against the dev server
 //
-//   TOOLS_SHOTS=/some/dir node studio/test/tools-shots.mjs      (default: studio/test/screens/tools)
+//   TOOLS_SHOTS=/some/dir node studio/test/tools-shots.mjs      (default: a temp folder; --update-screens: studio/test/screens/tools)
 import path from 'node:path';
 import http from 'node:http';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
+import { outDir } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SHOTS = process.env.TOOLS_SHOTS || path.join(__dirname, 'screens', 'tools');
+const SHOTS = outDir('tools', process.env.TOOLS_SHOTS);
 let failed = 0;
 const check = (name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${name}${detail ? ` · ${String(detail).slice(0, 200)}` : ''}`); return ok; };
 

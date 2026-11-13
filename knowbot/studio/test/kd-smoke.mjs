@@ -17,11 +17,12 @@ import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
+import { outDir } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
-const SHOTS = process.env.SHOTS || path.join(os.tmpdir(), 'kb-kd-shots');
+const SHOTS = outDir('kd', process.env.SHOTS);
 const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 
 let failures = 0;

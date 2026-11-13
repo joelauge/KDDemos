@@ -2,26 +2,37 @@
 // KnowBot Studio Playwright smoke (SPEC 7.4, owner B). Runs the whole journey against studio/test/dev-server.mjs
 // (fake knowDrive + fake model on 127.0.0.1, FAKE_SPEED=4). Never touches production or any real service.
 //
-//   npm run studio:smoke                       # all cells
+//   npm run studio:smoke                       # all cells side by side (SMOKE_CONCURRENCY=n to choose how many)
 //   node studio/test/smoke.mjs --cell=desktop-light-full --cell=mobile-dark-full
 //   node studio/test/smoke.mjs --quick          # steps 1-13 only, desktop-light-full + mobile-light-full
+//   SMOKE_CONCURRENCY=1 npm run studio:smoke   # one cell after another in this process (the old behaviour)
 //   HEADED=1 node studio/test/smoke.mjs        # watch it
+//   npm run studio:smoke -- --update-screens   # also rewrite the tracked screenshots in studio/test/screens/
 //
-// Screenshots: studio/test/screens/<cell>/<nn>-<step>.png. Exit code 1 on any hard failure.
+// Cells run side by side, each in its own process with its own dev server (a random port), browser and results file,
+// so they share nothing. Measured on a 4-core, 16 GB machine: a cell needs about 0.45 GB (browser + server); all five
+// at once peak at about 2 GB above idle and finish in about 100 s (three at a time: 180 s; one at a time: 470 s).
+// The default follows the memory that is free when the run starts: 5 at a time with 6 GB or more available, 3 with
+// 3 GB or more, otherwise one after another. SMOKE_CONCURRENCY (or --concurrency=n) overrides it.
+//
+// Screenshots and results.json go to a temp folder (printed at the end; SMOKE_OUT=<dir> to choose it), so a run never
+// changes the repository. Exit code 1 on any hard failure.
 
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
 import { startDevServer } from './dev-server.mjs';
+import { outDir, UPDATE_SCREENS } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;   // isolation rule (SPEC 7.1): nothing below may reach a real store
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SCREENS = path.join(__dirname, 'screens');
+const SCREENS = outDir('', process.env.SMOKE_OUT);
 const FIXTURES = path.join(__dirname, 'fixtures');
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const SAMPLE_FILES = ['lumen-warranty-returns.md', 'lumen-service-plans.html', 'lumen-store-faq.txt', 'lumen-price-list-2026.md'];
@@ -63,7 +74,8 @@ const state = (page) => page.evaluate(() => {
   if (!s) return null;
   return JSON.parse(JSON.stringify({ spec: s.spec, trial: { id: s.trial.id, status: s.trial.status, converted: s.trial.converted }, files: s.files, fileOrder: s.fileOrder,
     milestones: s.milestones, thread: s.thread.map((a) => ({ id: a.id, question: a.question, by: a.by, label: a.label, status: a.status, final: a.final ? { text: a.final.text, refused: a.final.refused, status: a.final.status, citations: (a.final.citations || []).map((c) => ({ n: c.n, file: c.file, similarity: c.similarity, match: c.match })) } : null })),
-    ui: { view: s.ui.view, tab: s.ui.tab, drawer: s.ui.drawer, sheet: s.ui.sheet, badges: s.ui.badges }, proof: { status: s.proof?.status, score: s.proof?.score } }));
+    ui: { view: s.ui.view, tab: s.ui.tab, drawer: s.ui.drawer, sheet: s.ui.sheet, badges: s.ui.badges, specOpen: s.ui.specOpen }, proof: { status: s.proof?.status, score: s.proof?.score, progress: JSON.stringify(s.proof?.rows || []).length },
+    setupBusy: !!s.setup?.busy }));
 });
 
 async function waitState(page, fn, { timeout = 30000, every = 250 } = {}) {
@@ -75,6 +87,24 @@ async function waitState(page, fn, { timeout = 30000, every = 250 } = {}) {
     await page.waitForTimeout(every);
   }
   return null;
+}
+
+/** Wait (at most `cap` ms) until no finite animation or transition is running: the page has stopped moving. */
+async function settled(page, cap = 1000) {
+  await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime)), null, { timeout: cap, polling: 50 }).catch(() => null);
+}
+
+/** Wait until the Builder has finished its turn: store.setup.busy stays false across three reads (about 0.3 s). */
+async function builderIdle(page, cap = 10000) {
+  const t0 = Date.now();
+  let quiet = 0;
+  while (Date.now() - t0 < cap) {
+    const s = await state(page).catch(() => null);
+    quiet = s && !s.setupBusy ? quiet + 1 : 0;
+    if (quiet >= 3) return true;
+    await page.waitForTimeout(120);
+  }
+  return false;
 }
 
 async function noHScroll(page) {
@@ -108,7 +138,11 @@ async function pane(page, cell, which) {
   if (!cell.mobile) return;
   const sel = which === 'setup' ? '#st-tab-setup' : '#st-tab-bot';
   const pressed = await page.getAttribute(sel, 'aria-pressed').catch(() => null);
-  if (pressed !== 'true') { await page.click(sel); await page.waitForTimeout(260); }
+  if (pressed !== 'true') {
+    await page.click(sel);
+    await page.waitForFunction((q) => document.querySelector(q)?.getAttribute('aria-pressed') === 'true', sel, { timeout: 3000 }).catch(() => null);
+    await settled(page, 400);
+  }
 }
 
 async function builderSay(page, cell, text) {
@@ -231,7 +265,8 @@ async function journey(browser, dev, cell) {
   await page.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#st-log .st-msg-a', { timeout: 5000 }).catch(() => null);
   const firstMsgMs = Date.now() - t0;
-  await page.waitForTimeout(700);
+  // the first turn is complete when its chip row and "More ways to start" are on screen
+  await page.waitForFunction(() => { const vis = (e) => !!e && e.offsetParent !== null; return [...document.querySelectorAll('#st-log .st-chips:not([hidden]) .st-chip')].some(vis) && [...document.querySelectorAll('#st-log .st-more-ways')].some(vis); }, null, { timeout: 5000 }).catch(() => null);
   const logText = await page.innerText('#st-log').catch(() => '');
   check('01-landing', 'B0 text visible', /Start with your files(, your website)? or ours\?/.test(logText), { detail: `${firstMsgMs} ms to first Builder message` });
   // r10: the first turn shows one chip; "More ways to start" shows the others (upload, website)
@@ -327,7 +362,8 @@ async function journey(browser, dev, cell) {
   const elapsed = Date.now() - t0;
   check('05-first-answer', 'grounded answer', !!grounded, { detail: grounded ? grounded.question : 'none' });
   check('05-first-answer', 'first cited answer < 45 s from landing', elapsed < 45000, { detail: `${(elapsed / 1000).toFixed(1)} s` });
-  await page.waitForTimeout(900);
+  await page.waitForFunction(() => !!document.querySelector('#sb-thread-slot .sb-srcrow') && !!document.querySelector('#sb-thread-slot button.pf-cite[data-n="1"]'), null, { timeout: 5000 }).catch(() => null);
+  await settled(page, 900);
   const threadText = await page.innerText('#sb-thread-slot').catch(() => '');
   // the visitor's view is calm: no match scores, no chip row (they live in Proof view); the DOM still carries the
   // source chips with their match, so the match range is checked from textContent
@@ -360,7 +396,8 @@ async function journey(browser, dev, cell) {
   if (await chip.count()) {
     await chip.focus();
     await chip.hover().catch(() => {});
-    await page.waitForTimeout(700);
+    await page.waitForFunction(() => [...document.querySelectorAll('mark')].some((m) => m.offsetParent !== null && m.textContent.trim().length > 3), null, { timeout: 3000 }).catch(() => null);
+    await settled(page, 700);
     const markOk = await page.evaluate(() => {
       const ans = document.querySelector('#sb-thread-slot')?.innerText || '';
       const marks = [...document.querySelectorAll('mark')].filter((m) => m.offsetParent !== null && m.textContent.trim().length > 3);
@@ -373,7 +410,8 @@ async function journey(browser, dev, cell) {
     // 07 drawer
     await chip.focus();
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(700);
+    await page.waitForFunction(() => { const d = document.querySelector('#sb-drawer-slot [role="dialog"]'); return !!d && d.offsetParent !== null && d.contains(document.activeElement); }, null, { timeout: 3000 }).catch(() => null);
+    await settled(page, 700);
     const drawerOpen = await page.evaluate(() => { const d = document.querySelector('#sb-drawer-slot [role="dialog"]'); return !!d && d.offsetParent !== null; });
     const focusIn = await page.evaluate(() => !!document.querySelector('#sb-drawer-slot')?.contains(document.activeElement));
     check('07-drawer', 'drawer open', drawerOpen);
@@ -382,7 +420,7 @@ async function journey(browser, dev, cell) {
     check('07-drawer', 'Proof view is now on (after Enter on the chip)', s7?.ui.view === 'proof', { detail: s7?.ui.view });
     await shot(page, cell, '07-drawer');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => { const d = document.querySelector('#sb-drawer-slot [role="dialog"]'); const a = document.activeElement; return (!d || d.offsetParent === null) && !!a && a.classList.contains('pf-cite'); }, null, { timeout: 3000 }).catch(() => null);
     const closed = await page.evaluate(() => { const d = document.querySelector('#sb-drawer-slot [role="dialog"]'); return !d || d.offsetParent === null; });
     const back = await page.evaluate(() => { const a = document.activeElement; return !!a && a.classList.contains('pf-cite') && a.dataset.n === '1'; });
     check('07-drawer', 'Esc closes it', closed);
@@ -398,11 +436,15 @@ async function journey(browser, dev, cell) {
   if (probe) await press(probe, 'probe chip');
   const refused = await waitState(page, (s) => s.thread.length > before && s.thread.slice(before).find((a) => a.final && a.final.refused), { timeout: 20000 });
   check('08-refusal', 'refusal text equals NOT_IN_DATA', refused && refused.final.text === NOT_IN_DATA, { detail: refused?.final?.text });
-  await page.waitForTimeout(600);
   const why = page.locator('#sb-thread-slot button', { hasText: /^Why\?/ }).last();
+  await why.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
   if (await why.count()) {
+    await settled(page, 600);   // the refusal choreography is over, the button sits still
+    const shown = () => page.waitForFunction(() => /Nothing was invented/i.test(document.querySelector('#sb-thread-slot')?.innerText || ''), null, { timeout: 3000 }).then(() => true).catch(() => false);
     await press(why, 'Why?');
-    await page.waitForTimeout(500);
+    // a press that landed while the answer was still being laid out is repeated once, only if the panel is still closed
+    if (!(await shown()) && (await why.getAttribute('aria-expanded').catch(() => null)) === 'false') { await press(why, 'Why? (again)'); await shown(); }
+    await settled(page, 500);
     const floorTxt = await page.innerText('#sb-thread-slot').catch(() => '');
     check('08-refusal', '[Why?] shows the FloorChart', /Nothing was invented/i.test(floorTxt) && /floor/i.test(floorTxt));
   } else check('08-refusal', '[Why?] button present', false);
@@ -412,7 +454,8 @@ async function journey(browser, dev, cell) {
   await builderSay(page, cell, 'make it more formal');
   const diff = await page.waitForFunction(() => [...document.querySelectorAll('#st-log .st-diff')].some((d) => /Tone/i.test(d.innerText)), null, { timeout: 10000 }).then(() => true).catch(() => false);
   check('09-refine', 'ConfigDiffCard row Tone', diff);
-  await page.waitForTimeout(800);
+  await page.waitForFunction(() => { const v = document.querySelector('#st-version'); return !!v && !v.hidden && Number((v.textContent.match(/v(\d+)/) || [])[1] || 0) >= 2; }, null, { timeout: 5000 }).catch(() => null);
+  await builderIdle(page);
   const ver = await page.evaluate(() => { const v = document.querySelector('#st-version'); return v && !v.hidden ? v.textContent.trim() : ''; });
   if (cell.mobile) await pane(page, cell, 'bot');
   const verN = Number((ver.match(/v(\d+)/) || [])[1] || 0);
@@ -449,11 +492,11 @@ async function journey(browser, dev, cell) {
   const box = page.locator('.st-src', { hasText: scopeFile }).locator('input[type="checkbox"]');
   if (await box.count()) {
     await page.locator('.st-src', { hasText: scopeFile }).locator('label').click();
-    await page.waitForTimeout(500);
   }
+  const scoped = await waitState(page, (s) => Object.values(s.spec.sources || {}).some((v) => v === false), { timeout: 6000, every: 100 });
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(400);
-  const scoped = await waitState(page, (s) => Object.values(s.spec.sources || {}).some((v) => v === false), { timeout: 6000 });
+  await waitState(page, (s) => !s.ui.specOpen, { timeout: 3000, every: 100 });
+  await settled(page, 400);
   check('10-scope', `${scopeFile} switched off`, !!scoped);
   const before10 = (await state(page)).thread.length;
   const reask = false;   // re-ask the FIRST starter directly (the Builder's own Re-ask chip targets the latest question)
@@ -487,23 +530,66 @@ async function journey(browser, dev, cell) {
     await pane(page, cell, 'setup');
     if (!(await page.locator('.st-src').first().isVisible().catch(() => false))) await page.click('#st-botchip');
     await page.waitForSelector('.st-src', { timeout: 3000 }).catch(() => null);
-    await page.waitForTimeout(400);
+    await settled(page, 400);
     const lbl = page.locator('.st-src', { hasText: scopeFile }).locator('label');
     const inp = page.locator('.st-src', { hasText: scopeFile }).locator('input[type="checkbox"]');
-    if (await lbl.count() && !(await inp.isChecked().catch(() => true))) { await lbl.click({ timeout: 5000 }).catch(() => null); await page.waitForTimeout(600); }
+    if (await lbl.count() && !(await inp.isChecked().catch(() => true))) { await lbl.click({ timeout: 5000 }).catch(() => null); await waitState(page, (s) => !Object.values(s.spec.sources || {}).some((v) => v === false), { timeout: 3000, every: 100 }); }
     await page.keyboard.press('Escape');
-    backOn = await waitState(page, (s) => !Object.values(s.spec.sources || {}).some((v) => v === false), { timeout: 6000 });
+    backOn = await waitState(page, (s) => !Object.values(s.spec.sources || {}).some((v) => v === false), { timeout: 6000, every: 100 });
   }
   check('10-scope', `${scopeFile} switched back on`, !!backOn, { soft: true });
-  await page.waitForTimeout(1500);
+  await waitState(page, (s) => !s.ui.specOpen, { timeout: 3000, every: 100 });
+  await builderIdle(page);   // the Builder's turn about the scope change is over before the next chip is pressed
+  // ...and the server has the file back in scope: the Proof Run asks the server for its questions, and the spec is
+  // saved a moment after the switch, so wait for the server to offer all 8 again
+  {
+    const who = await page.evaluate(() => { const t = window.__studio.store.getState().trial; return { id: t.id, token: t.token }; });
+    const t10 = Date.now();
+    let n = -1;
+    while (Date.now() - t10 < 10000) {
+      n = await fetch(`${dev.url}/api/studio/trials/${who.id}/questions`, { headers: { authorization: `Bearer ${who.token}` } }).then((r) => r.json()).then((j) => (j.proof || []).length).catch(() => -1);
+      if (n >= 8) break;
+      await page.waitForTimeout(150);
+    }
+    check('10-scope', 'the server offers all 8 proof questions again', n >= 8, { detail: `${n} after ${Date.now() - t10} ms` });
+  }
 
-  // 11 proof run (11 questions through the full pipeline: late in a five-cell run it can take well over a minute)
-  const ranChip = await clickBuilderChip(page, cell, /Proof Run|trip it up/i);
-  if (!ranChip) await builderSay(page, cell, 'run the proof run');
-  const sc = await page.waitForFunction(() => { const c = document.querySelector('#st-log [data-card="scorecard"]'); return c && /8\/8/.test(c.innerText) && /3\/3/.test(c.innerText); }, null, { timeout: 150000 }).then(() => true).catch(() => false);
+  // 11 proof run (11 questions through the full pipeline). The run is followed in the store: it must start
+  // (proof.status 'running') and then finish ('done' with a score); the scorecard is read once the store says so.
+  // A Builder turn can replace the chip row just as the chip is pressed (the press then lands on a row that is gone),
+  // so the request is repeated until the store shows the run; a run that is already going ignores a second request.
+  let started = null;
+  for (let attempt = 0; attempt < 3 && !started; attempt++) {
+    await builderIdle(page);
+    await settled(page, 1500);
+    const ranChip = attempt < 2 && await clickBuilderChip(page, cell, /Proof Run|trip it up/i);
+    if (!ranChip) await builderSay(page, cell, 'run the proof run');
+    started = await waitState(page, (s) => s.proof.status === 'running' || s.proof.status === 'done', { timeout: 8000, every: 100 });
+  }
+  check('11-proof-run', 'the Proof Run starts', !!started, { detail: started ? '' : `proof.status ${(await state(page))?.proof?.status}` });
+  const tProof = Date.now();
+  // no question may take longer than PROOF_STALL_MS to settle: progress resets the clock, so a slow machine is fine
+  // and a stuck run fails quickly instead of after a fixed long timeout
+  const PROOF_STALL_MS = 45000;
+  let proofDone = null;
+  if (started) {
+    let lastProgress = Date.now(), lastSeen = '';
+    for (;;) {
+      const s = await state(page).catch(() => null);
+      if (s?.proof?.status === 'done' && s.proof.score) { proofDone = s.proof; break; }
+      const seen = JSON.stringify([s?.proof?.status, s?.proof?.progress, s?.thread?.length]);
+      if (seen !== lastSeen) { lastSeen = seen; lastProgress = Date.now(); }
+      if (Date.now() - lastProgress > PROOF_STALL_MS) break;
+      await page.waitForTimeout(200);
+    }
+  }
+  const score = proofDone?.score;
+  check('11-proof-run', 'the Proof Run finishes (store: proof.status done)', !!proofDone, { detail: proofDone ? `${((Date.now() - tProof) / 1000).toFixed(1)} s` : `stalled: ${JSON.stringify((await state(page))?.proof)}` });
+  check('11-proof-run', 'score: 8/8 answered from the files, 3/3 probes refused', !!score && score.answered === 8 && score.total === 8 && score.refused === 3 && score.probes === 3, { detail: JSON.stringify(score) });
+  const sc = await page.waitForFunction(() => { const c = document.querySelector('#st-log [data-card="scorecard"]'); return c && /8\/8/.test(c.innerText) && /3\/3/.test(c.innerText); }, null, { timeout: 8000 }).then(() => true).catch(() => false);
   const scText = await page.evaluate(() => document.querySelector('#st-log [data-card="scorecard"]')?.innerText || '');
   check('11-proof-run', 'scorecard shows 8/8 and 3/3', sc, { detail: scText.replace(/\s+/g, ' ').slice(0, 160) });
-  await page.waitForTimeout(600);
+  await builderIdle(page);   // the proof_done turn (price, strip, next chips) is over
   {
     const price11 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);
     check('11-proof-run', 'price goes solid at the Proof Run (the peak)', price11 === 'solid' || price11 === undefined, { detail: price11 });
@@ -513,7 +599,7 @@ async function journey(browser, dev, cell) {
   await shot(page, cell, '11-proof-run');
 
   // 12 make it yours → launch card
-  await page.waitForTimeout(1500);   // let the proof_done turn finish
+  await builderIdle(page);
   await builderSay(page, cell, 'launch');
   const nMiy = await page.evaluate(() => (document.querySelector('#st-log')?.innerText.match(/only knows our sample files/gi) || []).length);
   const miy = await page.waitForFunction((n) => (document.querySelector('#st-log')?.innerText.match(/only knows our sample files/gi) || []).length > n, nMiy, { timeout: 12000 }).then(() => true).catch(() => false);
@@ -525,7 +611,10 @@ async function journey(browser, dev, cell) {
   if (miyShown) {
     const nCards = await page.evaluate(() => document.querySelectorAll('#st-log .co-miy').length);
     await builderSay(page, cell, 'how much to launch?');
-    await page.waitForTimeout(2500);
+    // the turn is over when the person's line is in the log and the Builder is idle again
+    await page.waitForFunction(() => [...document.querySelectorAll('#st-log .st-msg-u')].some((m) => /how much to launch\?/.test(m.textContent)), null, { timeout: 5000 }).catch(() => null);
+    await builderIdle(page);
+    await settled(page, 600);
     const after = await page.evaluate(() => document.querySelectorAll('#st-log .co-miy').length);
     check('12-make-it-yours', 'price question re-surfaces Make it yours (no second card)', after === nCards, { detail: `${nCards} -> ${after}` });
   }
@@ -545,7 +634,7 @@ async function journey(browser, dev, cell) {
     return /\$549/.test(text) && /For comparison/i.test(text);
   }, null, { timeout: 20000 }).then(() => true).catch(() => false);
   check('12-make-it-yours', 'LaunchCard with $549 and the anchor line', launchCard);
-  await page.waitForTimeout(900);
+  await settled(page, 900);
   await shot(page, cell, '12-make-it-yours');
 
   // 13 checkout
@@ -562,7 +651,8 @@ async function journey(browser, dev, cell) {
   if (await cta.count()) await press(cta, 'Launch CTA');
   const sheet = await page.waitForFunction(() => { const d = document.querySelector('#co-modal-slot [role="dialog"]'); return !!d && d.offsetParent !== null; }, null, { timeout: 6000 }).then(() => true).catch(() => false);
   check('13-checkout', 'checkout sheet open', sheet);
-  await page.waitForTimeout(700);
+  await page.waitForFunction(() => document.activeElement?.type === 'email', null, { timeout: 3000 }).catch(() => null);
+  await settled(page, 700);
   const behind = await page.evaluate(() => {
     const app = document.querySelector('#st-app').getBoundingClientRect();
     const cands = [...document.querySelectorAll('#co-modal-slot *')].filter((el) => { const r = el.getBoundingClientRect(); return r.width >= innerWidth * .95 && r.height >= innerHeight * .95; });
@@ -851,27 +941,72 @@ async function storeJourney(browser, dev, cell) {
 const speed = Number(process.env.FAKE_SPEED || 4) || 4;
 // SMOKE_CELLS=mobile-light-full,desktop-dark-full runs a subset (local iteration); the default is every cell
 const RUN = process.env.SMOKE_CELLS ? CELLS.filter((c) => process.env.SMOKE_CELLS.split(',').map((x) => x.trim()).includes(c.name)) : CELLS;
-log(`Studio smoke · FAKE_SPEED=${speed} · cells: ${RUN.map((c) => c.name).join(', ')}`);
-await fsp.mkdir(SCREENS, { recursive: true });
-const browser = await chromium.launch(process.env.HEADED ? { headless: false } : {});
-try {
-  for (const cell of RUN) {
-    // One dev server per cell: the per-IP rate limits (6 trials/h, 20 Builder turns/min) are real, and every cell
-    // comes from 127.0.0.1, so sharing a server would test the limiter instead of the journey.
-    // storeRowsShown 2: the fake store's 4 products exceed the server's row cap, so the Sources group's own search runs
-    // the checkout sheet is what step 13 checks; the KnowDrive account step before it has its own smoke (kd-smoke.mjs)
-    const dev = await startDevServer({ speed, studio: { storeRowsShown: 2 }, env: { KNOWBOT_KD_ACCOUNTS: 'off' } });
-    log(`  ${dev.studioUrl}`);
-    try { await journey(browser, dev, cell); await storeJourney(browser, dev, cell); }
-    catch (e) { results.push({ cell: cell.name, step: 'crash', name: e.message, ok: false, soft: false, detail: '' }); log(`  [FAIL] crash ${e.stack}`); }
-    finally { await dev.close(); }
+const CHILD = args.includes('--child');   // one cell, started by the parent run below
+const RESULTS_FILE = (args.find((a) => a.startsWith('--results=')) || '').slice(10);
+const FREE_GB = os.freemem() / 2 ** 30;   // on Linux: the memory available to new work
+const DEFAULT_CONCURRENCY = FREE_GB >= 6 ? 5 : FREE_GB >= 3 ? 3 : 1;
+const CONCURRENCY = Math.max(1, Math.floor(Number((args.find((a) => a.startsWith('--concurrency=')) || '').slice(14) || process.env.SMOKE_CONCURRENCY || DEFAULT_CONCURRENCY)) || DEFAULT_CONCURRENCY);
+
+/** One cell after another in this process: one browser, one dev server per cell. */
+async function runHere(cells) {
+  const browser = await chromium.launch(process.env.HEADED ? { headless: false } : {});
+  try {
+    for (const cell of cells) {
+      // One dev server per cell: the per-IP rate limits (6 trials/h, 20 Builder turns/min) are real, and every cell
+      // comes from 127.0.0.1, so sharing a server would test the limiter instead of the journey.
+      // storeRowsShown 2: the fake store's 4 products exceed the server's row cap, so the Sources group's own search runs
+      // the checkout sheet is what step 13 checks; the KnowDrive account step before it has its own smoke (kd-smoke.mjs)
+      const dev = await startDevServer({ speed, studio: { storeRowsShown: 2 }, env: { KNOWBOT_KD_ACCOUNTS: 'off' } });
+      log(`  ${dev.studioUrl}`);
+      try { await journey(browser, dev, cell); await storeJourney(browser, dev, cell); }
+      catch (e) { results.push({ cell: cell.name, step: 'crash', name: e.message, ok: false, soft: false, detail: '' }); log(`  [FAIL] crash ${e.stack}`); }
+      finally { await dev.close(); }
+    }
+  } finally {
+    await browser.close();
   }
-} finally {
-  await browser.close();
 }
+
+/** Each cell in its own process (own dev server on a random port, own browser, own results file), `n` at a time. */
+async function runSideBySide(cells, n) {
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-smoke-run-'));
+  const pass = args.filter((a) => a === '--quick' || a === '--update-screens');
+  const queue = [...cells];
+  const one = (cell) => new Promise((resolve) => {
+    const file = path.join(tmp, `${cell.name}.json`);
+    const t0 = Date.now();
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--child', `--cell=${cell.name}`, `--results=${file}`, ...pass], { env: { ...process.env, SMOKE_OUT: SCREENS, SMOKE_CELLS: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('close', async (code, signal) => {
+      let got = null;
+      try { got = JSON.parse(await fsp.readFile(file, 'utf8')).results; } catch { got = null; }
+      process.stdout.write(out.replace(/^Studio smoke · .*\n/, '').replace(/\nSmoke: [^\n]*\n(?:  FAIL [^\n]*\n)*$/, '\n'));
+      if (!got) results.push({ cell: cell.name, step: 'crash', name: `the cell's process ended without results (exit ${code}${signal ? `, signal ${signal}` : ''}; a SIGKILL usually means out of memory: lower SMOKE_CONCURRENCY)`, ok: false, soft: false, detail: out.slice(-400) });
+      else results.push(...got);
+      log(`--- ${cell.name} finished in ${((Date.now() - t0) / 1000).toFixed(0)} s${got ? '' : ' (crashed)'}`);
+      resolve();
+    });
+  });
+  const worker = async () => { for (let c = queue.shift(); c; c = queue.shift()) await one(c); };
+  try { await Promise.all(Array.from({ length: Math.min(n, cells.length) }, worker)); }
+  finally { await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {}); }
+}
+
+const tRun = Date.now();
+const sideBySide = !CHILD && RUN.length > 1 && CONCURRENCY > 1 && !process.env.HEADED;
+log(`Studio smoke · FAKE_SPEED=${speed} · cells: ${RUN.map((c) => c.name).join(', ')}${sideBySide ? ` · ${Math.min(CONCURRENCY, RUN.length)} at a time (${FREE_GB.toFixed(1)} GB free)` : ''}`);
+await fsp.mkdir(SCREENS, { recursive: true });
+if (sideBySide) await runSideBySide(RUN, CONCURRENCY);
+else await runHere(RUN);
 const hard = results.filter((r) => !r.ok && !r.soft);
 const soft = results.filter((r) => !r.ok && r.soft);
 log(`\nSmoke: ${results.length - hard.length - soft.length} passed · ${soft.length} warnings · ${hard.length} failed`);
 for (const r of hard) log(`  FAIL ${r.cell} ${r.step} ${r.name} ${r.detail ? '· ' + r.detail.slice(0, 200) : ''}`);
-await fsp.writeFile(path.join(SCREENS, 'results.json'), JSON.stringify({ at: new Date().toISOString(), speed, results }, null, 2));
+if (CHILD) { if (RESULTS_FILE) await fsp.writeFile(RESULTS_FILE, JSON.stringify({ results })); }
+else {
+  await fsp.writeFile(path.join(SCREENS, 'results.json'), JSON.stringify({ at: new Date().toISOString(), speed, results }, null, 2));
+  log(`${((Date.now() - tRun) / 1000).toFixed(0)} s · screenshots and results.json: ${SCREENS}${UPDATE_SCREENS ? ' (tracked: review and commit them)' : ''}`);
+}
 process.exit(hard.length ? 1 : 0);

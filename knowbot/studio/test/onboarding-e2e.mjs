@@ -7,7 +7,7 @@
 //   npm run onboarding:e2e -- --live        # PRODUCTION, safe steps only: a new visitor up to the real KnowDrive sign-in
 //                                           # window opened by Launch. Never submits a form on knowdrive.ai, never pays.
 //   ... --only=desktop | --only=phone       # one viewport
-//   OUT=/some/dir                           # default /tmp/onboarding/<local|live>
+//   OUT=/some/dir                           # default <temp dir>/knowbot-smoke/onboarding/<local|live>
 //
 // Every step records: a screenshot (OUT/<viewport>/NN-step.png), console errors, failed requests (4xx/5xx), layout
 // problems (horizontal scroll, covered or clipped controls, primary buttons off screen), axe (serious/critical WCAG
@@ -18,6 +18,7 @@ import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { outDir } from './smoke-util.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -26,7 +27,7 @@ const args = process.argv.slice(2);
 const LIVE = args.includes('--live');
 const ONLY = (args.find((a) => a.startsWith('--only=')) || '').slice(7);
 const MODE = LIVE ? 'live' : 'local';
-const OUT = process.env.OUT || path.join('/tmp/onboarding', MODE);
+const OUT = outDir(path.join('onboarding', MODE), process.env.OUT);
 const STUDIO_LIVE = process.env.LIVE_STUDIO_URL || 'https://knowbot.knowdrive.ai/studio/';
 const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 const NOT_IN_DATA = "Looks like we don't have that in our files.";

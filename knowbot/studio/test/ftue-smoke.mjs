@@ -25,11 +25,12 @@ import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
+import { outDir } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
-const SHOTS = process.env.SHOTS || path.join(os.tmpdir(), 'kb-ftue-shots');
+const SHOTS = outDir('ftue', process.env.SHOTS);
 
 const args = process.argv.slice(2);
 const want = args.filter((a) => a.startsWith('--cell=')).map((a) => a.slice(7));

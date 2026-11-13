@@ -11,7 +11,7 @@
 //   - a website import: the hosted link shows the overlay over the store's own homepage in a frame;
 //   - the Studio: See it as → Site (the overlay over the homepage, × works) and the Set up card (line, options, publish).
 //
-//   node studio/test/site-smoke.mjs                 # screenshots to studio/test/screens/site/ (not committed)
+//   node studio/test/site-smoke.mjs                 # screenshots to a temp folder (--update-screens: studio/test/screens/site/)
 //   SITE_SHOTS=/some/dir node studio/test/site-smoke.mjs
 import http from 'node:http';
 import path from 'node:path';
@@ -19,6 +19,7 @@ import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
+import { outDir } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
@@ -27,7 +28,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** The overlay heading's name: its text, or its logo's alt text (the logo replaces the name under the wave). */
 const headName = (loc) => loc.evaluate((el) => el.querySelector('.brandlogo')?.alt || el.textContent.trim());
-const SHOTS = process.env.SITE_SHOTS || path.join(__dirname, 'screens', 'site');
+const SHOTS = outDir('site', process.env.SITE_SHOTS);
 const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const CONTACT = '# Contact us\n\nCall us on (555) 123-4567 for help with an order.\n\nEmail help@lumen.example and we reply within one business day.\n\nThe shop is open Monday to Friday, 9am to 5pm.\n';

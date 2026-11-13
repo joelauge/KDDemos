@@ -17,11 +17,12 @@ import { promises as fsp } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { startDevServer, DEV_CHANNEL_SECRETS } from './dev-server.mjs';
+import { outDir } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
-const SHOTS = process.env.SHOTS || path.join(os.tmpdir(), 'kb-leads-shots');
+const SHOTS = outDir('leads', process.env.SHOTS);
 const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 const CSV_HEAD = 'timestamp,bot,channel,type,email,phone,question,utm_source,utm_medium,utm_campaign,click_id,clicked_at,checkout_items,consent,session';
 

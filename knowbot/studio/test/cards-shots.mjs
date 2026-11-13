@@ -1,16 +1,17 @@
 // Product cards in the Studio chat: imports the dev server's fake store, asks product questions and saves screenshots
-// (desktop light, desktop dark, phone). Usage: node studio/test/cards-shots.mjs [outDir]   (default studio/test/screens/cards)
+// (desktop light, desktop dark, phone). Usage: node studio/test/cards-shots.mjs [outDir]   (default: a temp folder; --update-screens: studio/test/screens/cards)
 // Fakes only (dev-server.mjs): nothing reaches a real store, knowDrive or model.
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
+import { outDir } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
-const OUT = path.resolve(process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), 'screens', 'cards'));
+const OUT = outDir('cards', process.argv.slice(2).find((x) => !x.startsWith('--')));
 const QUESTIONS = ['How much is the Commuter Lite?', 'How much are the Trail Pro, the Kids 20 and the Gravel X?', 'Compare the Kids 20 and the Gravel X prices', 'Is the Gravel X in stock?', 'What bikes do you sell and how much are they?'];
 
 const sse = async (res) => (await res.text()).split('\n\n').map((fr) => { const e = /^event: (.*)$/m.exec(fr)?.[1]; const d = /^data: (.*)$/m.exec(fr)?.[1]; try { return e ? { event: e, data: JSON.parse(d) } : null; } catch { return null; } }).filter(Boolean);

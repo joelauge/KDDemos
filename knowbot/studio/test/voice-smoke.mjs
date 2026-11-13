@@ -19,7 +19,7 @@
 //   - the Studio's Voice settings (Set up): the voice picker (30 voices, Kore by default), the reply language, the
 //     message-taking switch, and the hand-off number and hours (a bad number is refused in words), each saved to the spec.
 //
-//   node studio/test/voice-smoke.mjs                    # screenshots to studio/test/screens/voice/ (not committed)
+//   node studio/test/voice-smoke.mjs                    # screenshots to a temp folder (--update-screens: studio/test/screens/voice/)
 //   VOICE_SHOTS=/some/dir node studio/test/voice-smoke.mjs
 import path from 'node:path';
 import os from 'node:os';
@@ -28,12 +28,13 @@ import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
+import { outDir } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SHOTS = process.env.VOICE_SHOTS || path.join(__dirname, 'screens', 'voice');
+const SHOTS = outDir('voice', process.env.VOICE_SHOTS);
 const PRESETS = ['ocean', 'violet', 'sunset', 'mint', 'ruby', 'midnight', 'silver'];
 let failed = 0;
 const check = (cell, name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${cell} ${name}${detail ? ` · ${String(detail).slice(0, 300)}` : ''}`); return ok; };
