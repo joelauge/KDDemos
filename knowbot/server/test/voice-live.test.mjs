@@ -16,7 +16,7 @@ import { twilioSignature, NOT_IN_DATA } from '../channels/util.mjs';
 import { acceptWebSocket } from '../channels/ws.mjs';
 import {
   mulawDecode, mulawEncode, twilioToGemini, createTwilioToGemini, createGeminiToTwilio, issueStreamToken, claimStreamToken, createToolRunner,
-  systemInstruction, toolDeclarations, sendInfoDeclaration, MAX_TEXTS_PER_CALL, hasFigure, phoneLimits, phoneSessions,
+  systemInstruction, toolDeclarations, sendInfoDeclaration, MAX_TEXTS_PER_CALL, hasFigure, phoneLimits, phoneSessions, transferTwiml,
 } from '../channels/voice-live.mjs';
 import { createShop, toE164, handleInText, shopDomainFor, textableNumber, describeLines, MAX_LINK_ITEMS } from '../channels/shop.mjs';
 import { phoneEngine, PHONE_NOT_SET_UP } from '../channels/voice.mjs';
@@ -398,11 +398,12 @@ describe('voice-live: prompt, tools, product links', () => {
     const run = createToolRunner({ ask, callSid: 'CA8', callerNumber: PHONE, sendSms: async (to, body) => { texts.push({ to, body }); }, shopDomain: `${F.url}/shop`, org: 'Acme' });
     const s = await run({ name: 'search_knowledge_base', args: { query: 'How much is the dice tray?' } });
     assert.equal(s.status, 'ok');
-    assert.equal(s.say, 'The magnetic dice tray is $29.99.', 'just the answer: no spoken attribution');
-    // only what to say and where it came from: no raw excerpts or page addresses the model could read beyond the answer
-    assert.deepEqual(Object.keys(s).sort(), ['say', 'source_titles', 'status']);
+    assert.equal(s.answer, 'The magnetic dice tray is $29.99.', 'just the answer: no spoken attribution');
+    // only what to say, its exact facts and where it came from: no raw excerpts or page addresses the model could read beyond the answer
+    assert.deepEqual(Object.keys(s).sort(), ['answer', 'facts', 'source_titles', 'status']);
+    assert.deepEqual(s.facts, ['$29.99']);
     assert.deepEqual(s.source_titles, ['Magnetic Dice Tray']);
-    assert.deepEqual(await run({ name: 'search_knowledge_base', args: { query: OFF } }), { status: 'not_in_data', say: NOT_IN_DATA });
+    assert.deepEqual(await run({ name: 'search_knowledge_base', args: { query: OFF } }), { status: 'not_in_data', say: NOT_IN_DATA, next: 'offer_other_help' });
     assert.deepEqual(asked, ['How much is the dice tray?', OFF]);
     // by name: the handle comes from what this call's searches cited
     const sent = await run({ name: 'send_product_link', args: { product: 'the magnetic dice tray' } });
@@ -511,6 +512,42 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
         send({ serverContent: { turnComplete: true } });
         return;
       }
+      if (m === 'transfer') {
+        await next('text');
+        const call = toolCall(send, next, s);
+        send({ serverContent: { inputTranscription: { text: 'Can I talk to a person?' } } });
+        s.ask = await call('tr0', 'transfer_call', { caller_agreed: false });
+        s.ok = await call('tr1', 'transfer_call', { caller_agreed: true, reason: 'asked for a person' });
+        send({ serverContent: { outputTranscription: { text: 'Sure, connecting you now.' }, modelTurn: { parts: [{ inlineData: { data: pcm24k(600).toString('base64') } }] } } });
+        send({ serverContent: { turnComplete: true } });
+        return;
+      }
+      if (m === 'callback') {
+        await next('text');
+        const call = toolCall(send, next, s);
+        send({ serverContent: { inputTranscription: { text: 'Can someone call me back?' } } });
+        s.closedHours = await call('cb0', 'transfer_call', { caller_agreed: true });
+        s.rb = await call('cb1', 'take_message', { kind: 'callback', name: 'Ann', question: 'Talk about a bulk order', preferred_time: 'tomorrow morning' });
+        s.saved = await call('cb2', 'take_message', { kind: 'callback', name: 'Ann', question: 'Talk about a bulk order', preferred_time: 'tomorrow morning', confirmed: true });
+        await call('cb3', 'end_call', {});
+        send({ serverContent: { turnComplete: true } });
+        return;
+      }
+      if (m === 'facts') {
+        await next('text');
+        // a grounded answer, then the model says a figure that is in no fact (45): measured and flagged, never unsaid
+        send({ serverContent: { inputTranscription: { text: Q } } });
+        await toolCall(send, next, s)('f1', 'search_knowledge_base', { query: Q });
+        send({ serverContent: { outputTranscription: { text: 'You have 45 days to return it.' } } });
+        send({ serverContent: { turnComplete: true } });
+        send({ serverContent: { inputTranscription: { text: 'And the refund?' } } });
+        await toolCall(send, next, s)('f2', 'search_knowledge_base', { query: 'How long does a refund take?' });
+        send({ serverContent: { outputTranscription: { text: "Refunds go back to your card within five business days. Want the details?" } } });
+        send({ serverContent: { turnComplete: true } });
+        await toolCall(send, next, s)('f3', 'end_call', {});
+        send({ serverContent: { turnComplete: true } });
+        return;
+      }
       const hello = await next('text');
       toolResponses.push({ hello: hello.realtimeInput.text });
       const call = async (id, name, args) => {
@@ -573,7 +610,7 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     assert.match(s.setup.model, /^models\/gemini-3\.8-live$/);
     assert.deepEqual(s.setup.generationConfig.responseModalities, ['AUDIO']);
     assert.match(s.setup.systemInstruction.parts[0].text, /You are Front Desk/);
-    assert.deepEqual(s.setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'send_product_link', 'send_info', 'end_call']);
+    assert.deepEqual(s.setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'send_product_link', 'send_info', 'take_message', 'end_call']);
     assert.equal(toolResponses[0].hello, "[call connected] Caller's number ends in 0199.");
     // caller audio reached Gemini as 16 kHz PCM
     const audio = s.received.find((m) => m.realtimeInput?.audio);
@@ -583,10 +620,12 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     const [, t1, t2, t3, t4, t5] = toolResponses;
     assert.equal(t1.id, 't1');
     assert.equal(t1.response.status, 'ok');
-    assert.match(t1.response.say, /^You can return any unused item within 30 days/);
+    assert.match(t1.response.answer, /^You can return any unused item within 30 days/);
     assert.deepEqual(t1.response.source_titles, ['Returns Policy']);
     assert.equal(t1.response.sources, undefined, 'no raw excerpts reach the model');
-    assert.deepEqual(t2.response, { status: 'not_in_data', say: NOT_IN_DATA });
+    assert.equal(t2.response.status, 'not_in_data');
+    assert.equal(t2.response.say, NOT_IN_DATA);
+    assert.ok(['offer_related', 'offer_message'].includes(t2.response.next), t2.response.next);
     // product link texted through Twilio with attribution; sold out refused
     assert.equal(t3.response.status, 'ok');
     assert.equal(t3.response.sent_to_last_four, '0199');
@@ -748,6 +787,68 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
     } finally { await setBot({ on: true, email: true, text: true }); mode.current = 'full'; }
   });
 
+  test('hand-off (U6): in business hours the caller is transferred only after a yes, once the line has played (TwiML <Dial> on the call)', async () => {
+    const setVoice = async (voiceSetup) => assert.equal((await S.api('/api/instances/front-desk', { method: 'PATCH', headers: { authorization: 'Bearer dev-admin', 'content-type': 'application/json' }, body: JSON.stringify({ voiceSetup }) })).status, 200);
+    const bad = await S.api('/api/instances/front-desk', { method: 'PATCH', headers: { authorization: 'Bearer dev-admin', 'content-type': 'application/json' }, body: JSON.stringify({ voiceSetup: { transfer: { number: '555-01' } } }) });
+    assert.equal(bad.status, 400, 'a transfer number must be a full number');
+    await setVoice({ voice: 'Puck', transfer: { number: '+14155550123', timezone: 'UTC', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], start: '00:00', end: '23:59' } });
+    mode.current = 'transfer';
+    const at = G.sessions.length;
+    try {
+      const c = await startCall(S, 'front-desk', 'CA60');
+      await until(() => c.closeCode != null, 15000, 'the call to leave the stream');
+      const s = G.sessions[at];
+      assert.ok(!s.error, s.error?.stack);
+      assert.equal(s.setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, 'Puck', 'the bot\'s own voice');
+      assert.ok(s.setup.tools[0].functionDeclarations.some((f) => f.name === 'transfer_call'));
+      assert.match(s.setup.systemInstruction.parts[0].text, /Never transfer without a clear yes/);
+      assert.equal(s.ask.status, 'ask_first', 'no transfer without the caller agreeing');
+      assert.equal(s.ok.status, 'ok');
+      assert.ok(c.got.some((m) => m.event === 'mark' && /^transfer-\d+$/.test(m.mark.name)), 'the transfer waits for the line to play');
+      const tr = F.calls.find((x) => x.path === '/twilio/2010-04-01/Accounts/AC1/Calls/CA60.json');
+      assert.ok(tr, 'the call is updated through the REST API');
+      assert.equal(tr.form.Twiml, '<?xml version="1.0" encoding="UTF-8"?><Response><Dial answerOnBridge="true">+14155550123</Dial></Response>');
+      assert.equal(tr.form.Status, undefined, 'a transfer, not a hang-up');
+      assert.throws(() => transferTwiml('+1 415 <Dial>'), /E\.164/);
+    } finally { mode.current = 'full'; }
+    // outside business hours: no transfer tool, a callback request instead (a lead with the phone number and time)
+    await setVoice({ transfer: { number: '+14155550123', timezone: 'UTC', days: [], start: '09:00', end: '17:00' } });
+    mode.current = 'callback';
+    const at2 = G.sessions.length;
+    try {
+      const c = await startCall(S, 'front-desk', 'CA61', '+14155550161');
+      await until(() => c.closeCode != null, 15000, 'the call to end');
+      const s = G.sessions[at2];
+      assert.ok(!s.error, s.error?.stack);
+      assert.ok(!s.setup.tools[0].functionDeclarations.some((f) => f.name === 'transfer_call'), 'out of hours: no transfer tool');
+      assert.match(s.setup.systemInstruction.parts[0].text, /offer a callback/);
+      assert.equal(s.closedHours.status, 'unavailable');
+      assert.equal(s.rb.status, 'confirm_first');
+      assert.equal(s.rb.read_back, 'the number ending in zero one six one', 'the caller ID, read back by its last four');
+      assert.equal(s.saved.status, 'ok');
+      const rep = await S.kb.leads.report(['front-desk'], { days: 7 });
+      const lead = rep.leads.find((l) => l.consent === 'callback_request');
+      assert.ok(lead, JSON.stringify(rep.leads));
+      assert.equal(lead.value, '+14155550161');
+      assert.equal(lead.channel, 'phone');
+      assert.match(lead.question, /Asked: Talk about a bulk order · Name: Ann · Call back: tomorrow morning/);
+      assert.equal(lead.consentLabel, 'Asked for a callback (voice)');
+    } finally { mode.current = 'full'; await setVoice(null); }
+  });
+
+  test('facts guard (N2): a figure the bot said that is in no fact is logged with a ref and flagged; a backed one (five = 5) is not', async () => {
+    mode.current = 'facts';
+    try {
+      const c = await startCall(S, 'front-desk', 'CA62', '+14155550162');
+      await until(() => c.closeCode != null, 15000, 'the call to end');
+    } finally { mode.current = 'full'; }
+    const line = S.logs.find((l) => /\[voice-live\] CA62 facts guard ref=[0-9a-f]+: said 45 not in the facts/.test(l));
+    assert.ok(line, S.logs.filter((l) => /CA62/.test(l)).join('\n'));
+    assert.equal(S.logs.filter((l) => /CA62 facts guard/.test(l)).length, 1, 'the refund turn says "five", which the facts back');
+    const flagged = await until(async () => { await flushQuestions(); const f = [...S.kd.files.values()].filter((x) => x.tags.includes('flag:unsupported_figure')); return f.length ? f : null; }, 5000, 'a flagged turn');
+    assert.match(flagged[0].text, /said 45 not in the facts/);
+  });
+
   test('launch: a Shopify-imported trial keeps texted links on its launched bot; SHOP_DOMAIN never reaches an unrelated bot', async () => {
     const admin = { authorization: 'Bearer dev-admin', 'content-type': 'application/json' };
     for (const name of ['Shop Bot', 'Clinic']) assert.equal((await S.api('/api/instances', { method: 'POST', headers: admin, body: JSON.stringify({ name, buckets: ['acme'] }) })).status, 201);
@@ -772,8 +873,8 @@ describe('voice-live: a phone call through the server (fake Twilio, fake Gemini 
         await c.closed;
       }
       const names = (k) => G.sessions[at + k].setup.tools[0].functionDeclarations.map((f) => f.name);
-      assert.deepEqual(names(0), ['search_knowledge_base', 'send_product_link', 'send_info', 'end_call']);
-      assert.deepEqual(names(1), ['search_knowledge_base', 'send_info', 'end_call']);
+      assert.deepEqual(names(0), ['search_knowledge_base', 'send_product_link', 'send_info', 'take_message', 'end_call']);
+      assert.deepEqual(names(1), ['search_knowledge_base', 'send_info', 'take_message', 'end_call']);
       assert.ok(!/send_product_link/.test(G.sessions[at + 1].setup.systemInstruction.parts[0].text));
     } finally { mode.current = 'full'; }
   });

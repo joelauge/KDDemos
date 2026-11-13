@@ -278,7 +278,11 @@ describe('webvoice: Gemini Live engine', () => {
     assert.equal(seen.hello, '[visitor connected]');
     const setup = G.sessions[0].setup;
     assert.match(setup.systemInstruction.parts[0].text, /call search_knowledge_base/);
-    assert.deepEqual(setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base']);
+    // message-taking is on by default (the server keeps leads); the search runs NON_BLOCKING on this model
+    assert.deepEqual(setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'take_message']);
+    assert.equal(setup.tools[0].functionDeclarations[0].behavior, 'NON_BLOCKING');
+    assert.equal(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, 'Kore', 'the default voice');
+    assert.equal(setup.realtimeInputConfig.automaticActivityDetection.silenceDurationMs, 600);
     assert.deepEqual(setup.generationConfig.responseModalities, ['AUDIO']);
     await until(() => b.audio.length >= 1, 5000, 'greeting audio');
     assert.equal(b.audio[0].length, 4800);
@@ -295,7 +299,11 @@ describe('webvoice: Gemini Live engine', () => {
     assert.ok(cites.proofUrl);
     await until(() => seen.tool, 5000, 'tool response');
     assert.equal(seen.tool.response.status, 'ok');
-    assert.ok(!/According to/.test(seen.tool.response.say), 'the tool gives just the answer');
+    assert.ok(!/According to/.test(seen.tool.response.answer), 'the tool gives just the answer');
+    assert.match(seen.tool.response.answer, /30 days/);
+    assert.ok(seen.tool.response.facts.includes('30 days'), JSON.stringify(seen.tool.response.facts));
+    assert.equal(seen.tool.response.scheduling, 'WHEN_IDLE', 'a NON_BLOCKING search is spoken once the acknowledgement ends');
+    assert.equal(seen.tool.response.on_screen, 'sources', 'the web says it is on screen instead of reading details');
     assert.deepEqual(seen.tool.response.source_titles.length > 0, true, 'and the source titles, for when the visitor asks');
     await until(() => b.json.some((m) => m.type === 'transcript' && m.role === 'agent' && /30 days/.test(m.text)), 5000, 'caption');
     assert.ok(b.json.some((m) => m.type === 'transcript' && m.role === 'user' && m.text === Q));
@@ -355,7 +363,7 @@ describe('webvoice: phone mode (the Studio phone simulator)', () => {
     const setup = G.sessions[0].setup;
     assert.match(setup.systemInstruction.parts[0].text, /phone assistant/);
     assert.doesNotMatch(setup.systemInstruction.parts[0].text, /send_product_link/);
-    assert.deepEqual(setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'end_call']);
+    assert.deepEqual(setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'take_message', 'end_call']);
     b.send({ type: 'text', text: "That's all, thanks. Bye!" });
     await b.wait('hangup', 5000);
     await until(() => seen.hang, 5000, 'end_call response');
@@ -372,7 +380,7 @@ describe('webvoice: phone mode (the Studio phone simulator)', () => {
     const ready = await b.wait('ready');
     assert.equal(ready.mode, 'web');
     await until(() => G.sessions.length > n, 5000, 'session');
-    assert.deepEqual(G.sessions[n].setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base']);
+    assert.deepEqual(G.sessions[n].setup.tools[0].functionDeclarations.map((f) => f.name), ['search_knowledge_base', 'take_message']);
     b.send({ type: 'stop' });
     await b.closed;
   });
@@ -401,17 +409,17 @@ describe('webvoice: "Send me this" switched per bot (Gemini Live engine)', () =>
   };
   test('on by default: the tool and the offer; off: neither, and a plain "doesn\'t send messages"; email only: the tool, email only', async () => {
     const on = await session();
-    assert.deepEqual(on.tools, ['search_knowledge_base', 'send_info']);
+    assert.deepEqual(on.tools, ['search_knowledge_base', 'send_info', 'take_message']);
     assert.match(on.ready.greeting, /I can send you/);
     await setBot({ on: false });
     const off = await session();
-    assert.deepEqual(off.tools, ['search_knowledge_base']);
+    assert.deepEqual(off.tools, ['search_knowledge_base', 'take_message'], 'taking a message is a lead, not a send: the Send me this switch leaves it on');
     assert.doesNotMatch(off.ready.greeting, /I can send you/);
     assert.match(off.prompt, /This bot doesn't send messages/);
     assert.doesNotMatch(off.prompt, /send_info/);
     await setBot({ on: true, text: false });
     const mail = await session();
-    assert.deepEqual(mail.tools, ['search_knowledge_base', 'send_info']);
+    assert.deepEqual(mail.tools, ['search_knowledge_base', 'send_info', 'take_message']);
     assert.match(mail.prompt, /Texts aren't available here; offer an email instead/);
     await setBot({ on: true, email: true, text: true });
   });

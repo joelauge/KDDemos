@@ -142,6 +142,8 @@ export const CONSENT_LABEL = Object.freeze({
   inbound_message: 'Messaged the bot from this number',
   inbound_email: 'E-mailed the bot from this address',
   checkout_link: 'Agreed on the call to be texted a checkout link',
+  left_message: 'Left a message for your team (voice)',
+  callback_request: 'Asked for a callback (voice)',
 });
 
 // ------------------------------------------------------------------ the store
@@ -204,7 +206,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
    * One lead. Inbound contacts (a caller ID, a number that texted, an address that e-mailed) are recorded once per value
    * and channel per day; every "send me this" send is its own lead (each has its own click id). → the event, or null.
    */
-  function lead({ botId, channel = 'web', type = null, value, question = '', cid = null, session = null, consent = 'asked_to_send', via = null, at = null } = {}) {
+  function lead({ botId, channel = 'web', type = null, value, question = '', cid = null, session = null, consent = 'asked_to_send', via = null, at = null, name = null, note = null } = {}) {
     try {
       if (!botId) return null;
       const c = contactOf(value);
@@ -216,7 +218,8 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
         if (dup) return null;
       }
       const ev = { v: 1, kind: 'lead', at: t, bot: campaignOf(botId), channel: String(channel || 'web'), type: c.type, value: c.value, question: oneLine(question).slice(0, 500),
-        cid: cid && CLICK_ID_RE.test(cid) ? cid : null, session: session ? String(session).slice(0, 40) : null, consent, ...(via ? { via } : {}) };
+        cid: cid && CLICK_ID_RE.test(cid) ? cid : null, session: session ? String(session).slice(0, 40) : null, consent, ...(via ? { via } : {}),
+        ...(name ? { name: oneLine(name).slice(0, 80) } : {}), ...(note ? { note: oneLine(note).slice(0, 120) } : {}) };
       append(botId, ev);
       log(`[leads] bot ${ev.bot}: ${c.type} lead (${ev.channel}, ${consent}) h:${hash8(c.value)}`);
       return ev;
@@ -323,7 +326,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     };
     const iso = (t) => (t ? new Date(t).toISOString() : null);
     const leads = all.filter((e) => e.kind === 'lead').map((e) => ({ at: iso(e.at), bot: e.bot, channel: e.channel, type: e.type, value: e.value, question: e.question || '',
-      consent: e.consent, consentLabel: CONSENT_LABEL[e.consent] || '', cid: e.cid || null, session: e.session || null, ...(e.via ? { via: e.via } : {}),
+      consent: e.consent, consentLabel: CONSENT_LABEL[e.consent] || '', cid: e.cid || null, session: e.session || null, ...(e.via ? { via: e.via } : {}), ...(e.name ? { name: e.name } : {}), ...(e.note ? { note: e.note } : {}),
       clickedAt: e.cid ? iso(firstClick.get(e.cid)) : null, clicks: e.cid ? clicksByCid.get(e.cid) || 0 : 0, ...(e.cid ? utmOf(e.cid, e.channel) : {}) })).reverse();
     const sent = all.filter((e) => e.kind === 'checkout').map((e) => ({ at: iso(e.at), bot: e.bot, channel: e.channel, phone: e.phone, items: e.items, itemsText: itemsText(e.items),
       linkKind: e.linkKind, cid: e.cid || null, session: e.session || null, clickedAt: e.cid ? iso(firstClick.get(e.cid)) : null, clicks: e.cid ? clicksByCid.get(e.cid) || 0 : 0,

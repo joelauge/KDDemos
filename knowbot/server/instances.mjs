@@ -8,6 +8,7 @@
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { KnowDriveRetriever } from './retrievers.mjs';
+import { bumpFilesEpoch, cleanVoiceSetup } from './channels/voice-brain.mjs';
 import { combineDigests } from './evidence.mjs';
 import { PROVIDERS, sealKey, openKey, listModels } from './providers.mjs';
 
@@ -66,7 +67,7 @@ function cleanMask(m) {
 }
 
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
-const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'shopDomain', 'numberTrial', 'sendInfo', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
+const BOT_KEYS = ['id', 'flow', 'name', 'org', 'botName', 'greeting', 'instructions', 'provider', 'model', 'answerMode', 'starters', 'guards', 'minSimilarity', 'shopDomain', 'numberTrial', 'sendInfo', 'voiceSetup', 'buckets', 'builtin', 'createdAt', 'updatedAt'];
 const BUCKET_KEYS = ['id', 'flow', 'name', 'tag', 'builtin', 'createdAt', 'updatedAt'];
 const now = () => new Date().toISOString();
 
@@ -148,6 +149,11 @@ function cleanBot(body, { partial = false, models = [] } = {}) {
       }
       out.sendInfo = { on: cur.on !== false, email: cur.email !== false, text: cur.text !== false };
     }
+  }
+  // the live voice settings (server/channels/voice-brain.mjs): {voice, language, takeMessages, transfer}; set at launch
+  if (body.voiceSetup !== undefined) {
+    try { out.voiceSetup = body.voiceSetup === null ? undefined : cleanVoiceSetup(body.voiceSetup, null); }
+    catch (e) { throw new InstanceError(400, `voiceSetup: ${e.message}`); }
   }
   if (body.starters !== undefined) {
     if (!Array.isArray(body.starters)) throw new InstanceError(400, 'starters must be an array of strings');
@@ -773,6 +779,7 @@ export class InstanceRegistry {
 
   /** name may carry folders ("menus/lunch/specials.md"): they become folder tags. */
   async upload(bucketId, name, contentType, bytes) {
+    bumpFilesEpoch(); // cached instant voice answers are stale (voice-brain.mjs)
     this.needKd();
     const b = this.sharedBucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
@@ -796,6 +803,7 @@ export class InstanceRegistry {
 
   /** Moving a file between folders only changes its folder tags. */
   async moveFile(bucketId, fileId, folders) {
+    bumpFilesEpoch(); // cached instant voice answers are stale (voice-brain.mjs)
     this.needKd();
     const b = this.sharedBucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
@@ -810,6 +818,7 @@ export class InstanceRegistry {
   }
 
   async deleteFile(bucketId, fileId) {
+    bumpFilesEpoch(); // cached instant voice answers are stale (voice-brain.mjs)
     this.needKd();
     const b = this.sharedBucket(bucketId);
     if (b.builtin) throw new InstanceError(403, 'the built-in bucket is managed by the corpus sync script');
