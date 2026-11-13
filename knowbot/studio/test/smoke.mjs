@@ -332,7 +332,7 @@ async function journey(browser, dev, cell) {
   // the visitor's view is calm: no match scores, no chip row (they live in Proof view); the DOM still carries the
   // source chips with their match, so the match range is checked from textContent
   const srcText = await page.evaluate(() => [...document.querySelectorAll('#sb-thread-slot .sb-srcrow')].map((r) => r.textContent).join(' '));
-  const matches = [...srcText.matchAll(/match\s*(\d{1,3})/gi)].map((m) => Number(m[1]));
+  const matches = [...srcText.matchAll(/(\d{1,3})%\s*match|match\s*(\d{1,3})/gi)].map((m) => Number(m[1] || m[2]));
   check('05-first-answer', 'source chips carry match 55–99 (Proof view)', matches.some((n) => n >= 55 && n <= 99), { detail: matches.slice(0, 6).join(',') });
   check('05-first-answer', 'bot view shows no match scores', !/match\s*\d{1,3}/i.test(threadText), { detail: threadText.slice(0, 80) });
   // r7: chips are named "<visible text>: citation, atom n" (axe label-content-name-mismatch), so select by data-n
@@ -508,7 +508,7 @@ async function journey(browser, dev, cell) {
     const price11 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);
     check('11-proof-run', 'price goes solid at the Proof Run (the peak)', price11 === 'solid' || price11 === undefined, { detail: price11 });
     const strip = await page.evaluate(() => (document.getElementById('st-prun')?.innerText || '').replace(/\s+/g, ' ').trim());
-    check('11-proof-run', 'proof strip names the test once ("Proof Run 11/11 passed")', !strip || (/Proof Run 11\/11/.test(strip) && (strip.match(/Proof Run/g) || []).length === 1), { soft: true, detail: strip });
+    check('11-proof-run', 'proof strip names the test once ("Tests 11/11 passed")', !strip || (/(?:Proof Run|Tests) 11\/11/.test(strip) && (strip.match(/Proof Run|Tests/g) || []).length === 1), { soft: true, detail: strip });
   }
   await shot(page, cell, '11-proof-run');
 

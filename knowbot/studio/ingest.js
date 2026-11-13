@@ -42,7 +42,8 @@ import { mountWidget, mountRowMenu, gaugeProps } from './kdw.js?v=503d17b';
 const RANK = { rejected: -2, failed: -1, queued: 0, uploading: 1, uploaded: 2, extracted: 3, chunked: 4, atomized: 5, vectorizing: 6, ready: 7 };
 const TERMINAL = new Set(['ready', 'failed', 'rejected']);
 const SERVER_STAGES = new Set(['uploaded', 'extracted', 'chunked', 'atomized', 'vectorizing', 'ready', 'failed']);
-const DOING = { uploading: 'uploading', uploaded: 'extracting', extracted: 'chunking', chunked: 'atomizing', atomized: 'encoding your knowledge', vectorizing: 'encoding your knowledge', queued: 'waiting' };
+// plain words for each stage (onboarding copy audit: no "atomizing", "chunking", "encoding")
+const DOING = { uploading: 'uploading', uploaded: 'reading', extracted: 'reading', chunked: 'reading', atomized: 'making it searchable', vectorizing: 'making it searchable', queued: 'waiting' };
 
 const DEFAULT_TYPES = [
   { kind: 'pdf', ext: ['pdf'] }, { kind: 'docx', ext: ['docx'] }, { kind: 'pptx', ext: ['pptx'] }, { kind: 'xlsx', ext: ['xlsx'] },
@@ -422,7 +423,7 @@ export function mount(ctx) {
   const body = h('div', { class: 'in-body' }, cap, rowsEl);
   // Drag (or arrow-key) the bottom edge to give the file list more or less of the pane; double-click resets.
   const SIZE_KEY = 'kb-studio-sources-h';
-  const sizer = h('div', { class: 'in-sizer', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal', 'aria-label': 'Resize sources', title: 'Drag to resize · double-click to reset' }, h('span', { class: 'in-sizer-grip', 'aria-hidden': 'true' }));
+  const sizer = h('div', { class: 'in-sizer', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal', 'aria-label': 'Resize sources', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', title: 'Drag to resize · double-click to reset' }, h('span', { class: 'in-sizer-grip', 'aria-hidden': 'true' }));
   panel.append(head, tracker, body, sizer, empty, chip, chipDesc);
   intakeSlot.innerHTML = '';
   intakeSlot.append(panel);
@@ -453,7 +454,8 @@ export function mount(ctx) {
   const sizeBounds = () => { const ph = paneOf()?.clientHeight || window.innerHeight; return [120, Math.max(160, ph - 220)]; };
   function applySize(px, save) {
     if (px == null) {
-      intakeSlot.style.removeProperty('--in-user-h'); delete intakeSlot.dataset.userh; sizer.removeAttribute('aria-valuenow');
+      intakeSlot.style.removeProperty('--in-user-h'); delete intakeSlot.dataset.userh;
+      { const [lo, hi] = sizeBounds(); sizer.setAttribute('aria-valuemin', String(lo)); sizer.setAttribute('aria-valuemax', String(hi)); sizer.setAttribute('aria-valuenow', String(Math.round(Math.min(hi, Math.max(lo, intakeSlot.offsetHeight || lo))))); }   // a focusable separator always has a value (axe)
       if (save) { try { localStorage.removeItem(SIZE_KEY); } catch {} }
       return;
     }
@@ -2151,7 +2153,7 @@ export function mount(ctx) {
   // Legend chips are keyed (a count change rewrites one text node, never the whole row). They show only when the
   // Sources rows are folded away (chip) or in the ribbon: next to open rows they would just repeat the file list.
   const legendEls = new Map();
-  const SHORT_DOING = { queued: 'queued', uploading: 'upload', uploaded: 'extract', extracted: 'chunk', chunked: 'atomize', atomized: 'encoding', vectorizing: 'encoding' };
+  const SHORT_DOING = { queued: 'queued', uploading: 'upload', uploaded: 'reading', extracted: 'reading', chunked: 'reading', atomized: 'indexing', vectorizing: 'indexing' };
   // the phone ribbon's fallback when the per-file chips cannot all fit with their counts
   const legendSum = h('span', { class: 'map-chip map-chip-sum', role: 'listitem' }, h('i', { 'aria-hidden': 'true' }), h('span', { class: 'map-chip-c in-num' }));
   let legendOrder = '';
@@ -2308,7 +2310,7 @@ export function mount(ctx) {
     const chunks = files.reduce((acc, f) => acc + (RANK[f.phase] >= RANK.chunked ? Number(f.chunks) || 0 : 0), 0);
     const top = busy.reduce((a, f) => (RANK[f.phase] > RANK[a.phase] ? f : a), busy[0]);
     if (chunks) return `atomizing · ${plural(chunks, 'chunk')}`;
-    return { queued: 'waiting to upload', uploading: 'uploading', uploaded: 'extracting text', extracted: 'chunking' }[top.phase] || 'learning';
+    return { queued: 'waiting to upload', uploading: 'uploading', uploaded: 'reading', extracted: 'reading' }[top.phase] || 'learning';
   }
 
   // ================================================================== rows
@@ -3096,7 +3098,7 @@ export function mount(ctx) {
     const key = `${f.localId}:${f.phase}`;
     if (lastStageSaid.get(f.localId) === key) return;
     lastStageSaid.set(f.localId, key);
-    const word = { uploading: 'uploading', uploaded: 'uploaded, extracting', extracted: 'extracted, chunking', chunked: 'chunked, atomizing', atomized: `${plural(f.atoms || 0, 'atom')}, encoding your knowledge`, vectorizing: 'encoding your knowledge', ready: `ready, ${plural(f.atoms || 0, 'atom')}`, rejected: 'not added' }[f.phase];
+    const word = { uploading: 'uploading', uploaded: 'reading', extracted: 'reading', chunked: 'reading', atomized: 'making it searchable', vectorizing: 'making it searchable', ready: 'ready', rejected: 'not added' }[f.phase];
     if (word && f.phase !== 'failed') say(`${f.name} ${word}`, 'ingest');
   }
 

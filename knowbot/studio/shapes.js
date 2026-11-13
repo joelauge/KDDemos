@@ -82,7 +82,7 @@ function richText(text, { bold = false } = {}) {
 export function mountShapes(selectorHost, frameHost, o = {}) {
   const getState = o.getState || (() => ({}));
   const base = String(o.base || location.origin).replace(/\/+$/, '');
-  const botName = () => getState().spec?.name || 'Your bot';
+  const botName = () => { const n = getState().spec?.name; return n && n !== 'SampleBot' ? n : 'Your bot'; };
   const chosen = () => new Set((getState().spec?.surfaces || []).map((x) => SHAPE_OF_SURFACE[x]).filter(Boolean));
   const st = { shape: 'webchat', dev: null, devP: null, live: null, destroyed: false };
 

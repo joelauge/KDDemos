@@ -727,6 +727,28 @@ describe('KnowBot Studio server (trials.mjs)', () => {
     assert.deepEqual(hello.data.files.map((f) => f.id), [own.file.id]);
   });
 
+  test('onboarding: a launched bot outlives the 7-day trial (old token, restore link and same-browser reuse keep working)', async () => {
+    const t = await c.trial();
+    await c.upload(t, 'own.md', Buffer.from('# Own\n\nOur own document about returns.\n'));
+    const live = await c.trial();
+    await c.upload(live, 'own.md', Buffer.from('# Own\n\nOur own document about returns.\n'));
+    const r = await S.api(`/api/studio/trials/${live.trialId}/convert`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer dev-admin', 'x-forwarded-for': nextIp() }, body: JSON.stringify({ account: 'acct9', bucketId: 'live9' }) });
+    assert.equal(r.status, 200);
+    S.clock.skew = 8 * DAY;
+    try {
+      assert.equal((await c.json(t, '')).status, 401, 'an unlaunched trial still expires');
+      const g = await c.json(live, '');
+      assert.equal(g.status, 200, 'the launched bot opens with its old token');
+      const j = await g.json();
+      assert.equal(j.converted, true);
+      assert.ok(j.token && Date.parse(j.expiresAt) > Date.now() + 365 * DAY, 'a long-lived token comes back');
+      const rs = await S.api(`/api/studio/trials/${live.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': nextIp() }, body: JSON.stringify({ k: live.restoreKey }) });
+      assert.equal(rs.status, 200, 'the restore link still opens it on another device');
+      const rt = await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': nextIp() }, body: JSON.stringify({ k: t.restoreKey }) });
+      assert.equal(rt.status, 410, 'an expired trial link says it expired');
+    } finally { S.clock.skew = 0; }
+  });
+
   test('r2: convert pushes a reset snapshot so an open Studio drops the sample rows at once', async () => {
     const t = await c.trial();
     await c.json(t, '/samples', 'POST', { set: 'lumen-bikes' });

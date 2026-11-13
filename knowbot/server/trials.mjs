@@ -1403,7 +1403,7 @@ export function createStudio(o = {}) {
     const payload = b64u(JSON.stringify({ t: trialId, e: expiresAt }));
     return `${payload}.${b64u(createHmac('sha256', secret).update(payload).digest())}`;
   }
-  function verifyToken(token, trialId) {
+  function verifyToken(token, trialId, { allowExpired = false } = {}) {
     const [payload, sig] = String(token || '').split('.');
     if (!payload || !sig) fail(401, 'unauthorized', 'A trial token is required.');
     const want = createHmac('sha256', secret).update(payload).digest();
@@ -1413,9 +1413,14 @@ export function createStudio(o = {}) {
     let data;
     try { data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { fail(401, 'unauthorized', 'This trial token is not valid.'); }
     if (data.t !== trialId) fail(401, 'unauthorized', 'This token belongs to another trial.');
-    if (!(Number(data.e) > now())) fail(401, 'expired', 'This trial expired and its files were deleted.');
+    // a launched bot outlives the 7-day trial: auth() lets an old token through once it knows the trial converted
+    if (!(Number(data.e) > now()) && !allowExpired) fail(401, 'expired', 'This trial expired and its files were deleted.');
     return data;
   }
+  /** A launched (converted) bot's tokens and restore keys never lapse with the trial window (onboarding: "back into the
+   *  account later"). Its expiry moves out to LIVE_TTL_MS and every new token / key is signed with that. */
+  const LIVE_TTL_MS = 10 * 365 * DAY;
+  const liveExpiry = (T, e) => (T.converted ? Math.max(Number(e) || 0, now() + LIVE_TTL_MS) : Number(e));
   // Restore keys (fixer r1): the emailed / copied link carries ?t=<id>&k=<restore key> so the bot reopens on any device.
   // A restore key is NOT a bearer token: it is HMAC'd under a separate domain, is only accepted by POST /restore
   // (rate-limited), and is exchanged there for the trial bearer. It expires with the trial.
@@ -1430,7 +1435,7 @@ export function createStudio(o = {}) {
   }
   // fixer r5: an unknown id or a key that doesn't verify is 404 not_found ("we couldn't find that bot link"), never the
   // false "expired" claim; only a genuine key past its trial's expiry is 410 expired.
-  function verifyRestore(key, trialId) {
+  function verifyRestore(key, trialId, { allowExpired = false } = {}) {
     const [payload, sig] = String(key || '').split('.');
     const bad = () => fail(404, 'not_found', "We couldn't find that bot link. Open your saved bot, or start a new one.");
     if (!payload || !sig || !/^[\w-]{10,400}$/.test(payload) || !/^[\w-]{10,40}$/.test(sig)) bad();
@@ -1439,7 +1444,7 @@ export function createStudio(o = {}) {
     let data;
     try { data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { bad(); }
     if (data.t !== trialId) bad();
-    if (!(Number(data.e) > now())) fail(410, 'expired', 'This trial expired and its files were deleted.');
+    if (!(Number(data.e) > now()) && !allowExpired) fail(410, 'expired', 'This trial expired and its files were deleted.');
     return data;
   }
   const bearer = (req) => { const a = String(req.headers.authorization || ''); return a.startsWith('Bearer ') ? a.slice(7).trim() : ''; };
@@ -1480,10 +1485,12 @@ export function createStudio(o = {}) {
   async function auth(req, id) {
     if (!TRIAL_ID_RE.test(id)) fail(404, 'not_found', 'No such trial.');
     if (deletedTrials.has(id)) fail(404, 'not_found', 'This bot was deleted.');
-    const data = verifyToken(bearer(req), id);
+    const data = verifyToken(bearer(req), id, { allowExpired: true });
     const T = trialFor(id);
     T.expiresAt = Number(data.e);
     await loadSpecDoc(T);
+    if (!(Number(data.e) > now()) && !T.converted) fail(401, 'expired', 'This trial expired and its files were deleted.');
+    T.expiresAt = liveExpiry(T, data.e);
     T.lastActivityAt = now();
     return T;
   }
@@ -3411,7 +3418,8 @@ export function createStudio(o = {}) {
   }
   const EMIT_TYPES = new Set(['golive:open']); // fixer r7: client store events a chip may emit (studio/app.js onChip)
   const ACTION_TYPES = new Set(['request_upload', 'attach_samples', 'ask_samplebot', 'run_proof', 'show_launch', 'set_scope', 'open_spec', 'email_capture', 'remove_samples', 'import_store', 'open_setup']);
-  const botName = (T) => T.spec.name || 'Your bot';
+  // the placeholder ("SampleBot") is never said to the visitor or sent to checkout: an unnamed bot is "Your bot"
+  const botName = (T) => (T.spec.name && T.spec.name !== 'SampleBot' ? T.spec.name : 'Your bot');
   /** Enabled files still learning (not Ready, not Failed): a Proof Run waits for them. */
   const learningOf = (files) => files.filter((f) => f.enabled && !TERMINAL.has(f.stage));
   const proofPassed = (T) => !!(T.proofDone && !T.proofDone.mini && !T.proofDone.partial && T.proofDone.total > 0 && T.proofDone.passed === T.proofDone.total);
@@ -3971,7 +3979,7 @@ export function createStudio(o = {}) {
         if (!a) return { reply: 'Ask your bot a question on the right and I will walk you through the answer.', chips: stepChips(T, files) };
         T.flags.firstAnswerSaid = true;
         const k = a.quotes || 1, f = a.files.length || 1;
-        return { reply: `That's your first cited answer: ${plural(k, 'quote')} from ${plural(f, 'file')}. Hover the [1] to see the exact line. Now try to break it.`,
+        return { reply: `That's your first cited answer: ${plural(k, 'quote')} from ${plural(f, 'file')}. Hover the [1] to see the exact line. Next: ask something your files don't cover.`,
           chips: [C('offtopic', 'Ask something off-topic', { kind: 'probe', action: { type: 'ask_samplebot', question: PROBES[0], label: null } }), C('proof', 'Try to trip it up', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('shorter', 'Make answers shorter', { send: 'Make answers shorter' })] };
       }
       case 'close_miss':
@@ -4025,7 +4033,7 @@ export function createStudio(o = {}) {
         T.flags.proofQueued = false; T.flags.proofRetries = 0;
         T.proofDone = { at: now(), passed, total: totalQ, mini }; saveSpecSoon(T);
         if (totalQ && passed < totalQ) return { reply: `${passed} of ${totalQ} passed. Open the failed rows to see why. Usually it's a file that's still processing.`, chips: [C('proof', 'Run it again', { kind: 'primary', action: { type: 'run_proof', mini: false } }), C('add-files', 'Add more files', { action: { type: 'request_upload' } }), C('keep-testing', 'Keep testing', { send: 'Keep testing' })] };
-        const head = `Proof Run passed. ${name} is ready to go live.`;
+        const head = 'Proof Run passed.';   // the launch line that follows names the bot (said once)
         const l = launchFlow(T, files);
         return { ...l, reply: `${head}\n\n${l.reply}` };
       }
@@ -4034,7 +4042,8 @@ export function createStudio(o = {}) {
       case 'returned': {
         const atoms = files.reduce((s, f) => s + (f.atoms || 0), 0);
         const tests = T.proofDone ? `, ${T.proofDone.passed}/${T.proofDone.total} tests passed` : '';
-        return { reply: files.length ? `Welcome back. ${name} is where you left it (${plural(files.length, 'file')}, ${atomsN(atoms)}${tests}).` : `Welcome back. ${name} is saved: add files whenever you're ready.`, chips: stepChips(T, files) };
+        void atoms;
+        return { reply: files.length ? `Welcome back. ${name} is where you left it: ${plural(files.length, 'file')}${tests}. Ask it something, or launch it when you're ready.` : `Welcome back. ${name} is saved: add files whenever you're ready.`, chips: stepChips(T, files) };
       }
       case 'spec_edit': {
         const lastQ = lastQuestion(T);
@@ -4669,7 +4678,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 <body><main><h1>${htmlEsc(title)}</h1><p>${htmlEsc(body)}</p>${back ? `<p><a href="${htmlEsc(back)}">Back to KnowBot Studio</a></p>` : ''}</main>
 <script nonce="${nonce}">(function(){var o=${JSON.stringify(origin || '')};try{if(window.opener&&o){window.opener.postMessage(${msg},o);setTimeout(function(){window.close();},${ok ? 400 : 4000});}}catch(e){}})();</script></body></html>`;
     res.writeHead(ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
-      'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` });
+      'content-security-policy': `default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` });
     res.end(html);
   }
   async function kdCallback(req, res, url) {
@@ -4733,7 +4742,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (T.flags.storePdfUrls) T.flags.storePdfUrls = Object.fromEntries(Object.entries(T.flags.storePdfUrls).map(([k, v]) => [idMap.get(k) || k, v]));
     T.spec = { ...T.spec, sampleSet: null, sources: {} };
     if (T.flags.sharedSet) { T.flags.sharedSet = null; T.flags.sharedAt = null; }
-    T.converted = true; T.convertedFiles = ready.size; T.convertedBucket = bucketId.toLowerCase();
+    T.converted = true; T.convertedFiles = ready.size; T.convertedBucket = bucketId.toLowerCase(); T.expiresAt = liveExpiry(T, T.expiresAt);
     T.kdLink.home = true;
     T.rows = null; T.rowsAt = 0; T.atomCache.clear(); T.atomPreview.clear(); T.questionsCache = null; T.lastStage.clear(); T.stageAt.clear();
     // the launched bot in the registry (POST /api/instances links it): a bucket read from the customer's store
@@ -4784,7 +4793,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const expiresTags = [...new Set(keep.flatMap((r) => (r.tags || []).filter((t) => t.startsWith('expires:'))))];
       await batchTags(keep.map((r) => r.id), [`account:${account.toLowerCase()}`, `bucket:${bucketId.toLowerCase()}`], ['kind:trial', `trial:${T.id}`, ...expiresTags]);
       files = keep.filter(isTrialFileRow).length;
-      T.converted = true; T.convertedFiles = files; T.convertedBucket = bucketId.toLowerCase();
+      T.converted = true; T.convertedFiles = files; T.convertedBucket = bucketId.toLowerCase(); T.expiresAt = liveExpiry(T, T.expiresAt);
       // shared sample copies are only switched off for this trial (never deleted: other trials replay them)
       const sources = { ...T.spec.sources }; for (const r of samples) delete sources[r.id];
       T.spec = { ...T.spec, sampleSet: null, sources };
@@ -5088,12 +5097,17 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const cb = await readBody(req).catch(() => ({}));
       if (cb && typeof cb === 'object' && TRIAL_ID_RE.test(String(cb.trialId || '')) && (cb.restoreKey || cb.k)) {
         let data = null;
-        try { data = verifyRestore(cb.restoreKey || cb.k, cb.trialId); } catch { data = null; }
+        try { data = verifyRestore(cb.restoreKey || cb.k, cb.trialId, { allowExpired: true }); } catch { data = null; }
         if (data) {
           limitOrThrow(`restore ${who}`, limits.restoreMin ?? 30, 60000, 'link openings');
           const RT = trialFor(cb.trialId);
           RT.expiresAt = Number(data.e);
           await loadSpecDoc(RT);
+          if (!(Number(data.e) > now()) && !RT.converted) data = null;
+        }
+        if (data) {
+          const RT = trialFor(cb.trialId);
+          RT.expiresAt = liveExpiry(RT, data.e);
           RT.lastActivityAt = now();
           return sendJson(res, 200, { trialId: RT.id, reused: true, token: signToken(RT.id, RT.expiresAt), restoreKey: signRestore(RT.id, RT.expiresAt), expiresAt: new Date(RT.expiresAt).toISOString(),
             quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES }, spec: publicSpec(RT) });
@@ -5131,10 +5145,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       // the expired screen only for 410 expired.
       if (!TRIAL_ID_RE.test(id)) fail(404, 'not_found', "We couldn't find that bot link. Open your saved bot, or start a new one.");
       const body = await readBody(req);
-      const data = verifyRestore(body.k ?? body.key ?? url.searchParams.get('k'), id);
+      const data = verifyRestore(body.k ?? body.key ?? url.searchParams.get('k'), id, { allowExpired: true });
       const T = trialFor(id);
       T.expiresAt = Number(data.e);
       await loadSpecDoc(T);
+      if (!(Number(data.e) > now()) && !T.converted) fail(410, 'expired', 'This trial expired and its files were deleted.');
+      T.expiresAt = liveExpiry(T, data.e);
       T.lastActivityAt = now();
       return sendJson(res, 200, { trialId: id, token: signToken(id, T.expiresAt), restoreKey: signRestore(id, T.expiresAt), expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T) });
     }
@@ -5149,7 +5165,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         const files = await filesOf(T, { maxAgeMs: 0 });
         return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
           convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email, kd: kdPublic(T),
-          restoreKey: signRestore(T.id, T.expiresAt), shareLink: shareLinkOf(req, T, selfOriginOf(req)) });
+          restoreKey: signRestore(T.id, T.expiresAt), shareLink: shareLinkOf(req, T, selfOriginOf(req)), ...(T.converted ? { token: signToken(T.id, T.expiresAt) } : {}) });
       }
       if (m === 'PATCH') {
         const r = applyPatch(T, await readBody(req), 'user');

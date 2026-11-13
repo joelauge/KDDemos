@@ -14,7 +14,8 @@
     "tools:smoke": "node studio/test/tools-shots.mjs",
     "ftue:smoke": "node studio/test/ftue-smoke.mjs",
     "kd:smoke": "node studio/test/kd-smoke.mjs",
-    "builder:eval": "node scripts/builder-eval.mjs"
+    "builder:eval": "node scripts/builder-eval.mjs",
+    "onboarding:e2e": "node studio/test/onboarding-e2e.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.3.0"

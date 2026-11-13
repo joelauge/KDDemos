@@ -168,6 +168,12 @@ export function mountFtue(ctx, hooks = {}) {
   function render(force = false) {
     raf = 0;
     const root = document.documentElement;
+    // the guide's job ends with a tested bot: once the visitor opens Launch (or the bot is live), Launch is the one next
+    // step and the guide steps aside for good (no second primary button beside the launch sheet)
+    if (active() && ftueStep(getState()) === 'done') {
+      const st = getState();
+      if (hooks.isLive?.() || st.milestones?.launchShown || st.ui?.sheet) { save({ status: 'done' }); hooks.onEnd?.('launch'); }
+    }
     if (!visible()) { if (!card.hidden) card.hidden = true; if (root.hasAttribute('data-ftue')) { root.removeAttribute('data-ftue'); root.removeAttribute('data-ftue-step'); } return; }
     place();
     let step = ftueStep(getState());

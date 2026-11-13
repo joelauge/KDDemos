@@ -113,7 +113,7 @@ try {
   await openLaunch(page);
   await page.locator('#kda-create').waitFor();
   const [popup] = await Promise.all([A.context.waitForEvent('page'), page.locator('#kda-create').click()]);
-  await page.locator('.kda-body', { hasText: /Finish signing in/ }).waitFor({ timeout: 10000 });
+  await page.locator('.kda-body', { hasText: /Finish signing in|Finish in the KnowDrive window/ }).waitFor({ timeout: 10000 });
   check('waits for the popup', true);
   await finishInPopup(popup, { email: 'casey@example.com' });
   await popup.waitForEvent('close', { timeout: 10000 }).catch(() => {});

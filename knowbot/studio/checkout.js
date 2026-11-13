@@ -177,18 +177,20 @@ export function mount(ctx) {
       tools.innerHTML = '';
       for (const t of toolSwitches(getState().spec?.surfaces).filter((x) => x.id !== 'agents')) { // AI agents: metered, not a plan line
         const onF = t.features.filter((f) => f.on).map((f) => f.label);
-        const state = t.features.length === 1 ? (onF.length ? 'on' : 'off') : onF.length ? `${onF.join(', ')} on` : 'all off';
+        const state = t.features.length === 1 ? (onF.length ? 'on' : 'included, switch on anytime') : onF.length ? `${onF.join(', ')} on` : 'included, switch on anytime';
         tools.append(h('li', { class: `co-tool${t.on ? ' is-on' : ''}` }, h('span', { class: 'co-incl-ico', html: icon(t.on ? 'check' : 'plus', 12) }),
           h('span', null, h('b', null, t.label), ` · ${t.sub} · `, h('span', { class: 'co-tool-state' }, state))));
       }
-      total.textContent = `Total: ${pr.long}, whatever features you switch on`;
-      terms.textContent = `One plan: ${pr.fmt(pr.p.amount || PRICE_MONTH)}/month or ${pr.fmt(pr.p.yearAmount || PRICE_YEAR)}/year · every feature included · switch features on and off in Set up · first 30 days free · card required · up to 100 MB per deployment · KnowBot number usage billed separately · more than 100 MB is enterprise: ${pr.p.enterpriseEmail || 'sales@recoursellm.com'}`;
+      total.textContent = `Total: ${pr.long}. The price stays the same whatever you switch on.`;
+      terms.textContent = `${pr.fmt(pr.p.amount || PRICE_MONTH)}/month or ${pr.fmt(pr.p.yearAmount || PRICE_YEAR)}/year · up to 100 MB of files · calls and texts on a KnowBot number are billed by use · need more than 100 MB? ${pr.p.enterpriseEmail || 'sales@recoursellm.com'}`;
     };
     el.paint();
     planBlocks.add(el);
     return el;
   }
-  const botName = () => getState().spec.name || 'Your bot';
+  const botName = () => { const n = getState().spec.name; return n && n !== 'SampleBot' ? n : 'Your bot'; };
+  /** mid-sentence ("Launch your bot"): the placeholder in lower case */
+  const botNameMid = () => { const n = getState().spec.name; return n && n !== 'SampleBot' ? n : 'your bot'; };
   // fixer M r1 (D8): the trial bot is "your bot" until it is actually launched (never "live" before payment)
   const converted = () => { const s = getState(); return !!(s.trial?.converted || s.milestones?.launched); };
   const backLabel = () => (converted() ? 'Back to the live bot' : 'Back to your bot');
@@ -210,7 +212,7 @@ export function mount(ctx) {
     const quotaMB = Math.round((s.trial.quota?.bytes || cfg().quota?.bytes || 104857600) / 1048576);
     const sc = s.proof?.score || null;
     // fixer r2 (D8): the 3 + 1 mini check before launch is a "Quick check", never labelled as the 8 + 3 Proof Run.
-    const tests = sc ? { passed: (sc.answered || 0) + (sc.refused || 0), total: (sc.total || 0) + (sc.probes || 0), unsupported: sc.unsupported || 0, full: (sc.total || 0) >= 8 } : null;
+    const tests = sc ? { passed: (sc.answered || 0) + (sc.refused || 0), total: (sc.total || 0) + (sc.probes || 0), unsupported: sc.unsupported || 0, full: sc.mini != null ? !sc.mini : (sc.total || 0) >= 8 } : null;
     return { files: files.length, samples: files.filter((f) => f.sample).length, bytes: s.usage?.bytes || files.reduce((a, f) => a + (f.bytes || 0), 0), quotaMB, atoms, tests };
   }
   /** The last grounded answer: prefer the visitor's own questions over Proof Run rows. */
@@ -243,7 +245,7 @@ export function mount(ctx) {
   // fixer r6 (D8/D9): the CTA shows "Launch <bot>" (the price is the hero beside it); the price rides in a visually
   // hidden suffix so the accessible name stays "Launch <bot>, $549/mo" (it starts with the visible label).
   const ctaPrice = () => pspan('cta', 'co-sr co-cta-price');
-  const testsName = (t) => (t && t.full ? 'Proof Run' : 'Quick check');
+  const testsName = () => 'Tests';   // onboarding copy: one plain name for the test run, whatever its size
   const FULL_PROOF_N = 11;   // 8 in-scope questions + 3 out-of-scope probes (SPEC 1.4 B8)
   const runFullProof = (before) => { if (before) before(); emit('proof:run', { mini: false }); };
 
@@ -383,7 +385,7 @@ export function mount(ctx) {
       h('dt', null, label),
       h('dd', null, statEls[key] = h('span', { class: 'co-num', dataset: { value: '0' } }, '0'), h('small', { class: 'co-unit' }, unit || '')));
     const statsEl = h('dl', { class: 'co-stats' },
-      stat('files', 'Files'), stat('mb', 'Storage', 'of 100 MB'), stat('atoms', 'Atoms'), stat('tests', 'Checks', ''));
+      stat('files', 'Files'), stat('mb', 'Storage', 'of 100 MB'), stat('atoms', 'Passages'), stat('tests', 'Tests', ''));
     const testsLine = h('p', { class: 'co-rc-tests' });
     const qaEl = h('figure', { class: 'co-qa' });
     const embedEl = h('div', { class: 'co-embed-wrap' });
@@ -407,7 +409,7 @@ export function mount(ctx) {
       ['Cancel anytime', 'checkCircle'],
     ].filter(Boolean);
     const cta = h('button', { type: 'button', class: 'co-cta', 'aria-describedby': `${titleId}-trust` },
-      h('span', { class: 'co-cta-label' }, `Launch ${botName()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
+      h('span', { class: 'co-cta-label' }, `Launch ${botNameMid()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
     cta.addEventListener('click', () => openSheet({ source: 'card', from: receipt, invoker: cta }));
     const channelsStrip = h('button', { type: 'button', class: 'co-chstrip' },
       h('span', { class: 'co-chstrip-icons', 'aria-hidden': 'true' }, ...['chat', 'phone', 'mail', 'mic', 'code'].map((n, i) => h('i', { style: { '--i': i }, html: icon(n, 13) }))),
@@ -433,7 +435,7 @@ export function mount(ctx) {
     // fixer r6 (D8): in the 560 px receipt sheet the card is one column; the embed preview moves below the inclusions
     // (after "what you get"), so the cited answer leads straight into the plan instead of a tall mock
     if (where === 'stage') plan.insertBefore(embedEl, plan.querySelector('.co-anchors'));
-    const card = h('article', { class: `co-launch${where === 'stage' ? ' is-stage' : where === 'inline' ? ' is-inline' : ''}`, 'aria-label': where === 'inline' ? `${botName()}: full receipt and plan` : `Launch ${botName()}` }, h('div', { class: 'co-launch-glow', 'aria-hidden': 'true' }), h('div', { class: 'co-launch-grid' }, receipt, plan));
+    const card = h('article', { class: `co-launch${where === 'stage' ? ' is-stage' : where === 'inline' ? ' is-inline' : ''}`, 'aria-label': where === 'inline' ? `${botName()}: full receipt and plan` : `Launch ${botNameMid()}` }, h('div', { class: 'co-launch-glow', 'aria-hidden': 'true' }), h('div', { class: 'co-launch-grid' }, receipt, plan));
     // fixer r5 (D6): on the stage the plan column and the embed preview are laid out in later frames (content-visibility
     // skips their layout until released), so no single frame lays out the whole two-column card under CPU throttling.
     const deferred = where === 'stage' ? [plan, embedEl] : [];
@@ -456,7 +458,7 @@ export function mount(ctx) {
       qaEl.append(
         h('figcaption', { class: 'co-qa-q' }, h('span', { class: 'co-qa-k' }, 'Q'), h('span', null, qa.question)),
         h('blockquote', { class: 'co-qa-a' }, h('span', { class: 'co-qa-k' }, 'A'), h('span', null, qa.answer, NBSP, chip)),
-        h('p', { class: 'co-qa-src' }, h('span', { class: 'co-qa-src-ico', html: icon('file', 12) }), h('span', null, [c.file || c.title || 'source', c.locator, c.match != null ? `match ${c.match}` : null].filter(Boolean).join(' · '))));
+        h('p', { class: 'co-qa-src' }, h('span', { class: 'co-qa-src-ico', html: icon('file', 12) }), h('span', null, [c.file || c.title || 'source'].filter(Boolean).join(' · '))));
     }
     function paint(first, { fromZero = false } = {}) {
       const st = stats();
@@ -465,11 +467,11 @@ export function mount(ctx) {
       const org = getState().spec.org;
       subEl.textContent = `${org ? `for ${org} · ` : ''}${st.samples && st.samples === st.files ? 'sample files' : plural(st.files, 'file')} · saved ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
       // fixer r6 (D8): the price is shown once, as the hero; the CTA names the bot, not the price again
-      $('.co-cta-label', cta).textContent = `Launch ${botName()}`;
+      $('.co-cta-label', cta).textContent = `Launch ${botNameMid()}`;
       const samples = st.samples && st.samples === st.files;
       $('dt', statsEl.querySelector('[data-k="files"]')).textContent = samples ? 'Sample files' : 'Files';
       $('.co-unit', statsEl.querySelector('[data-k="files"]')).textContent = samples ? 'removed at launch' : '';
-      if (where !== 'inline') card.setAttribute('aria-label', `Launch ${botName()}`);
+      if (where !== 'inline') card.setAttribute('aria-label', `Launch ${botNameMid()}`);
       const ms = fromZero && !motion.reduced() ? 700 : first ? 0 : 300;
       motion.ticker(statEls.files, st.files, { ms });
       motion.ticker(statEls.atoms, st.atoms, { ms });
@@ -486,14 +488,14 @@ export function mount(ctx) {
         tUnit.textContent = 'passed';
         const allPass = st.tests.passed === st.tests.total && !st.tests.unsupported;
         testsLine.className = `co-rc-tests${allPass ? ' is-pass' : ''}`;
-        $('dt', statsEl.querySelector('[data-k="tests"]')).textContent = st.tests.full ? 'Proof Run' : 'Quick check';
-        testsLine.append(h('span', { html: icon(allPass ? 'shieldCheck' : 'shield', 14) }), `${testsName(st.tests)} ${st.tests.passed}/${st.tests.total} passed · ${plural(st.tests.unsupported, 'unsupported claim')}`);
-        if (!st.tests.full) testsLine.append(h('button', { type: 'button', class: 'co-link', onclick: () => runFullProof(where === 'stage' ? () => closeStage({ focus: false }) : null) }, `Run the full Proof Run (${FULL_PROOF_N})`));
+        $('dt', statsEl.querySelector('[data-k="tests"]')).textContent = 'Tests';
+        testsLine.append(h('span', { html: icon(allPass ? 'shieldCheck' : 'shield', 14) }), `${st.tests.passed} of ${st.tests.total} tests passed · ${st.tests.unsupported ? `${plural(st.tests.unsupported, 'answer')} said something your files don't` : 'nothing made up'}`);
+        if (!st.tests.full) testsLine.append(h('button', { type: 'button', class: 'co-link', onclick: () => runFullProof(where === 'stage' ? () => closeStage({ focus: false }) : null) }, 'Run all tests'));
       } else {
         statEls.tests.textContent = '—';
         tUnit.textContent = 'not run';
         testsLine.className = 'co-rc-tests';
-        testsLine.append(h('span', { html: icon('flask', 14) }), 'Not tested yet · ', h('button', { type: 'button', class: 'co-link', onclick: () => { if (where === 'stage') closeStage({ focus: false }); emit('proof:run', { mini: false }); } }, 'Run the Proof Run'));
+        testsLine.append(h('span', { html: icon('flask', 14) }), 'Not tested yet · ', h('button', { type: 'button', class: 'co-link', onclick: () => { if (where === 'stage') closeStage({ focus: false }); emit('proof:run', { mini: false }); } }, 'Test it now'));
       }
       $$('.co-ava', receipt).forEach((a) => { a.textContent = getState().spec.avatar?.initials || initialsOf(botName()); a.style.setProperty('--co-hue', hueVar()); });
       if (first || !qaEl.dataset.answer || qaEl.dataset.answer !== (lastQA()?.answerId || '')) { paintQA(); qaEl.dataset.answer = lastQA()?.answerId || ''; }
@@ -545,7 +547,7 @@ export function mount(ctx) {
     const amt = pspan('amt', 'co-price-amt');
     const per = pspan('per', 'co-price-per');
     const cta = h('button', { type: 'button', class: 'co-cta' },
-      h('span', { class: 'co-cta-label' }, `Launch ${botName()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
+      h('span', { class: 'co-cta-label' }, `Launch ${botNameMid()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
     const moreId = `co-sum-more-${Math.random().toString(36).slice(2, 8)}`;
     const more = h('div', { class: 'co-sum-more', id: moreId, hidden: true });
     const viewLabel = h('span', null, 'Receipt & plan');
@@ -553,7 +555,7 @@ export function mount(ctx) {
     const view = h('button', { type: 'button', class: 'co-link co-sum-view', 'aria-expanded': 'false', 'aria-controls': moreId }, viewLabel);
     const headId = `co-sum-h-${Math.random().toString(36).slice(2, 8)}`;
     const heading = h('h3', { class: 'co-sum-h', id: headId }, nameEl, edit);
-    const fullLink = h('button', { type: 'button', class: 'co-link co-sum-full', hidden: true, onclick: () => runFullProof(() => closeStage({ focus: false })) }, `Run the full Proof Run (${FULL_PROOF_N})`);
+    const fullLink = h('button', { type: 'button', class: 'co-link co-sum-full', hidden: true, onclick: () => runFullProof(() => closeStage({ focus: false })) }, 'Run all tests');
     const chBtn = h('button', { type: 'button', class: 'co-link co-sum-channels' }, 'See the tools & API');
     chBtn.addEventListener('click', () => openGoLive({ tab: 'channels', invoker: chBtn }));
     const incl = h('ul', { class: 'co-sum-incl', 'aria-label': 'Included in the plan' },
@@ -592,7 +594,7 @@ export function mount(ctx) {
         h('div', { class: 'co-sum-pillrow' }, pills, fullLink),
         qaEl,
         h('div', { class: 'co-sum-gets' }, incl, thumb),
-        h('div', { class: 'co-sum-price' }, h('p', { class: 'co-price' }, amt, per), h('small', null, pspan('count', ''), ' · no per-answer fees · cancel anytime')),
+        h('div', { class: 'co-sum-price' }, h('p', { class: 'co-price' }, amt, per), h('small', null, pspan('count', ''), ' · first 30 days free · cancel anytime')),
         cta,
         h('div', { class: 'co-sum-links' },
           h('a', { class: 'co-link', href: contactHref() }, 'Questions? Talk to us'),
@@ -675,11 +677,11 @@ export function mount(ctx) {
           qaEl.append(
             h('figcaption', { class: 'co-qa-q' }, h('span', { class: 'co-qa-k' }, 'Q'), h('span', null, qa.question)),
             h('blockquote', { class: 'co-qa-a' }, h('span', { class: 'co-qa-k' }, 'A'), h('span', { class: 'co-sum-qa-t' }, qa.answer, NBSP, chip)),
-            h('p', { class: 'co-qa-src' }, h('span', { class: 'co-qa-src-ico', html: icon('file', 12) }), h('span', null, [c.file || c.title || 'source', c.match != null ? `match ${c.match}` : null].filter(Boolean).join(' · '))));
+            h('p', { class: 'co-qa-src' }, h('span', { class: 'co-qa-src-ico', html: icon('file', 12) }), h('span', null, [c.file || c.title || 'source'].filter(Boolean).join(' · '))));
         }
         thumb.replaceChildren(embedThumb(qa));
       }
-      $('.co-cta-label', cta).textContent = `Launch ${botName()}`;
+      $('.co-cta-label', cta).textContent = `Launch ${botNameMid()}`;
       pills.innerHTML = '';
       const pill = (txt, cls = '') => h('span', { class: `co-pill${cls}` }, txt);
       const allPass = st.tests && st.tests.total && st.tests.passed === st.tests.total && !st.tests.unsupported;
@@ -812,14 +814,14 @@ export function mount(ctx) {
     // Phones: the plan sits below the receipt, so a sticky footer keeps the price and the CTA in reach while scrolling.
     // fixer r6 (D8): the price is the hero once, here in the sticky bar ($549/month); the CTA names the bot only and the
     // plan column's own price is hidden on the stage (checkout.css)
-    const footCta = h('button', { type: 'button', class: 'co-cta' }, h('span', { class: 'co-cta-label' }, `Launch ${botName()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
+    const footCta = h('button', { type: 'button', class: 'co-cta' }, h('span', { class: 'co-cta-label' }, `Launch ${botNameMid()}`), ctaPrice(), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 16) }));
     const pr0 = price();
     const foot = h('div', { class: 'co-stage-foot' },
       h('div', { class: 'co-stage-foot-bar' }, h('p', { class: 'co-stage-foot-price' }, h('span', null, pspan('amt', '', 'b'), pspan('per', 'co-stage-foot-per')), h('small', null, 'all three tools · cancel anytime')), footCta),
       sublinks({ stage: true }));
     // fixer r7 (D9): a non-modal side panel (role=region, named "Launch <bot>"): the Builder beside it stays live, the
     // covered SampleBot is inert and shown un-dimmed behind a click-to-close veil (no modal scrim)
-    const panel = h('section', { class: 'co-stage', id: 'co-stage', role: 'region', 'aria-label': `Launch ${botName()}`, tabindex: '-1' }, head, holder, foot);
+    const panel = h('section', { class: 'co-stage', id: 'co-stage', role: 'region', 'aria-label': `Launch ${botNameMid()}`, tabindex: '-1' }, head, holder, foot);
     footCta.addEventListener('click', () => openSheet({ source: 'card', from: stage?.inst?.receipt || null, invoker: footCta }));
     const layer = h('div', { class: 'co-stage-layer is-right', dataset: { kind: 'launch-stage' } }, h('div', { class: 'co-stage-backdrop', 'aria-hidden': 'true' }), panel);
     modal.append(layer);
@@ -1094,7 +1096,9 @@ export function mount(ctx) {
     launching = true;
     try {
       // Mini proof first so the card always shows real stats (3 in-scope + 1 probe, about 6 s).
+      let testedNow = false;
       if (!getState().milestones.proofRun && getState().proof?.status !== 'done' && readyFiles().length) {
+        testedNow = true;
         const done = new Promise((resolve) => {
           const un = on('proof:done', () => { un(); resolve(true); });
           setTimeout(() => { un(); resolve(false); }, MINI_PROOF_WAIT);
@@ -1102,7 +1106,10 @@ export function mount(ctx) {
         if (getState().proof?.status !== 'running') emit('proof:run', { mini: true });
         await done;
       }
-      const showText = !fromServerTurn;
+      // the Builder already said it (the test run's own result turn): the card arrives without repeating the line
+      const saidIt = [...document.querySelectorAll('#st-log .st-msg-a')].slice(-3).some((m) => /is built and saved/.test(m.textContent || ''));
+      // a test run just ran for this launch: its own result turn ("All N tests passed. Your bot is built and saved…") says it
+      const showText = !fromServerTurn && !saidIt && !testedNow;
       focusNextCard = userPick;
       pickFocus = userPick ? ae : null;
       autoStageNext = true;
@@ -1138,14 +1145,11 @@ export function mount(ctx) {
     const st = stats();
     const pr = price();
     const qa = lastQA();
-    const tests = st.tests && st.tests.total ? `${testsName(st.tests)} ${st.tests.passed}/${st.tests.total}` : 'not tested yet';
+    const tests = st.tests && st.tests.total ? `passed ${st.tests.passed} of ${st.tests.total} tests` : 'not tested yet';
     // fixer r6 (D8): a sample-only bot is told at the moment of payment that its sample files do not carry over
-    const one = sampleOnly() ? [`Sample files (removed at launch): ${st.files}`, tests].join(' · ') : [plural(st.files, 'file'), `${mbOf(st.bytes)} MB`, plural(st.atoms, 'atom'), tests].join(' · ');
-    const full = st.tests && st.tests.total && !st.tests.full
-      ? h('p', { class: 'co-sr-quick' }, h('span', { html: icon('flask', 13) }),
-        h('span', null, `Only the ${st.tests.total}-question quick check has run. `,
-          h('button', { type: 'button', class: 'co-link', onclick: () => { closeSheet('proof'); runFullProof(); } }, `Run the full Proof Run (${FULL_PROOF_N}) first`)))
-      : null;
+    const one = sampleOnly() ? [`Sample files (removed at launch): ${st.files}`, tests].join(' · ') : [plural(st.files, 'file'), tests].join(' · ');
+    // onboarding: the money step carries no detour (the tests already ran when Launch opened); the receipt is one line
+    const full = null;
     return h('section', { class: 'co-sr-receipt', 'aria-label': `Your KnowBot: ${botName()}, ${one}, ${pr.text}` },
       h('div', { class: 'co-sr-line' }, avatar(32),
         h('p', { class: 'co-oneline' }, h('b', { class: 'co-oneline-name' }, botName()), h('span', null, one))),
@@ -1210,21 +1214,24 @@ export function mount(ctx) {
     const samples = sampleOnly();
     const addFirst = samples ? h('p', { class: 'co-addfirst' }, h('span', { html: icon('upload', 13) }),
       h('span', null, `${botName()} only knows sample files. `, h('button', { type: 'button', class: 'co-link', onclick: () => { closeSheet('addfiles'); addOwnFiles(); } }, 'Add my files first'))) : null;
+    const linked = !!kdEmail && emailIn.value === kdEmail;
     const form = h('form', { class: 'co-form', novalidate: true },
-      h('label', { class: 'flabel co-label', for: 'co-email' }, 'Email for your KnowDrive login'),
+      h('label', { class: 'flabel co-label', for: 'co-email' }, linked ? 'Email for receipts' : 'Email for your KnowDrive login'),
       emailIn,
-      h('p', { class: 'co-hint', id: 'co-email-hint' }, 'We send your login and your bot link here. No other field.'),
-      emailErr, addFirst, submit, errBox);
+      h('p', { class: 'co-hint', id: 'co-email-hint' }, linked ? 'Your KnowDrive login. We send your receipt and your bot link here.' : 'We send your login and your bot link here. No other field.'),
+      emailErr, addFirst, submit,
+      h('p', { class: 'co-hint co-today' }, pspan('today', ''), 'Your files stay yours, in your KnowDrive account.'),
+      errBox);
     const back = h('button', { type: 'button', class: 'co-link co-back' }, h('span', { html: icon('arrowRight', 14), class: 'co-back-ico' }), 'Back to my bot');
     const x = h('button', { type: 'button', class: 'co-x', 'aria-label': 'Close and go back to my bot', html: icon('x', 18) });
     const pay = h('section', { class: 'co-pay' },
       h('p', { class: 'co-eyebrow' }, h('span', { html: icon('rocket', 13) }), 'Launch'),
-      h('h2', { class: 'co-sheet-title', id: 'co-sheet-title' }, `Launch ${botName()}`),
+      h('h2', { class: 'co-sheet-title', id: 'co-sheet-title' }, `Launch ${botNameMid()}`),
       h('p', { class: 'co-sheet-desc', id: 'co-sheet-desc' }, h('b', null, 'KnowDrive · ', pspan('amt', ''), pspan('per', '')), '. You finish on KnowDrive\'s secure checkout, then come straight back here.'),
       planBlock(),
       form,
       h('p', { class: 'co-foot co-foot-incl' }, h('span', { html: icon('check', 13) }), `Includes hosting, Website, KnowBot number and Email + the chat API, ${stats().quotaMB} MB of storage, question insights.`),
-      h('p', { class: 'co-foot' }, pspan('today', ''), samples
+      h('p', { class: 'co-foot' }, samples
         ? 'Your settings, tone and tests carry over; sample files are removed, so add your own docs after launch.'
         : 'Your bot, files and tests carry over. Nothing gets rebuilt.'),
       h('p', { class: 'co-foot co-foot-trust' }, h('span', { html: icon('lock', 12) }), `Saved for ${cfg().quota?.ttlDays || 7} days if you don't launch. `, h('a', { class: 'co-link', href: contactHref() }, 'Questions? Talk to us')),
@@ -1235,14 +1242,14 @@ export function mount(ctx) {
     // frame that slides the sheet in
     const sideEmbed = side ? h('div', { class: 'co-sr-embed', style: { contentVisibility: 'hidden' } }, h('p', { class: 'co-eyebrow' }, 'On your site'), embedPreview(lastQA())) : null;
     if (sideEmbed) requestAnimationFrame(() => nextSlice(() => { sideEmbed.style.contentVisibility = ''; }));
-    const dialog = h('div', { class: 'co-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'co-sheet-title', 'aria-describedby': 'co-sheet-desc' }, x, receipt, pay, sideEmbed);
+    const dialog = h('div', { class: 'co-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'co-sheet-title', 'aria-describedby': 'co-sheet-desc' }, x, pay, receipt, sideEmbed);
     const scrim = h('div', { class: 'co-scrim', 'aria-hidden': 'true' });
     // fixer r6 (D8/D10): phones get an 85%-height bottom sheet; above it the live bot's last cited answer peeks
     // through (tap it to go back to the bot). The peek is a visual echo of the receipt's own Q&A, so it is aria-hidden.
     const qa0 = !side ? lastQA() : null;
     const peek = !side ? h('div', { class: 'co-peek', 'aria-hidden': 'true', style: { '--co-hue': hueVar() } },
       h('span', { class: 'co-peek-head' }, avatar(22), h('b', null, botName()), h('span', { class: 'co-peek-on' }, h('i', { class: 'co-dot is-ready' }), converted() ? 'live bot' : 'your bot (draft)')),
-      qa0 ? h('span', { class: 'co-peek-a' }, qa0.answer, NBSP, h('span', { class: 'co-peek-cite' }, String(qa0.cite?.n || 1))) : h('span', { class: 'co-peek-a' }, getState().spec.greeting || `Ask ${botName()} anything.`)) : null;
+      qa0 ? h('span', { class: 'co-peek-a' }, qa0.answer, NBSP, h('span', { class: 'co-peek-cite' }, String(qa0.cite?.n || 1))) : h('span', { class: 'co-peek-a' }, getState().spec.greeting || `Ask ${botNameMid()} anything.`)) : null;
     const layer = h('div', { class: `co-layer${side ? ' is-side' : ' is-bottom'}`, dataset: { kind: 'checkout' } }, scrim, peek, dialog);
     if (peek) peek.addEventListener('click', () => closeSheet('back'));
     // fixer r7 (D8): desktop checkout docks on the RIGHT, the same edge as the receipt panel it continues (and at its
@@ -1491,14 +1498,14 @@ export function mount(ctx) {
       meter.hidden = !(st === 'checking' || st === 'pending');
       skel.hidden = st !== 'checking';
       const email = getState().trial.email;
-      if (st === 'checking') { title.textContent = `Activating ${botName()}…`; text.textContent = 'Checking with KnowDrive'; }
+      if (st === 'checking') { title.textContent = `Activating ${botNameMid()}…`; text.textContent = 'Confirming your payment with KnowDrive, usually a few seconds'; }
       else if (st === 'pending') { title.textContent = 'Payment received? We\'re finishing setup.'; text.textContent = 'Checking again automatically every 5 s · usually under a minute'; }
       else if (st === 'slow') { title.textContent = 'Taking longer than usual: we\'ll email you'; text.textContent = `We'll email ${email || 'you'} the moment ${botName()} is live. Keep testing meanwhile: your bot is saved.`; }
-      else if (st === 'done') { title.textContent = 'Payment confirmed'; text.textContent = `${botName()} moved to your KnowDrive account.`; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
+      else if (st === 'done') { title.textContent = 'Payment confirmed. Thank you!'; text.textContent = `${botName()} now answers from your KnowDrive account.`; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
       paintClock();
       clearInterval(tick);
       if (st === 'checking' || st === 'pending') tick = setInterval(() => { if (!card.isConnected) { clearInterval(tick); return; } paintClock(); }, 1000);
-      if (changed) live.textContent = st === 'checking' ? `Activating ${botName()}. Checking with KnowDrive.` : `${title.textContent} ${text.textContent}`;
+      if (changed) live.textContent = st === 'checking' ? `Activating ${botNameMid()}. Confirming your payment with KnowDrive.` : `${title.textContent} ${text.textContent}`;
       if (changed && st !== 'checking' && !motion.reduced()) motion.animate(card, [{ transform: 'translateY(3px)', opacity: .6 }, { transform: 'none', opacity: 1 }], { duration: motion.DUR[2], easing: 'out' });
     }
     update(data);
@@ -1509,6 +1516,18 @@ export function mount(ctx) {
 
   registerCard('success', (data, el) => {
     const base = siteBase();
+    const studioLink = api.shareLink();
+    const mailNote = h('span', { class: 'co-back-mail' });
+    const backRow = h('div', { class: 'co-backin' },
+      h('div', { class: 'co-row' }, h('span', { class: 'co-row-k' }, 'Your Studio link'), h('span', { class: 'co-row-v co-mono', title: studioLink }, studioLink.replace(/^https?:\/\//, '')), copyButton(studioLink, 'Copy', { small: true, what: 'Studio link copied', aria: 'Copy your private Studio link' })),
+      h('p', { class: 'co-backin-note' }, 'Keep it private. It opens this bot on any device, so you can change it later. ', mailNote));
+    const em = getState().trial.email;
+    if (em) {
+      let sentKey = `kb-live-mailed:${getState().trial.id}`, already = false;
+      try { already = localStorage.getItem(sentKey) === '1'; } catch { /* ignore */ }
+      if (already) mailNote.textContent = `We emailed it to ${em}.`;
+      else api.sendEmail(em).then((r) => { if (r && r.sent) { mailNote.textContent = `We emailed it to ${em}.`; try { localStorage.setItem(sentKey, '1'); } catch { /* ignore */ } } }).catch(() => {});
+    }
     const botId = data.botId || getState().trial.id || 'your-bot';
     const botUrl = data.botUrl || shareUrl(botId);
     const apiBase = api.BASE || location.origin;
@@ -1518,7 +1537,9 @@ export function mount(ctx) {
     const code = h('pre', { class: 'co-code', tabindex: '0', 'aria-label': 'Embed snippet' }, h('code', null, embed));
     const card = h('div', { class: 'co-success' },
       h('div', { class: 'co-success-head' }, dot, h('div', null, h('b', null, `${botName()} is live`), h('small', null, 'Hosted, embeddable and answering only from your files'))),
-      h('div', { class: 'co-row' }, h('span', { class: 'co-row-k' }, 'Hosted link'), h('a', { class: 'co-row-v co-mono', href: botUrl, target: '_blank', rel: 'noopener' }, botUrl.replace(/^https?:\/\//, '')), copyButton(botUrl, 'Copy', { small: true, what: 'Link copied', aria: 'Copy hosted link' })),
+      h('div', { class: 'co-row' }, h('span', { class: 'co-row-k' }, 'Chat page'), h('a', { class: 'co-row-v co-mono', href: botUrl, target: '_blank', rel: 'noopener' }, botUrl.replace(/^https?:\/\//, '')), copyButton(botUrl, 'Copy', { small: true, what: 'Link copied', aria: 'Copy the chat page link' })),
+      // onboarding: the way back in. The private Studio link reopens this bot on any device (also emailed, when mail is on)
+      backRow,
       data.ownFiles === 0 ? h('div', { class: 'alert alert-warn co-success-empty', role: 'note' },
         h('span', { class: 'co-success-empty-ico', html: icon('upload', 16) }),
         h('div', null, h('b', null, 'Sample files were removed at launch'), h('small', null, `${botName()} keeps your settings, tests and tone. Add your docs and it starts answering from them.`)),

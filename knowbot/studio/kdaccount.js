@@ -20,7 +20,8 @@ export function createKdStep(ctx, { h, $$ }) {
   let last = null;        // the last status from the server
   let notice = null;
 
-  const botName = () => getState().spec?.name || 'your bot';
+  const botName = () => { const n = getState().spec?.name; return n && n !== 'SampleBot' ? n : 'your bot'; };
+  const BotName = () => { const n = botName(); return n === 'your bot' ? 'Your bot' : n; };
   const plural = (n, w) => `${Number(n).toLocaleString()} ${n === 1 ? w : `${w}s`}`;
   const errText = (err, fallback) => `${err?.message && err.status && err.status < 500 ? err.message : fallback}${err?.detail?.ref || err?.ref ? ` (ref ${err.detail?.ref || err.ref})` : ''}`;
 
@@ -173,9 +174,13 @@ export function createKdStep(ctx, { h, $$ }) {
         h('p', { class: 'kda-fine' }, 'Free to create. It opens in a small window; you come straight back here.'));
     } else if (state === 'waiting') {
       setSteps('account');
-      const again = M.url ? h('a', { class: 'co-link kda-link', href: M.url, target: '_blank', rel: 'opener', id: 'kda-open' }, 'Open the sign-in window again') : null;
-      b.append(h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), 'Finish signing in to KnowDrive in the other window…'),
-        h('p', { class: 'kda-alt' }, again, again ? ' · ' : null, link('Cancel', () => { try { M.popup?.close(); } catch { /* ignore */ } render('start'); }, 'kda-cancel')));
+      // onboarding (live run): a new KnowDrive account is confirmed by email, and that link ends on KnowDrive's own site,
+      // not back here. So the wait says what to expect and gives the one way to finish: sign in again, now with a password.
+      const again = M.url ? h('a', { class: 'co-cta kda-cta', href: M.url, target: '_blank', rel: 'opener', id: 'kda-open' }, h('span', { class: 'co-cta-label' }, 'I\u2019ve set my password: continue'), h('span', { class: 'co-cta-ico', html: icon('arrowRight', 15) })) : null;
+      b.append(h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), 'Finish in the KnowDrive window…'),
+        h('p', { class: 'kda-fine' }, 'New to KnowDrive? It emails you a link to set your password. Once that\u2019s done, come back here and continue.'),
+        again,
+        h('p', { class: 'kda-alt' }, link('Cancel', () => { try { M.popup?.close(); } catch { /* ignore */ } render('start'); }, 'kda-cancel')));
       poll();
     } else if (state === 'blocked') {
       setSteps('account');
@@ -187,7 +192,7 @@ export function createKdStep(ctx, { h, $$ }) {
       setSteps('files');
       const n = s.movable ?? null;
       b.append(who());
-      if (s.samplesOnly) b.append(h('p', { class: 'kda-note' }, `${botName()} only knows sample files, and sample files never move. Launch now and add your own files after, or add them first.`),
+      if (s.samplesOnly) b.append(h('p', { class: 'kda-note' }, `${BotName()} only knows sample files, and sample files never move. Launch now and add your own files after, or add them first.`),
         cta('Continue without files', startMove, { id: 'kda-move' }));
       else if (s.learning) { b.append(h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), 'Some files are still learning. They move as soon as they are ready…')); later(startMove, 3000); }
       else b.append(cta(n != null ? `Move ${plural(n, 'file')} to KnowDrive` : 'Move my files to KnowDrive', startMove, { id: 'kda-move', ico: 'arrowRight' }));
@@ -202,7 +207,7 @@ export function createKdStep(ctx, { h, $$ }) {
         h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), `Moving ${plural(total, 'file')} into your KnowDrive account…`),
         h('div', { class: 'kda-bar', role: 'progressbar', 'aria-label': 'Files moved', 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(ready), 'aria-valuetext': `${ready} of ${total} ready` },
           h('span', { style: { width: `${pct}%` } })),
-        h('p', { class: 'kda-fine', id: 'kda-progress' }, `${ready} of ${total} ready. You can close this; it keeps going.`));
+        h('p', { class: 'kda-fine', id: 'kda-progress' }, `${ready} of ${total} ready. Usually a minute or two. You can close this: it keeps going, and Launch picks up where it left off.`));
       poll();
     } else if (state === 'partial') {
       setSteps('files');
@@ -214,12 +219,12 @@ export function createKdStep(ctx, { h, $$ }) {
     } else if (state === 'ready') {
       setSteps('checkout');
       const mv = s.move || {};
-      b.append(who(), h('p', { class: 'kda-done' }, h('span', { class: 'kda-ok', html: icon('check', 15) }), s.live ? `${botName()} answers from your KnowDrive account.` : `${plural(mv.ready || mv.total || 0, 'file')} ${(mv.ready || mv.total) === 1 ? 'is' : 'are'} in your KnowDrive account.`));
+      b.append(who(), h('p', { class: 'kda-done' }, h('span', { class: 'kda-ok', html: icon('check', 15) }), s.live ? `${BotName()} answers from your KnowDrive account.` : `${plural(mv.ready || mv.total || 0, 'file')} ${(mv.ready || mv.total) === 1 ? 'is' : 'are'} in your KnowDrive account.`));
       if (s.live) b.append(cta('Done', () => close('close'), { id: 'kda-done' }));
       else b.append(cta('Continue to checkout', () => { const fn = M.onContinue; close('continue'); fn?.({ email: last?.email || null }); }, { id: 'kda-continue', ico: 'arrowRight' }));
     } else if (state === 'reconnect') {
       setSteps('account');
-      b.append(h('p', { class: 'kda-note' }, `${botName()} can't read its files because the KnowDrive sign-in stopped working.${s.ref ? ` (ref ${s.ref})` : ''}`),
+      b.append(h('p', { class: 'kda-note' }, `${BotName()} can't read its files because the KnowDrive sign-in stopped working.${s.ref ? ` (ref ${s.ref})` : ''}`),
         cta('Reconnect KnowDrive', () => signIn('signin'), { id: 'kda-reconnect', ico: 'refresh' }));
     }
     if (keepFocus || prev !== state) requestAnimationFrame(() => { if (M && (!M.dialog.contains(document.activeElement) || document.activeElement === M.dialog)) M.focusFirst(); });
@@ -289,7 +294,7 @@ export function createKdStep(ctx, { h, $$ }) {
     const btn = h('button', { type: 'button', class: 'co-link kda-link', id: 'kda-notice-reconnect' }, 'Reconnect KnowDrive');
     btn.addEventListener('click', () => open({ invoker: btn, reconnect: true }));
     notice = h('div', { class: 'kda-notice', role: 'status' }, h('span', { class: 'co-err-ico', html: icon('warn', 15) }),
-      h('span', null, `${botName()} can't read its KnowDrive files right now, so it refuses questions.`), btn);
+      h('span', null, `${BotName()} can't read its KnowDrive files right now, so it refuses questions.`), btn);
     document.body.append(notice);
   }
   on('kd:event', (d) => { if (d && typeof d === 'object') { last = { ...last, ...d }; showNotice(last); } });

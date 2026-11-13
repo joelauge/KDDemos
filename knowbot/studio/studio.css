@@ -976,6 +976,9 @@ textarea.st-text { resize: vertical; }
    and nothing in the panes moves (no layout shift) */
 @media (max-width: 899px) {
   .st-tabs > .st-peek { position: absolute; top: 6px; left: 8px; right: 8px; bottom: auto; z-index: 2; width: auto; margin: 0; height: 44px; min-height: 44px; padding: 0 12px; border-radius: 12px; box-shadow: 0 6px 16px -10px rgb(2 6 23 / .45); font-size: 12.5px; }
+  /* onboarding: the peek covers only the Builder tab it leads to; the "Your bot" tab stays tappable (two short lines) */
+  .st-tabs > .st-peek { right: calc(50% + 2px); padding: 0 8px 0 10px; font-size: 12px; line-height: 1.25; }
+  .st-tabs > .st-peek .st-peek-text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 }
 
 /* D7: mono metadata reads as whole tokens (ProofDrawer docked squeezes these) */
