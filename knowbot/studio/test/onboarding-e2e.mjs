@@ -555,6 +555,8 @@ async function liveJourney(browser, vp) {
     // what a visitor gets if they try to reach checkout without an account (the API is the real one)
     const r = await page.evaluate(async () => { try { await window.__studio.api.checkout({}); return 'opened'; } catch (e) { return `${e.status} ${e.code}: ${e.message}`; } });
     rec.notes.push(`checkout without an account → ${r}`);
+    await sleep(300);
+    for (let i = bucket.network.length - 1; i >= 0; i--) if (/ 409 POST .*\/checkout\b/.test(bucket.network[i])) bucket.network.splice(i, 1);   // the probe's own expected 409
     try { await popup?.close(); } catch { /* ignore */ }
   }, { allowNoAction: true, noAxe: true });
   run.summary = { firstAnswerMs, totalMs: Date.now() - t0 };
