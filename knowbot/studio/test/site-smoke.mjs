@@ -5,8 +5,8 @@
 //     phone × light / dark): it overlays the page, focus is trapped, Esc and × close it and reveal the page, the
 //     "Ask <name>" button opens it again and focus comes back, a question gets quote blocks and Sources, a question not in
 //     the files gets the refusal sentence, the page's CSS can't touch it (Shadow DOM) and it leaks no globals; no console
-//     errors, no horizontal scroll, 44px targets, axe (serious/critical; skipped when axe-core is unreachable, or
-//     AXE_PATH=/path/to/axe.min.js); closed stays closed on reload (first visit), every-visit and topic chips options;
+//     errors, no horizontal scroll, 44px targets, axe (serious/critical; the vendored axe-core,
+//     or AXE_PATH=/path/to/axe.min.js); closed stays closed on reload (first visit), every-visit and topic chips options;
 //   - the hosted link (neutral backdrop; a ?q= link asks at once; an unknown bot is "not available");
 //   - a website import: the hosted link shows the overlay over the store's own homepage in a frame;
 //   - the Studio: See it as → Site (the overlay over the homepage, × works) and the Set up card (line, options, publish).
@@ -19,7 +19,7 @@ import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
-import { outDir } from './smoke-util.mjs';
+import { outDir, injectAxe } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
@@ -29,7 +29,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** The overlay heading's name: its text, or its logo's alt text (the logo replaces the name under the wave). */
 const headName = (loc) => loc.evaluate((el) => el.querySelector('.brandlogo')?.alt || el.textContent.trim());
 const SHOTS = outDir('site', process.env.SITE_SHOTS);
-const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const CONTACT = '# Contact us\n\nCall us on (555) 123-4567 for help with an order.\n\nEmail help@lumen.example and we reply within one business day.\n\nThe shop is open Monday to Friday, 9am to 5pm.\n';
 const CELLS = [
@@ -41,19 +40,16 @@ const CELLS = [
 let failed = 0;
 const check = (cell, name, ok, detail = '') => { if (!ok) failed++; console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${cell} ${name}${detail ? ` · ${String(detail).slice(0, 240)}` : ''}`); return ok; };
 
-let axeSource = null;
+/** axe on the page: { violations } or { error } (axe-core could not be loaded or run: a failure, never a skip). */
 async function runAxe(page) {
   try {
-    if (axeSource === null) {
-      if (process.env.AXE_PATH) axeSource = await fsp.readFile(process.env.AXE_PATH, 'utf8').catch(() => '');
-      else { try { const r = await fetch(AXE_URL, { signal: AbortSignal.timeout(8000) }); axeSource = r.ok ? await r.text() : ''; } catch { axeSource = ''; } }
-    }
-    if (!axeSource) return { skipped: true };
-    await page.addScriptTag({ content: axeSource });
+    await injectAxe(page);
     return { violations: await page.evaluate(async () => (await window.axe.run(document, { resultTypes: ['violations'] })).violations
       .filter((v) => v.impact === 'serious' || v.impact === 'critical').map((v) => ({ id: v.id, nodes: v.nodes.slice(0, 3).map((n) => n.target.join(' ')) }))) };
-  } catch (e) { return { skipped: true, error: e.message }; }
+  } catch (e) { return { error: `axe did not run: ${e.message}` }; }
 }
+const axeOk = (a) => !a.error && !a.violations.length;
+const axeDetail = (a) => a.error || JSON.stringify(a.violations);
 
 /** A business's existing homepage on its own origin, with CSS that would wreck anything it could reach. */
 function homepageHtml(snippet) {
@@ -180,8 +176,7 @@ try {
     const small = await inShadow(page, (sr) => [...sr.querySelectorAll('button, input, .built')].filter((e) => e.getClientRects().length).map((e) => { const r = e.getBoundingClientRect(); return { t: e.textContent.trim().slice(0, 30) || e.className, h: Math.round(r.height), w: Math.round(r.width) }; }).filter((x) => x.h < 44 || x.w < 44));
     check(cell.name, '44px targets', !small.length, JSON.stringify(small));
     const axe = await runAxe(page);
-    if (axe.skipped) console.log(`  [warn] ${cell.name} axe skipped (axe-core unreachable)`);
-    else check(cell.name, 'axe (open): no serious or critical violations', !axe.violations.length, JSON.stringify(axe.violations));
+    check(cell.name, 'axe (open): no serious or critical violations', axeOk(axe), axeDetail(axe));
     // Esc closes and shows the page; the button in the corner opens it again; × closes it; focus comes back
     await page.keyboard.press('Escape');
     check(cell.name, 'Esc closes it: the page shows, the “Ask Lumen Bikes” button waits in the corner', await page.locator('knowbot-overlay .dialog').isHidden() && await page.locator('knowbot-overlay .pill').isVisible()
@@ -196,7 +191,7 @@ try {
     check(cell.name, 'the page works again once closed', await page.evaluate(() => { const r = document.getElementById('page-btn').getBoundingClientRect(); const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return el?.id === 'page-btn'; }));
     if (cell.name === 'desktop-light' || cell.name === 'phone-dark') await page.screenshot({ path: path.join(SHOTS, `closed-${cell.name}.png`) });
     const axe2 = await runAxe(page);
-    if (!axe2.skipped) check(cell.name, 'axe (closed): no serious or critical violations', !axe2.violations.length, JSON.stringify(axe2.violations));
+    check(cell.name, 'axe (closed): no serious or critical violations', axeOk(axe2), axeDetail(axe2));
     await page.reload({ waitUntil: 'load' });
     await page.locator('knowbot-overlay .pill').waitFor({ state: 'visible', timeout: 15000 });
     check(cell.name, 'until dismissed: once closed, it stays closed on the next visit', await page.locator('knowbot-overlay .dialog').isHidden());
@@ -236,7 +231,7 @@ try {
     check('hosted', '× shows the page and the button', await page.locator('knowbot-overlay .pill').isVisible() && await page.evaluate(() => document.querySelector('.kh-page').inert === false));
     check('hosted', 'no horizontal scroll', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
     const axe = await runAxe(page);
-    if (!axe.skipped) check('hosted', 'axe: no serious or critical violations', !axe.violations.length, JSON.stringify(axe.violations));
+    check('hosted', 'axe: no serious or critical violations', axeOk(axe), axeDetail(axe));
     check('hosted', 'no console errors', !errors.length, errors.join(' | '));
     await page.goto(`${dev.url}/site/?bot=${t.trialId}&q=${encodeURIComponent(q)}`, { waitUntil: 'load' });
     await page.locator('knowbot-overlay .turn:not([aria-busy])').waitFor({ timeout: 30000 });

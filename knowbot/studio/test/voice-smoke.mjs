@@ -221,8 +221,7 @@ try {
     await page.waitForTimeout(700);
     await page.screenshot({ path: path.join(SHOTS, 'webchat-voice-dark.png') });
     await page.click('.sb-voice .kbvm-end');
-    await page.waitForSelector('.sb-voice', { state: 'detached', timeout: 5000 });
-    check('studio', 'web chat: End closes voice mode', true);
+    check('studio', 'web chat: End closes voice mode', await page.waitForSelector('.sb-voice', { state: 'detached', timeout: 5000 }).then(() => true).catch(() => false));
     check('studio', 'no page errors', !errors.length, errors.join(' | '));
     await ctx.close();
   }

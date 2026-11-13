@@ -25,7 +25,7 @@ import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
-import { outDir } from './smoke-util.mjs';
+import { outDir, injectAxe } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
@@ -50,12 +50,9 @@ let browser;
 try {
   browser = await chromium.launch({ headless: !process.env.HEADED });
   await fsp.mkdir(SHOTS, { recursive: true });
-  let axeSource = null;
-  try { const r = await fetch('https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js', { signal: AbortSignal.timeout(8000) }); if (r.ok) axeSource = await r.text(); } catch { axeSource = null; }
   const axe = async (page, cell, label) => {
-    if (!axeSource) { console.log(`  (axe skipped for ${label}: CDN unreachable)`); return; }
-    if (!(await page.evaluate(() => !!window.axe))) await page.addScriptTag({ content: axeSource });
-    const res = await page.evaluate(async () => (await window.axe.run(document.getElementById('st-ftue'), { runOnly: ['wcag2a', 'wcag2aa'] })).violations.map((v) => `${v.id}: ${v.nodes.length}`));
+    const res = await injectAxe(page).then(() => page.evaluate(async () => (await window.axe.run(document.getElementById('st-ftue'), { runOnly: ['wcag2a', 'wcag2aa'] })).violations.map((v) => `${v.id}: ${v.nodes.length}`)))
+      .catch((e) => [`axe did not run: ${e.message}`]);
     check(cell, `axe: no WCAG A/AA violations in the guide (${label})`, !res.length, res.join(', '));
   };
   for (const cell of CELLS) {

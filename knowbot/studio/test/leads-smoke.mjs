@@ -8,7 +8,7 @@
 //      in server/test/voice-live.test.mjs) and clicked
 //   2. the Stats & Leads panel opens from the header button (⋯ menu on phones): totals, interactions by channel, the leads table, checkout links + clicks,
 //      7 / 30 days, the tracking switch, and Download CSV (the downloaded file's columns and rows are checked)
-//   3. axe (when the CDN is reachable), Escape closes and focus returns, light + dark screenshots at 2x
+//   3. axe, Escape closes and focus returns, light + dark screenshots at 2x
 //
 //   npm run leads:smoke                  # SHOTS=<dir> to keep the screenshots and the sample CSV somewhere else
 import path from 'node:path';
@@ -17,13 +17,12 @@ import { promises as fsp } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { startDevServer, DEV_CHANNEL_SECRETS } from './dev-server.mjs';
-import { outDir } from './smoke-util.mjs';
+import { outDir, injectAxe } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const SHOTS = outDir('leads', process.env.SHOTS);
-const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 const CSV_HEAD = 'timestamp,bot,channel,type,email,phone,question,utm_source,utm_medium,utm_campaign,click_id,clicked_at,checkout_items,consent,session';
 
 let failures = 0;
@@ -78,8 +77,6 @@ try {
   console.log('2. the Stats & Leads panel');
   browser = await chromium.launch({ headless: !process.env.HEADED });
   await fsp.mkdir(SHOTS, { recursive: true });
-  let axeSource = null;
-  try { const r = await fetch(AXE_URL, { signal: AbortSignal.timeout(8000) }); if (r.ok) axeSource = await r.text(); } catch { axeSource = null; }
   for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2, colorScheme: theme, acceptDownloads: true });
     await context.addInitScript(({ trial, theme: th }) => {
@@ -136,11 +133,11 @@ try {
       check('the CSV downloads with the CRM columns', lines[0] === CSV_HEAD, lines[0]);
       check('the CSV has every lead and the checkout link', lines.length === 7 && lines.some((l) => /,checkout,,\+16475550123,/.test(l)) && lines.some((l) => l.includes('jordan.lee@example.com') && /,knowbot,webchat,tr_/.test(l)), `${lines.length} lines`);
       check('the file is named for the bot', /^knowbot-leads-[a-z0-9-]+-\d{4}-\d{2}-\d{2}\.csv$/.test(download.suggestedFilename()), download.suggestedFilename());
-      if (axeSource) {
-        await page.addScriptTag({ content: axeSource });
-        const res = await page.evaluate(async () => (await window.axe.run(document.querySelector('dialog.kb-leads'), { runOnly: ['wcag2a', 'wcag2aa'] })).violations.map((v) => `${v.id}: ${v.nodes.length}`));
+      {
+        const res = await injectAxe(page).then(() => page.evaluate(async () => (await window.axe.run(document.querySelector('dialog.kb-leads'), { runOnly: ['wcag2a', 'wcag2aa'] })).violations.map((v) => `${v.id}: ${v.nodes.length}`)))
+          .catch((e) => [`axe did not run: ${e.message}`]);
         check('axe: no WCAG A/AA violations in the panel', !res.length, res.join(', '));
-      } else console.log('  (axe skipped: CDN unreachable)');
+      }
       await page.keyboard.press('Escape');
       await page.waitForSelector('dialog.kb-leads', { state: 'detached', timeout: 5000 });
       check('Escape closes it and focus returns to the Stats & Leads button', await page.evaluate(() => document.activeElement?.id === 'st-leads'));

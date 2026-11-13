@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { startDevServer } from './dev-server.mjs';
-import { outDir, UPDATE_SCREENS } from './smoke-util.mjs';
+import { outDir, UPDATE_SCREENS, injectAxe, watchErrors, settled } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;   // isolation rule (SPEC 7.1): nothing below may reach a real store
 
@@ -36,7 +36,6 @@ const SCREENS = outDir('', process.env.SMOKE_OUT);
 const FIXTURES = path.join(__dirname, 'fixtures');
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const SAMPLE_FILES = ['lumen-warranty-returns.md', 'lumen-service-plans.html', 'lumen-store-faq.txt', 'lumen-price-list-2026.md'];
-const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 
 const args = process.argv.slice(2);
 const QUICK = args.includes('--quick');
@@ -50,7 +49,6 @@ const CELLS = [
 ].filter((c) => (wantCells.length ? wantCells.includes(c.name) : QUICK ? ['desktop-light-full', 'mobile-light-full'].includes(c.name) : true));
 
 const results = [];   // {cell, step, name, ok, soft, detail}
-let axeSource = null;
 
 function log(...a) { console.log(...a); }
 
@@ -89,11 +87,6 @@ async function waitState(page, fn, { timeout = 30000, every = 250 } = {}) {
   return null;
 }
 
-/** Wait (at most `cap` ms) until no finite animation or transition is running: the page has stopped moving. */
-async function settled(page, cap = 1000) {
-  await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime)), null, { timeout: cap, polling: 50 }).catch(() => null);
-}
-
 /** Wait until the Builder has finished its turn: store.setup.busy stays false across three reads (about 0.3 s). */
 async function builderIdle(page, cap = 10000) {
   const t0 = Date.now();
@@ -111,19 +104,10 @@ async function noHScroll(page) {
   return page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 }
 
+/** axe on the page: { violations } or { error } (axe-core could not be loaded or run: a failure, never a skip). */
 async function runAxe(page) {
   try {
-    if (!(await page.evaluate(() => !!window.axe))) {
-      // offline runs: AXE_PATH=/path/to/axe.min.js (a local axe-core copy) instead of the CDN
-      if (process.env.AXE_PATH && axeSource === null) { try { axeSource = await fsp.readFile(process.env.AXE_PATH, 'utf8'); } catch { axeSource = null; } }
-      if (axeSource) await page.addScriptTag({ content: axeSource });
-      else try { await page.addScriptTag({ url: AXE_URL }); }
-      catch {
-        if (axeSource === null) { try { const r = await fetch(AXE_URL); axeSource = r.ok ? await r.text() : ''; } catch { axeSource = ''; } }
-        if (!axeSource) return { skipped: true };
-        await page.addScriptTag({ content: axeSource });
-      }
-    }
+    await injectAxe(page);
     const res = await page.evaluate(async () => {
       // label-content-name-mismatch (WCAG 2.5.3) is experimental in axe 4.10, so it is switched on explicitly
       const r = await window.axe.run(document, { resultTypes: ['violations'], rules: { 'label-content-name-mismatch': { enabled: true } } });
@@ -131,8 +115,10 @@ async function runAxe(page) {
         .map((v) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.slice(0, 4).map((n) => n.target.join(' ')) }));
     });
     return { violations: res };
-  } catch (e) { return { skipped: true, error: e.message }; }
+  } catch (e) { return { error: `axe did not run: ${e.message}` }; }
 }
+const axeOk = (a) => !a.error && a.violations.length === 0;
+const axeDetail = (a) => a.error || JSON.stringify(a.violations).slice(0, 600);
 
 async function pane(page, cell, which) {
   if (!cell.mobile) return;
@@ -228,22 +214,14 @@ async function setupCell(browser, cell) {
   return context;
 }
 
-function watchConsole(page, bucket) {
-  page.on('response', (r) => {
-    if (r.status() < 400) return;
-    const u = r.url();
-    if (/fonts\.(googleapis|gstatic)\.com/.test(u)) return;
-    bucket.push(`HTTP ${r.status()} ${u.replace(/^https?:\/\/[^/]+/, '')}`);
-  });
-  page.on('console', (m) => {
-    if (m.type() !== 'error') return;
-    const t = m.text();
-    if (/^Failed to load resource/.test(t)) return;   // reported with its URL by the response listener
-    if (/fonts\.(googleapis|gstatic)\.com|favicon|ERR_TUNNEL|ERR_PROXY|net::ERR_/.test(t)) return;   // offline font CDN in the sandbox
-    bucket.push(t);
-  });
-  page.on('pageerror', (e) => bucket.push(`pageerror: ${e.message}`));
-}
+// Console errors, page errors and failed requests are hard failures. What a journey provokes on purpose is allowed
+// by name, per context, and nothing else:
+const ALLOW_OWN_FILE = [
+  /^HTTP 4(?:00|13|15|22) POST \/api\/studio\/trials\/[^/]+\/files\b/,   // step 15 uploads an .exe and a file with no text: the server refuses them
+];
+const ALLOW_STORE = [
+  /^HTTP 4\d\d (?:POST|GET|DELETE) \/api\/studio\/trials\/[^/]+\/store\b/,   // step 18 stops an import and then imports from "localhost": both are refused or cancelled
+];
 
 // ------------------------------------------------------------------ the journey
 
@@ -252,8 +230,7 @@ async function journey(browser, dev, cell) {
   const check = makeChecker(cell);
   const context = await setupCell(browser, cell);
   const page = await context.newPage();
-  const errors = [];
-  watchConsole(page, errors);
+  const errors = watchErrors(page);
   const hscroll = async (step) => check(step, 'no horizontal scroll', await noHScroll(page));
   let trialStatus = null;
   page.on('response', (r) => { if (r.url().endsWith('/api/studio/trials') && r.request().method() === 'POST') trialStatus = r.status(); });
@@ -286,8 +263,7 @@ async function journey(browser, dev, cell) {
   }
   await shot(page, cell, '01-landing');
   const axe1 = await runAxe(page);
-  if (axe1.skipped) check('01-landing', 'axe (skipped: axe-core unreachable)', true, { soft: true, detail: axe1.error || '' });
-  else check('01-landing', 'axe: 0 serious/critical', axe1.violations.length === 0, { detail: JSON.stringify(axe1.violations).slice(0, 600) });
+  check('01-landing', 'axe: 0 serious/critical', axeOk(axe1), { detail: axeDetail(axe1) });
 
   // 02 samples
   await page.locator('#st-log .st-chip-primary').first().click();
@@ -385,7 +361,7 @@ async function journey(browser, dev, cell) {
   await hscroll('05-first-answer');
   await shot(page, cell, '05-first-answer');
   const axe2 = await runAxe(page);
-  if (!axe2.skipped) check('05-first-answer', 'axe: 0 serious/critical', axe2.violations.length === 0, { detail: JSON.stringify(axe2.violations).slice(0, 600) });
+  check('05-first-answer', 'axe: 0 serious/critical', axeOk(axe2), { detail: axeDetail(axe2) });
   if (cell.mobile) {
     const badge = await page.evaluate(() => { const b = document.querySelector('#st-tab-setup .st-badge'); return !!b && !b.hidden; });
     check('05-first-answer', 'mobile: badge on the hidden Builder tab', badge, { soft: true });
@@ -592,9 +568,9 @@ async function journey(browser, dev, cell) {
   await builderIdle(page);   // the proof_done turn (price, strip, next chips) is over
   {
     const price11 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);
-    check('11-proof-run', 'price goes solid at the Proof Run (the peak)', price11 === 'solid' || price11 === undefined, { detail: price11 });
+    check('11-proof-run', 'price goes solid at the Proof Run (the peak)', price11 === 'solid', { detail: String(price11) });
     const strip = await page.evaluate(() => (document.getElementById('st-prun')?.innerText || '').replace(/\s+/g, ' ').trim());
-    check('11-proof-run', 'proof strip names the test once ("Tests 11/11 passed")', !strip || (/(?:Proof Run|Tests) 11\/11/.test(strip) && (strip.match(/Proof Run|Tests/g) || []).length === 1), { soft: true, detail: strip });
+    check('11-proof-run', 'proof strip names the test once ("Tests 11/11 passed")', /(?:Proof Run|Tests) 11\/11/.test(strip) && (strip.match(/Proof Run|Tests/g) || []).length === 1, { soft: true, detail: strip || '(the proof strip is empty)' });
   }
   await shot(page, cell, '11-proof-run');
 
@@ -665,7 +641,7 @@ async function journey(browser, dev, cell) {
   check('13-checkout', 'email field has focus', emailFocus);
   await shot(page, cell, '13-checkout');
   const axe3 = await runAxe(page);
-  if (!axe3.skipped) check('13-checkout', 'axe: 0 serious/critical', axe3.violations.length === 0, { detail: JSON.stringify(axe3.violations).slice(0, 600) });
+  check('13-checkout', 'axe: 0 serious/critical', axeOk(axe3), { detail: axeDetail(axe3) });
   const email = page.locator('#co-modal-slot input[type="email"]').first();
   if (await email.count()) { await email.fill('smoke@example.com'); }
   const cont = page.locator('#co-modal-slot button', { hasText: /Continue to secure checkout/i }).first();
@@ -692,6 +668,7 @@ async function journey(browser, dev, cell) {
   }
   check('13-checkout', 'pointer targets never covered (keyboard fallback unused)', interceptNotes.length === 0, { soft: true, detail: interceptNotes.join(' || ') });
   interceptNotes = [];
+  check('13-checkout', 'no console errors or failed requests in the whole journey (steps 01-13)', errors.length === 0, { detail: errors.slice(0, 4).join(' || ') });
   await context.close();
 
   if (QUICK) return;
@@ -699,7 +676,7 @@ async function journey(browser, dev, cell) {
   // 14 own file (fresh context)
   const ctx2 = await setupCell(browser, cell);
   const p2 = await ctx2.newPage();
-  const errs2 = []; watchConsole(p2, errs2);
+  const errs2 = watchErrors(p2, { allow: ALLOW_OWN_FILE });
   await p2.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
   await p2.waitForSelector('#st-log .st-chip', { timeout: 6000 });
   await waitState(p2, (s) => s.trial.status === 'ready', { timeout: 8000 });
@@ -756,7 +733,7 @@ async function journey(browser, dev, cell) {
   check('16-reload', 'files restored', restored);
   check('16-reload', 'no horizontal scroll', await noHScroll(p2));
   await shot(p2, cell, '16-reload');
-  check('16-reload', 'no console errors (own-file context)', errs2.filter((e) => !/HTTP 4(00|13|15|22)/.test(e)).length === 0, { soft: true, detail: errs2.slice(0, 3).join(' || ') });
+  check('16-reload', 'no console errors (own-file context)', errs2.length === 0, { detail: errs2.slice(0, 4).join(' || ') });
 
   // shell hit areas (phones): every header / bot-header control takes a 44 x 44 tap around its centre
   if (cell.mobile) {
@@ -789,6 +766,7 @@ async function journey(browser, dev, cell) {
     // channel + API next actions); a text-only Live line still offers "Copy embed code"
     return /Set up channels|Test it before going live|Copy embed code/.test(t) && !/Use sample files|canonical bot|avoid making things up|^\s*Call it /im.test(t) ? t : null; }, null, { timeout: 12000 }).then((h) => h.jsonValue()).catch(() => null);
   check('17-live', 'Builder offers the live next actions (no setup chips)', !!liveChips, { detail: String(liveChips || '').replace(/\s+/g, ' ') });
+  check('17-live', 'no console errors after launch (live reload)', errs2.length === 0, { detail: errs2.slice(0, 4).join(' || ') });
   check('17-live', 'ghost answer hidden', await p2.evaluate(() => { const g = document.querySelector('.sb-ghost'); return !g || g.offsetParent === null; }));
   await p2.waitForTimeout(cell.motion === 'reduce' ? 200 : 1400);   // let the SuccessCard finish assembling before the shot
   await shot(p2, cell, '17-live');
@@ -809,8 +787,7 @@ async function storeJourney(browser, dev, cell) {
   const check = makeChecker(cell);
   const context = await setupCell(browser, cell);
   const page = await context.newPage();
-  const errors = [];
-  watchConsole(page, errors);
+  const errors = watchErrors(page, { allow: ALLOW_STORE });
   try {
     await page.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
     await waitState(page, (s) => s.trial.status === 'ready', { timeout: 10000 });
@@ -931,7 +908,7 @@ async function storeJourney(browser, dev, cell) {
       return run && /Try another URL/.test(run.innerText) && /Upload files instead/.test(run.innerText) ? run.innerText : null;
     }, null, { timeout: 10000 }).then((h) => h.jsonValue()).catch(() => null);
     check('18-store', 'errors use the store copy with "Try another URL" and "Upload files instead"', !!errUi, { detail: String(errUi || '').replace(/\s+/g, ' ') });
-    check('18-store', 'no console errors', errors.length === 0, { soft: true, detail: errors.slice(0, 3).join(' || ') });
+    check('18-store', 'no console errors', errors.length === 0, { detail: errors.slice(0, 4).join(' || ') });
     check('18-store', 'no horizontal scroll', await noHScroll(page));
   } finally { await context.close(); }
 }

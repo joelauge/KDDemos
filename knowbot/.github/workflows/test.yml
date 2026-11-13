@@ -1,0 +1,73 @@
+# Unit tests on every push and pull request to main: npm ci && npm test (about a minute).
+# Everything runs against fakes on 127.0.0.1 (fake KnowDrive, model, Twilio, Stripe): no secrets are used or needed,
+# and none must ever be added here (this repository is public).
+#
+# The browser smokes are a separate job, started by hand (Actions -> Tests -> Run workflow -> "Also run the browser
+# smokes"). They need Chromium, which the job installs with Playwright.
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      smokes:
+        description: Also run the browser smokes (Playwright, headless Chromium)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+  smokes:
+    name: Browser smokes
+    if: github.event_name == 'workflow_dispatch' && inputs.smokes
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SMOKE_CONCURRENCY: 2   # hosted runners have less memory and fewer cores than a workstation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Install Playwright and Chromium (not a dependency of the server, so not in package.json)
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - run: npm run studio:smoke
+      - run: npm run onboarding:e2e
+        if: ${{ !cancelled() }}
+      - run: npm run ftue:smoke
+        if: ${{ !cancelled() }}
+      - run: npm run kd:smoke
+        if: ${{ !cancelled() }}
+      - run: npm run leads:smoke
+        if: ${{ !cancelled() }}
+      - run: npm run tools:smoke
+        if: ${{ !cancelled() }}
+      - run: npm run voice:smoke
+        if: ${{ !cancelled() }}
+      - run: npm run site:smoke
+        if: ${{ !cancelled() }}
+      - name: Keep the screenshots and reports of this run
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-output
+          path: /tmp/knowbot-smoke
+          if-no-files-found: ignore
+          retention-days: 7

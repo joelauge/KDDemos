@@ -18,7 +18,7 @@ import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { outDir } from './smoke-util.mjs';
+import { outDir, injectAxe } from './smoke-util.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -29,7 +29,6 @@ const ONLY = (args.find((a) => a.startsWith('--only=')) || '').slice(7);
 const MODE = LIVE ? 'live' : 'local';
 const OUT = outDir(path.join('onboarding', MODE), process.env.OUT);
 const STUDIO_LIVE = process.env.LIVE_STUDIO_URL || 'https://knowbot.knowdrive.ai/studio/';
-const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const VIEWPORTS = [
   { name: 'desktop', viewport: { width: 1440, height: 900 }, mobile: false },
@@ -38,13 +37,6 @@ const VIEWPORTS = [
 
 if (!LIVE) delete process.env.KNOWDRIVE_API_KEY; // the local journey never reaches a real store
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-let axeSource = null;
-async function loadAxe() {
-  if (axeSource !== null) return axeSource;
-  try { if (process.env.AXE_PATH) axeSource = await fsp.readFile(process.env.AXE_PATH, 'utf8'); } catch { axeSource = null; }
-  if (!axeSource) { try { const r = await fetch(AXE_URL, { signal: AbortSignal.timeout(10000) }); axeSource = r.ok ? await r.text() : ''; } catch { axeSource = ''; } }
-  return axeSource;
-}
 
 // ------------------------------------------------------------------ recorder
 const report = { mode: MODE, started: new Date().toISOString(), runs: [] };
@@ -163,17 +155,16 @@ async function copyAudit(page) {
   return hits;
 }
 
+/** axe on the page: { violations } or { error } (axe-core could not be loaded or run: recorded as a problem). */
 async function axe(page) {
-  const src = await loadAxe();
-  if (!src) return { skipped: true };
   try {
-    if (!(await page.evaluate(() => !!window.axe))) await page.addScriptTag({ content: src });
+    await injectAxe(page);
     const v = await page.evaluate(async () => {
       const r = await window.axe.run(document, { runOnly: ['wcag2a', 'wcag2aa'], resultTypes: ['violations'] });
       return r.violations.filter((x) => x.impact === 'serious' || x.impact === 'critical').map((x) => `${x.id} (${x.impact}): ${x.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`);
     });
     return { violations: v };
-  } catch (e) { return { skipped: true, error: e.message }; }
+  } catch (e) { return { error: e.message }; }
 }
 
 function makeRun(vp) {
@@ -202,7 +193,7 @@ function makeRun(vp) {
     rec.console = bucket.console.splice(0);
     rec.network = bucket.network.splice(0);
     try { rec.layout = await layoutAudit(P); } catch (e) { rec.layout = []; }
-    if (!opts.noAxe) { const a = await axe(P); rec.axe = a.violations || []; if (a.skipped) rec.notes.push('axe skipped'); }
+    if (!opts.noAxe) { const a = await axe(P); rec.axe = a.error ? [`axe did not run: ${a.error}`] : a.violations; }
     try { rec.next = await nextActions(P); } catch { rec.next = null; }
     if (!opts.external) { try { rec.copy = await copyAudit(P); } catch { rec.copy = []; } }
     const dead = !opts.allowNoAction && !opts.external && rec.next && !rec.next.primary.length && !rec.next.composer;

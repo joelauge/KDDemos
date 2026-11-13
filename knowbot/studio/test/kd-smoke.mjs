@@ -17,13 +17,12 @@ import os from 'node:os';
 import { promises as fsp } from 'node:fs';
 import { createRequire } from 'node:module';
 import { startDevServer } from './dev-server.mjs';
-import { outDir } from './smoke-util.mjs';
+import { outDir, injectAxe, settled } from './smoke-util.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const SHOTS = outDir('kd', process.env.SHOTS);
-const AXE_URL = 'https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js';
 
 let failures = 0;
 const check = (name, ok, detail = '') => { console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${name}${detail ? ` · ${String(detail).slice(0, 240)}` : ''}`); if (!ok) failures++; return ok; };
@@ -79,8 +78,6 @@ let browser;
 try {
   browser = await chromium.launch({ headless: !process.env.HEADED });
   await fsp.mkdir(SHOTS, { recursive: true });
-  let axeSource = null;
-  try { const r = await fetch(AXE_URL, { signal: AbortSignal.timeout(8000) }); if (r.ok) axeSource = await r.text(); } catch { axeSource = null; }
 
   console.log('1. Launch opens the KnowDrive step; Escape closes it');
   const t1 = await newTrial({ samples: true });
@@ -96,11 +93,13 @@ try {
   check('the background is inert', await page.evaluate(() => !!document.getElementById('st-app')?.inert || !!document.querySelector('[inert]')));
   const text = await dlg.textContent();
   check('no third-party names in the copy', !/google|oauth|stripe|twilio|anthropic|claude|cloudflare/i.test(text), text);
-  if (axeSource) {
-    await page.addScriptTag({ content: axeSource });
-    const res = await page.evaluate(async () => (await window.axe.run(document.querySelector('.kda-dialog'), { runOnly: ['wcag2a', 'wcag2aa'] })).violations.map((v) => `${v.id}: ${v.nodes.length}`));
+  {
+    // the dialog fades in: measured halfway, its text fails colour contrast, so axe runs once it has stopped moving
+    await settled(page, 3000);
+    const res = await injectAxe(page).then(() => page.evaluate(async () => (await window.axe.run(document.querySelector('.kda-dialog'), { runOnly: ['wcag2a', 'wcag2aa'] })).violations.map((v) => `${v.id}: ${v.nodes.length}`)))
+      .catch((e) => [`axe did not run: ${e.message}`]);
     check('axe: no WCAG A/AA violations in the step', !res.length, res.join(', '));
-  } else console.log('  (axe skipped: CDN unreachable)');
+  }
   await page.screenshot({ path: path.join(SHOTS, 'kd-start-light.png') });
   // Tab stays inside
   for (let i = 0; i < 6; i++) await page.keyboard.press('Tab');
@@ -114,13 +113,11 @@ try {
   await openLaunch(page);
   await page.locator('#kda-create').waitFor();
   const [popup] = await Promise.all([A.context.waitForEvent('page'), page.locator('#kda-create').click()]);
-  await page.locator('.kda-body', { hasText: /Finish signing in|Finish in the KnowDrive window/ }).waitFor({ timeout: 10000 });
-  check('waits for the popup', true);
+  check('waits for the popup', await page.locator('.kda-body', { hasText: /Finish signing in|Finish in the KnowDrive window/ }).waitFor({ timeout: 10000 }).then(() => true).catch(() => false));
   await finishInPopup(popup, { email: 'casey@example.com' });
   await popup.waitForEvent('close', { timeout: 10000 }).catch(() => {});
   check('the popup closes itself', popup.isClosed());
-  await page.locator('.kda-who', { hasText: 'casey@example.com' }).first().waitFor({ timeout: 15000 });
-  check('Signed in as <email>', true);
+  check('Signed in as <email>', await page.locator('.kda-who', { hasText: 'casey@example.com' }).first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false));
   const sawMoving = await page.locator('.kda-body', { hasText: /Moving 2 files/ }).first().waitFor({ timeout: 8000 }).then(() => true).catch(() => false);
   check('Moving N files (progress)', sawMoving || (await page.locator('#kda-continue').count()) > 0);
   if (sawMoving) await page.screenshot({ path: path.join(SHOTS, 'kd-moving-light.png') });
