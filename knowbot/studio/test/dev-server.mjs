@@ -32,6 +32,8 @@ export const DEV_CHANNEL_SECRETS = Object.freeze({
 // KnowBot numbers (server/numbers.mjs) on the dev server: a fake number provider and fake payments on loopback, with
 // fake keys. A real payments key (sk_live_ / sk_test_ / rk_…) is refused.
 export const DEV_NUMBER_SECRETS = Object.freeze({ STRIPE_SECRET_KEY: 'sk_dev_fake', STRIPE_PUBLISHABLE_KEY: 'pk_dev_fake', STRIPE_WEBHOOK_SECRET: 'whsec_dev_fake' });
+// The KnowBot plan's checkout (server/billing.mjs) on the dev server: the same fake payments, its own webhook secret.
+export const DEV_BILLING_SECRETS = Object.freeze({ STRIPE_SECRET_KEY: 'sk_dev_fake', KNOWBOT_BILLING_WEBHOOK_SECRET: 'whsec_dev_billing_fake' });
 // Keys that would reach a real provider: never accepted by the dev server.
 const REAL_PROVIDER_KEYS = ['SENDGRID_API_KEY', 'POSTMARK_SERVER_TOKEN', 'GOOGLE_API_KEY', 'GOOGLE_STT_API_KEY', 'GOOGLE_TTS_API_KEY', 'GOOGLE_ACCESS_TOKEN', 'MAILGUN_SIGNING_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'];
 
@@ -121,12 +123,15 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
   const sink = await startFakeChannelSink({ host: '127.0.0.1' });
   const shop = await startFakeStore({ host: '127.0.0.1' });
   const tw = channels && numbers ? await startFakeTwilio({ host: '127.0.0.1' }) : null;
-  const pay = channels && numbers ? await startFakeStripe({ host: '127.0.0.1' }) : null;
+  const pay = await startFakeStripe({ host: '127.0.0.1' }); // the plan's checkout always; KnowBot numbers when on
   const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-studio-dev-'));
   const env = {
     KNOWDRIVE_BASE_URL: kd.url, KNOWDRIVE_API_KEY: 'fake-key', KNOWDRIVE_STORE: 'vs_fake', KNOWBOT_TRIAL_STORE: 'vs_fake_trials',
     KNOWBOT_ADMIN_TOKEN: 'dev-admin', KNOWBOT_SECRET_KEY: 'dev-secret', LLM_BASE_URL: `${llm.url}/v1`, LLM_MODEL: 'fake-qwen2.5-1.5b',
-    KNOWBOT_CHECKOUT_URL: 'https://knowdrive.ai/signup?plan=knowbot',
+    KNOWBOT_CHECKOUT_URL: 'https://knowdrive.ai/signup?plan=knowbot', // only used with KNOWBOT_CHECKOUT=knowdrive
+    // the KnowBot plan: Launch → "Continue to secure checkout" opens the fake payments' hosted page (/pay/:id), which
+    // posts the signed webhook events to this server
+    ...DEV_BILLING_SECRETS, STRIPE_API_BASE_URL: pay.url,
     // KnowDrive accounts at launch: the fake knowDrive is also the authorization server (sign-up, sign-in, tokens) and
     // gives every account its own store, so the whole Launch → account → move → checkout flow runs offline
     KNOWBOT_KD_AUTH_URL: kd.url,
@@ -134,7 +139,7 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
       TWILIO_API_BASE_URL: sink.url, KNOWBOT_STUDIO_CHANNEL_TEST: '1',
       // "send me this" by e-mail (and the Leads report's e-mail leads): a fake mail key; every e-mail lands in the sink
       RESEND_API_KEY: 're_dev_fake', RESEND_BASE_URL: sink.url } : {}),
-    ...(tw && pay ? { ...DEV_NUMBER_SECRETS, TWILIO_API_BASE_URL: tw.url, TWILIO_PRICING_BASE_URL: tw.url, STRIPE_API_BASE_URL: pay.url, STRIPE_JS_URL: `${pay.url}/stripe.js` } : {}),
+    ...(tw ? { ...DEV_NUMBER_SECRETS, TWILIO_API_BASE_URL: tw.url, TWILIO_PRICING_BASE_URL: tw.url, STRIPE_API_BASE_URL: pay.url, STRIPE_JS_URL: `${pay.url}/stripe.js` } : {}),
     ...(engine === 'llm' ? { KNOWBOT_STUDIO_PROVIDER: 'local' } : {}),
     ...extra,
   };
@@ -147,7 +152,7 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
     for (const k of REAL_PROVIDER_KEYS) if (env[k]) throw new Error(`dev-server refuses to start: ${k} would reach a real provider`);
     if (/^(?:sk|rk)_(?:live|test)_/.test(String(env.STRIPE_SECRET_KEY || ''))) throw new Error('dev-server refuses to start: STRIPE_SECRET_KEY is a real payments key');
     if (env.STRIPE_SECRET_KEY && !env.STRIPE_API_BASE_URL) throw new Error('dev-server refuses to start: STRIPE_SECRET_KEY without a loopback STRIPE_API_BASE_URL');
-  } catch (e) { await kd.close(); await llm.close(); await sink.close(); await shop.close(); await tw?.close(); await pay?.close(); throw e; }
+  } catch (e) { await kd.close(); await llm.close(); await sink.close(); await shop.close(); await tw?.close(); await pay.close(); throw e; }
   // "Enter a Store URL" may reach the fake shop's port on loopback only (the importer refuses loopback by default)
   const storeNet = { allowAddresses: ['127.0.0.1'], allowPorts: [shop.port], paceMs: 20 };
   const kb = createKnowBotServer({ root: ROOT, env, quiet, watch: false, dataDir, studio: { sweep: false, storeNet, ...(studio || {}) } });
@@ -155,9 +160,10 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
   const actual = kb.server.address().port;
   const url = `http://${host}:${actual}`;
   // fake payments post the signed checkout.session.completed event to this server, like the real webhook
-  if (pay) pay.state.webhook = { url: `${url}/api/studio/numbers/webhook`, secret: DEV_NUMBER_SECRETS.STRIPE_WEBHOOK_SECRET };
+  pay.state.webhook = { url: `${url}/api/studio/numbers/webhook`, secret: DEV_NUMBER_SECRETS.STRIPE_WEBHOOK_SECRET };
+  if (env.KNOWBOT_BILLING_WEBHOOK_SECRET) pay.state.webhooks.push({ url: `${url}/api/studio/billing/webhook`, secret: env.KNOWBOT_BILLING_WEBHOOK_SECRET });
   return {
-    url, studioUrl: `${url}/studio/`, port: actual, kd, llm, kb, dataDir, sink, shop, shopUrl: shop.url, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null, numbers: tw && pay ? { provider: tw, payments: pay } : null,
+    url, studioUrl: `${url}/studio/`, port: actual, kd, llm, kb, dataDir, sink, shop, shopUrl: shop.url, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null, numbers: tw ? { provider: tw, payments: pay } : null, payments: pay,
     async close() {
       await new Promise((r) => kb.server.close(() => r()));
       await shop.close();

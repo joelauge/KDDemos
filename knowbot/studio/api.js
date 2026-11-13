@@ -453,6 +453,13 @@ export async function checkout({ email, surfaces, interval } = {}) {
   return request('POST', trialPath('/checkout'), { body: { ...(email ? { email } : {}), ...(Array.isArray(surfaces) && surfaces.length ? { surfaces } : {}), ...(interval ? { interval } : {}) } });
 }
 
+/** GET /billing -> {mode, converted, billing}: the plan's status for the owner (trialing | active | past_due | canceled). */
+export async function billing() { return request('GET', trialPath('/billing')); }
+/** POST /billing/confirm -> {converted, billing, paid}: looks a finished checkout up (the return before the webhook). */
+export async function billingConfirm() { return request('POST', trialPath('/billing/confirm'), { body: {} }); }
+/** POST /billing/portal -> {url}: the page to cancel, update the card or get invoices. */
+export async function billingPortal() { return request('POST', trialPath('/billing/portal'), { body: {} }); }
+
 /** `${origin}${pathname}?t=<id>&k=<restore key>` (never contains the bearer token; the restore key only works on POST /restore). */
 export function shareLink() {
   const id = T().id || '';
@@ -508,6 +515,7 @@ export function openEvents({ onEvent, onStatus } = {}) {
         else if (type === 'storegroup') emit('store:group', data);
         else if (type === 'asked') emit('insights:asked', data);
         else if (type === 'kd') emit('kd:event', data);
+        else if (type === 'billing') emit('billing:event', data);
         else if (type === 'hello') {
           if (Array.isArray(data.files)) emit('store:rows', { rows: data.files.filter((r) => r && r.origin === 'store'), reset: true });
           for (const g of Array.isArray(data.groups) ? data.groups : []) emit('store:group', g);

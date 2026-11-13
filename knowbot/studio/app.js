@@ -2563,6 +2563,7 @@ function openMoreMenu(anchor) {
     item('motion', motion.reduced() ? 'Full motion' : 'Reduce motion', toggleMotion),
     item('command', 'Command palette', () => openPalette()),
     item('table', detailsOn() ? 'Hide details' : 'Show details', toggleDetails),
+    mods.checkout?.billing?.canManage ? item('card', 'Manage billing', () => mods.checkout.manageBilling()) : null,
     t.converted ? null : item('refresh', 'Start over', () => confirmStartOver()),
     t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, h('span', { html: icon('checkCircle', 14) }), ` Saved until ${new Date(t.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`) : null);
   openMenu(anchor, list);
