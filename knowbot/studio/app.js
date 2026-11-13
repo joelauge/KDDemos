@@ -1122,7 +1122,7 @@ function polishCopy(text) {
     if (!sc) return all;
     const n = (sc.total || 0) + (sc.probes || 0), ok = (sc.answered || 0) + (sc.refused || 0);
     // plain words: how many tests, and that it passed them all
-    return sc.mini === false || (sc.mini == null && (sc.total || 0) >= 8) ? `All ${n} tests passed.` : `Quick check passed (${ok} of ${n}).`;
+    return sc.mini === false || (sc.mini == null && (sc.total || 0) >= 8) ? `All ${n} tests passed.` : `${ok} of ${n} tests passed.`;
   });
   t = t.replace(/, built for ([^(.\n]+?) \(([a-z]+)\)/g, (all, org, tone) => {
     const o = org.trim();
@@ -2258,7 +2258,7 @@ function paintProofStrip() {
   const passed = rows.filter((r) => r.status === 'pass').length;
   // r5 (D8): the strip names the test that ran: the full 8 + 3 is the Proof Run; anything shorter is a quick check
   // (never "Proof Run passed" after 4 questions). One phrase, no repeat.
-  const kind = rows.filter((r) => r.expect !== 'refuse').length >= 8 ? 'Proof Run' : 'Quick check';
+  const kind = 'Tests';   // onboarding copy: one plain name, whatever the run's size
   setText($('.st-prun-n', el), pr.status === 'done' ? `${kind} ${passed}/${rows.length}` : `${done}/${rows.length}`);
   const cur = rows.find((r) => r.status === 'running');
   const q = $('.st-prun-q', el);

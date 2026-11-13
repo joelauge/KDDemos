@@ -131,6 +131,37 @@ async function nextActions(page) {
   });
 }
 
+/** Copy audit: words a new visitor should never have to decode, in what they can see right now (the Sources map
+ *  explains its own "atoms" in its legend, code blocks are code, and the Proof view is the opt-in detail view). */
+const JARGON = [
+  [/\bSampleBot\b/, 'the placeholder bot name'], [/\batomi[sz]\w*|\batoms?\b/i, '"atom" (storage jargon)'], [/\bingest\w*/i, '"ingest"'],
+  [/\bvectori[sz]\w*|\bvector\b/i, '"vector"'], [/\bchunk\w*/i, '"chunk"'], [/\bgrounded\b|\bgrounding\b/i, '"grounded"'], [/\btrial key\b/i, '"trial key"'],
+  [/\bbot spec\b/i, '"bot spec"'], [/\bmatch \d{2}\b/i, 'a bare match score'], [/\bextracting\b/i, '"extracting"'], [/\bencoding your knowledge\b/i, '"encoding"'],
+  [/\bOAuth\b|\bopenid\b/i, 'auth protocol names'], [/\bunsupported claims?\b/i, '"unsupported claims"'], [/\bQuick check\b/i, '"Quick check" vs "tests" (two names)'],
+];
+async function copyAudit(page) {
+  const text = await page.evaluate(() => {
+    const visible = (el) => { if (!el.getClientRects().length) return false; const cs = getComputedStyle(el); return cs.visibility !== 'hidden' && +cs.opacity >= 0.05; };
+    const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].filter(visible);
+    const root = dialogs.length ? dialogs[dialogs.length - 1] : document.body;
+    const out = [];
+    const walk = (n) => {
+      if (n.nodeType === 3) { const p = n.parentElement; if (p && n.textContent.trim() && visible(p)) { const r = p.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth) out.push(n.textContent.trim()); } return; }
+      if (n.nodeType !== 1) return;
+      if (n.matches('#in-map-slot, pre, code, script, style, [aria-hidden="true"], [hidden], .st-sr, .co-sr, .sr-only, [data-view="proof"]')) return;
+      for (const c of n.childNodes) walk(c);
+    };
+    walk(root);
+    return out.join(' \n ');
+  }).catch(() => '');
+  const hits = [];
+  for (const [re, what] of JARGON) {
+    const m = re.exec(text);
+    if (m) { const i = text.indexOf(m[0]); hits.push(`${what}: "…${text.slice(Math.max(0, i - 50), i + 60).replace(/\s+/g, ' ').trim()}…"`); }
+  }
+  return hits;
+}
+
 async function axe(page) {
   const src = await loadAxe();
   if (!src) return { skipped: true };
@@ -158,7 +189,7 @@ function makeRun(vp) {
     n++;
     const id = `${String(n).padStart(2, '0')}-${name}`;
     const t0 = Date.now();
-    const rec = { id, name, ms: 0, ok: true, error: null, shot: path.join(dir, `${id}.png`), console: [], network: [], layout: [], axe: [], next: null, notes: [], external: !!opts.external };
+    const rec = { id, name, ms: 0, ok: true, error: null, shot: path.join(dir, `${id}.png`), console: [], network: [], layout: [], axe: [], copy: [], next: null, notes: [], external: !!opts.external };
     run.steps.push(rec);
     process.stdout.write(`  ${id} … `);
     try { const r = await fn(rec); if (typeof r === 'string') rec.notes.push(r); }
@@ -172,6 +203,7 @@ function makeRun(vp) {
     try { rec.layout = await layoutAudit(P); } catch (e) { rec.layout = []; }
     if (!opts.noAxe) { const a = await axe(P); rec.axe = a.violations || []; if (a.skipped) rec.notes.push('axe skipped'); }
     try { rec.next = await nextActions(P); } catch { rec.next = null; }
+    if (!opts.external) { try { rec.copy = await copyAudit(P); } catch { rec.copy = []; } }
     const dead = !opts.allowNoAction && !opts.external && rec.next && !rec.next.primary.length && !rec.next.composer;
     const add = (kind, detail) => run.problems.push({ step: id, kind, detail, shot: rec.shot, external: rec.external });
     if (!rec.ok) add('step failed', rec.error);
@@ -179,6 +211,7 @@ function makeRun(vp) {
     for (const x of rec.network) add('failed request', x);
     for (const l of rec.layout) add('layout', l);
     for (const v of rec.axe) add('accessibility', v);
+    for (const v of rec.copy) { const seen = run.problems.some((p) => p.kind === 'copy' && p.detail.split(':')[0] === v.split(':')[0]); if (!seen) add('copy', v); }
     if (dead) add('dead end', 'no visible primary action and nowhere to type');
     if (opts.budgetMs && rec.ms > opts.budgetMs) add('slow', `${(rec.ms / 1000).toFixed(1)} s (budget ${(opts.budgetMs / 1000).toFixed(0)} s)`);
     const bad = run.problems.filter((p) => p.step === id).length;
@@ -232,7 +265,7 @@ function fakeCheckoutPage(u) {
   const p = u.searchParams;
   const price = Number(p.get('price') || 0), interval = p.get('interval') || 'month';
   const pay = new URL('https://knowdrive.ai/__fake_pay'); pay.search = u.search;
-  return `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>KnowDrive checkout (fake)</title>
+  return `<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>KnowDrive checkout (fake)</title>
 <style>body{font:16px system-ui;margin:0;padding:24px;max-width:480px;margin:auto;color:#222}h1{font-size:22px}.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee}button{width:100%;padding:14px;font-size:16px;margin-top:20px;border-radius:10px;border:0;background:#222;color:#fff}</style>
 <h1>Subscribe to KnowBot</h1><p>Fake payment page (local harness). Nothing is charged.</p>
 <div class=row><span>Bot</span><b id=bot>${(p.get('bot') || '').replace(/[<&]/g, '')}</b></div>
@@ -548,6 +581,10 @@ async function writeReport() {
       L.push('');
     } else L.push('No problems.', '');
   }
+  const copy = ours.filter((p) => p.kind === 'copy');
+  L.push('## Copy', '', copy.length ? 'Words a new visitor would have to decode, where they first appear (fix → plain words):' : 'No jargon found in what a new visitor sees (the Sources map keeps its own legend-explained "atoms"; code blocks and the opt-in Proof view are not audited).', '');
+  for (const p of copy) L.push(`- [${p.viewport} ${p.step}] ${p.detail} — \`${p.shot}\``);
+  L.push('');
   await fsp.mkdir(OUT, { recursive: true });
   await fsp.writeFile(path.join(OUT, 'REPORT.md'), L.join('\n'));
   await fsp.writeFile(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));

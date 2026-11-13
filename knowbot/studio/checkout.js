@@ -245,7 +245,7 @@ export function mount(ctx) {
   // fixer r6 (D8/D9): the CTA shows "Launch <bot>" (the price is the hero beside it); the price rides in a visually
   // hidden suffix so the accessible name stays "Launch <bot>, $549/mo" (it starts with the visible label).
   const ctaPrice = () => pspan('cta', 'co-sr co-cta-price');
-  const testsName = (t) => (t && t.full ? 'Proof Run' : 'Quick check');
+  const testsName = () => 'Tests';   // onboarding copy: one plain name for the test run, whatever its size
   const FULL_PROOF_N = 11;   // 8 in-scope questions + 3 out-of-scope probes (SPEC 1.4 B8)
   const runFullProof = (before) => { if (before) before(); emit('proof:run', { mini: false }); };
 
@@ -594,7 +594,7 @@ export function mount(ctx) {
         h('div', { class: 'co-sum-pillrow' }, pills, fullLink),
         qaEl,
         h('div', { class: 'co-sum-gets' }, incl, thumb),
-        h('div', { class: 'co-sum-price' }, h('p', { class: 'co-price' }, amt, per), h('small', null, pspan('count', ''), ' · no per-answer fees · cancel anytime')),
+        h('div', { class: 'co-sum-price' }, h('p', { class: 'co-price' }, amt, per), h('small', null, pspan('count', ''), ' · first 30 days free · cancel anytime')),
         cta,
         h('div', { class: 'co-sum-links' },
           h('a', { class: 'co-link', href: contactHref() }, 'Questions? Talk to us'),

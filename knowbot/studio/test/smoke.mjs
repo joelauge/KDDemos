@@ -508,7 +508,7 @@ async function journey(browser, dev, cell) {
     const price11 = await page.evaluate(() => document.getElementById('st-price')?.dataset.level);
     check('11-proof-run', 'price goes solid at the Proof Run (the peak)', price11 === 'solid' || price11 === undefined, { detail: price11 });
     const strip = await page.evaluate(() => (document.getElementById('st-prun')?.innerText || '').replace(/\s+/g, ' ').trim());
-    check('11-proof-run', 'proof strip names the test once ("Proof Run 11/11 passed")', !strip || (/Proof Run 11\/11/.test(strip) && (strip.match(/Proof Run/g) || []).length === 1), { soft: true, detail: strip });
+    check('11-proof-run', 'proof strip names the test once ("Tests 11/11 passed")', !strip || (/(?:Proof Run|Tests) 11\/11/.test(strip) && (strip.match(/Proof Run|Tests/g) || []).length === 1), { soft: true, detail: strip });
   }
   await shot(page, cell, '11-proof-run');
 

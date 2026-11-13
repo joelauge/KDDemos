@@ -2008,7 +2008,7 @@ export function mount(ctx) {
     const id = `${A.id}-ledger`;
     const btn = h('button', { type: 'button', class: 'pf-sum', 'aria-expanded': 'false', 'aria-controls': id },
       ico('shieldCheck', 14),
-      h('span', null, 'Verified claims ', h('b', { class: 'sb-num' }, `${v.verified}/${v.claims}`), ' · ', h('b', { class: 'sb-num' }, `${vp}%`), ' · Unsupported claims ', h('b', { class: `sb-num${f.proof.unsupported ? ' is-bad' : ' is-good'}` }, String(f.proof.unsupported || 0))),
+      h('span', null, 'Statements checked ', h('b', { class: 'sb-num' }, `${v.verified}/${v.claims}`), ' · ', h('b', { class: 'sb-num' }, `${vp}%`), ' · Made-up statements ', h('b', { class: `sb-num${f.proof.unsupported ? ' is-bad' : ' is-good'}` }, String(f.proof.unsupported || 0))),
       h('span', { class: 'pf-sum-chev' }, ico('chevronDown', 14)));
     // panel shell now (aria-controls resolves), table on first open: nothing heavy in the frame the answer lands in
     const panel = h('div', { class: 'pf-ledger-panel', id, hidden: true });
@@ -2815,10 +2815,10 @@ export function mount(ctx) {
       stats[key] = { num, tail, box };
       totals.append(box);
     };
-    stat('answered', 'Answered with citations', '/0');
-    stat('refused', 'Refused off-topic', '/0');
-    stat('unsupported', 'Unsupported claims', '');
-    stat('verified', 'Verified claims', '%');
+    stat('answered', 'Answered from your files', '/0');
+    stat('refused', 'Said no to off-topic', '/0');
+    stat('unsupported', 'Made-up statements', '');
+    stat('verified', 'Statements checked', '%');
     const again = h('button', { type: 'button', class: 'btn btn-ghost sb-btn sb-btn-sm', hidden: true, onclick: () => runProof({ mini: run?.mini }) }, ico('refresh', 13), 'Run again');
     const card = h('div', { class: 'pf-sc', role: 'group', 'aria-label': 'Proof Run scorecard' }, title, bar, list, totals, h('div', { class: 'pf-sc-actions' }, again));
     el.append(card);
@@ -2855,7 +2855,7 @@ export function mount(ctx) {
       else icoEl.append(h('i', { class: 'pf-sc-wait' }));
       meta.innerHTML = '';
       let srText = '';
-      if (r.status === 'pass' && r.expect === 'answer') { meta.append(r.match != null ? `match ${r.match}` : 'keyword match', ' · ', plural(r.citations || 0, 'citation')); srText = 'passed'; }
+      if (r.status === 'pass' && r.expect === 'answer') { meta.append(r.match != null ? `${r.match}% match` : 'word match', ' · ', plural(r.citations || 0, 'source')); srText = 'passed'; }
       else if (r.status === 'pass') { meta.append('refused ', ico('check', 11)); srText = 'refused as expected'; }
       else if (r.status === 'fail') { meta.append(h('span', { class: 'pf-sc-why' }, r.reason || 'failed'), ' · ', h('span', { class: 'pf-sc-open' }, 'Open')); srText = `failed: ${r.reason || ''}`; }
       else if (r.status === 'running') { meta.append(r.expect === 'refuse' ? 'should refuse' : 'asking…'); srText = 'running'; }
