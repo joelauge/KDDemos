@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server/server.mjs",
     "test": "node --test --test-concurrency=6 \"scripts/test/*.test.mjs\" \"lib/test/*.test.mjs\" \"server/test/*.test.mjs\"",
+    "test:area": "node scripts/test-area.mjs",
     "stamp": "node scripts/stamp-assets.mjs",
     "stamp:strip": "node scripts/stamp-assets.mjs --strip",
     "stamp:check": "node scripts/stamp-assets.mjs --check",
