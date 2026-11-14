@@ -826,7 +826,7 @@ function priceIntent(text, label) {
     return;
   }
   if (isLive()) {
-    localSay(`${botName()} is already live: your plan is active, so there's nothing more to pay here. Manage billing in your KnowDrive dashboard.`, { reply: true, chips: [
+    localSay(`${botName()} is already live: your plan is active, so there's nothing more to pay here. To change or cancel it, open Manage billing in the ⋯ menu.`, { reply: true, chips: [
       { id: 'live_copy', label: 'Copy embed code', kind: 'primary', local: true, run: () => { copyText(embedSnippet()); toast({ kind: 'info', text: 'Embed code copied' }); } },
       { id: 'channels', label: 'Set up channels', local: true, run: () => openGoLive('channels') },
     ] });
@@ -2563,6 +2563,7 @@ function openMoreMenu(anchor) {
     item('motion', motion.reduced() ? 'Full motion' : 'Reduce motion', toggleMotion),
     item('command', 'Command palette', () => openPalette()),
     item('table', detailsOn() ? 'Hide details' : 'Show details', toggleDetails),
+    mods.checkout?.billing?.canManage ? item('card', 'Manage billing', () => mods.checkout.manageBilling()) : null,
     t.converted ? null : item('refresh', 'Start over', () => confirmStartOver()),
     t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, h('span', { html: icon('checkCircle', 14) }), ` Saved until ${new Date(t.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`) : null);
   openMenu(anchor, list);

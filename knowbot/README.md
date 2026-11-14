@@ -177,6 +177,27 @@ step), `KNOWBOT_MODE=owner` (the owner's own deployment: skip it too), `KNOWBOT_
 `openid email profile entitlements`), `KNOWBOT_KD_CLIENT_ID` / `KNOWBOT_KD_CLIENT_SECRET` (a pre-registered client instead
 of DCR). Offline: `npm run studio:dev` runs the whole flow against the fake authorization server; `npm run kd:smoke`.
 
+## The KnowBot plan: our own checkout (`server/billing.mjs`, `studio/checkout.js`)
+
+KnowBot bills for itself. The customer's KnowDrive account is a free account that holds their files (the step above);
+nothing is bought on knowdrive.ai. After that step, "Continue to secure checkout" opens a hosted checkout page for one
+subscription: the product "KnowBot", $549/month or $5,490/year (the Studio's `PRICE` / `PRICE_YEAR`), first 30 days
+free, card required, cancel anytime. The two prices are found by lookup key (`knowbot_monthly`, `knowbot_yearly`) and
+created on first use, so no price ids need configuring (`KNOWBOT_STRIPE_PRICE_MONTH` / `_YEAR` pin them).
+
+- **Launch**: `POST /api/studio/billing/webhook` (signature-verified, each event applied once) receives
+  `checkout.session.completed` and runs the same convert as the admin route; for a linked bot that finalises the
+  customer-store model. The Studio's "Activating…" poll also looks the payment up itself, so a late webhook never
+  strands anyone.
+- **Status** (`T.flags.billing`): `trialing`, `active`, `past_due` (keeps answering, the owner is warned), `canceled` /
+  `unpaid` (keeps answering for `KNOWBOT_BILLING_GRACE_DAYS`, default 3, then stops answering publicly with
+  "Subscription ended · Reactivate" in the Studio). Files are never deleted.
+- **Manage billing** (the ⋯ menu and the live card): the customer portal (cancel, card, invoices).
+- **Switches**: on whenever `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` is set; without one the Launch sheet says
+  checkout isn't available yet. `KNOWBOT_CHECKOUT=knowdrive` uses the old signed link to knowdrive.ai instead.
+- Webhook signing secret: `KNOWBOT_BILLING_WEBHOOK_SECRET` (see `.env.example`). Tests: `server/test/billing.test.mjs`,
+  `npm run onboarding:e2e` (the whole journey through the fake payments page).
+
 ## Bots and buckets
 
 A **bucket** is a tag: every file carrying `bucket:<id>` belongs to it, wherever knowDrive stores it. A **bot** (chat instance) is linked to any number of buckets, and each link can be switched on or off. A bot answers **only** from its enabled buckets. Each bucket is searched on its own, filtered to its tag (plus the link's mask), and any hit whose tags don't match is dropped before it can be quoted or cited. Several bots can share a bucket, and a bot with no enabled links answers nothing. Wire them on the dashboard's **Bots & buckets** canvas.

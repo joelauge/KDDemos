@@ -40,7 +40,7 @@ export const PACKS = [1000, 2500, 5000];     // prepaid credit packs, in cents
 export const COUNTRIES = ['US', 'CA'];
 export const LOW_MICROS = 2_000_000;         // under $2 of credit: "running low"
 const MICROS = 1_000_000;                    // credit is kept in millionths of a dollar (no rounding drift per text)
-const STRIPE_VERSION = '2024-06-20';
+export const STRIPE_VERSION = '2024-06-20';
 // The provider's list prices (USD) when its pricing API can't be read; KNOWBOT_NUMBER_COST_* override.
 export const FALLBACK_COSTS = { US: { monthly: 1.15, minute: 0.0085, text: 0.0083 }, CA: { monthly: 1.15, minute: 0.0085, text: 0.0083 } };
 
@@ -113,6 +113,24 @@ export function stripeForm(obj, prefix = '', out = new URLSearchParams()) {
   return out;
 }
 
+/**
+ * The payments REST client (form-encoded, Bearer key, pinned Stripe-Version), shared by KnowBot numbers and the KnowBot
+ * plan (server/billing.mjs). A GET's `body` becomes the query string. Errors carry `.status` and the provider's `.code`.
+ */
+export function createStripe(env = {}) {
+  const base = String(env.STRIPE_API_BASE_URL || 'https://api.stripe.com').replace(/\/+$/, '');
+  return async function stripe(method, p, body = null) {
+    const init = { method, headers: { authorization: `Bearer ${stripeKeyOf(env)}`, 'stripe-version': STRIPE_VERSION }, signal: AbortSignal.timeout(20000) };
+    let url = `${base}${p}`;
+    if (body && method === 'GET') url += `${p.includes('?') ? '&' : '?'}${stripeForm(body).toString()}`;
+    else if (body) { init.headers['content-type'] = 'application/x-www-form-urlencoded'; init.body = stripeForm(body).toString(); }
+    const res = await fetch(url, init);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { const e = new Error(`payments HTTP ${res.status}: ${String(j.error?.message || '').slice(0, 160)}`); e.status = res.status; e.code = j.error?.code || null; throw e; }
+    return j;
+  };
+}
+
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 const AREA_RE = /^[2-9]\d{2}$/;
 const pretty = (e) => { const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(String(e || '')); return m ? `(${m[1]}) ${m[2]}-${m[3]}` : String(e || ''); };
@@ -129,7 +147,6 @@ export const prettyNumber = pretty;
 export function createNumbers({ env = {}, log = () => {}, now = () => Date.now(), loadTrial, saveTrial, onChange = () => {}, fail } = {}) {
   const twBase = String(env.TWILIO_API_BASE_URL || 'https://api.twilio.com').replace(/\/+$/, '');
   const prBase = String(env.TWILIO_PRICING_BASE_URL || 'https://pricing.twilio.com').replace(/\/+$/, '');
-  const stBase = String(env.STRIPE_API_BASE_URL || 'https://api.stripe.com').replace(/\/+$/, '');
   const apiPrefix = env.KNOWBOT_API_PREFIX != null ? String(env.KNOWBOT_API_PREFIX).replace(/\/+$/, '') : '/api';
   const enabled = () => numbersEnabled(env);
   const sid = env.TWILIO_ACCOUNT_SID;
@@ -144,14 +161,7 @@ export function createNumbers({ env = {}, log = () => {}, now = () => Date.now()
     if (!res.ok) { const e = new Error(`number provider HTTP ${res.status}${j.code ? ` (${j.code})` : ''}: ${String(j.message || '').slice(0, 160)}`); e.status = res.status; e.code = j.code; throw e; }
     return j;
   }
-  async function stripe(method, p, body = null) {
-    const init = { method, headers: { authorization: `Bearer ${stripeKeyOf(env)}`, 'stripe-version': STRIPE_VERSION }, signal: AbortSignal.timeout(20000) };
-    if (body) { init.headers['content-type'] = 'application/x-www-form-urlencoded'; init.body = stripeForm(body).toString(); }
-    const res = await fetch(`${stBase}${p}`, init);
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) { const e = new Error(`payments HTTP ${res.status}: ${String(j.error?.message || '').slice(0, 160)}`); e.status = res.status; throw e; }
-    return j;
-  }
+  const stripe = createStripe(env);
 
   // ---------------------------------------------------------------- costs (cached an hour per country)
   const costCache = new Map();
@@ -335,6 +345,7 @@ export function createNumbers({ env = {}, log = () => {}, now = () => Date.now()
   async function fulfill(session, { via = 'return' } = {}) {
     const m = session?.metadata || {};
     if (m.app !== 'knowbot' || !/^tr_[a-z2-7]{16}$/.test(String(m.trial || ''))) return { ignored: true };
+    if (m.kind !== 'number' && m.kind !== 'topup') return { ignored: true }; // e.g. the KnowBot plan (server/billing.mjs)
     return withLock(m.trial, async () => {
       const T = await loadTrial(m.trial);
       if (!T) { log(`[numbers] ${session.id}: no bot ${m.trial}`); return { ignored: true }; }

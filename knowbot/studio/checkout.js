@@ -127,6 +127,11 @@ export function mount(ctx) {
   // feature; the visitor picks monthly or yearly here. The features switched on (spec.surfaces) never change the price.
   // Shown only at launch/checkout, which comes after testing.
   let planInterval = 'month';
+  // The plan's billing (server/billing.mjs): {status: trialing | active | past_due | canceled, notice, canManage, …} once
+  // the bot has a subscription. A launched bot with one that ended is reactivated through the same sheet (no free month).
+  let billing = null;
+  const checkoutOff = () => cfg().checkout?.available === false;
+  const reactivating = () => !!(billing && billing.status && getState().trial?.converted);
   const price = () => {
     const p = cfg().price || {};
     const plan = planTotals(getState().spec?.surfaces, planInterval, { month: Number(p.amount) || PRICE_MONTH, year: Number(p.yearAmount) || PRICE_YEAR });
@@ -140,7 +145,7 @@ export function mount(ctx) {
   /** Every price on screen carries data-co-price=<kind>; one repaint keeps them all in step with the plan. */
   const PRICE_KINDS = {
     amt: (pr) => pr.amt, per: (pr) => `/${pr.perLong}`, cta: (pr) => `, ${pr.text}`, submit: (pr) => `Continue to secure checkout · ${pr.text}`,
-    today: (pr) => `Today: ${pr.today} · first 30 days free, then ${pr.long} · cancel anytime. `,
+    today: (pr) => (reactivating() ? `Today: ${pr.long} · cancel anytime. ` : `Today: ${pr.today} · first 30 days free, then ${pr.long} · cancel anytime. `),
     count: (pr) => `One plan · all three tools · ${pr.perLong === 'year' ? 'billed yearly' : 'billed monthly'}`,
   };
   const pspan = (kind, cls, tag = 'span') => h(tag, { class: cls, dataset: { coPrice: kind } }, PRICE_KINDS[kind](price()));
@@ -1178,7 +1183,8 @@ export function mount(ctx) {
 
   async function openSheet({ source = 'card', from = null, invoker = null, kdChecked = false } = {}) {
     if (sheet) { sheet.email?.focus(); return; }
-    if (kdNeeded() && !kdChecked) {
+    // no checkout on this server yet: the sheet says so at once, before anyone is sent to create an account
+    if (kdNeeded() && !kdChecked && !checkoutOff()) {
       let k = null;
       try { k = await kdStep(); if (!k.isReady()) await k.status(); } catch { k = null; }
       if (k && !k.isReady()) {
@@ -1211,6 +1217,10 @@ export function mount(ctx) {
     const emailErr = h('p', { class: 'form-error co-field-err', id: 'co-email-err', hidden: true });
     const submit = h('button', { type: 'submit', class: 'co-cta co-cta-lg' }, h('span', { class: 'co-spin', 'aria-hidden': 'true' }), h('span', { class: 'co-cta-label', dataset: { coPrice: 'submit' } }, `Continue to secure checkout · ${pr.text}`), h('span', { class: 'co-cta-ico', html: icon('lock', 15) }));
     const errBox = h('div', { class: 'co-err', role: 'alert', hidden: true });
+    const off = checkoutOff();
+    const unavailable = off ? h('div', { class: 'co-err co-unavail', id: 'co-unavail', role: 'status' }, h('span', { class: 'co-err-ico', html: icon('info', 15) }),
+      h('span', null, `Checkout isn't available yet. ${botName()} is saved, and you can keep testing it. `, h('a', { class: 'co-link', href: contactHref() }, 'Talk to us'))) : null;
+    if (off) { submit.disabled = true; submit.setAttribute('aria-describedby', 'co-unavail'); }
     const samples = sampleOnly();
     const addFirst = samples ? h('p', { class: 'co-addfirst' }, h('span', { html: icon('upload', 13) }),
       h('span', null, `${botName()} only knows sample files. `, h('button', { type: 'button', class: 'co-link', onclick: () => { closeSheet('addfiles'); addOwnFiles(); } }, 'Add my files first'))) : null;
@@ -1219,15 +1229,15 @@ export function mount(ctx) {
       h('label', { class: 'flabel co-label', for: 'co-email' }, linked ? 'Email for receipts' : 'Email for your KnowDrive login'),
       emailIn,
       h('p', { class: 'co-hint', id: 'co-email-hint' }, linked ? 'Your KnowDrive login. We send your receipt and your bot link here.' : 'We send your login and your bot link here. No other field.'),
-      emailErr, addFirst, submit,
+      emailErr, addFirst, unavailable, submit,
       h('p', { class: 'co-hint co-today' }, pspan('today', ''), 'Your files stay yours, in your KnowDrive account.'),
       errBox);
     const back = h('button', { type: 'button', class: 'co-link co-back' }, h('span', { html: icon('arrowRight', 14), class: 'co-back-ico' }), 'Back to my bot');
     const x = h('button', { type: 'button', class: 'co-x', 'aria-label': 'Close and go back to my bot', html: icon('x', 18) });
     const pay = h('section', { class: 'co-pay' },
       h('p', { class: 'co-eyebrow' }, h('span', { html: icon('rocket', 13) }), 'Launch'),
-      h('h2', { class: 'co-sheet-title', id: 'co-sheet-title' }, `Launch ${botNameMid()}`),
-      h('p', { class: 'co-sheet-desc', id: 'co-sheet-desc' }, h('b', null, 'KnowDrive · ', pspan('amt', ''), pspan('per', '')), '. You finish on KnowDrive\'s secure checkout, then come straight back here.'),
+      h('h2', { class: 'co-sheet-title', id: 'co-sheet-title' }, `${reactivating() ? 'Reactivate' : 'Launch'} ${botNameMid()}`),
+      h('p', { class: 'co-sheet-desc', id: 'co-sheet-desc' }, h('b', null, 'KnowBot · ', pspan('amt', ''), pspan('per', '')), '. You finish on our secure checkout page, then come straight back here.'),
       planBlock(),
       form,
       h('p', { class: 'co-foot co-foot-incl' }, h('span', { html: icon('check', 13) }), `Includes hosting, Website, KnowBot number and Email + the chat API, ${stats().quotaMB} MB of storage, question insights.`),
@@ -1337,7 +1347,7 @@ export function mount(ctx) {
       return !msg;
     }
     async function go() {
-      if (sheet?.redirecting) return;
+      if (sheet?.redirecting || checkoutOff()) return;
       if (!validate(true)) return;
       errBox.hidden = true; errBox.innerHTML = '';
       const email = emailIn.value.trim();
@@ -1345,8 +1355,8 @@ export function mount(ctx) {
       submit.disabled = true;
       submit.setAttribute('aria-busy', 'true');
       submit.classList.add('is-busy');
-      $('.co-cta-label', submit).textContent = 'Opening KnowDrive checkout…';
-      announce('Opening KnowDrive checkout…', 'polite');
+      $('.co-cta-label', submit).textContent = 'Opening secure checkout…';
+      announce('Opening secure checkout…', 'polite');
       try {
         // The server's /checkout flushes the spec doc (PATCH state) and stores the email before it returns the URL.
         // CONTRACT-GAP: SPEC 6.4 step 1 also emits spec:request {email}; B's drawer would render that as a ConfigDiffCard
@@ -1362,6 +1372,13 @@ export function mount(ctx) {
         $('.co-cta-label', submit).textContent = PRICE_KINDS.submit(price());
         // the KnowDrive step is not finished (signed out, sign-in expired): back to it
         if (err && /^kd_/.test(err.code || '')) { closeSheet('kd'); setTimeout(() => kdStep().then((k) => k.open({ onContinue: () => openSheet({ source: 'card', kdChecked: true }) })).catch(() => {}), motion.reduced() ? 60 : 480); return; }
+        // no checkout on this server, or this bot already has a plan: say exactly that (no retry would change it)
+        if (err && (err.code === 'checkout_unavailable' || err.code === 'already_subscribed')) {
+          errBox.append(h('span', { class: 'co-err-ico', html: icon('info', 15) }), h('span', null, err.message || "Checkout isn't available yet. Your bot is saved."),
+            ...(err.code === 'already_subscribed' ? [h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small', onclick: () => manageBilling() }, 'Manage billing')] : []));
+          errBox.hidden = false;
+          return;
+        }
         if (err && err.status === 400 && /email/i.test(err.message || '')) { emailErr.textContent = err.message; emailErr.hidden = false; emailIn.setAttribute('aria-invalid', 'true'); emailIn.focus(); return; }
         const retry = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost is-small' }, h('span', { html: icon('refresh', 14) }), 'Try again');
         retry.addEventListener('click', () => go());
@@ -1468,7 +1485,7 @@ export function mount(ctx) {
     const clk = h('span', { class: 'co-act-clock', 'aria-hidden': 'true' });
     const line = h('p', { class: 'co-act-text' }, text, clk);
     const live = h('span', { class: 'co-sr', role: 'status' });
-    const meter = h('div', { class: 'co-act-meter', role: 'progressbar', 'aria-label': 'Checking with KnowDrive', 'aria-valuemin': '0', 'aria-valuemax': String(POLL_MAX_MS / 1000) }, h('i'));
+    const meter = h('div', { class: 'co-act-meter', role: 'progressbar', 'aria-label': 'Confirming your payment', 'aria-valuemin': '0', 'aria-valuemax': String(POLL_MAX_MS / 1000) }, h('i'));
     const skel = h('div', { class: 'co-act-skel', 'aria-hidden': 'true' }, h('i'), h('i'), h('i', { class: 'is-short' }));
     // fixer r2 (D8): the pending state lives in this one card (replaced in place), with its own next actions; no
     // duplicate Builder turn repeating the same sentence.
@@ -1498,14 +1515,14 @@ export function mount(ctx) {
       meter.hidden = !(st === 'checking' || st === 'pending');
       skel.hidden = st !== 'checking';
       const email = getState().trial.email;
-      if (st === 'checking') { title.textContent = `Activating ${botNameMid()}…`; text.textContent = 'Confirming your payment with KnowDrive, usually a few seconds'; }
+      if (st === 'checking') { title.textContent = `Activating ${botNameMid()}…`; text.textContent = 'Confirming your payment, usually a few seconds'; }
       else if (st === 'pending') { title.textContent = 'Payment received? We\'re finishing setup.'; text.textContent = 'Checking again automatically every 5 s · usually under a minute'; }
       else if (st === 'slow') { title.textContent = 'Taking longer than usual: we\'ll email you'; text.textContent = `We'll email ${email || 'you'} the moment ${botName()} is live. Keep testing meanwhile: your bot is saved.`; }
       else if (st === 'done') { title.textContent = 'Payment confirmed. Thank you!'; text.textContent = `${botName()} now answers from your KnowDrive account.`; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
       paintClock();
       clearInterval(tick);
       if (st === 'checking' || st === 'pending') tick = setInterval(() => { if (!card.isConnected) { clearInterval(tick); return; } paintClock(); }, 1000);
-      if (changed) live.textContent = st === 'checking' ? `Activating ${botNameMid()}. Confirming your payment with KnowDrive.` : `${title.textContent} ${text.textContent}`;
+      if (changed) live.textContent = st === 'checking' ? `Activating ${botNameMid()}. Confirming your payment.` : `${title.textContent} ${text.textContent}`;
       if (changed && st !== 'checking' && !motion.reduced()) motion.animate(card, [{ transform: 'translateY(3px)', opacity: .6 }, { transform: 'none', opacity: 1 }], { duration: motion.DUR[2], easing: 'out' });
     }
     update(data);
@@ -1535,6 +1552,7 @@ export function mount(ctx) {
     const dash = data.dashboardUrl || 'https://knowdrive.ai/';
     const dot = h('span', { class: 'co-live-dot', 'aria-hidden': 'true' }, h('i'), h('i'));
     const code = h('pre', { class: 'co-code', tabindex: '0', 'aria-label': 'Embed snippet' }, h('code', null, embed));
+    const manage = h('button', { type: 'button', class: 'btn btn-ghost co-btn co-btn-ghost', id: 'co-manage-billing', hidden: !billing?.canManage, onclick: () => manageBilling(manage) }, h('span', { html: icon('card', 14) }), 'Manage billing');
     const card = h('div', { class: 'co-success' },
       h('div', { class: 'co-success-head' }, dot, h('div', null, h('b', null, `${botName()} is live`), h('small', null, 'Hosted, embeddable and answering only from your files'))),
       h('div', { class: 'co-row' }, h('span', { class: 'co-row-k' }, 'Chat page'), h('a', { class: 'co-row-v co-mono', href: botUrl, target: '_blank', rel: 'noopener' }, botUrl.replace(/^https?:\/\//, '')), copyButton(botUrl, 'Copy', { small: true, what: 'Link copied', aria: 'Copy the chat page link' })),
@@ -1547,10 +1565,10 @@ export function mount(ctx) {
       // fixer r7 (D8): one solid next step per Live card: "Add your files" when the samples were removed, else "Copy
       // embed". The dashboard is an outline link; channels and the API are the turn's chips (never repeated here).
       h('div', { class: 'co-codewrap' }, h('div', { class: 'co-code-head' }, h('span', null, 'Embed on your site'), copyButton(embed, 'Copy embed', { small: true, what: 'Embed code copied', primary: data.ownFiles !== 0 })), code),
-      h('div', { class: 'co-success-actions' },
+      h('div', { class: 'co-success-actions' }, manage,
         h('a', { class: 'btn btn-ghost co-btn co-btn-ghost', href: dash, target: '_blank', rel: 'noopener' }, 'Open KnowDrive dashboard', h('span', { html: icon('external', 14) }), h('span', { class: 'co-sr' }, ' (opens in a new tab)'))));
     el.append(card);
-    const inst = { el, card, dot, embed, update() {}, destroy() { if (cardInst.success === inst) cardInst.success = null; } };
+    const inst = { el, card, dot, embed, manage, update() {}, destroy() { if (cardInst.success === inst) cardInst.success = null; } };
     cardInst.success = inst;
     if (!motion.reduced()) {
       motion.stagger([...card.children], [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'out', fill: 'backwards' }, 60);
@@ -1621,6 +1639,7 @@ export function mount(ctx) {
       const elapsed = Date.now() - t0;
       if (r && r.converted) {
         pollWake = null;
+        setBilling(r.billing);
         cardInst.activating?.update({ state: 'done' });
         setState({ trial: { ...getState().trial, converted: true } }, 'converted');
         postSuccess({ burst: true, data: { botUrl: r.botUrl, embed: r.embed, dashboardUrl: r.dashboardUrl, botId: r.botId, convertedFiles: r.convertedFiles, files: r.files } });
@@ -1637,9 +1656,58 @@ export function mount(ctx) {
     }
   }
 
+  // ---- the plan's billing: "Manage billing", and one notice when the subscription needs the owner
+  let billNotice = null, billBusy = false;
+  const dateOf = (iso) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString(undefined, { month: 'long', day: 'numeric' }) : ''; };
+  function setBilling(b) {
+    billing = b && typeof b === 'object' && b.status ? b : null;
+    if (cardInst.success?.manage) cardInst.success.manage.hidden = !billing?.canManage;
+    showBillNotice();
+    repaintPrices();
+  }
+  /** Opens the page to cancel, update the card or get invoices (the same tab; it comes back here). */
+  async function manageBilling(btn = null) {
+    if (billBusy) return;
+    billBusy = true; btn?.classList.add('is-busy'); btn?.setAttribute('aria-busy', 'true');
+    try {
+      const r = await api.billingPortal();
+      if (!r || !r.url) throw new Error('no url');
+      try { store.persist(); } catch { /* ignore */ }
+      location.assign(r.url);
+    } catch (err) {
+      billBusy = false; btn?.classList.remove('is-busy'); btn?.removeAttribute('aria-busy');
+      announce(err && err.code === 'no_billing' ? 'This bot has no subscription yet.' : "Couldn't open billing just now. Try again in a minute.", 'assertive');
+    }
+  }
+  function showBillNotice() {
+    const n = billing?.notice;
+    billNotice?.remove(); billNotice = null;
+    if (!n) return;
+    const when = dateOf(n.until);
+    const [title, text] = n.kind === 'paused' ? ['Subscription ended', `${botName()} is paused and no longer answers visitors. Your files are safe in your KnowDrive account.`]
+      : n.kind === 'grace' ? ['Subscription ended', `${botName()} stops answering visitors${when ? ` on ${when}` : ' soon'}. Your files stay in your KnowDrive account.`]
+      : n.kind === 'past_due' ? ['Payment failed', `We couldn't charge your card. ${botName()} keeps answering while we try again.`]
+      : ['Subscription ending', `Your subscription ends${when ? ` on ${when}` : ' soon'}; ${botName()} answers until then.`];
+    const btn = h('button', { type: 'button', class: 'co-link kda-link', id: 'co-bill-action' }, n.action === 'reactivate' ? 'Reactivate' : n.kind === 'past_due' ? 'Update card' : 'Manage billing');
+    btn.addEventListener('click', () => (n.action === 'reactivate' ? openSheet({ source: 'billing', invoker: btn, kdChecked: true }) : manageBilling(btn)));
+    billNotice = h('div', { class: `kda-notice co-bill-notice is-${n.kind}`, id: 'co-bill-notice', role: 'status', dataset: { kind: n.kind } }, h('span', { class: 'co-err-ico', html: icon('warn', 15) }),
+      h('span', null, h('b', null, `${title}. `), text), btn);
+    document.body.append(billNotice);
+  }
+  sub('billing:event', (d) => { if (d && typeof d === 'object') setBilling(d.billing); });
+
   sub('trial:ready', (d) => {
     const launched = params.get('launched') === '1' || /^#launched\b/.test(location.hash);
     const t = getState().trial;
+    // back from "Manage billing": what changed there is read at once (the webhook may still be on its way)
+    const fromBilling = /^#billing\b/.test(location.hash);
+    if (fromBilling) { try { history.replaceState(history.state, '', location.pathname + location.search); } catch { /* ignore */ } }
+    if (t.converted && cfg().checkout?.mode === 'hosted') (fromBilling ? api.billingConfirm() : api.billing()).then((r) => setBilling(r && r.billing)).catch(() => {});
+    // back from checkout without paying ("Back" on the checkout page): the Launch sheet again, nothing lost
+    if (!launched && !t.converted && (params.get('launch') === '1' || /^#launch$/.test(location.hash))) {
+      try { const u = new URL(location.href); u.searchParams.delete('launch'); u.searchParams.delete('k'); u.hash = ''; history.replaceState(history.state, '', u.pathname + (u.search || '')); } catch { /* ignore */ }
+      setTimeout(() => openSheet({ source: 'return' }), motion.reduced() ? 80 : 500);
+    }
     if (launched && !activatingKey) {
       activatingKey = t.id;
       // Reloading should not re-run the activation beat; keep ?t= for B.
@@ -1746,6 +1814,7 @@ export function mount(ctx) {
 
   return {
     open(source = 'api') { const c = [...launchCards].filter((x) => x.el.isConnected).pop(); return openSheet({ source, from: c?.receipt || null }); },
+    manageBilling, get billing() { return billing; },
     openGoLive,
     close() { closeSheet('close'); },
     destroy() { subs.forEach((u) => u()); subs.length = 0; if (sheet) closeSheet('destroy'); pollGen++; },

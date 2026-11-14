@@ -10,7 +10,7 @@ Building and testing a bot in KnowBot Studio is free and needs no account. Uploa
 
 Source: /studio/
 
-To launch your KnowBot, you start a KnowDrive account at $549 per month, or $5,490 per year. The first 30 days are free. A credit card is required at signup. You can cancel anytime.
+To launch your KnowBot, you subscribe to the KnowBot plan at $549 per month, or $5,490 per year. The first 30 days are free. A credit card is required at signup. You can cancel anytime. Your bot's files are kept in your own KnowDrive account, which is free to create.
 
 There is one plan. It includes all three tools, Website, KnowBot number and Email, with every feature, and a deployment of up to 100 MB of files. Switching a feature on or off never changes the price; see The three tools below.
 

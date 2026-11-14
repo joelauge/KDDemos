@@ -2,8 +2,9 @@
 // Onboarding end to end: a brand-new visitor all the way to a paid, launched bot and back into it later.
 //
 //   npm run onboarding:e2e                  # LOCAL: the whole journey against studio/test/dev-server.mjs (fake knowDrive
-//                                           # incl. its fake authorization server, a fake checkout/payment page that
-//                                           # converts the bot and redirects to the `return` URL). Desktop 1440x900 + phone 390x844.
+//                                           # incl. its fake authorization server, and the fake payments' hosted checkout
+//                                           # page: Back returns to the Launch sheet, paying returns to the Studio and the
+//                                           # signed webhook launches the bot a moment later). Desktop 1440x900 + phone 390x844.
 //   npm run onboarding:e2e -- --live        # PRODUCTION, safe steps only: a new visitor up to the real KnowDrive sign-in
 //                                           # window opened by Launch. Never submits a form on knowdrive.ai, never pays.
 //   ... --only=desktop | --only=phone       # one viewport
@@ -252,21 +253,6 @@ async function askTyped(page, vp, text) {
   return waitFor(page, (s) => s.thread.find((x) => x.q === text && x.text), 60000);
 }
 
-// ------------------------------------------------------------------ fake checkout (local only)
-function fakeCheckoutPage(u) {
-  const p = u.searchParams;
-  const price = Number(p.get('price') || 0), interval = p.get('interval') || 'month';
-  const pay = new URL('https://knowdrive.ai/__fake_pay'); pay.search = u.search;
-  return `<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>KnowDrive checkout (fake)</title>
-<style>body{font:16px system-ui;margin:0;padding:24px;max-width:480px;margin:auto;color:#222}h1{font-size:22px}.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee}button{width:100%;padding:14px;font-size:16px;margin-top:20px;border-radius:10px;border:0;background:#222;color:#fff}</style>
-<h1>Subscribe to KnowBot</h1><p>Fake payment page (local harness). Nothing is charged.</p>
-<div class=row><span>Bot</span><b id=bot>${(p.get('bot') || '').replace(/[<&]/g, '')}</b></div>
-<div class=row><span>Plan</span><b>$${price.toLocaleString()} / ${interval}</b></div>
-<div class=row><span>Email</span><b id=email>${(p.get('email') || '').replace(/[<&]/g, '')}</b></div>
-<div class=row><span>KnowDrive account</span><b id=acct>${(p.get('kd_account') || 'none').replace(/[<&]/g, '')}</b></div>
-<form method=get action="${pay.origin}${pay.pathname}">${[...p.entries()].map(([k, v]) => `<input type=hidden name="${k}" value="${String(v).replace(/"/g, '&quot;')}">`).join('')}<button id=pay type=submit>Pay $${price}</button></form>`;
-}
-
 // ------------------------------------------------------------------ the LOCAL journey
 async function localJourney(browser, dev, vp, files) {
   console.log(`\n=== local · ${vp.name} ===`);
@@ -274,17 +260,13 @@ async function localJourney(browser, dev, vp, files) {
   const ctxOpts = { viewport: vp.viewport, isMobile: vp.mobile, hasTouch: vp.mobile, deviceScaleFactor: vp.mobile ? 2 : 1 };
   const context = await browser.newContext(ctxOpts);
   const bucket = { console: [], network: [] };
-  let checkoutUrl = null, paid = null;
-  const convertDelayMs = 2500; // the payment provider's webhook lands a moment after the redirect, like production
+  let paid = null, signupHit = null;
+  const pay = dev.payments;                // the fake payments account: its hosted checkout page and its webhooks
+  pay.state.webhookDelayMs = 2500;         // the webhook lands a moment after the redirect back, like production
+  const sessionOf = (url) => pay.sessions.get(new URL(url).pathname.split('/').pop());
   await context.route(/^https:\/\/knowdrive\.ai\//, async (route) => {
     const u = new URL(route.request().url());
-    if (u.pathname === '/__fake_pay') {
-      const trial = u.searchParams.get('trial');
-      paid = { trial, at: Date.now() };
-      setTimeout(() => { fetch(`${dev.url}/api/studio/trials/${trial}/convert`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer dev-admin' }, body: JSON.stringify({ account: u.searchParams.get('kd_account') || 'acct-e2e', bucketId: `bot-${trial.slice(3, 15).toLowerCase()}` }) }).then((r) => { paid.convert = r.status; }).catch((e) => { paid.convert = e.message; }); }, convertDelayMs);
-      return route.fulfill({ status: 302, headers: { location: u.searchParams.get('return') } });
-    }
-    if (/^\/signup/.test(u.pathname)) { checkoutUrl = u.toString(); return route.fulfill({ status: 200, contentType: 'text/html', body: fakeCheckoutPage(u) }); }
+    if (/^\/signup/.test(u.pathname)) signupHit = u.toString(); // KnowBot sells itself: nobody is sent to knowdrive.ai to pay
     return route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>KnowDrive</title><h1>KnowDrive</h1>' });
   });
   let page = await context.newPage();
@@ -380,17 +362,51 @@ async function localJourney(browser, dev, vp, files) {
     if (v !== email) throw new Error(`checkout email is "${v}", expected the KnowDrive email`);
   });
 
-  await step(page, bucket, 'payment-page', async (rec) => {
+  const toCheckout = async () => {
     await page.locator('#co-modal-slot button.co-cta', { hasText: /secure checkout/i }).first().click();
-    await page.waitForURL(/knowdrive\.ai\/signup/, { timeout: 20000 });
-    const u = new URL(checkoutUrl);
-    const ret = new URL(u.searchParams.get('return'));
-    if (!u.searchParams.get('kd_account')) throw new Error('the checkout link has no kd_account');
-    if (ret.searchParams.get('launched') !== '1' || !ret.searchParams.get('t')) throw new Error(`return URL is wrong: ${ret}`);
-    rec.notes.push(`return carries ${[...ret.searchParams.keys()].join(', ')}${ret.hash ? ` ${ret.hash}` : ''}`);
+    await page.waitForURL(/\/pay\/cs_/, { timeout: 20000 });
+    await page.locator('#pay').waitFor({ timeout: 10000 });
+  };
+  let session = null;
+  await step(page, bucket, 'payment-page', async (rec) => {
+    await toCheckout();
+    if (signupHit) throw new Error(`Launch went to ${signupHit}`);
+    session = sessionOf(page.url());
+    const text = async (sel) => (await page.locator(sel).innerText()).trim();
+    // what the checkout page shows matches the Launch sheet: the product, the price, the free month, $0 today, the bot
+    const shown = { product: await text('#product'), plan: await text('#plan'), trial: await text('#trial'), today: await text('#today'), email: await text('#email'), note: await text('#note') };
+    if (shown.product !== 'KnowBot') throw new Error(`product is "${shown.product}"`);
+    if (shown.plan !== '$549 per month' || shown.trial !== '30 days free' || shown.today !== '$0') throw new Error(`checkout shows ${JSON.stringify(shown)}`);
+    if (shown.email !== email) throw new Error(`checkout email is "${shown.email}", expected the KnowDrive email`);
+    if (!/first 30 days free, then \$549 per month\. cancel anytime/i.test(shown.note)) throw new Error(`checkout line: ${shown.note}`);
+    if (session.mode !== 'subscription' || session.subscription_data?.trial_period_days !== '30') throw new Error('not a subscription with 30 days free');
+    if (!session.metadata?.kd_account || session.metadata.trial !== session.client_reference_id) throw new Error(`checkout is not tied to the bot and its KnowDrive account: ${JSON.stringify(session.metadata)}`);
+    const ret = new URL(session.success_url);
+    if (ret.searchParams.get('launched') !== '1' || !ret.searchParams.get('t') || !ret.searchParams.get('k')) throw new Error(`return URL is wrong: ${ret}`);
+    rec.notes.push(`"${shown.note}" · return carries ${[...ret.searchParams.keys()].join(', ')}${ret.hash ? ` ${ret.hash}` : ''}`);
+  }, { external: true });
+
+  // "Back" on the checkout page: the Launch sheet again, with nothing lost
+  await step(page, bucket, 'checkout-back-to-sheet', async (rec) => {
+    await page.locator('#back').click();
+    await page.waitForURL((u) => u.toString().startsWith(dev.url), { timeout: 20000 });
+    await page.waitForFunction(() => !!window.__studio?.store?.getState?.().trial?.id, null, { timeout: 20000 });
+    await page.locator('#co-email').waitFor({ timeout: 20000 });
+    const v = await page.locator('#co-email').inputValue();
+    if (v !== email) throw new Error(`back from checkout the email is "${v}"`);
+    const s = await st(page);
+    if (s.trial.converted) throw new Error('cancelling the checkout launched the bot');
+    if (/[?&](?:k|launch)=/.test(page.url())) throw new Error(`the return link's parameters stay in the address bar: ${page.url()}`);
+    rec.notes.push('the Launch sheet is back; the bot, its files and the account are as they were');
+  });
+
+  await step(page, bucket, 'payment-page-again', async () => {
+    await toCheckout();
+    session = sessionOf(page.url());
   }, { external: true });
 
   await step(page, bucket, 'paid-return-activating', async (rec) => {
+    paid = { at: Date.now() };
     await page.locator('#pay').click();
     await page.waitForURL((u) => u.toString().startsWith(dev.url), { timeout: 20000 });
     await page.waitForFunction(() => !!window.__studio?.store, null, { timeout: 20000 });
@@ -407,7 +423,27 @@ async function localJourney(browser, dev, vp, files) {
     const txt = await page.locator('.co-success').first().innerText();
     if (!/is live/.test(txt)) throw new Error(`live card text: ${txt.slice(0, 120)}`);
     if (!/<script/.test(txt)) rec.notes.push('no embed snippet on the live card');
-    rec.notes.push(`paid → live in ${((Date.now() - paid.at) / 1000).toFixed(1)} s; convert ${paid.convert}`);
+    const hooks = pay.sent.filter((x) => /\/billing\/webhook$/.test(x.url)).map((x) => `${x.type} ${x.status ?? 'pending'}`);
+    rec.notes.push(`paid → live in ${((Date.now() - paid.at) / 1000).toFixed(1)} s; webhook: ${hooks.join(', ') || 'not sent yet (the return check launched it)'}`);
+  });
+
+  // "Manage billing" on the live card: the billing page (cancel, card, invoices) and back
+  await step(page, bucket, 'manage-billing', async (rec) => {
+    const btn = page.locator('#co-manage-billing');
+    await btn.waitFor({ state: 'visible', timeout: 20000 });
+    await btn.scrollIntoViewIfNeeded();
+    await btn.click();
+    await page.waitForURL(/\/portal\/bps_/, { timeout: 20000 });
+    const subs = (await page.locator('#subs').innerText()).trim();
+    if (subs !== '1') throw new Error(`the billing page shows ${subs} subscription(s)`);
+    await page.locator('#return').click();
+    await page.waitForURL((u) => u.toString().startsWith(dev.url), { timeout: 20000 });
+    await page.waitForFunction(() => !!window.__studio?.store?.getState?.().trial?.id, null, { timeout: 20000 });
+    await sleep(1200);
+    const s = await st(page);
+    if (!s.trial.converted) throw new Error('back from billing the bot is not shown as live');
+    if (await page.locator('#co-bill-notice').count()) throw new Error(`a billing notice shows on a healthy subscription: ${await page.locator('#co-bill-notice').innerText()}`);
+    rec.notes.push('billing page opened for this customer and returned to the live bot');
   });
 
   await step(page, bucket, 'live-bot-answers', async (rec) => {

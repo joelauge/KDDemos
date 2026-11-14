@@ -28,6 +28,11 @@ export class KnowBotContainer extends Container {
       ...pick(env, ['GEMINI_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM_NUMBER',
         // KnowBot numbers bought and paid for in the Studio (server/numbers.mjs): off unless all four Stripe/Twilio keys are set
         'STRIPE_SECRET_KEY', 'STRIPE_RESTRICTED_KEY', 'STRIPE_PUBLISHABLE_KEY', 'STRIPE_WEBHOOK_SECRET',
+        // The KnowBot plan's own checkout (server/billing.mjs): on whenever a payments key above is set. Its webhook
+        // endpoint (/api/studio/billing/webhook) has its own signing secret; the rest are optional plain vars: pinned
+        // price ids (else found by lookup key and created on first use), days a cancelled bot keeps answering (default
+        // 3), and KNOWBOT_CHECKOUT=knowdrive (the old signed link to knowdrive.ai) or off
+        'KNOWBOT_BILLING_WEBHOOK_SECRET', 'KNOWBOT_STRIPE_PRICE_MONTH', 'KNOWBOT_STRIPE_PRICE_YEAR', 'KNOWBOT_BILLING_GRACE_DAYS', 'KNOWBOT_CHECKOUT', 'KNOWBOT_CHECKOUT_URL',
         // plain vars (wrangler.jsonc "vars" or --var), optional
         // (no SHOP_DOMAIN: product links come from each bot's own Shopify store import, never one server-wide store)
         'GEMINI_LIVE_MODEL', 'GEMINI_VOICE', 'KNOWBOT_PUBLIC_URL', 'KNOWBOT_PROOF_URL', 'KNOWBOT_PHONE_MAX_SECONDS', 'KNOWBOT_PHONE_MAX_SESSIONS',

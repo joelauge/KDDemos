@@ -45,8 +45,8 @@ export const AREAS = {
   studio: { about: 'Studio core: trials, uploads, events, launch, the server itself', aka: ['core'],
     tests: T('server', 'instances', 'providers', 'trials', 'trials-launch', 'trials-modes'), smokes: ['studio:smoke', 'ftue:smoke', 'onboarding:e2e'],
     src: [/^server\/(?:trials|server|instances|providers)\.mjs$/, /^studio\/[^/]+\.(?:js|css|html)$/, /^studio\/samples\//, /^studio\/test\/[^/]+\.mjs$/, /^dashboard\//] },
-  // Placeholder until the Stripe checkout lands: the cases that touch paying today (checkout, convert, numbers, the account step).
-  billing: { about: 'checkout and payments (placeholder: add the Stripe checkout tests here)', aka: ['checkout', 'stripe'], tests: T('trials-launch', 'numbers', 'kdaccount'),
+  billing: { about: 'the KnowBot plan: our own checkout, billing, and the cases that touch paying (convert, numbers, the account step)', aka: ['checkout', 'stripe'],
+    tests: T('billing', 'trials-launch', 'numbers', 'kdaccount'), smokes: ['kd:smoke'],
     src: [/^studio\/checkout\./, /^server\/(?:billing|checkout|stripe)/, /^server\/test\/(?:billing|checkout|stripe)/] },
 };
 // Shared plumbing: a change here can break any area, so --changed runs everything.
