@@ -21,6 +21,9 @@
 //
 // Exports (contract, SPEC 11.1):
 //   logQuestion({kd, store, scopeTags, root, question, outcome, citations, topScore, channel, callerKey, origin?, flags?, note?})
+//     answer (optional): the answer text the bot gave (answered questions only). Stored with the question from now on, masked
+//     like the question (e-mail addresses and long digit runs) and capped at 1500 characters, so the owner's question
+//     history (questionHistory) can show it. Questions logged before this was added have no answer text.
 //     flags: review flags such as 'ungrounded' (a phone turn that spoke a figure with no search behind it): tagged
 //     flag:<name> and listed in the file, so the owner can find them; note: what was said (masked like the question).
 //   questionInsights({kd, store, scopeTags, limit, includeTest?, suggest?, nearest?}) → {total, answered, refused,
@@ -28,6 +31,9 @@
 //     gaps:[{q,count,lastAt,origin,channels[],variants?,inDomain,offTopic?,status,statusLabel?,suggestion:{kind,inDomain,status,text,nearest,action}}],
 //     byChannel:{studio,web,api,sms,voice,phone,whatsapp,email}, offTopic, more:{top, gaps, probes}, testTraffic, testRefused, test:{total, answered, refused}, probes:[{q,count,lastAt,outcome,probe:true}], source,
 //     scope:{key, state:'active'|'empty'|'missing'}, missing?:true, error?:{status:410, code:'scope_gone', message}}
+//   questionHistory({kd, store, scopeTags, from?, to?, days?, tz?, day?, channel?, outcome?, q?, includeStudio?, cursor?, limit?, classify?})
+//     → every question in a date range, newest first, paged, with per-day counts by outcome (see the function)
+//   questionsCsv({...same filters}) → the owner's questions export: date,time,channel,question,outcome
 //     (onMissing:'throw' → a gone trial/bucket throws InsightsScopeError {status:410, code:'scope_gone'} instead)
 //
 // Test traffic: a question logged with origin 'setup' | 'proof' | 'probe' (or one of the Studio's own off-topic probes asked
@@ -58,6 +64,7 @@ const DEFAULTS = Object.freeze({
   memoryPerScope: 500,   // recent entries kept in memory per scope (pending writes + local mode)
   maxQueue: 5000,        // across all scopes; beyond it new questions are dropped (logged once)
   semanticMin: 0.9,      // knowDrive similarity at which two questions are "the same question"
+  historyListTtlMs: 15000, // questionHistory: how long this month's file listing is reused (paging and filters never re-list)
   logger: () => {},
 });
 let cfg = { ...DEFAULTS };
@@ -122,6 +129,12 @@ export function scrubQuestion(q) {
     .replace(DIGIT_RUN, (m) => ((m.match(/\d/g) || []).length >= 7 ? '[number]' : m)).replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
+/** The stored answer text: one line, ≤ 1500 chars, masked exactly like a question. */
+export function scrubAnswer(a) {
+  return String(a ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(EMAIL, '[email]')
+    .replace(DIGIT_RUN, (m) => ((m.match(/\d/g) || []).length >= 7 ? '[number]' : m)).replace(/\s+/g, ' ').trim().slice(0, 1500);
+}
+
 const tagSafe = (s, max = 60) => String(s ?? '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, max);
 const cleanChannel = (c) => { const t = tagSafe(c, 20); return t || 'web'; };
 const cleanOutcome = (o) => (String(o).toLowerCase() === 'refused' ? 'refused' : 'answered');
@@ -147,7 +160,7 @@ export function parseQuestionPath(p) {
 /** The markdown body of one question file (the first atom is the question itself, for similarity grouping). */
 export function questionDoc(e) {
   const meta = { v: 1, q: e.q, hash: e.hash, outcome: e.outcome, channel: e.channel, at: new Date(e.at).toISOString(), top: e.top, files: e.files, ...(e.atoms?.length ? { atoms: e.atoms } : {}), from: e.from || null,
-    ...(e.flags?.length ? { flags: e.flags } : {}), ...(e.note ? { note: e.note } : {}) };
+    ...(e.flags?.length ? { flags: e.flags } : {}), ...(e.note ? { note: e.note } : {}), ...(e.answer ? { answer: e.answer } : {}) };
   // The question alone is the first atom (no heading travels with it), so similarity search compares question to question.
   return [
     e.q, '',
@@ -205,7 +218,7 @@ export function logQuestion(o = {}) {
   try { return Promise.resolve(enqueue(o || {})); } catch (e) { try { cfg.logger(`[questions] log failed: ${e.message}`); } catch {} return Promise.resolve({ logged: false, skipped: 'error' }); }
 }
 
-function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, citations = [], topScore = null, channel = 'web', callerKey, now, origin, flags = [], note = '' } = {}) {
+function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, citations = [], topScore = null, channel = 'web', callerKey, now, origin, flags = [], note = '', answer = '' } = {}) {
   const at = Number.isFinite(now) ? now : Date.now();
   const q = scrubQuestion(question);
   if (!q || !normalizeQuestion(q)) return { logged: false, skipped: 'empty' };
@@ -243,8 +256,9 @@ function enqueue({ kd = null, store, scopeTags = [], root, question, outcome, ci
   const path = `${normRoot(root, scopeKey)}questions/${month}/${at}-${hash}-${randomBytes(3).toString('hex')}.md`;
   const fl = [...new Set((Array.isArray(flags) ? flags : [flags]).map((f) => tagSafe(f, 30)).filter(Boolean))].slice(0, 4);
   const nt = note ? scrubQuestion(String(note)).slice(0, 300) : '';
+  const ans = answer && oc === 'answered' ? scrubAnswer(answer) : '';
   const tags = [...new Set([QUESTIONS_TAG, 'knowbot', ...tags0, `outcome:${oc}`, `channel:${ch}`, `month:${month}`, ...(from ? [`from:${from}`] : []), ...(og ? [`origin:${og}`] : []), ...fl.map((f) => `flag:${f}`)])];
-  const entry = { q, hash, outcome: oc, channel: ch, at, top, files, atoms, from, path, tags, scopeKey, state: 'pending', test: !!og, origin: og || 'customer', ...(fl.length ? { flags: fl } : {}), ...(nt ? { note: nt } : {}) };
+  const entry = { q, hash, outcome: oc, channel: ch, at, top, files, atoms, from, path, tags, scopeKey, state: 'pending', test: !!og, origin: og || 'customer', ...(fl.length ? { flags: fl } : {}), ...(nt ? { note: nt } : {}), ...(ans ? { answer: ans } : {}) };
 
   const list = recent.get(scopeKey) || [];
   list.push(entry);
@@ -344,7 +358,7 @@ export async function flushQuestions() {
 /** Forget all in-memory state (tests). */
 export function _resetQuestions() {
   for (const w of writers.values()) if (w.timer) clearTimeout(w.timer);
-  writers.clear(); recent.clear(); seen.clear(); daily.clear(); texts.clear(); cites.clear(); sendEvents.clear();
+  writers.clear(); recent.clear(); seen.clear(); daily.clear(); texts.clear(); cites.clear(); sendEvents.clear(); listCache.clear(); metaCache.clear();
   queued = 0; warnedFull = false; cfg = { ...DEFAULTS };
 }
 
@@ -352,7 +366,7 @@ export function _resetQuestions() {
 async function listQuestionRows(kd, store, tags, max = 5000) {
   const rows = [];
   let after = '';
-  for (let page = 0; page < 10 && rows.length < max; page++) {
+  for (let page = 0; page < Math.ceil(max / 1000) && rows.length < max; page++) {
     const qs = new URLSearchParams({ tags_all: tags.join(','), limit: '1000' });
     if (after) qs.set('after', after);
     const res = await kdFetch(kd, `/api/v1/vector_stores/${encodeURIComponent(store)}/files?${qs}`, { timeout: 15000 });
@@ -860,6 +874,236 @@ export async function questionActivity({ kd = null, store, scopeTags = [], days 
     row.byChannel[e.channel] = (row.byChannel[e.channel] || 0) + 1;
   }
   return { days: d, since: new Date(start).toISOString(), total, answered: total - refused, refused, byChannel, byDay, sends: sendEventCounts(tags), source };
+}
+
+// ------------------------------------------------------------------ question history (Studio "Stats & Leads")
+// Every question, newest first, for the owner's full Stats view. Built on the same log as insights:
+//   * the knowDrive file listing gives, per question and without reading a file: the time (path), the outcome, channel,
+//     origin and review flags (tags). Listings are fetched per month tag (month:<yyyy-mm>, only the months the range
+//     touches) and cached briefly, so paging and filtering never re-list, and a long history is not capped by one listing.
+//   * the text, cited files, top similarity, note and (from now on) the answer live in the file: read only for the rows
+//     of the page being shown, and cached. A text search and the gap / off-topic filters need the text of every candidate:
+//     known texts come from memory, the rest are read within a time budget (`partial: true` when it ran out).
+// Days are the VIEWER's days: `tz` is their UTC offset in minutes east of UTC (-new Date().getTimezoneOffset()), applied
+// as one fixed offset to the whole range (a daylight-saving change inside the range shifts those days by an hour);
+// without it days are UTC. `from` / `to` / `day` are YYYY-MM-DD local dates, inclusive.
+// Retention: question files are never pruned by age (they live as long as the bot's files); a bot logs at most
+// `dailyCap` questions a day. Test traffic (setup / Proof Run / probes) is never listed, as in insights.
+const listCache = new Map(); // `${base}|${store}|${tags}|${month}` → { at, rows }
+const metaCache = new Map(); // path → parsed question doc
+const HISTORY = Object.freeze({ maxDays: 800, monthRows: 20000, listTtlMs: 15000, pastTtlMs: 5 * 60000, pageMax: 200, readBudgetMs: 6000, readConcurrency: 8 });
+export const HISTORY_OUTCOMES = Object.freeze(['answered', 'refused', 'gap', 'off_topic', 'flagged']);
+export const QUESTIONS_CSV_COLUMNS = Object.freeze(['date', 'time', 'channel', 'question', 'outcome']);
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const cleanTz = (tz) => { const n = Math.round(Number(tz)); return Number.isFinite(n) ? Math.max(-840, Math.min(840, n)) : 0; };
+const localDay = (at, tz) => dayOf(at + tz * 60000);
+const localTime = (at, tz) => new Date(at + tz * 60000).toISOString().slice(11, 16);
+const dayStart = (day, tz) => Date.parse(`${day}T00:00:00Z`) - tz * 60000;
+const validDay = (d) => DAY_RE.test(String(d || '')) && Number.isFinite(Date.parse(`${d}T00:00:00Z`));
+const encCursor = (e) => Buffer.from(`${e.at}|${e.path}`).toString('base64url');
+function decCursor(c) {
+  try { const s = Buffer.from(String(c || ''), 'base64url').toString('utf8'); const i = s.indexOf('|'); const at = Number(s.slice(0, i)); return i > 0 && Number.isFinite(at) ? { at, path: s.slice(i + 1) } : null; } catch { return null; }
+}
+/** Newest first; the path breaks ties, so a cursor is exact. */
+const newestFirst = (a, b) => b.at - a.at || (a.path < b.path ? 1 : a.path > b.path ? -1 : 0);
+
+async function monthRows(kd, st, tags, month, now) {
+  const key = `${baseOf(kd)}|${st}|${tags.join(',')}|${month}`;
+  const hit = listCache.get(key);
+  const ttl = month === monthOf(now) ? cfg.historyListTtlMs : HISTORY.pastTtlMs;
+  if (hit && Date.now() - hit.at < ttl) return hit.rows;
+  const rows = await listQuestionRows(kd, st, [QUESTIONS_TAG, ...tags, `month:${month}`], HISTORY.monthRows);
+  remember(listCache, key, { at: Date.now(), rows }, 400);
+  return rows;
+}
+
+/**
+ * Resolve the range → {from, to, tz, startMs, endMs, days, open} from {from, to} or {days: n | 'all'}. 'all' reaches back
+ * HISTORY_ALL_DAYS (two years) and is `open`: questionHistory then starts the range at the first day that has a question.
+ */
+export const HISTORY_ALL_DAYS = 730;
+export function historyRange({ from, to, days, tz = 0, now = Date.now() } = {}) {
+  const z = cleanTz(tz);
+  const today = localDay(now, z);
+  let t = validDay(to) ? String(to) : today;
+  if (t > today) t = today;
+  let f;
+  const open = !validDay(from) && String(days).toLowerCase() === 'all';
+  if (validDay(from)) f = String(from);
+  else if (open) f = dayOf(Date.parse(`${t}T00:00:00Z`) - (HISTORY_ALL_DAYS - 1) * 86400000);
+  else { const n = Math.max(1, Math.min(HISTORY.maxDays, Math.floor(Number(days)) || 30)); f = dayOf(Date.parse(`${t}T00:00:00Z`) - (n - 1) * 86400000); }
+  if (f > t) f = t;
+  const span = Math.round((Date.parse(`${t}T00:00:00Z`) - Date.parse(`${f}T00:00:00Z`)) / 86400000) + 1;
+  if (span > HISTORY.maxDays) f = dayOf(Date.parse(`${t}T00:00:00Z`) - (HISTORY.maxDays - 1) * 86400000);
+  return { from: f, to: t, tz: z, startMs: dayStart(f, z), endMs: dayStart(t, z) + 86400000, days: Math.min(span, HISTORY.maxDays), open };
+}
+
+/** Every logged (non-test) question of a scope inside [startMs, endMs): memory first, then the month listings. */
+async function historyEntries({ kd, store, tags, startMs, endMs, now }) {
+  const scopeKey = scopeKeyOf(tags);
+  const entries = new Map();
+  for (const e of recent.get(scopeKey) || []) {
+    if (e.state === 'failed' || e.test || !tags.every((t) => e.tags.includes(t)) || e.at < startMs || e.at >= endMs) continue;
+    entries.set(e.path, { path: e.path, at: e.at, hash: e.hash, channel: e.channel || 'web', outcome: e.outcome, flags: e.flags || [], q: e.q,
+      meta: { q: e.q, files: e.files || [], top: e.top, ...(e.note ? { note: e.note } : {}), ...(e.answer ? { answer: e.answer } : {}) } });
+  }
+  let source = 'memory', truncated = false;
+  const st = String(store || kd?.store || '');
+  if (kdUsable(kd) && st) {
+    source = 'knowdrive';
+    const months = [];
+    for (let t = Date.parse(`${monthOf(startMs)}-01T00:00:00Z`); t < endMs && months.length < 40; ) { months.push(monthOf(t)); const d = new Date(t); t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); }
+    const lists = new Array(months.length);
+    let mi = 0;
+    await Promise.all(Array.from({ length: Math.min(6, months.length) }, async () => { while (mi < months.length) { const k = mi++; lists[k] = await monthRows(kd, st, tags, months[k], now); } }));
+    for (const rows of lists) {
+      if (rows.length >= HISTORY.monthRows) truncated = true;
+      for (const r of rows) {
+        const tg = (r.tags || []).map(String);
+        if (!tg.includes(QUESTIONS_TAG) || !tags.every((t) => tg.includes(t))) continue; // fail closed
+        const p = parseQuestionPath(r.filename);
+        if (!p) continue;
+        const at = p.at || atOf(r.created_at);
+        if (at < startMs || at >= endMs) continue;
+        const ch = tagVal(tg, 'channel') || 'web';
+        if (TEST_ORIGINS.includes(tagVal(tg, 'origin')) || (ch === 'studio' && probeHashes.has(p.hash))) continue;
+        const prev = entries.get(r.filename);
+        if (prev) { prev.row = r; continue; }
+        entries.set(r.filename, { path: r.filename, at, hash: p.hash, channel: ch, outcome: tagVal(tg, 'outcome') === 'refused' ? 'refused' : 'answered',
+          flags: tg.filter((t) => t.startsWith('flag:')).map((t) => t.slice(5)), q: null, meta: metaCache.get(r.filename) || null, row: r });
+      }
+    }
+  }
+  return { entries: [...entries.values()], source, truncated, live: source === 'knowdrive', st };
+}
+
+/** Fill `e.meta` (the stored doc: q, files, top, note, answer) for these entries, within a time budget. → true when all were filled. */
+async function fillMeta(kd, st, list, budgetMs) {
+  const want = list.filter((e) => !e.meta && e.row);
+  if (!want.length) return true;
+  const until = Date.now() + budgetMs;
+  let i = 0, done = 0;
+  const worker = async () => {
+    while (i < want.length && Date.now() < until) {
+      const e = want[i++];
+      const d = metaCache.get(e.path) || await readQuestionMeta(kd, st, e.row);
+      if (d?.q) { e.meta = d; remember(metaCache, e.path, d, 20000); remember(texts, e.hash, d.q, 20000); }
+      else e.meta = { q: null };
+      done++;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(HISTORY.readConcurrency, want.length) }, worker));
+  return done === want.length;
+}
+const textOf = (e) => e.meta?.q || e.q || texts.get(e.hash) || null;
+function normalizeSearch(s) { return String(s ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().slice(0, 120); }
+
+/**
+ * The question history of one bot.
+ * @param {{ kd?: object|null, store?: string, scopeTags: string[], from?: string, to?: string, days?: number|'all',
+ *   tz?: number, day?: string, channel?: string, outcome?: string, q?: string, includeStudio?: boolean, cursor?: string, limit?: number,
+ *   classify?: (x: {q: string|null, top: number|null}) => 'gap'|'off_topic', now?: number, all?: boolean, budgetMs?: number }} o
+ *   includeStudio false leaves out channel:studio (the owner's own tests in the Studio); `all` returns every match (the CSV).
+ * @returns {Promise<{ range:{from,to,tz,days}, total, answered, refused, flagged, byChannel, byDay:[{day,total,answered,refused,flagged}],
+ *   matched, dayCounts:{[day]:number}, items:[{id, at, day, time, q, channel, outcome, flags, files, top, note, answer}],
+ *   nextCursor:string|null, source, partial:boolean, truncated:boolean }>}
+ *   total / answered / refused / byDay follow includeStudio and `channel` (what the chart shows); byChannel follows only
+ *   includeStudio (so the channel breakdown always shows every channel); matched / items follow every filter.
+ *   item.outcome: 'answered' | 'gap' (not in the files) | 'off_topic'; item.answer is null for questions logged before
+ *   answers were stored.
+ */
+export async function questionHistory(o = {}) {
+  const now = Number.isFinite(o.now) ? o.now : Date.now();
+  const tags = cleanTags(o.scopeTags || []);
+  const range = historyRange({ from: o.from, to: o.to, days: o.days, tz: o.tz, now });
+  const { tz, startMs, endMs } = range;
+  const kd = o.kd || null;
+  const { entries, source, truncated, live, st } = await historyEntries({ kd, store: o.store, tags, startMs, endMs: Math.min(endMs, now + 60000), now });
+  const includeStudio = o.includeStudio !== false;
+  const channel = CHANNELS.includes(String(o.channel || '')) ? String(o.channel) : null;
+  const outcome = HISTORY_OUTCOMES.includes(String(o.outcome || '')) ? String(o.outcome) : null;
+  const day = validDay(o.day) ? String(o.day) : null;
+  const needle = normalizeSearch(o.q);
+  const classify = typeof o.classify === 'function' ? o.classify : () => 'gap';
+  const budget = Math.max(200, Number(o.budgetMs) || HISTORY.readBudgetMs);
+
+  const base = entries.filter((e) => includeStudio || e.channel !== 'studio');
+  const byChannel = Object.fromEntries(CHANNELS.map((c) => [c, 0]));
+  for (const e of base) byChannel[e.channel] = (byChannel[e.channel] || 0) + 1;
+  const charted = channel ? base.filter((e) => e.channel === channel) : base;
+  for (const e of base) e.day = localDay(e.at, tz);
+  if (range.open) { // "All": start at the first day with a question (never fewer than 7 days, so the chart reads as a chart)
+    const week = dayOf(Date.parse(`${range.to}T00:00:00Z`) - 6 * 86400000);
+    const first = base.reduce((m, e) => (e.day < m ? e.day : m), week);
+    range.from = first < range.from ? range.from : first;
+    range.days = Math.round((Date.parse(`${range.to}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86400000) + 1;
+  }
+  const byDay = Array.from({ length: range.days }, (_, i) => ({ day: dayOf(Date.parse(`${range.from}T00:00:00Z`) + i * 86400000), total: 0, answered: 0, refused: 0, flagged: 0 }));
+  const dayIndex = new Map(byDay.map((d, i) => [d.day, i]));
+  let total = 0, refused = 0, flagged = 0;
+  for (const e of charted) {
+    const row = byDay[dayIndex.get(e.day)];
+    if (!row) continue;
+    row.total++; total++;
+    if (e.outcome === 'refused') { row.refused++; refused++; } else row.answered++;
+    if (e.flags.length) { row.flagged++; flagged++; }
+  }
+
+  let partial = false;
+  let list = charted.filter((e) => dayIndex.has(e.day) && (!day || e.day === day));
+  if (outcome === 'answered') list = list.filter((e) => e.outcome !== 'refused');
+  else if (outcome === 'flagged') list = list.filter((e) => e.flags.length);
+  else if (outcome) list = list.filter((e) => e.outcome === 'refused');
+  const kindOf = (e) => (e.outcome !== 'refused' ? 'answered' : textOf(e) && classify({ q: textOf(e), top: e.meta?.top ?? null }) === 'off_topic' ? 'off_topic' : 'gap');
+  if (outcome === 'gap' || outcome === 'off_topic') {
+    if (live && !(await fillMeta(kd, st, list, budget))) partial = true;
+    list = list.filter((e) => kindOf(e) === outcome);
+  }
+  if (needle) {
+    const unknown = list.filter((e) => !textOf(e));
+    if (live && unknown.length && !(await fillMeta(kd, st, unknown, budget))) partial = true;
+    list = list.filter((e) => { const t = textOf(e); return !!t && normalizeSearch(t).includes(needle); });
+  }
+  list.sort(newestFirst);
+  const dayCountsAll = new Map();
+  for (const e of list) dayCountsAll.set(e.day, (dayCountsAll.get(e.day) || 0) + 1);
+
+  let page = list, nextCursor = null;
+  if (!o.all) {
+    const cur = decCursor(o.cursor);
+    const startAt = cur ? list.findIndex((e) => newestFirst(cur, e) < 0) : 0;
+    const limit = Math.max(1, Math.min(HISTORY.pageMax, Math.floor(Number(o.limit)) || 50));
+    page = startAt < 0 ? [] : list.slice(startAt, startAt + limit);
+    nextCursor = startAt >= 0 && startAt + limit < list.length && page.length ? encCursor(page[page.length - 1]) : null;
+  }
+  if (live && !(await fillMeta(kd, st, page, o.all ? Math.max(budget, 25000) : Math.max(budget, 10000)))) partial = true;
+  const items = page.map((e) => {
+    const m = e.meta || {};
+    return { id: `${e.at.toString(36)}-${e.hash}-${e.path.slice(-9, -3)}`, at: new Date(e.at).toISOString(), day: e.day, time: localTime(e.at, tz), q: textOf(e), channel: e.channel,
+      outcome: kindOf(e), flags: e.flags, files: Array.isArray(m.files) ? m.files.map(String).slice(0, 8) : [], top: m.top != null && Number.isFinite(Number(m.top)) ? Number(m.top) : null,
+      note: typeof m.note === 'string' && m.note ? m.note : null, answer: e.outcome !== 'refused' && typeof m.answer === 'string' && m.answer ? m.answer : null };
+  });
+  const dayCounts = {};
+  for (const it of items) dayCounts[it.day] = dayCountsAll.get(it.day) || 0;
+  return { range: { from: range.from, to: range.to, tz, days: range.days, ...(range.open ? { all: true, reachDays: HISTORY_ALL_DAYS } : {}) }, total, answered: total - refused, refused, flagged, byChannel, byDay,
+    matched: list.length, dayCounts, items, nextCursor, source, partial, truncated };
+}
+
+const OUTCOME_CSV = Object.freeze({ answered: 'answered', gap: 'not in files', off_topic: 'off-topic' });
+const csvCell = (v) => { // RFC 4180, with spreadsheet formula injection neutralised (as server/leads.mjs)
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s) && !/^[+-]?\d[\d\s().-]*$/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+/**
+ * The questions export: one row per question, newest first, with the same filters as questionHistory (at most 20,000 rows).
+ * Columns: date, time (the viewer's local day and time, see `tz`), channel, question, outcome (answered | not in files |
+ * off-topic, with "; flagged: <flag>" appended for a flagged one). Nothing here is more than the history shows.
+ */
+export async function questionsCsv(o = {}) {
+  const r = await questionHistory({ ...o, all: true, cursor: null });
+  const rows = r.items.slice(0, 20000).map((it) => [it.day, it.time, it.channel, it.q || '', `${OUTCOME_CSV[it.outcome] || it.outcome}${it.flags.length ? `; flagged: ${it.flags.join(' ')}` : ''}`].map(csvCell).join(','));
+  return `${[QUESTIONS_CSV_COLUMNS.join(','), ...rows].join('\r\n')}\r\n`;
 }
 
 export const SCOPE_GONE_MESSAGE ="This bot's files are no longer in the store (the trial expired or was reset), so there are no question insights to show.";

@@ -575,7 +575,8 @@ export function createDevApi(o = {}) {
     try {
       const ch = CHANNELS.includes(channel) ? channel : 'api';
       const base = { question: a.question, outcome: a.refused ? 'refused' : 'answered', citations: a.citations.map((c) => ({ file: c.file })),
-        topScore: a.proof.floor.top ?? a.citations[0]?.similarity ?? null, channel: ch, callerKey, ...extra };
+        topScore: a.proof.floor.top ?? a.citations[0]?.similarity ?? null, channel: ch, callerKey,
+        answer: a.refused ? '' : String(a.answer || ''), ...extra }; // the answer text: kept for the owner's question history
       const p = target.kind === 'trial'
         ? logQuestion({ ...base, kd: kd ? { ...kd, store: studio.store } : null, store: studio?.store, scopeTags: [`trial:${target.id}`, 'kind:trial', `expires:${yyyymmdd(target.expiresAt)}`], root: `knowbot/trials/${target.id}/` })
         : logQuestion({ ...base, kd, store: kd?.store, scopeTags: [`bot:${target.id}`], root: `knowbot/_bots/${target.id}/` });

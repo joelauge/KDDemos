@@ -3247,7 +3247,7 @@ export function createStudio(o = {}) {
       try {
         const p = questionsMod.logQuestion({ kd: { ...kd, store }, store, scopeTags: [`trial:${T.id}`, 'kind:trial', `expires:${yyyymmdd(T.expiresAt)}`], root: rootOf(T.id),
           question: final.question, outcome: final.refused ? 'refused' : 'answered', citations: (final.citations || []).map((c) => ({ n: c.n, file: c.file })),
-          topScore: top, channel: 'studio', callerKey: T.id,
+          topScore: top, channel: 'studio', callerKey: T.id, answer: final.refused ? '' : String(final.text || ''),
           // test traffic (the Studio's own probes and the Builder's "Asked by Setup") stays out of top questions and gaps
           origin: /setup/i.test(label || '') ? 'setup' : (PROBES.includes(final.question) || PROBE_BACKUPS.includes(final.question)) ? 'probe' : undefined });
         p?.catch?.(() => {});
@@ -4985,6 +4985,34 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return { botId: T.id, ...rest, agents: rest.agents || { questions: 0, answered: 0, refused: 0, limited: 0, free: 0, paid: 0, owner: 0, byDay: [] }, interactions, tracking: T.flags?.leadTracking !== false, available: !!o.leads };
   }
 
+  // ------------------------------------------------------------------------- question history (server/questions.mjs questionHistory)
+  // GET /trials/:id/history?days=7|30|90|all | from=&to= (YYYY-MM-DD, the viewer's days) &tz=<minutes east of UTC>
+  //       &day=YYYY-MM-DD &channel= &outcome=answered|refused|gap|off_topic|flagged &q=<text> &tests=0|1 &cursor= &limit=
+  //   → { range, total, answered, refused, flagged, byChannel, byDay:[{day,total,answered,refused,flagged}], matched,
+  //       dayCounts, items:[{id, at, day, time, q, channel, outcome, flags, files, top, note, answer}], nextCursor,
+  //       retention:{questionsDays:null, leadsDays, allDays}, partial, truncated }
+  // GET /trials/:id/history.csv?…same filters → date,time,channel,question,outcome (newest first).
+  // Days are the viewer's (tz); UTC when tz is missing. tests=0 leaves out what the owner asked in the Studio itself.
+  // The trial token is required, exactly like the leads report (auth below). Question text is what the question log
+  // already holds (e-mail addresses and long numbers masked); nothing here is served publicly.
+  function historyQuery(T, url) {
+    const sp = url.searchParams;
+    const days = sp.get('days');
+    const floor = Number(T.spec?.floor);
+    return { kd: { ...kd, store }, store, scopeTags: [`trial:${T.id}`], now: now(),
+      from: sp.get('from') || undefined, to: sp.get('to') || undefined, days: String(days).toLowerCase() === 'all' ? 'all' : ([7, 30, 90].includes(Number(days)) ? Number(days) : 30),
+      tz: sp.has('tz') ? Number(sp.get('tz')) : 0, day: sp.get('day') || undefined, channel: sp.get('channel') || undefined, outcome: sp.get('outcome') || undefined,
+      q: (sp.get('q') || '').slice(0, 120), includeStudio: sp.get('tests') !== '0', cursor: sp.get('cursor') || undefined, limit: Number(sp.get('limit')) || 50,
+      // off-topic vs a gap in the files: the same rule as the insights card (general knowledge, or far below the floor)
+      classify: ({ q, top }) => ((top == null || !Number.isFinite(floor) ? (generalKnowledge(q) ? 'off_topic' : 'near_miss') : refusalReasonOf({ q, best: top, floor })) === 'near_miss' ? 'gap' : 'off_topic') };
+  }
+  async function questionsHistory(T, url) {
+    await questionsReady;
+    if (!questionsMod?.questionHistory) fail(503, 'unavailable', 'The question history is not available right now.');
+    const r = await withTimeout(Promise.resolve(questionsMod.questionHistory(historyQuery(T, url))), 20000);
+    return { botId: T.id, ...r, retention: { questionsDays: null, leadsDays: o.leads?.retentionDays ?? 90, allDays: questionsMod.HISTORY_ALL_DAYS || 730 } };
+  }
+
   // ------------------------------------------------------------------------- HTTP
   function sendJson(res, status, body, headers = {}) {
     if (res.headersSent) { try { res.end(); } catch {} return; }
@@ -5438,6 +5466,18 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const name = `knowbot-leads-${String(T.spec?.name || T.id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'bot'}-${new Date(now()).toISOString().slice(0, 10)}.csv`;
       res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
       return res.end(`\ufeff${body}`); // a BOM so spreadsheet apps read UTF-8 names and questions correctly
+    }
+    if (sub === 'history' && !fid) {
+      allow('GET');
+      return sendJson(res, 200, await questionsHistory(T, url));
+    }
+    if (sub === 'history.csv' && !fid) {
+      allow('GET');
+      await questionsReady;
+      const body = questionsMod?.questionsCsv ? await withTimeout(Promise.resolve(questionsMod.questionsCsv(historyQuery(T, url))), 40000) : '';
+      const name = `knowbot-questions-${String(T.spec?.name || T.id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'bot'}-${new Date(now()).toISOString().slice(0, 10)}.csv`;
+      res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+      return res.end(`\ufeff${body}`);
     }
     if (sub === 'insights') {
       allow('GET');
