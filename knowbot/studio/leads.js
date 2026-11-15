@@ -10,7 +10,9 @@
 //                          "Add what's missing" on the ones the files could not answer
 //                        - What people ask (most asked + gaps), Interactions by channel, AI agents, the Leads table
 //                          (sortable; a lead's question opens it in the history), Checkout links sent
+//                        - Connect your CRM (studio/crm.js): send new leads to a CRM, an email list, Zapier or a webhook
 //                        - Track links, Download leads CSV, Download questions CSV
+//                      opts.section 'crm' scrolls to (and focuses) that section once the view is painted.
 //   initStatsRoute()   wires #stats: opens the view when the page loads on it, and follows Back / Forward.
 //
 // Data: GET /api/studio/trials/:id/leads[.csv] (server/leads.mjs), /history[.csv] (server/questions.mjs questionHistory)
@@ -19,6 +21,7 @@
 import * as api from './api.js';
 import { getState } from './store.js';
 import { icon } from './icons.js';
+import { crmSection } from './crm.js';
 
 const CHANNELS = [
   ['web', 'Website chat'], ['site', 'Homepage search'], ['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['email', 'Email'],
@@ -137,8 +140,8 @@ export function initStatsRoute(opts = {}) {
 }
 
 /** Opens Stats & Leads as a full view (one at a time). Resolves when it is shown. */
-export async function openLeads({ filters = null, push = true, invoker = null } = {}) {
-  if (view) { if (filters && view.el.isConnected) view.apply({ ...parseRoute(ROUTE), ...filters }); view.el.querySelector('#kb-stats-title')?.focus(); return; }
+export async function openLeads({ filters = null, push = true, invoker = null, section = null } = {}) {
+  if (view) { if (filters && view.el.isConnected) view.apply({ ...parseRoute(ROUTE), ...filters }); if (section) view.show(section); else view.el.querySelector('#kb-stats-title')?.focus(); return; }
   if (!getState().trial?.id) return;
   const opener = invoker || (document.activeElement && document.activeElement !== document.body ? document.activeElement : null);
   const f = { ...(parseRoute() || parseRoute(ROUTE)), ...(filters || {}) };
@@ -186,7 +189,18 @@ export async function openLeads({ filters = null, push = true, invoker = null } 
     close();
   };
   document.addEventListener('keydown', onKey);
-  view = { el, close, apply: (nf) => { Object.assign(f, nf); paintSeg(); load(); } }; // claimed before the first await: one view, however it is asked for
+  // Connect your CRM: built once per view (it keeps its own state while the report repaints around it)
+  let crmEl = null, wantSection = section;
+  const showSection = (name) => {
+    wantSection = name;
+    const target = name === 'crm' ? el.querySelector('#kb-crm') : null;
+    if (!target) return; // not painted yet: paint() comes back here
+    wantSection = null;
+    target.scrollIntoView({ block: 'start' });
+    target.querySelector('h3')?.focus({ preventScroll: true });
+  };
+  let ready = false; // a route change that lands while the styles load only updates the filters: the first load picks them up
+  view = { el, close, show: showSection, apply: (nf) => { Object.assign(f, nf); if (!ready) return; paintSeg(); load(); } }; // claimed before the first await: one view, however it is asked for
   await ensureCss();
   if (!view || view.el !== el) return; // closed while the styles loaded
   document.body.append(el);
@@ -194,7 +208,7 @@ export async function openLeads({ filters = null, push = true, invoker = null } 
   document.documentElement.classList.add('kb-stats-open');
   document.title = `Stats & Leads${botName ? ` · ${botName}` : ''}`;
   el.querySelector(`#${titleId}`).focus({ preventScroll: true });
-  setTimeout(load, 0); // after the helpers below exist
+  setTimeout(() => { ready = true; paintSeg(); load(); }, 0); // after the helpers below exist
 
   /** Leave the view. fromHistory: Back / Forward already changed the URL. */
   function close(fromHistory = false) {
@@ -337,11 +351,12 @@ export async function openLeads({ filters = null, push = true, invoker = null } 
       f.range === 'all' ? h('p', { class: 'kb-stats-note' }, ico('info', 13), ` “All” shows every question since ${fmtDay(hist.range.from, { month: 'short', day: 'numeric', year: 'numeric' })}${hist.range.all && hist.range.days >= (hist.range.reachDays || 730) ? ' (it goes back two years at most)' : ''}. Leads, checkout links and clicks are only kept for ${keep} days, so those show the last ${keep} days.`) : null,
       h('div', { id: 'kb-qsec', class: 'kb-stats-q' }),
       h('div', { class: 'kb-stats-cols' }, asksSection(st.insights), h('div', { id: 'kb-chsec' })),
-      agentsSection(data.agents), leadsSection(data.leads), checkoutSection(data.conversions.items || []),
+      agentsSection(data.agents), leadsSection(data.leads), (crmEl ||= crmSection({ announce: (t) => { status.textContent = t; } })), checkoutSection(data.conversions.items || []),
       h('p', { class: 'kb-leads-foot' }, ico('lock', 12),
         h('span', null, `Only you can see this. Days and times are in your time zone (${tzName()}). Questions are kept for as long as your bot exists, with email addresses and long numbers masked; leads, checkout links and clicks are kept for ${keep} days. Tracked links carry utm_source=knowbot, utm_medium (the channel) and utm_campaign (this bot), so your own analytics can count visits and sales from them. The leads CSV lists each AI agent question on channel "agent".`)),
     ].filter(Boolean));
     paintQuestions();
+    if (wantSection) showSection(wantSection);
   }
   function tile(label, n, sub) {
     return h('li', { class: 'kb-leads-tile' }, h('span', { class: 'kb-leads-tile-label' }, label), h('strong', { class: 'kb-leads-tile-n st-mono' }, Number(n || 0).toLocaleString()), h('span', { class: 'kb-leads-tile-sub' }, sub));

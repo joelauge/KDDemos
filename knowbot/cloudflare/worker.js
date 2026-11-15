@@ -49,6 +49,14 @@ export class KnowBotContainer extends Container {
       // (default https://knowdrive.ai), the sign-in callback on this API host, off|required, the scopes, a pinned client
       // (else registered dynamically), and KNOWBOT_MODE=owner (skips the account step)
       ...pick(env, ['KNOWBOT_KD_AUTH_URL', 'KNOWBOT_KD_API_URL', 'KNOWBOT_KD_REDIRECT_URI', 'KNOWBOT_KD_ACCOUNTS', 'KNOWBOT_KD_SCOPE', 'KNOWBOT_KD_CLIENT_ID', 'KNOWBOT_KD_CLIENT_SECRET', 'KNOWBOT_MODE']),
+      // Lead delivery to the owner's CRM (server/crm): each service's one-click sign-in is offered only when its app's
+      // client id and secret are both set (secrets; `wrangler secret put`). Without them HubSpot, Pipedrive and
+      // Mailchimp still connect with a pasted key, and the webhook and Zapier need nothing. Optional plain vars: the
+      // sign-in callback base (default <public URL>/api/studio/crm/callback) and the Salesforce REST API version.
+      ...pick(env, ['KNOWBOT_HUBSPOT_CLIENT_ID', 'KNOWBOT_HUBSPOT_CLIENT_SECRET', 'KNOWBOT_SALESFORCE_CLIENT_ID', 'KNOWBOT_SALESFORCE_CLIENT_SECRET',
+        'KNOWBOT_PIPEDRIVE_CLIENT_ID', 'KNOWBOT_PIPEDRIVE_CLIENT_SECRET', 'KNOWBOT_ZOHO_CLIENT_ID', 'KNOWBOT_ZOHO_CLIENT_SECRET',
+        'KNOWBOT_MAILCHIMP_CLIENT_ID', 'KNOWBOT_MAILCHIMP_CLIENT_SECRET', 'KNOWBOT_CONSTANTCONTACT_CLIENT_ID', 'KNOWBOT_CONSTANTCONTACT_CLIENT_SECRET',
+        'KNOWBOT_CRM_REDIRECT_BASE', 'KNOWBOT_SALESFORCE_API_VERSION']),
     };
   }
 

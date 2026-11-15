@@ -1,0 +1,21 @@
+{
+  "name": "knowbot-zapier",
+  "version": "1.0.0",
+  "description": "KnowBot for Zapier: start a Zap whenever your KnowBot captures a lead.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test",
+    "validate": "zapier validate",
+    "push": "zapier push"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "zapier-platform-core": "19.3.0"
+  },
+  "devDependencies": {
+    "zapier-platform-cli": "19.3.0"
+  }
+}

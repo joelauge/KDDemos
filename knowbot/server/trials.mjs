@@ -45,6 +45,8 @@ import { agentLimits, agentSettings, priceText as agentPriceText } from './agent
 import { sendInfoSwitches, sendInfoAllow, cleanSendInfo } from './sendinfo.mjs';
 import { createKdAccount, KdError } from './kdaccount.mjs';
 import { publicBase } from './channels/util.mjs';
+import { createCrm } from './crm/index.mjs';
+import { createCrmRoutes } from './crm/routes.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.resolve(__dirname, '..', 'studio', 'samples');
@@ -1314,8 +1316,8 @@ export function createStudio(o = {}) {
     }
     return rows;
   }
-  async function ingest({ storePath, tags, mime, bytes, signal, via = null }) {
-    bumpFilesEpoch(); // a bot's files change: its cached instant voice answers are stale (voice-brain.mjs)
+  async function ingest({ storePath, tags, mime, bytes, signal, via = null, side = false }) {
+    if (!side) bumpFilesEpoch(); // a bot's files change: its cached instant voice answers are stale (voice-brain.mjs); side: a state file no answer reads
     const fd = new FormData();
     // knowDrive /ingest is a batch endpoint: every text part after mime_type counts as a file part (a `path` part
     // would be stored as its own file), and mime_type must precede the file parts. The store path rides on the
@@ -1673,6 +1675,68 @@ export function createStudio(o = {}) {
     // the same convert the admin route runs: a linked bot's account is its KnowDrive account (the customer-store model)
     launch: (T, { customerId } = {}) => convert(T, { account: kdReady(T) ? T.kdLink.account : String(customerId || 'knowbot').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), bucketId: `bot-${T.id.slice(3, 15)}` }),
     onChange: (T, state) => pushEvent(T, 'billing', { billing: state }) });
+  // Lead delivery to the owner's CRMs (server/crm): connections live in T.flags.crm (saved in the spec doc, kept when
+  // the bot launches); the outbox and delivery log are <bot root>/_crm.json; the bot's leads themselves get a durable
+  // copy at <bot root>/_leads.jsonl (the local data dir does not survive a restart in production). Both files sit
+  // beside _spec.json with its tags (kind:trial-spec: never searched, cited or listed; deleted or swept with the bot).
+  const crmDocPath = (id) => `${rootOf(id)}_crm.json`;
+  const leadsDocPath = (id) => `${rootOf(id)}_leads.jsonl`;
+  const sideTags = (T, ...extra) => (T.converted ? ['knowbot', 'kind:trial-spec', ...extra] : [...trialTags(T), 'kind:trial-spec', ...extra]);
+  const readSide = async (storePath) => {
+    const res = await kdFetch(`/api/v1/vector_stores/${encodeURIComponent(store)}/path/content/${storePath.split('/').map(encodeURIComponent).join('/')}`, { timeout: 10000 });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  };
+  const liveTrial = async (id) => {
+    if (!enabled || !TRIAL_ID_RE.test(String(id || '')) || deletedTrials.has(id)) return null;
+    const T = trialFor(id);
+    await loadSpecDoc(T);
+    // a bot we have no saved state for (expired and swept, or never created) has nothing to deliver or keep
+    return T.expiresAt ? T : null;
+  };
+  const crm = o.crm === false ? null : createCrm({ env, log, now, secret, net: o.crmNet || {}, bases: o.crmBases || {}, leads: o.leads, botName: (T) => botName(T), ...(o.crmOptions || {}),
+    loadTrial: liveTrial,
+    saveTrial: (T, { soon = false } = {}) => (soon ? saveSpecSoon(T) : flushSpec(T)),
+    onChange: (T) => pushEvent(T, 'crm', {}),
+    docs: {
+      read: async (T) => (T.flags.crmDoc ? readSide(crmDocPath(T.id)) : null),
+      write: async (T, text, { pending = false } = {}) => {
+        if (T.deleted || closed) return;
+        if (!T.flags.crmDoc) { T.flags.crmDoc = true; saveSpecSoon(T); }
+        await ingest({ storePath: crmDocPath(T.id), tags: sideTags(T, 'kind:trial-crm', ...(pending ? ['crm:pending'] : [])), mime: 'application/json', bytes: Buffer.from(text), side: true });
+      },
+    },
+    listPending: async () => (await listRows({ tags_all: 'kind:trial-crm,crm:pending' })).filter((r) => (r.tags || []).includes('crm:pending'))
+      .map((r) => /knowbot\/trials\/(tr_[a-z2-7]{16})\/_crm\.json$/.exec(String(r.filename || ''))?.[1]).filter(Boolean) });
+  const crmRoutes = crm ? createCrmRoutes(crm, { env, log, sendJson: (...a) => sendJson(...a), readBody: (req) => readBody(req), bearer, publicBase: (req) => publicBase(req, env), clientIp: (req) => ip(req),
+    limit: (key, n, ms, what) => limitOrThrow(key, n, ms, what), page: (res, x) => kdPage(res, x) }) : null;
+  if (enabled && o.leads?.setDurable && o.leadsDurable !== false) {
+    o.leads.setDurable({
+      read: async (bot) => { const T = await liveTrial(bot); return T?.flags.leadsDoc ? readSide(leadsDocPath(T.id)) : null; },
+      write: async (bot, text) => {
+        const T = await liveTrial(bot);
+        if (!T || T.deleted || closed) return;
+        if (!T.flags.leadsDoc) { T.flags.leadsDoc = true; saveSpecSoon(T); }
+        await ingest({ storePath: leadsDocPath(T.id), tags: sideTags(T, 'kind:trial-leads'), mime: 'application/x-ndjson', bytes: Buffer.from(text), side: true });
+      },
+    });
+  }
+  if (crm && o.leads?.on) o.leads.on((ev, extra) => { crm.onLead(ev, extra); });
+  /** Start-up: bots with a durable leads copy are loaded, so their short links (/r/<id>) redirect again after a restart. */
+  async function warmLeads() {
+    if (!enabled || !o.leads?.linksOf || o.leadsDurable === false) return 0;
+    let rows = [];
+    try { rows = await listRows({ tags_all: 'kind:trial-leads' }); } catch (e) { log(`[studio] leads warm-up list failed: ${e.message}`); return 0; }
+    const ids = [...new Set(rows.map((r) => /knowbot\/trials\/(tr_[a-z2-7]{16})\/_leads\.jsonl$/.exec(String(r.filename || ''))?.[1]).filter(Boolean))].slice(0, 2000);
+    for (const id of ids) { if (closed) break; try { await o.leads.linksOf(id, '-'); } catch { /* the next request loads it */ } }
+    return ids.length;
+  }
+  /** The bot launched: its side files are written again without the trial's expiry tags, so the sweeper never takes them. */
+  async function retagSideDocs(T) {
+    try { if (T.flags.leadsDoc) await o.leads?.persist?.(T.id); } catch (e) { log(`[studio] convert ${T.id}: leads copy: ${e.message}`); }
+    try { if (T.flags.crmDoc && crm) await crm.rewrite(T); } catch (e) { log(`[studio] convert ${T.id}: delivery queue: ${e.message}`); }
+  }
   // fixer r7 (D2): who set each identity field. A field the person set (typed in the Builder or edited in the spec) is
   // never overwritten by a sample set's draft; the draft only fills fields that still hold their default.
   const PROVENANCE_FIELDS = ['name', 'org', 'tone', 'length', 'greeting', 'purpose', 'audience'];
@@ -4683,12 +4747,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }
   const htmlEsc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   /** The popup's last page: tells the Studio (opener, its own origin only) and closes; never carries a token. */
-  function kdPage(res, { origin = null, trialId = null, ok, code = null, message = '', ref = null }) {
+  function kdPage(res, { origin = null, trialId = null, ok, code = null, message = '', ref = null, type = 'knowbot:kd', crm: crmId = null, title: titleIn = null, body: bodyIn = null }) {
     const nonce = randomBytes(12).toString('base64');
-    const msg = JSON.stringify({ type: 'knowbot:kd', ok: !!ok, ...(code ? { code } : {}), ...(ref ? { ref } : {}) }).replace(/</g, '\\u003c');
+    const msg = JSON.stringify({ type, ok: !!ok, ...(crmId ? { crm: crmId } : {}), ...(code ? { code } : {}), ...(ref ? { ref } : {}), ...(!ok && crmId && message ? { message } : {}) }).replace(/</g, '\\u003c');
     const back = origin && trialId ? `${origin}/studio/?t=${encodeURIComponent(trialId)}` : null;
-    const title = ok ? "You're signed in to KnowDrive" : "KnowDrive sign-in didn't finish";
-    const body = ok ? 'You can close this window and go back to KnowBot Studio.' : `${message || 'Something went wrong.'}${ref ? ` (ref ${ref})` : ''} Close this window and try again from KnowBot Studio.`;
+    const title = titleIn || (ok ? "You're signed in to KnowDrive" : "KnowDrive sign-in didn't finish");
+    const body = ok ? (bodyIn || 'You can close this window and go back to KnowBot Studio.') : `${message || 'Something went wrong.'}${ref ? ` (ref ${ref})` : ''} Close this window and try again from KnowBot Studio.`;
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEsc(title)}</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:#faf9f5;color:#1f1e1d}main{max-width:420px;padding:32px 24px;text-align:center}h1{font-size:20px;margin:0 0 8px}p{margin:0 0 16px;color:#5e5d59}a{color:#6c5ce7}@media(prefers-color-scheme:dark){body{background:#1f1e1d;color:#f5f4ef}p{color:#c2c0b6}a{color:#a99ff5}}</style></head>
 <body><main><h1>${htmlEsc(title)}</h1><p>${htmlEsc(body)}</p>${back ? `<p><a href="${htmlEsc(back)}">Back to KnowBot Studio</a></p>` : ''}</main>
@@ -4767,6 +4831,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       catch (e) { log(`[kd] convert ${T.id}: registry bucket ${T.convertedBucket}: ${e.message}`); }
     }
     await flushSpec(T);
+    await retagSideDocs(T);
     log(`[studio] converted ${T.id} → KnowDrive account ${L.account} bucket:${bucketId} (${ready.size} files in the customer's store, ${removed} shared copies removed)`);
     return ready.size;
   }
@@ -4818,6 +4883,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       T.rowsAt = now();
       T.questionsCache = null;
       await flushSpec(T);
+      await retagSideDocs(T);
       log(`[studio] converted ${T.id} → account:${account} bucket:${bucketId} (${files} files, ${samples.length} samples removed)`);
     }
     // the open Studio drops the sample rows and the "partial" banner at once: a reset snapshot of the post-convert files
@@ -5137,6 +5203,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     }
     // the KnowDrive sign-in popup's redirect (no trial token: the sealed state names the trial)
     if (a === 'kd' && id === 'callback' && !sub) { allow('GET'); return kdCallback(req, res, url); }
+    // lead delivery (server/crm): a CRM's sign-in popup redirect, and the endpoints the Zapier app calls (its own key)
+    if (a === 'crm' && id === 'callback' && sub && !fid) { allow('GET'); if (!crmRoutes) fail(404, 'not_found', `no such endpoint ${p}`); return crmRoutes.callback(req, res, url, String(sub).toLowerCase()); }
+    if (a === 'zapier' && id === 'v1') { if (!crmRoutes) fail(404, 'not_found', `no such endpoint ${p}`); return crmRoutes.zapierRoute(req, res, url, [sub, fid].filter(Boolean), m); }
     if (a !== 'trials') fail(404, 'not_found', `no such endpoint ${p}`);
 
     if (!id) {
@@ -5210,6 +5279,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const T = await auth(req, id);
 
     if (sub === 'kd') return kdRoute(req, res, T, fid, m);
+    if (sub === 'crm') { if (!crmRoutes) fail(404, 'not_found', 'Lead delivery is not available on this server.'); return crmRoutes.trialRoute(req, res, T, fid, sub2, m); }
 
     if (!sub) {
       if (m === 'GET') {
@@ -5677,6 +5747,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     // a running website import is interrupted, not cancelled: its doc still says running, so the next server resumes it
     for (const T of trials.values()) { clearTimeout(T.poller); T.poller = null; clearTimeout(T.productsTimer); if (T.specDirty) clearTimeout(T.specTimer); clearTimeout(T.jobSaveTimer); if (T.storeJob?.state === 'running') { T.storeJob.shutdown = true; T.storeJob.ac.abort(); } }
     clearTimeout(resumeTimer);
+    crm?.close();
     for (const c of allClients) { try { c.drop?.(); c.res.end(); } catch {} }
     allClients.clear();
   }
@@ -5684,6 +5755,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   // start-up: website imports a restart interrupted resume on their own (and when their bot is next touched)
   const resumeTimer = enabled && o.resumeStoreJobs !== false ? setTimeout(() => {
     resumingAll = resumeAllStoreJobs().finally(() => { resumingAll = null; });
+    crm?.resume(); // lead deliveries a restart interrupted carry on
+    warmLeads();
   }, Number(o.resumeDelayMs ?? 1000)) : null;
   resumeTimer?.unref?.();
 
@@ -5725,7 +5798,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }
   return { handle, close, sweep, trials, numbers, billing, billingPaused: (flags) => billing.paused(flags), signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
     // a trial bot's answer on the API, AI agents, channels and the website widget (devapi): the Studio's own pipeline
-    answerTrial, searchTrial, kdFetchFor, kd: kdAcct, flush: async () => { for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
+    answerTrial, searchTrial, kdFetchFor, kd: kdAcct, crm,
+    flush: async () => { await o.leads?.flush?.(); await crm?.idle(); for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,
     /** Background work a restart would interrupt: website imports running or about to resume (GET /api/internal/busy). */
     busy: () => ({ storeJobs: storeJobsRunning() }),
     resumeStoreJobs: () => (resumingAll ||= resumeAllStoreJobs().finally(() => { resumingAll = null; })) };

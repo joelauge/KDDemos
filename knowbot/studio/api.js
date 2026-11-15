@@ -448,6 +448,30 @@ export async function devKey() { return request('GET', trialPath('/devkey')); }
 /** POST /email -> {sent, link}. */
 export async function sendEmail(email) { return request('POST', trialPath('/email'), { body: { email } }); }
 
+// ---- Connect your CRM (studio/crm.js; server/crm/routes.mjs). Secrets never come back: a webhook's signing secret and
+// a Zapier key are returned once, by the call that makes them.
+const crmPath = (id, rest = '') => trialPath(`/crm${id ? `/${encodeURIComponent(id)}` : ''}${rest}`);
+/** GET /crm -> {connectors:[{id, name, blurb, kind, auth, fields, connection}], zapier, retentionDays}. */
+export async function crm() { return request('GET', crmPath()); }
+/** POST /crm/:id/connect {token | url} -> the view (+ reveal:{secret, header} once for a webhook). */
+export async function crmConnect(id, body) { return request('POST', crmPath(id, '/connect'), { body }); }
+/** POST /crm/:id/oauth {options} -> {url}: the service's sign-in page for the popup. */
+export async function crmOauth(id, options = {}) { return request('POST', crmPath(id, '/oauth'), { body: { options } }); }
+/** PATCH /crm/:id {config} -> the view. */
+export async function crmConfig(id, config) { return request('PATCH', crmPath(id), { body: { config } }); }
+/** POST /crm/:id/test -> {ok, entry}; /sync -> {queued, already, days}; /retry -> {retried}. */
+export async function crmTest(id) { return request('POST', crmPath(id, '/test'), { body: {} }); }
+export async function crmSync(id) { return request('POST', crmPath(id, '/sync'), { body: {} }); }
+export async function crmRetry(id) { return request('POST', crmPath(id, '/retry'), { body: {} }); }
+/** GET /crm/:id/log -> {log:[{at, leadId, who, result, action, attempts, error?, test?, recordUrl?}]} (last 50, newest first). */
+export async function crmLog(id) { return request('GET', crmPath(id, '/log')); }
+/** GET /crm/:id/lists -> {lists:[{id, name}]}: the audiences / contact lists to choose from. */
+export async function crmLists(id) { return request('GET', crmPath(id, '/lists')); }
+/** DELETE /crm/:id -> the view. */
+export async function crmDisconnect(id) { return request('DELETE', crmPath(id)); }
+/** POST /crm/zapier/key -> {key}: a new Zapier API key for this bot (shown once; the old one stops working). */
+export async function crmZapierKey() { return request('POST', crmPath('zapier', '/key'), { body: {} }); }
+
 /** KnowDrive account at launch: GET /kd -> status {status: none|linked|reconnect, email, move, movable, ready, live}. */
 export async function kdStatus() { return request('GET', trialPath('/kd')); }
 /** POST /kd/start {mode: signup|signin} -> {url} (the KnowDrive sign-in page for the popup). */

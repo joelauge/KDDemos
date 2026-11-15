@@ -721,6 +721,8 @@ function openMissingNote(question, invoker) {
     else toast({ kind: 'warn', text: 'Your bot is still loading. Try again in a moment.' });
   });
 }
+// Set up → "Connect your CRM" (golive.js) opens that section of Stats & Leads
+document.addEventListener('knowbot:open-crm', () => openLeads({ section: 'crm' }));
 // #stats is the Stats & Leads view: a deep link, a reload or Back / Forward on it opens the view once the bot is known
 whenReady(() => initStatsRoute({ addMissing: openMissingNote }));
 /** "Write a note": samplebot.js's note form (the "Didn't get the answer you needed?" form, titled for a first note). */
@@ -2943,6 +2945,7 @@ function paletteCommands() {
     { id: 'channels', label: 'Set up: Website, KnowBot number, Email', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
     { id: 'leads', label: 'Stats & Leads · questions by day, question history, leads, clicks, CSV', ico: 'users', run: () => openLeads() },
+    { id: 'crm', label: 'Connect your CRM · HubSpot, Salesforce, Pipedrive, Zoho, Mailchimp, Constant Contact, Zapier, webhook', ico: 'link', run: () => openLeads({ section: 'crm' }) },
     { id: 'details', label: detailsOn() ? 'Hide details (atoms, stages, gauges)' : 'Show details (atoms, stages, gauges)', ico: 'table', run: () => toggleDetails() },
     ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
@@ -3899,7 +3902,8 @@ store.registerCard('insights', (data, el) => {
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('trending', 14) }), h('span', null, 'What people ask'), metaEl),
     h('div', { class: 'st-ins-grid' }, topCol, gapCol),
     h('p', { class: 'st-card-foot' }, h('span', { html: icon('lock', 12) }), ' Every question is logged to your question insights. Logged questions are never used as sources. ',
-      h('button', { type: 'button', class: 'st-link-btn', onclick: () => openLeads() }, 'See leads and clicks')));
+      h('button', { type: 'button', class: 'st-link-btn', onclick: () => openLeads() }, 'See leads and clicks'), ' · ',
+      h('button', { type: 'button', class: 'st-link-btn', onclick: () => openLeads({ section: 'crm' }) }, 'Connect your CRM')));
   el.append(card);
   const rowsByKey = new Map();
   const row = (kind, t, max) => {

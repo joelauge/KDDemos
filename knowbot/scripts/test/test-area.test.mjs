@@ -22,6 +22,8 @@ test('--changed: files pick their areas; shared plumbing and unknown code run ev
   assert.deepEqual(areasForFiles(['server/test/leads.test.mjs', 'server/leads.mjs']).areas, ['leads']);
   assert.deepEqual(areasForFiles(['studio/leads.css']).areas.sort(), ['leads', 'studio'], 'a Studio file also runs the Studio core tests');
   assert.deepEqual(areasForFiles(['studio/checkout.js']).areas.sort(), ['billing', 'studio']);
+  assert.deepEqual(areasForFiles(['server/crm/connectors/hubspot.mjs', 'server/test/fake-crm.mjs']).areas, ['crm']);
+  assert.deepEqual(areasForFiles(['studio/crm.js']).areas.sort(), ['crm', 'studio']);
   assert.deepEqual(areasForFiles(['README.md', 'studio/test/screens/site/a.png', 'SPEC.md']), { areas: [], all: false, unplaced: [] });
   assert.equal(areasForFiles(['server/test/fake-knowdrive.mjs']).all, true);
   assert.deepEqual(areasForFiles(['server/brand-new.mjs']), { areas: [], all: true, unplaced: ['server/brand-new.mjs'] });

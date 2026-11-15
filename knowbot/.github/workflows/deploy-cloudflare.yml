@@ -54,6 +54,18 @@ jobs:
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           KNOWBOT_BILLING_WEBHOOK_SECRET: ${{ secrets.KNOWBOT_BILLING_WEBHOOK_SECRET }}
+          KNOWBOT_HUBSPOT_CLIENT_ID: ${{ secrets.KNOWBOT_HUBSPOT_CLIENT_ID }}
+          KNOWBOT_HUBSPOT_CLIENT_SECRET: ${{ secrets.KNOWBOT_HUBSPOT_CLIENT_SECRET }}
+          KNOWBOT_SALESFORCE_CLIENT_ID: ${{ secrets.KNOWBOT_SALESFORCE_CLIENT_ID }}
+          KNOWBOT_SALESFORCE_CLIENT_SECRET: ${{ secrets.KNOWBOT_SALESFORCE_CLIENT_SECRET }}
+          KNOWBOT_PIPEDRIVE_CLIENT_ID: ${{ secrets.KNOWBOT_PIPEDRIVE_CLIENT_ID }}
+          KNOWBOT_PIPEDRIVE_CLIENT_SECRET: ${{ secrets.KNOWBOT_PIPEDRIVE_CLIENT_SECRET }}
+          KNOWBOT_ZOHO_CLIENT_ID: ${{ secrets.KNOWBOT_ZOHO_CLIENT_ID }}
+          KNOWBOT_ZOHO_CLIENT_SECRET: ${{ secrets.KNOWBOT_ZOHO_CLIENT_SECRET }}
+          KNOWBOT_MAILCHIMP_CLIENT_ID: ${{ secrets.KNOWBOT_MAILCHIMP_CLIENT_ID }}
+          KNOWBOT_MAILCHIMP_CLIENT_SECRET: ${{ secrets.KNOWBOT_MAILCHIMP_CLIENT_SECRET }}
+          KNOWBOT_CONSTANTCONTACT_CLIENT_ID: ${{ secrets.KNOWBOT_CONSTANTCONTACT_CLIENT_ID }}
+          KNOWBOT_CONSTANTCONTACT_CLIENT_SECRET: ${{ secrets.KNOWBOT_CONSTANTCONTACT_CLIENT_SECRET }}
         run: |
           if [ -n "$KNOWDRIVE_API_KEY" ]; then printf '%s' "$KNOWDRIVE_API_KEY" | npx wrangler secret put KNOWDRIVE_API_KEY; else echo "::warning::KNOWDRIVE_API_KEY not set; the container will answer from the bundled corpus"; fi
           if [ -n "$ANTHROPIC_API_KEY" ]; then printf '%s' "$ANTHROPIC_API_KEY" | npx wrangler secret put ANTHROPIC_API_KEY; else echo "::notice::ANTHROPIC_API_KEY not set; the Studio Builder uses its scripted engine"; fi
@@ -61,6 +73,10 @@ jobs:
           # Phone + SMS channels (optional; each feature stays off without its secret)
           for n in GEMINI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM_NUMBER STRIPE_SECRET_KEY STRIPE_RESTRICTED_KEY STRIPE_PUBLISHABLE_KEY STRIPE_WEBHOOK_SECRET; do
             v="${!n}"; if [ -n "$v" ]; then printf '%s' "$v" | npx wrangler secret put "$n"; else echo "::notice::$n not set; the phone/SMS feature that needs it stays off"; fi
+          done
+          # Lead delivery (optional): each CRM's one-click sign-in is offered only when its client id and secret are both set
+          for n in KNOWBOT_HUBSPOT_CLIENT_ID KNOWBOT_HUBSPOT_CLIENT_SECRET KNOWBOT_SALESFORCE_CLIENT_ID KNOWBOT_SALESFORCE_CLIENT_SECRET KNOWBOT_PIPEDRIVE_CLIENT_ID KNOWBOT_PIPEDRIVE_CLIENT_SECRET KNOWBOT_ZOHO_CLIENT_ID KNOWBOT_ZOHO_CLIENT_SECRET KNOWBOT_MAILCHIMP_CLIENT_ID KNOWBOT_MAILCHIMP_CLIENT_SECRET KNOWBOT_CONSTANTCONTACT_CLIENT_ID KNOWBOT_CONSTANTCONTACT_CLIENT_SECRET; do
+            v="${!n}"; if [ -n "$v" ]; then printf '%s' "$v" | npx wrangler secret put "$n"; fi
           done
           # The KnowBot plan's checkout (optional): its webhook's signing secret
           if [ -n "$KNOWBOT_BILLING_WEBHOOK_SECRET" ]; then printf '%s' "$KNOWBOT_BILLING_WEBHOOK_SECRET" | npx wrangler secret put KNOWBOT_BILLING_WEBHOOK_SECRET; else echo "::notice::KNOWBOT_BILLING_WEBHOOK_SECRET not set; a paid checkout is only confirmed when the customer returns to the Studio, and cancellations or failed payments are not seen"; fi

@@ -368,7 +368,9 @@ export function createSendInfo({ env = {}, log = () => {}, now = () => Date.now(
     // the leads report (server/leads.mjs): the address they asked us to send to, with what they asked and the click id
     try {
       onLead?.({ botId: leadId || botId, channel, type: via === 'email' ? 'email' : 'phone', value: dest, via, cid, consent: 'asked_to_send', scopeTags,
-        question: (convo.length ? convo.map((x) => x.question).filter(Boolean).join(' | ') : a.question) || '', session: callerKey ? hashCaller(callerKey) : null });
+        question: (convo.length ? convo.map((x) => x.question).filter(Boolean).join(' | ') : a.question) || '', session: callerKey ? hashCaller(callerKey) : null,
+        // for the owner's CRM (server/crm): what the bot answered; handed to lead listeners, never stored with the lead
+        extra: { answer: String(a.answer || a.text || '').slice(0, 600) } });
     } catch (e) { log(`[sendinfo] lead not recorded: ${e.message}`); }
     const masked = maskOf(via, dest);
     if (items) return { status: 'sent', via, to: masked, scope: 'conversation', reply: via === 'email' ? `Sent to ${masked}: the transcript of our conversation and the sources for each answer.` : `Sent to ${masked}, with a link to the sources for each answer.` };

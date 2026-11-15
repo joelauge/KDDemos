@@ -635,7 +635,10 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         siSwitch({ id: 'gl-si-on', label: 'Visitors can ask for a copy', sub: '', cls: 'is-main', onChange: (v) => setSendInfo({ on: v }) }),
         h('div', { class: 'gl-si-media', role: 'group', 'aria-label': 'Ways to send' },
           siSwitch({ id: 'gl-si-email', label: 'Email', sub: '', onChange: (v) => setSendInfo({ email: v }) }),
-          siSwitch({ id: 'gl-si-text', label: 'Text', sub: '', onChange: (v) => setSendInfo({ text: v }) }))));
+          siSwitch({ id: 'gl-si-text', label: 'Text', sub: '', onChange: (v) => setSendInfo({ text: v }) }))),
+      // leads can go straight to the owner's CRM: the section lives in Stats & Leads (studio/crm.js; app.js opens it)
+      h('p', { class: 'gl-si-crm' }, 'Want these leads in your CRM or email list? ',
+        h('button', { type: 'button', class: 'st-link-btn', id: 'gl-si-crm', onclick: () => document.dispatchEvent(new CustomEvent('knowbot:open-crm')) }, 'Connect your CRM')));
     paintSendInfo();
     return siCard;
   }

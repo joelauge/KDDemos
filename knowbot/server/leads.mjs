@@ -32,6 +32,15 @@
 // loaded, and short links stop redirecting once they are older than it. Addresses are kept as given (the owner's own
 // export is not masked) but never written to the server log: logs carry an 8-hex hash, as sendinfo.mjs does.
 // Nothing here is served publicly: the report and the CSV are /api/studio/trials/:id/leads[.csv] (the trial token).
+//
+// Durable copy (setDurable): the local data dir does not survive a restart in production, so a bot's events are also
+// kept as one snapshot file in the store that holds the bot's saved state (server/trials.mjs: <bot root>/_leads.jsonl,
+// beside _spec.json, never searched or listed, deleted with the bot). The snapshot is rewritten a few seconds after
+// an event (only events inside the retention window are written, so retention is unchanged) and read back when the
+// local file is missing. It holds exactly what the local file holds, for the same bots, no longer.
+//
+// Listeners (on): server/crm delivers each new lead to the CRMs the owner connected. Only kind:'lead' events are
+// announced, after they are recorded.
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
@@ -150,7 +159,7 @@ export const CONSENT_LABEL = Object.freeze({
 /**
  * @param {{ dataDir?: string|null, env?: object, now?: () => number, log?: (s: string) => void, retentionDays?: number }} [o]
  */
-export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), log = () => {}, retentionDays = 90 } = {}) {
+export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), log = () => {}, retentionDays = 90, durable = null, durableMs = 2000 } = {}) {
   const keepDays = Math.max(1, Number(env.KNOWBOT_LEADS_RETENTION_DAYS || retentionDays) || 90);
   const keepMs = keepDays * DAY;
   const dir = dataDir ? path.join(dataDir, 'leads') : null;
@@ -160,6 +169,24 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
   const pending = new Set();
   const track = (p) => { pending.add(p); p.finally(() => pending.delete(p)); return p; };
   const fileOf = (bot) => (dir ? path.join(dir, `${campaignOf(bot)}.jsonl`) : null);
+  const listeners = new Set();
+  const jsonl = (events) => events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : '');
+  /** Writes the bot's durable snapshot now (events inside the retention window only). */
+  function persist(bot) {
+    const key = campaignOf(bot);
+    const st = bots.get(key);
+    if (!durable?.write || !st) return Promise.resolve();
+    clearTimeout(st.durableTimer); st.durableTimer = null;
+    const cut = now() - keepMs;
+    st.durableChain = (st.durableChain || Promise.resolve()).then(() => st.ready).then(() => durable.write(key, jsonl(st.events.filter((e) => Number(e.at) >= cut))))
+      .catch((e) => log(`[leads] could not save the durable copy for ${key}: ${e.message}`));
+    return track(st.durableChain);
+  }
+  function persistSoon(key, st) {
+    if (!durable?.write || st.durableTimer) return;
+    st.durableTimer = setTimeout(() => { st.durableTimer = null; persist(key); }, Math.max(0, durableMs));
+    st.durableTimer.unref?.();
+  }
 
   function stateOf(bot) {
     const key = campaignOf(bot);
@@ -169,9 +196,14 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     bots.set(key, st);
     st.ready = (async () => {
       const f = fileOf(key);
-      if (!f) return;
-      let text = '';
-      try { text = await fsp.readFile(f, 'utf8'); } catch { return; }
+      if (!f && !durable?.read) return;
+      let text = '', restored = false;
+      if (f) { try { text = await fsp.readFile(f, 'utf8'); } catch { text = ''; } }
+      // no local file (a fresh container): the durable snapshot, when this bot has one
+      if (!text.trim() && durable?.read) {
+        try { text = String((await durable.read(key)) || ''); restored = !!text.trim(); } catch (e) { log(`[leads] could not read the durable copy for ${key}: ${e.message}`); }
+      }
+      if (!text.trim()) return;
       const cut = now() - keepMs;
       const all = [];
       let dropped = 0;
@@ -184,7 +216,9 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
       // events recorded while the file was loading stay after the stored ones
       st.events = [...kept, ...st.events];
       for (const ev of kept) if (ev.kind === 'link' && ev.id && !links.has(ev.id)) links.set(ev.id, { ...ev });
-      if (dropped) st.chain = st.chain.then(() => fsp.writeFile(f, st.events.map((e) => JSON.stringify(e)).join('\n') + (st.events.length ? '\n' : ''))).catch((e) => log(`[leads] could not prune ${key}: ${e.message}`));
+      if (f && (dropped || restored)) st.chain = st.chain.then(() => fsp.mkdir(path.dirname(f), { recursive: true })).then(() => fsp.writeFile(f, jsonl(st.events))).catch((e) => log(`[leads] could not prune ${key}: ${e.message}`));
+      if (restored) log(`[leads] bot ${key}: restored ${kept.length} events from the durable copy`);
+      if (dropped && restored) persistSoon(key, st); // the snapshot held events past the retention window: rewrite it without them
     })();
     return st;
   }
@@ -198,6 +232,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
         .catch((e) => log(`[leads] could not save an event for ${campaignOf(bot)}: ${e.message}`));
       track(st.chain);
     }
+    persistSoon(campaignOf(bot), st);
     return ev;
   }
   const eventsOf = async (bot) => { const st = stateOf(bot); await st.ready; return st.events; };
@@ -206,7 +241,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
    * One lead. Inbound contacts (a caller ID, a number that texted, an address that e-mailed) are recorded once per value
    * and channel per day; every "send me this" send is its own lead (each has its own click id). → the event, or null.
    */
-  function lead({ botId, channel = 'web', type = null, value, question = '', cid = null, session = null, consent = 'asked_to_send', via = null, at = null, name = null, note = null } = {}) {
+  function lead({ botId, channel = 'web', type = null, value, question = '', cid = null, session = null, consent = 'asked_to_send', via = null, at = null, name = null, note = null, extra = null } = {}) {
     try {
       if (!botId) return null;
       const c = contactOf(value);
@@ -222,6 +257,8 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
         ...(name ? { name: oneLine(name).slice(0, 80) } : {}), ...(note ? { note: oneLine(note).slice(0, 120) } : {}) };
       append(botId, ev);
       log(`[leads] bot ${ev.bot}: ${c.type} lead (${ev.channel}, ${consent}) h:${hash8(c.value)}`);
+      // extra (e.g. the answer text that was sent) is passed to listeners only: it is never stored
+      for (const fn of listeners) { try { fn(ev, extra || {}); } catch (e) { log(`[leads] a lead listener failed: ${e.message}`); } }
       return ev;
     } catch (e) { log(`[leads] lead not recorded: ${e.message}`); return null; }
   }
@@ -268,6 +305,11 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     if (!rec && dir) { try { rec = JSON.parse(await fsp.readFile(path.join(dir, 'links', `${id}.json`), 'utf8')); if (rec?.id === id) links.set(id, rec); else rec = null; } catch { rec = null; } }
     if (!rec || !isHttpUrl(rec.target) || now() - Number(rec.at) > keepMs) return null;
     return rec;
+  }
+  /** The links sent with one lead (its click id): [{url, kind}] (the tagged targets, oldest first). */
+  async function linksOf(botId, cid) {
+    if (!cid) return [];
+    return (await eventsOf(botId)).filter((e) => e.kind === 'link' && e.cid === cid && isHttpUrl(e.target)).slice(0, 10).map((e) => ({ url: e.target, kind: e.linkKind || 'source' }));
   }
   /** One AI-agent question (server/agents.mjs): recorded per bot; the free allowance and the meter count these. */
   function agent({ botId, outcome = 'answered', billing = 'free', question = '', at = null } = {}) {
@@ -365,5 +407,12 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     return `${[csvRow(CSV_COLUMNS), ...rows.map((x) => csvRow(x.cells))].join('\r\n')}\r\n`;
   }
 
-  return { lead, checkout, link, click, agent, agentDay, linkRecord, report, csv, retentionDays: keepDays, idle: async () => { while (pending.size) await Promise.all([...pending]); } };
+  return { lead, checkout, link, click, agent, agentDay, linkRecord, linksOf, report, csv, retentionDays: keepDays, persist,
+    /** fn(event, extra) for every new lead (after it is recorded). → a function that removes the listener. */
+    on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    /** { read(bot) → jsonl|null, write(bot, jsonl) }: where a bot's events are kept across restarts (set once, at start-up). */
+    setDurable: (d) => { durable = d || null; },
+    /** Writes every durable snapshot that is still waiting for its timer (shutdown, tests). */
+    flush: async () => { await Promise.all([...bots].filter(([, st]) => st.durableTimer).map(([key]) => persist(key))); },
+    idle: async () => { while (pending.size) await Promise.all([...pending]); } };
 }

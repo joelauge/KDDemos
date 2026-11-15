@@ -23,6 +23,7 @@ import { createRequire } from 'node:module';
 import { startDevServer, DEV_CHANNEL_SECRETS } from './dev-server.mjs';
 import { outDir, injectAxe, watchErrors } from './smoke-util.mjs';
 import { logQuestion } from '../../server/questions.mjs';
+import { startFakeCrm } from '../../server/test/fake-crm.mjs';
 
 delete process.env.KNOWDRIVE_API_KEY;
 const require = createRequire(import.meta.url);
@@ -35,7 +36,10 @@ const DAY = 86400000;
 let failures = 0;
 const check = (name, ok, detail = '') => { console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${name}${detail ? ` · ${String(detail).slice(0, 240)}` : ''}`); if (!ok) failures++; return ok; };
 
-const dev = await startDevServer({ speed: 8 });
+// "Connect your CRM": a local fake receives the webhook (the dev server may reach loopback for it; production never does)
+const crmFake = await startFakeCrm();
+const CRM_SHOTS = process.env.CRM_SHOTS ? path.resolve(process.env.CRM_SHOTS) : SHOTS;
+const dev = await startDevServer({ speed: 8, studio: { crmNet: crmFake.net, crmBases: crmFake.bases, crmOptions: { saveMs: 50 } } });
 const api = (p, init = {}) => fetch(dev.url + p, init);
 const twSig = (url, params) => createHmac('sha1', DEV_CHANNEL_SECRETS.TWILIO_AUTH_TOKEN).update(Buffer.from(Object.keys(params).sort().reduce((a, k) => a + k + (params[k] ?? ''), url), 'utf8')).digest('base64');
 const twilio = (p, params) => api(p, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-twilio-signature': twSig(dev.url + p, params) }, body: new URLSearchParams(params).toString() });
@@ -122,7 +126,7 @@ try {
       } catch { /* ignore */ }
     }, { trial: t, theme });
     const page = await context.newPage();
-    const errors = watchErrors(page);
+    const errors = watchErrors(page, { allow: [/HTTP 400 POST .*\/crm\/webhook\/connect/] }); // the smoke pastes a private address on purpose
     await page.goto(dev.studioUrl, { waitUntil: 'domcontentloaded' });
     // desktop: "Stats & Leads" is a quiet text button in the header, left of Launch
     const btn = page.locator('#st-leads');
@@ -141,7 +145,7 @@ try {
     }));
     check(`${theme}: the view is named "Stats & Leads"`, (await page.locator('#kb-stats-title').textContent()) === 'Stats & Leads' && /Stats & Leads/.test(await page.title()));
     const tiles = await page.locator('.kb-leads-tile-n').allTextContents();
-    check(`${theme}: totals (questions, leads, checkout links, clicks)`, tiles.length === 4 && Number(tiles[0]) === h30.total && Number(tiles[1]) === 5 && Number(tiles[2]) === 1 && Number(tiles[3]) >= 2, tiles.join(' / '));
+    check(`${theme}: totals (questions, leads, checkout links, clicks)`, tiles.length === 4 && (theme === 'light' ? Number(tiles[0]) === h30.total : Number(tiles[0]) >= h30.total) && Number(tiles[1]) === (theme === 'light' ? 5 : 6) && Number(tiles[2]) === 1 && Number(tiles[3]) >= 2, tiles.join(' / '));
 
     // ---- questions by day
     const chart = await inView(page, () => {
@@ -354,7 +358,80 @@ try {
       await view.waitFor({ state: 'detached', timeout: 5000 });
       check('Escape from a deep link leaves the Studio on the bot', await page.evaluate(() => location.hash === '' && !document.getElementById('st-app').inert));
 
+      // ---- Connect your CRM: the list, connect a webhook to a local fake, send a test lead, see it in the log, disconnect
+      console.log('2b. Connect your CRM');
+      await fsp.mkdir(CRM_SHOTS, { recursive: true });
+      await page.locator('#st-leads').click();
+      await view.waitFor({ timeout: 10000 });
+      const crm = page.locator('#kb-crm');
+      await crm.locator('.kb-crm-row').first().waitFor({ timeout: 10000 });
+      await crm.scrollIntoViewIfNeeded();
+      const crmRows = await crm.locator('.kb-crm-row').evaluateAll((els) => els.map((el) => ({ id: el.dataset.crm, name: el.querySelector('strong').textContent, status: el.querySelector('.kb-crm-status').textContent, btn: el.querySelector('.kb-crm-toggle').textContent.trim() })));
+      check('the section lists the connectors by name', (await crm.locator('h3').textContent()) === 'Connect your CRM'
+        && crmRows.map((r) => r.name).join('|') === 'Webhook|Zapier|HubSpot|Salesforce|Pipedrive|Zoho CRM|Mailchimp|Constant Contact', crmRows.map((r) => r.name).join('|'));
+      const rowOf = (id) => crmRows.find((r) => r.id === id);
+      check('nothing is connected yet; services with no way to connect on this server say "Not available yet"', rowOf('webhook').status === 'Not connected' && rowOf('hubspot').status === 'Not connected'
+        && rowOf('salesforce').status === 'Not available yet' && rowOf('zoho').status === 'Not available yet' && rowOf('constantcontact').status === 'Not available yet', JSON.stringify(crmRows.map((r) => `${r.id}:${r.status}`)));
+      await page.screenshot({ path: path.join(CRM_SHOTS, 'crm-desktop-list.png') });
+      await crm.locator('[data-crm="salesforce"] .kb-crm-toggle').click();
+      const sfText = await crm.locator('[data-crm="salesforce"] .kb-crm-panel').textContent();
+      check('"Not available yet" explains itself without naming a reason or a setting', /not available yet/i.test(sfText) && !/KNOWBOT_|client id|client secret|environment|OAuth/i.test(sfText), sfText);
+      await crm.locator('[data-crm="zapier"] .kb-crm-toggle').click();
+      check('opening one row closes the other (one panel at a time)', (await crm.locator('.kb-crm-panel').count()) === 1 && (await crm.locator('[data-crm="zapier"] .kb-crm-toggle').getAttribute('aria-expanded')) === 'true');
+      check('Zapier says how to use it today (a Catch Hook pasted into Webhook)', /Webhooks by Zapier/.test(await crm.locator('[data-crm="zapier"] .kb-crm-panel').textContent()) && /Catch Hook/.test(await crm.locator('[data-crm="zapier"] .kb-crm-panel').textContent()));
+      await crm.locator('[data-crm="zapier"] [data-act="key"]').click();
+      const zkey = crm.locator('[data-crm="zapier"] .kb-crm-secret');
+      await zkey.waitFor({ timeout: 10000 });
+      const zapKey = await zkey.textContent();
+      check('a Zapier API key is shown once, to copy', /^kb_zap_/.test(zapKey));
+      const zme = await api('/api/studio/zapier/v1/me', { headers: { authorization: `Bearer ${zapKey}` } });
+      check('the key works for the Zapier endpoints', zme.status === 200 && (await zme.json()).id === t.trialId);
+      // a wrong address is refused in plain words
+      await crm.locator('[data-crm="webhook"] .kb-crm-toggle').click();
+      const hookInput = crm.locator('#kb-crm-webhook-paste');
+      await hookInput.fill('https://192.168.1.20/hook');
+      await crm.locator('[data-crm="webhook"] [data-act="connect"]').click();
+      const hookMsg = crm.locator('[data-crm="webhook"] .kb-crm-msg');
+      await hookMsg.waitFor({ state: 'visible', timeout: 10000 });
+      check('a private address is refused, and the message says what to do', /not on the public internet/.test(await hookMsg.textContent()) && /public https/.test(await hookMsg.textContent()) && (await hookMsg.getAttribute('role')) === 'alert', await hookMsg.textContent());
+      await hookInput.fill(`${crmFake.url}/hook/smoke`);
+      await crm.locator('[data-crm="webhook"] [data-act="connect"]').click();
+      await crm.locator('[data-crm="webhook"] .kb-crm-secret').waitFor({ timeout: 10000 });
+      const whsec = await crm.locator('[data-crm="webhook"] .kb-crm-secret').textContent();
+      check('connected: the status says so and the signing secret is shown once', /^whsec_/.test(whsec) && (await crm.locator('[data-crm="webhook"] .kb-crm-status').textContent()) === 'Connected');
+      await crm.locator('[data-crm="webhook"] [data-act="test"]').click();
+      await page.waitForFunction(() => /Test lead delivered/.test(document.querySelector('[data-crm="webhook"] .kb-crm-msg')?.textContent || ''), null, { timeout: 10000 });
+      const got = crmFake.state.hooks.filter((x) => x.path === '/hook/smoke');
+      check('Send a test lead: the fake receiver got a signed, clearly marked test lead', got.length === 1 && got[0].body.test === true && got[0].headers['x-knowbot-event'] === 'lead.test' && /^t=\d+,v1=[0-9a-f]{64}$/.test(got[0].headers['x-knowbot-signature']));
+      await crm.locator('[data-crm="webhook"] [data-act="log"]').click();
+      const logRow = crm.locator('[data-crm="webhook"] .kb-crm-log tbody tr').first();
+      await logRow.waitFor({ timeout: 10000 });
+      check('the delivery log shows it as delivered', /Test lead/.test(await logRow.textContent()) && /Delivered/.test(await logRow.textContent()), await logRow.textContent());
+      // a real lead reaches the receiver, and past leads can be synced
+      await ask('How long is the frame warranty?');
+      await ask('can you email me that at crm.smoke@example.com?');
+      for (let i = 0; i < 100 && !crmFake.state.hooks.some((x) => x.path === '/hook/smoke' && x.body.contact?.email === 'crm.smoke@example.com'); i++) await new Promise((r) => setTimeout(r, 50));
+      const live = crmFake.state.hooks.find((x) => x.path === '/hook/smoke' && x.body.contact?.email === 'crm.smoke@example.com');
+      check('a new lead is delivered on its own, with its consent label and question', !!live && live.body.consent.label === 'Asked the bot to send them the answer' && /warranty/i.test(live.body.question) && live.body.bot.id === t.trialId, JSON.stringify(live?.body || null).slice(0, 200));
+      await crm.locator('[data-crm="webhook"] [data-act="sync"]').click();
+      await page.waitForFunction(() => /Sending \d+ leads? from the last 90 days/.test(document.querySelector('[data-crm="webhook"] .kb-crm-msg')?.textContent || ''), null, { timeout: 10000 });
+      for (let i = 0; i < 100 && crmFake.state.hooks.filter((x) => x.path === '/hook/smoke' && !x.body.test).length < 6; i++) await new Promise((r) => setTimeout(r, 50));
+      check('Sync past leads sends the earlier leads once each', new Set(crmFake.state.hooks.filter((x) => x.path === '/hook/smoke' && !x.body.test).map((x) => x.body.id)).size === 6
+        && crmFake.state.hooks.filter((x) => x.path === '/hook/smoke' && !x.body.test).length === 6, String(crmFake.state.hooks.filter((x) => x.path === '/hook/smoke').length));
+      await page.screenshot({ path: path.join(CRM_SHOTS, 'crm-desktop-connected.png') });
+      await crm.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+      await page.screenshot({ path: path.join(CRM_SHOTS, 'crm-desktop-section.png') });
+      {
+        const res = await axe(page);
+        check('axe: no WCAG A/AA violations with a connector open', !res.length, res.join(', '));
+        const leak = await page.evaluate(async ({ id, token }) => (await (await fetch(`/api/studio/trials/${id}/crm`, { headers: { authorization: `Bearer ${token}` } })).text()), { id: t.trialId, token: t.token });
+        check('the connections response carries no secret', !leak.includes(whsec) && !leak.includes('/hook/smoke') && !leak.includes(zapKey));
+      }
+      check('keyboard: a row\'s button is a disclosure that names its service', await page.evaluate(() => [...document.querySelectorAll('.kb-crm-toggle')].every((b) => b.hasAttribute('aria-expanded') && b.getAttribute('aria-controls') && /\S/.test(b.querySelector('.st-sr')?.textContent || ''))));
+
       // ---- phones: the header keeps its room; the ⋯ menu has Stats & Leads; one column
+      await page.keyboard.press('Escape');
+      await view.waitFor({ state: 'detached', timeout: 5000 });
       console.log('3. phone width');
       await page.setViewportSize({ width: 390, height: 844 });
       check('mobile: Stats & Leads leaves the header', !(await page.locator('#st-leads').isVisible()));
@@ -387,6 +464,32 @@ try {
         const res = await axe(page);
         check('mobile axe: no WCAG A/AA violations', !res.length, res.join(', '));
       }
+      // Connect your CRM at phone width: inside the screen, the connected webhook managed and disconnected
+      {
+        const crm = page.locator('#kb-crm');
+        await crm.locator('.kb-crm-row').first().waitFor({ timeout: 10000 });
+        await crm.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+        await crm.locator('[data-crm="webhook"] .kb-crm-toggle').click();
+        await crm.locator('[data-crm="webhook"] [data-act="test"]').waitFor({ timeout: 10000 });
+        const fit = await page.evaluate(() => {
+          const inside = (el) => { const r = el.getBoundingClientRect(); return r.left >= -0.5 && r.right <= innerWidth + 0.5; };
+          return { page: document.documentElement.scrollWidth <= innerWidth + 1, rows: [...document.querySelectorAll('.kb-crm-row, .kb-crm-row button, .kb-crm-row input, .kb-crm-row select')].every(inside),
+            taps: Math.min(...[...document.querySelectorAll('.kb-crm-row button')].map((b) => b.getBoundingClientRect().height)) };
+        });
+        check('mobile: Connect your CRM fits the screen; buttons are big enough to tap', fit.page && fit.rows && fit.taps >= 32, JSON.stringify(fit));
+        await page.screenshot({ path: path.join(CRM_SHOTS, 'crm-phone-connected.png') });
+        const res = await axe(page);
+        check('mobile axe: no WCAG A/AA violations with a connector open', !res.length, res.join(', '));
+        await crm.locator('[data-crm="webhook"] [data-act="askdisconnect"]').click();
+        await crm.locator('[data-crm="webhook"] [data-act="disconnect"]').click();
+        await page.waitForFunction(() => document.querySelector('[data-crm="webhook"] .kb-crm-status')?.textContent === 'Not connected', null, { timeout: 10000 });
+        const before = crmFake.state.hooks.length;
+        await api(T('/crm/webhook/test'), { method: 'POST', headers: { ...H, 'content-type': 'application/json' }, body: '{}' });
+        check('Disconnect: the status goes back to "Not connected" and nothing more is sent', crmFake.state.hooks.length === before);
+        await crm.locator('[data-crm="webhook"] .kb-crm-toggle').click();
+        await crm.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+        await page.screenshot({ path: path.join(CRM_SHOTS, 'crm-phone-list.png') });
+      }
       await page.getByRole('button', { name: 'Back to your bot' }).click();
       await view.waitFor({ state: 'detached', timeout: 5000 });
     } else {
@@ -403,6 +506,7 @@ try {
 } finally {
   await browser?.close();
   await dev.close();
+  await crmFake.close();
 }
 console.log(failures ? `\n${failures} check(s) failed` : `\nall checks passed · screenshots and sample CSVs in ${SHOTS}`);
 process.exit(failures ? 1 : 0);

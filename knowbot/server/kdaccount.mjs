@@ -19,26 +19,18 @@
 // reports with owner:true (a new free account has exactly one). See discover() for the fallbacks.
 //
 // Tokens never leave the server: the browser only ever sees a sealed `state` and the callback's ok/error page.
-import { createHash, randomBytes } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { sealKey, openKey } from './providers.mjs';
+import { bearerHash, pkcePair, createStateSealer, ORIGIN_RE } from './oauthstate.mjs';
+
+export { bearerHash, pkcePair };
 
 export class KdError extends Error {
   /** code: reconnect | bad_state | denied | upstream | no_store | not_configured */
   constructor(code, message, status = 502) { super(message); this.name = 'KdError'; this.code = code; this.status = status; }
 }
 
-const b64u = (b) => Buffer.from(b).toString('base64url');
-const sha256u = (s) => createHash('sha256').update(String(s)).digest('base64url');
-export const bearerHash = (bearer) => sha256u(`knowbot-kd-bearer\n${bearer || ''}`).slice(0, 22);
-/** PKCE (RFC 7636): a 43-character verifier and its S256 challenge. */
-export function pkcePair() {
-  const verifier = b64u(randomBytes(32));
-  return { verifier, challenge: sha256u(verifier) };
-}
-const ORIGIN_RE = /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i;
-const STATE_TTL_MS = 15 * 60000;
 const REFRESH_MARGIN_MS = 60000;
 
 /**
@@ -130,23 +122,10 @@ export function createKdAccount(o = {}) {
   }
 
   // ------------------------------------------------------------------ state (sealed, single use)
-  const usedNonces = new Map(); // nonce → expiry
-  function sealState(data) { return sealKey(JSON.stringify(data), stateKey); }
-  /** Opens a state without consuming it (callback errors still need the trial and origin). */
-  function peekState(state) {
-    let d;
-    try { d = JSON.parse(openKey(String(state || ''), stateKey)); } catch { throw new KdError('bad_state', 'This sign-in link is not valid. Start again from KnowBot Studio.', 400); }
-    if (!d || typeof d !== 'object' || !d.t || !d.n || !d.v) throw new KdError('bad_state', 'This sign-in link is not valid. Start again from KnowBot Studio.', 400);
-    if (!(Number(d.e) > now())) throw new KdError('bad_state', 'This sign-in took too long. Start again from KnowBot Studio.', 400);
-    return d;
-  }
-  function consumeState(state) {
-    const d = peekState(state);
-    for (const [n, e] of usedNonces) if (e < now()) usedNonces.delete(n);
-    if (usedNonces.has(d.n)) throw new KdError('bad_state', 'This sign-in link was already used. Start again from KnowBot Studio.', 400);
-    usedNonces.set(d.n, Number(d.e));
-    return d;
-  }
+  // server/oauthstate.mjs: sealed (AES-GCM), expiring, single use
+  const states = createStateSealer({ key: stateKey, now, service: 'sign-in', makeError: (m) => new KdError('bad_state', m, 400) });
+  const peekState = (state) => states.peek(state);
+  const consumeState = (state) => states.consume(state);
 
   /**
    * Starts a sign-in for a trial: → { url } (the KnowDrive authorize page). The state is sealed (AES-GCM) and carries
@@ -157,8 +136,8 @@ export function createKdAccount(o = {}) {
     const md = await metadata();
     const client = await clientFor(redirectUri);
     const { verifier, challenge } = pkcePair();
-    const st = sealState({ t: trialId, bh: bearerHash(bearer), o: ORIGIN_RE.test(String(origin || '')) ? origin : null, r: redirectUri, v: verifier,
-      n: b64u(randomBytes(12)), e: Math.min(now() + STATE_TTL_MS, Number(expiresAt) || Infinity), m: m === 'signin' ? 'signin' : 'signup' });
+    const st = states.seal({ t: trialId, bh: bearerHash(bearer), o: ORIGIN_RE.test(String(origin || '')) ? origin : null, r: redirectUri, v: verifier,
+      m: m === 'signin' ? 'signin' : 'signup' }, { expiresAt });
     const u = new URL(md.authorization_endpoint);
     u.searchParams.set('response_type', 'code');
     u.searchParams.set('client_id', client.client_id);
