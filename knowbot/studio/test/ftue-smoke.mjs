@@ -317,18 +317,18 @@ try {
         && await page.evaluate(() => document.getElementById('st-leads').getBoundingClientRect().right <= document.getElementById('st-price').getBoundingClientRect().left
           && getComputedStyle(document.getElementById('st-leads')).borderTopWidth === '0px'));
       await btn.click();
-      const dlg = await page.locator('dialog.kb-leads[open]').waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
-      check(cell, 'it opens the Stats & Leads report', dlg && (await page.locator('#kb-leads-title').textContent()) === 'Stats & Leads');
+      const dlg = await page.locator('#kb-stats').waitFor({ timeout: 10000 }).then(() => true).catch(() => false);
+      check(cell, 'it opens the Stats & Leads view', dlg && (await page.locator('#kb-stats-title').textContent()) === 'Stats & Leads');
       await page.keyboard.press('Escape');
       await page.waitForTimeout(250);
-      check(cell, 'Escape closes it; focus returns to the header button', await page.evaluate(() => !document.querySelector('dialog.kb-leads') && document.activeElement?.id === 'st-leads'));
+      check(cell, 'Escape closes it; focus returns to the header button', await page.evaluate(() => !document.querySelector('#kb-stats') && document.activeElement?.id === 'st-leads'));
     } else {
       check(cell, 'phones: Stats & Leads is not crammed into the header', !(await page.locator('#st-leads').isVisible()));
       await page.locator('#st-more').click();
       const item = page.locator('[role="menuitem"]', { hasText: 'Stats & Leads' });
       check(cell, 'phones: ⋯ has Stats & Leads', await item.isVisible().catch(() => false));
       await item.click();
-      check(cell, 'phones: it opens the report', await page.locator('dialog.kb-leads[open]').waitFor({ timeout: 10000 }).then(() => true).catch(() => false));
+      check(cell, 'phones: it opens the view', await page.locator('#kb-stats').waitFor({ timeout: 10000 }).then(() => true).catch(() => false));
       await page.keyboard.press('Escape');
     }
     check(cell, 'no page errors', errors.length === 0, errors.slice(0, 3).join(' || '));

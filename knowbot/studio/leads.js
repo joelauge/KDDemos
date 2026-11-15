@@ -138,7 +138,7 @@ export function initStatsRoute(opts = {}) {
 
 /** Opens Stats & Leads as a full view (one at a time). Resolves when it is shown. */
 export async function openLeads({ filters = null, push = true, invoker = null } = {}) {
-  if (view) { if (filters) view.apply({ ...parseRoute(ROUTE), ...filters }); view.el.querySelector('#kb-stats-title')?.focus(); return; }
+  if (view) { if (filters && view.el.isConnected) view.apply({ ...parseRoute(ROUTE), ...filters }); view.el.querySelector('#kb-stats-title')?.focus(); return; }
   if (!getState().trial?.id) return;
   const opener = invoker || (document.activeElement && document.activeElement !== document.body ? document.activeElement : null);
   const f = { ...(parseRoute() || parseRoute(ROUTE)), ...(filters || {}) };
@@ -186,14 +186,15 @@ export async function openLeads({ filters = null, push = true, invoker = null } 
     close();
   };
   document.addEventListener('keydown', onKey);
+  view = { el, close, apply: (nf) => { Object.assign(f, nf); paintSeg(); load(); } }; // claimed before the first await: one view, however it is asked for
   await ensureCss();
+  if (!view || view.el !== el) return; // closed while the styles loaded
   document.body.append(el);
   if (app) { app.inert = true; app.setAttribute('aria-hidden', 'true'); }
   document.documentElement.classList.add('kb-stats-open');
   document.title = `Stats & Leads${botName ? ` · ${botName}` : ''}`;
-  view = { el, close, apply: (nf) => { Object.assign(f, nf); paintSeg(); load(); } };
   el.querySelector(`#${titleId}`).focus({ preventScroll: true });
-  await load();
+  setTimeout(load, 0); // after the helpers below exist
 
   /** Leave the view. fromHistory: Back / Forward already changed the URL. */
   function close(fromHistory = false) {
@@ -241,6 +242,7 @@ export async function openLeads({ filters = null, push = true, invoker = null } 
       status.textContent = `Showing ${rangeWords()}: ${plural(hist.total || 0, 'question')}, ${plural(rep.leads.length, 'lead')}, ${plural(rep.conversions.sent, 'checkout link')} sent.`;
     } catch (e) {
       if (seq !== st.seq || !view) return;
+      if (!e?.status) console.error('[stats]', e); // not a server answer: a bug here should never hide behind "try again"
       body.replaceChildren(h('p', { class: 'alert alert-danger kb-leads-err', role: 'alert' }, e?.status === 401 ? 'This bot has expired, so its stats and leads are no longer available.' : "Couldn't load Stats & Leads. Try again in a moment."));
       status.textContent = '';
     } finally {
