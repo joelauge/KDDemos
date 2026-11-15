@@ -33,7 +33,7 @@ import { mountShapes } from './shapes.js';
 import { mountBuilderPane } from './builderpane.js';
 import { siteSettings } from './sitebrand.js';
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js';
-import { openLeads } from './leads.js';
+import { openLeads, initStatsRoute } from './leads.js';
 import { mountFtue } from './ftue.js';
 
 const { getState, setState, on, emit, mark } = store;
@@ -199,9 +199,9 @@ function renderHeader() {
   const livePill = h('span', { id: 'st-livepill', class: 'chip green is-label no-dot st-pill st-pill-live', role: 'status', hidden: true }, h('i', { 'aria-hidden': 'true' }), 'Live');
   const dash = h('a', { id: 'st-dash', class: 'st-dash', href: 'https://knowdrive.ai/', target: '_blank', rel: 'noopener', hidden: true },
     h('span', null, 'Dashboard'), h('span', { class: 'st-dash-ico', 'aria-hidden': 'true', html: icon('external', 13) }), h('span', { class: 'st-sr' }, ' (opens in a new tab)'));
-  // Stats & Leads (studio/leads.js): questions by channel, contacts visitors gave the bot, links it sent, clicks, CSV.
+  // Stats & Leads (studio/leads.js): a full view at #stats. Questions by day and their history, leads, links, clicks, CSV.
   // A quiet text button left of Launch on desktop; on phones it lives in the ⋯ menu (studio.css).
-  const leadsBtn = h('button', { type: 'button', id: 'st-leads', class: 'st-hlink', 'aria-haspopup': 'dialog', hidden: !getState().trial.id, onclick: () => openLeads() }, 'Stats & Leads');
+  const leadsBtn = h('button', { type: 'button', id: 'st-leads', class: 'st-hlink', hidden: !getState().trial.id, onclick: () => openLeads() }, 'Stats & Leads');
   const restart = h('button', { type: 'button', id: 'st-restart', class: 'st-restart st-menu-only', 'aria-haspopup': 'dialog', onclick: () => confirmStartOver() },
     h('span', { html: icon('refresh', 14), 'aria-hidden': 'true' }), h('span', null, 'Start over'));
   const theme = h('button', { type: 'button', id: 'st-theme', class: 'st-iconbtn st-menu-only', onclick: toggleTheme });
@@ -714,6 +714,15 @@ function dedupeLandingLink() {
   run();
   if (!landingMO && slots.suggest) { landingMO = new MutationObserver(run); landingMO.observe(slots.suggest, { childList: true, subtree: true }); }
 }
+/** Stats & Leads → "Add what's missing": the note form with the question people asked filled in (it opens over the view). */
+function openMissingNote(question, invoker) {
+  whenReady(() => {
+    if (mods.samplebot?.openMissing) mods.samplebot.openMissing({ question, invoker });
+    else toast({ kind: 'warn', text: 'Your bot is still loading. Try again in a moment.' });
+  });
+}
+// #stats is the Stats & Leads view: a deep link, a reload or Back / Forward on it opens the view once the bot is known
+whenReady(() => initStatsRoute({ addMissing: openMissingNote }));
 /** "Write a note": samplebot.js's note form (the "Didn't get the answer you needed?" form, titled for a first note). */
 function openNote(invoker) {
   const inv = invoker && invoker.isConnected ? invoker : document.activeElement;
@@ -2933,7 +2942,7 @@ function paletteCommands() {
     { id: 'launch', label: launchChipLabel(), ico: 'rocket', run: () => launchOpen('palette') },
     { id: 'channels', label: 'Set up: Website, KnowBot number, Email', ico: 'phone', run: () => openGoLive('channels') },
     { id: 'api', label: 'Developer API · OpenAI-compatible', ico: 'code', run: () => openGoLive('developers') },
-    { id: 'leads', label: 'Leads report · contacts, links sent, clicks, CSV download', ico: 'users', run: () => openLeads() },
+    { id: 'leads', label: 'Stats & Leads · questions by day, question history, leads, clicks, CSV', ico: 'users', run: () => openLeads() },
     { id: 'details', label: detailsOn() ? 'Hide details (atoms, stages, gauges)' : 'Show details (atoms, stages, gauges)', ico: 'table', run: () => toggleDetails() },
     ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
@@ -3890,7 +3899,7 @@ store.registerCard('insights', (data, el) => {
     h('div', { class: 'st-card-head' }, h('span', { class: 'st-card-ico', html: icon('trending', 14) }), h('span', null, 'What people ask'), metaEl),
     h('div', { class: 'st-ins-grid' }, topCol, gapCol),
     h('p', { class: 'st-card-foot' }, h('span', { html: icon('lock', 12) }), ' Every question is logged to your question insights. Logged questions are never used as sources. ',
-      h('button', { type: 'button', class: 'st-link-btn', 'aria-haspopup': 'dialog', onclick: () => openLeads() }, 'See leads and clicks')));
+      h('button', { type: 'button', class: 'st-link-btn', onclick: () => openLeads() }, 'See leads and clicks')));
   el.append(card);
   const rowsByKey = new Map();
   const row = (kind, t, max) => {

@@ -3378,11 +3378,11 @@ export function mount(ctx) {
   let missDlg = null;
   /** The note form. mode 'miss' (default): "Didn't get the answer you needed?" after an answer. mode 'note': the same
    *  form as a first note ("Add a note"), opened from the empty state or the first-time guide, with no answer yet. */
-  function openMiss({ mode = 'miss', invoker = null } = {}) {
+  function openMiss({ mode = 'miss', invoker = null, question = null } = {}) {
     if (missDlg) missDlg.remove();
     const note = mode === 'note';
     const back = invoker && invoker.isConnected ? invoker : null;
-    const qIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-q', maxlength: '300', value: note ? '' : lastMissed(), placeholder: 'e.g. Do you take walk-ins?' });
+    const qIn = h('input', { class: 'input sb-miss-in', id: 'sb-miss-q', maxlength: '300', value: question != null ? String(question).slice(0, 300) : note ? '' : lastMissed(), placeholder: 'e.g. Do you take walk-ins?' });
     const aIn = h('textarea', { class: 'input sb-miss-ta', id: 'sb-miss-a', rows: '5', maxlength: '20000', required: true, placeholder: note ? 'For example: “We take walk-ins Monday to Friday, 9am to noon. Bookings: 555-0100.”' : 'Write it the way you’d want your bot to say it. For example: “Yes, we take walk-ins Monday to Friday, 9am to noon.”' });
     // tags: chips the owner picks or types; the bot's earlier tags (knowDrive topic:* tags) are offered underneath
     const tagOf = (t) => String(t).toLowerCase().trim().replace(/[^a-z0-9 _-]+/g, '').replace(/\s+/g, '-').slice(0, 32);
@@ -3721,5 +3721,7 @@ export function mount(ctx) {
     dom.thread.innerHTML = ''; dom.suggest.innerHTML = ''; dom.composer.innerHTML = ''; if (dom.banner) dom.banner.innerHTML = '';
   }
 
-  return { ask, destroy, openNote: ({ invoker = null } = {}) => openMiss({ mode: 'note', invoker }) };
+  return { ask, destroy, openNote: ({ invoker = null } = {}) => openMiss({ mode: 'note', invoker }),
+    // Stats & Leads (leads.js) "Add what's missing": the same form, with the question people asked already filled in
+    openMissing: ({ question = '', invoker = null } = {}) => openMiss({ mode: 'miss', invoker, question }) };
 }

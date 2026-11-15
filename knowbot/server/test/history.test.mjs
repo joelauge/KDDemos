@@ -126,6 +126,9 @@ describe('history: the list (memory)', () => {
     assert.deepEqual(one.items.map((i) => i.q), ['Do you ship to Canada?', 'Do you ship to Brazil?', 'What is the capital of France?']);
     assert.equal(one.total, 6, 'the totals and the chart keep the whole range');
     assert.equal(one.matched, 3);
+    // a run of days (the chart groups long ranges into weeks)
+    assert.equal((await hist({ day: '2026-11-07', dayEnd: '2026-11-08' })).matched, 3);
+    assert.equal((await hist({ day: '2026-11-08', dayEnd: '2026-11-01' })).matched, 2, 'an end before the start is just the day');
   });
 
   test('filters: channel, outcome, search, and the Studio-tests switch', async () => {

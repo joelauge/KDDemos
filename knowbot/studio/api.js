@@ -422,6 +422,15 @@ export async function insights() { return request('GET', trialPath('/insights'))
 export async function leads(days = 30) { return request('GET', trialPath(`/leads?days=${encodeURIComponent(days)}`)); }
 /** GET /leads.csv?days= -> the raw Response (text/csv): the CRM export, downloaded by the Leads report. */
 export async function leadsCsv(days = 30) { return request('GET', trialPath(`/leads.csv?days=${encodeURIComponent(days)}`), { raw: true }); }
+const historyQs = (p = {}) => { const sp = new URLSearchParams(); for (const [k, v] of Object.entries(p)) if (v != null && v !== '') sp.set(k, String(v)); return sp.toString(); };
+/**
+ * GET /history?days=7|30|90|all&tz=<minutes east of UTC>&day=&dayEnd=&channel=&outcome=&q=&tests=0&cursor=&limit= (Stats & Leads,
+ * studio/leads.js) -> {range, total, answered, refused, byChannel, byDay:[{day, total, answered, refused}], matched, dayCounts,
+ * items:[{id, at, day, q, channel, outcome, flags, files, note, answer}], nextCursor, retention}.
+ */
+export async function history(params = {}) { return request('GET', trialPath(`/history?${historyQs(params)}`)); }
+/** GET /history.csv?…the same filters -> the raw Response (text/csv): date,time,channel,question,outcome. */
+export async function historyCsv(params = {}) { return request('GET', trialPath(`/history.csv?${historyQs(params)}`), { raw: true }); }
 /** PATCH /leads {tracking} -> {tracking}: tracked links on (default) or off for this bot. */
 export async function setLeadTracking(tracking) { return request('PATCH', trialPath('/leads'), { body: { tracking: !!tracking } }); }
 /** GET /notes -> {tags:[{tag, count}]}: the tags this bot's notes and files already use (knowDrive topic:* tags). */

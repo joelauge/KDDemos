@@ -1001,7 +1001,7 @@ function normalizeSearch(s) { return String(s ?? '').toLowerCase().normalize('NF
 /**
  * The question history of one bot.
  * @param {{ kd?: object|null, store?: string, scopeTags: string[], from?: string, to?: string, days?: number|'all',
- *   tz?: number, day?: string, channel?: string, outcome?: string, q?: string, includeStudio?: boolean, cursor?: string, limit?: number,
+ *   tz?: number, day?: string, dayEnd?: string, channel?: string, outcome?: string, q?: string, includeStudio?: boolean, cursor?: string, limit?: number,
  *   classify?: (x: {q: string|null, top: number|null}) => 'gap'|'off_topic', now?: number, all?: boolean, budgetMs?: number }} o
  *   includeStudio false leaves out channel:studio (the owner's own tests in the Studio); `all` returns every match (the CSV).
  * @returns {Promise<{ range:{from,to,tz,days}, total, answered, refused, flagged, byChannel, byDay:[{day,total,answered,refused,flagged}],
@@ -1023,6 +1023,7 @@ export async function questionHistory(o = {}) {
   const channel = CHANNELS.includes(String(o.channel || '')) ? String(o.channel) : null;
   const outcome = HISTORY_OUTCOMES.includes(String(o.outcome || '')) ? String(o.outcome) : null;
   const day = validDay(o.day) ? String(o.day) : null;
+  const dayEnd = day && validDay(o.dayEnd) && String(o.dayEnd) > day ? String(o.dayEnd) : day; // a run of days (a week of the chart)
   const needle = normalizeSearch(o.q);
   const classify = typeof o.classify === 'function' ? o.classify : () => 'gap';
   const budget = Math.max(200, Number(o.budgetMs) || HISTORY.readBudgetMs);
@@ -1050,7 +1051,7 @@ export async function questionHistory(o = {}) {
   }
 
   let partial = false;
-  let list = charted.filter((e) => dayIndex.has(e.day) && (!day || e.day === day));
+  let list = charted.filter((e) => dayIndex.has(e.day) && (!day || (e.day >= day && e.day <= dayEnd)));
   if (outcome === 'answered') list = list.filter((e) => e.outcome !== 'refused');
   else if (outcome === 'flagged') list = list.filter((e) => e.flags.length);
   else if (outcome) list = list.filter((e) => e.outcome === 'refused');

@@ -4987,7 +4987,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
 
   // ------------------------------------------------------------------------- question history (server/questions.mjs questionHistory)
   // GET /trials/:id/history?days=7|30|90|all | from=&to= (YYYY-MM-DD, the viewer's days) &tz=<minutes east of UTC>
-  //       &day=YYYY-MM-DD &channel= &outcome=answered|refused|gap|off_topic|flagged &q=<text> &tests=0|1 &cursor= &limit=
+  //       &day=YYYY-MM-DD [&dayEnd=YYYY-MM-DD] &channel= &outcome=answered|refused|gap|off_topic|flagged &q=<text> &tests=0|1 &cursor= &limit=
   //   → { range, total, answered, refused, flagged, byChannel, byDay:[{day,total,answered,refused,flagged}], matched,
   //       dayCounts, items:[{id, at, day, time, q, channel, outcome, flags, files, top, note, answer}], nextCursor,
   //       retention:{questionsDays:null, leadsDays, allDays}, partial, truncated }
@@ -5001,7 +5001,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const floor = Number(T.spec?.floor);
     return { kd: { ...kd, store }, store, scopeTags: [`trial:${T.id}`], now: now(),
       from: sp.get('from') || undefined, to: sp.get('to') || undefined, days: String(days).toLowerCase() === 'all' ? 'all' : ([7, 30, 90].includes(Number(days)) ? Number(days) : 30),
-      tz: sp.has('tz') ? Number(sp.get('tz')) : 0, day: sp.get('day') || undefined, channel: sp.get('channel') || undefined, outcome: sp.get('outcome') || undefined,
+      tz: sp.has('tz') ? Number(sp.get('tz')) : 0, day: sp.get('day') || undefined, dayEnd: sp.get('dayEnd') || undefined, channel: sp.get('channel') || undefined, outcome: sp.get('outcome') || undefined,
       q: (sp.get('q') || '').slice(0, 120), includeStudio: sp.get('tests') !== '0', cursor: sp.get('cursor') || undefined, limit: Number(sp.get('limit')) || 50,
       // off-topic vs a gap in the files: the same rule as the insights card (general knowledge, or far below the floor)
       classify: ({ q, top }) => ((top == null || !Number.isFinite(floor) ? (generalKnowledge(q) ? 'off_topic' : 'near_miss') : refusalReasonOf({ q, best: top, floor })) === 'near_miss' ? 'gap' : 'off_topic') };
