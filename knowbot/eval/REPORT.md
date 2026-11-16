@@ -57,7 +57,7 @@ What moved, from the automatic scorer:
 ## knowDrive hybrid retrieval (round 6 code, `results/*.knowdrive.json`)
 
 The same code was run with retrieval from the `knowbot-ugm` knowDrive store (hybrid search, windowed to tag
-`knowbot:ugm`) instead of local BM25. With no long-lived key in the session, it ran in 8 batches with short-lived
+`bucket:ugm`) instead of local BM25. With no long-lived key in the session, it ran in 8 batches with short-lived
 read tokens through `KNOWDRIVE_API_KEY_FILE`, and the batches were combined with `run-benchmark.mjs --merge`. Every
 item's retrieval came from knowDrive, apart from guard refusals that never search. These are automatic scores only;
 this run has not been judged.

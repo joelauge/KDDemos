@@ -66,7 +66,7 @@ function fakeKnowDrive() {
         // Deliberately ignores the filter: KnowBot must drop every hit whose tags don't match the bucket and mask.
         return json(200, { data: [
           { file_id: 'a', filename: 'knowbot/acme/hours.md', score: 0.9, content: [{ type: 'text', text: 'Open 9 to 5.' }], tags: ['bucket:acme'] },
-          { file_id: 'b', filename: 'knowbot/ugm/policies/refund.md', score: 0.95, content: [{ type: 'text', text: 'another bucket' }], tags: ['knowbot:ugm'] },
+          { file_id: 'b', filename: 'knowbot/ugm/policies/refund.md', score: 0.95, content: [{ type: 'text', text: 'another bucket' }], tags: ['bucket:ugm'] },
           { file_id: 'c', filename: 'elsewhere/lunch.md', score: 0.93, content: [{ type: 'text', text: 'tagged in, stored elsewhere' }], tags: ['bucket:acme', 'f1:menus'] },
           { file_id: 'd', filename: 'knowbot/acme/menus/menu.pdf', score: 0.8, content: [{ type: 'text', text: 'Menu.' }], tags: ['bucket:acme', 'f1:menus', 'format:pdf'] },
           { file_id: 'e', filename: 'knowbot/acme/untagged.md', score: 0.99, content: [{ type: 'text', text: 'no tags returned' }] },
@@ -124,7 +124,7 @@ describe('chat instances', () => {
     const bot = await (await post('/api/instances', { name: 'Front desk', buckets: [{ id: 'acme' }, { id: 'menus', enabled: false }] })).json();
     assert.deepEqual(bot.buckets, [{ id: 'acme', enabled: true }, { id: 'menus', enabled: false }]);
     const g = await (await api('/api/graph')).json();
-    assert.deepEqual(g.buckets.map((x) => [x.id, x.tag]), [['ugm', 'knowbot:ugm'], ['acme', 'bucket:acme'], ['menus', 'bucket:menus']]);
+    assert.deepEqual(g.buckets.map((x) => [x.id, x.tag]), [['ugm', 'bucket:ugm'], ['acme', 'bucket:acme'], ['menus', 'bucket:menus']]);
   });
 
   test('a bot searches by its enabled buckets\' tags, and every hit must carry them', async () => {

@@ -114,7 +114,7 @@ export function createKnowBotServer(opts = {}) {
     models: models.map((x) => x.id),
     // Seals the operator's OpenAI/Anthropic keys in the registry. Changing it means re-entering those keys.
     secret: env.KNOWBOT_SECRET_KEY || adminToken || 'knowbot-local-dev',
-    builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', tag: env.KNOWDRIVE_TAG || 'knowbot:ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
+    builtin: { id: env.KNOWBOT_BUILTIN_ID || 'ugm', tag: env.KNOWDRIVE_TAG || 'bucket:ugm', name: builtinOrg, org: builtinOrg, folder: mode === 'knowdrive' ? (env.KNOWDRIVE_PREFIX ?? DEFAULT_PREFIX) : 'corpus/', guards: 'store' },
   });
 
   // ------------------------------------------------------------ Claude Haiku 5.5, the default answering engine

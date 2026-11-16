@@ -328,7 +328,7 @@ export class KnowDriveRetriever {
   /**
    * @param {{ baseUrl: string, apiKey: string, store: string, local: LocalRetriever, timeoutMs?: number, logger?: Function }} opts
    */
-  constructor({ baseUrl, apiKey, store, tag = 'knowbot:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true, resolver = null, botId = null, fetchVia = null }) {
+  constructor({ baseUrl, apiKey, store, tag = 'bucket:ugm', prefix = '', local, timeoutMs = 8000, logger = () => {}, minSimilarity = 0, canonicalMargin = -0.01, rescueMargin = -0.03, exclude = [], cards = true, include = [], dirFilter = true, prefixFilter = true, resolver = null, botId = null, fetchVia = null }) {
     this.baseUrl = String(baseUrl || 'https://knowdrive.ai').replace(/\/+$/, '');
     // fetchVia(path, init) → Response: a store reached through someone else's sign-in (a launched bot's customer store,
     // server/kdaccount.mjs), which brings its own Authorization and refreshes it; apiKey is then unused
@@ -502,9 +502,9 @@ export class KnowDriveRetriever {
 
 function pickStr(v) { return typeof v === 'string' && v.trim() ? v.trim() : null; }
 
-// Production home: "Joel's Store" on knowdrive.ai, windowed to the knowbot/ugm/ folder and knowbot:ugm tag.
+// Production home: "Joel's Store" on knowdrive.ai, windowed to the knowbot/ugm/ folder and bucket:ugm tag.
 export const DEFAULT_STORE = 'vs_97c857474b1f4e8892b134c283cf9849';
-export const DEFAULT_TAG = 'knowbot:ugm';
+export const DEFAULT_TAG = 'bucket:ugm';
 export const DEFAULT_PREFIX = 'knowbot/ugm/';
 // Calibrated on the benchmark (vector similarity of the top hit): off-topic 0.70–0.76, answerable 0.74–0.88.
 export const DEFAULT_MIN_SIMILARITY = 0.745;

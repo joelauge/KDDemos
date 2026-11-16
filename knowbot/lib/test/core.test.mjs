@@ -252,7 +252,7 @@ test('injection guard: titles, delimiters, template tokens and marker variants i
   assert.ok(!/【2】|\[Source 3\]|\[\^4\]|\[3\]/.test(last), 'marker variants neutralised');
 });
 
-test('knowdriveRetriever windows to the knowbot:ugm tag and prefix (red-team: no citing outside the window)', async () => {
+test('knowdriveRetriever windows to the bucket:ugm tag and prefix (red-team: no citing outside the window)', async () => {
   const calls = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -264,7 +264,7 @@ test('knowdriveRetriever windows to the knowbot:ugm tag and prefix (red-team: no
   };
   try {
     const r = await knowdriveRetriever({ store: 'vs', token: 't', prefix: 'kb/' }).search('q', 6);
-    assert.deepEqual(calls[0].filter, { all_of: ['knowbot:ugm'] });
+    assert.deepEqual(calls[0].filter, { all_of: ['bucket:ugm'] });
     assert.deepEqual(r.results.map((x) => x.filename), ['policies/refund.md']);
     await knowdriveRetriever({ store: 'vs', tag: null }).search('q', 6);
     assert.equal(calls[1].filter, undefined, 'tag:null opts out explicitly');

@@ -79,7 +79,7 @@ describe('createBuilderKb.ensure', () => {
 
   test('ingests every doc once with the kb tags, path and a per-version invisible tail; a second process ingests nothing', async () => {
     // rows that are not ours: another bot's file, a kb-looking path without the kb tag, a kb tag outside the prefix
-    fake.add({ store: STORE, path: 'knowbot/ugm/policies/shipping.md', text: '# Shipping\n\nWe ship worldwide.', tags: ['knowbot', 'knowbot:ugm'] });
+    fake.add({ store: STORE, path: 'knowbot/ugm/policies/shipping.md', text: '# Shipping\n\nWe ship worldwide.', tags: ['knowbot', 'bucket:ugm'] });
     fake.add({ store: STORE, path: `${KB_PREFIX}pricing-and-trial.md`, text: '# Fake\n\nNot ours.', tags: ['knowbot'] });
     fake.add({ store: STORE, path: 'elsewhere/pricing.md', text: '# Elsewhere\n\nNot under the prefix.', tags: ['knowbot', 'kind:builder-kb', 'bucket:knowbot-builder'] });
     const before0 = fake.files.size;

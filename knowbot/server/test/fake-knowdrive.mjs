@@ -17,7 +17,7 @@
 //   stages grow with bytes and atoms, and blocks over MAX_ATOM chars are split at line/sentence boundaries.)
 //   A file containing FAIL_NO_TEXT ends status:'error', last_error:'no text layer found'.
 //   A file containing STALL stays text_extracted forever.
-// Search deliberately IGNORES `filter` and always adds one production hit tagged knowbot:ugm, so the caller's own
+// Search deliberately IGNORES `filter` and always adds one production hit tagged bucket:ugm, so the caller's own
 // tag enforcement is what keeps results in scope.
 //
 // Production facts this fake ENFORCES (verified against production knowDrive, 2026-11-08), so the bugs they caused
@@ -293,7 +293,7 @@ function splitBlock(t) {
 const FIXTURE_UGM = Object.freeze({
   file_id: 'file_prod_ugm_shipping', filename: 'knowbot/ugm/policies/shipping.md',
   text: 'Production fixture: The Ultimate Game Master ships worldwide. This hit belongs to another store and must never be shown.',
-  tags: ['knowbot', 'knowbot:ugm'],
+  tags: ['knowbot', 'bucket:ugm'],
 });
 
 // ------------------------------------------------------------------ server

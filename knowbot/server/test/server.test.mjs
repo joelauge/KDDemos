@@ -187,14 +187,14 @@ describe('retrievers (unit)', () => {
     const kd = fakeKnowDrive();
     const port = await listen(kd.srv);
     try {
-      const r = new KnowDriveRetriever({ baseUrl: `http://127.0.0.1:${port}`, apiKey: 'sk-test', store: 'vs_test', tag: 'knowbot:ugm', prefix: 'knowbot/ugm/', local });
+      const r = new KnowDriveRetriever({ baseUrl: `http://127.0.0.1:${port}`, apiKey: 'sk-test', store: 'vs_test', tag: 'bucket:ugm', prefix: 'knowbot/ugm/', local });
       const out = await r.search('return policy', 5);
       assert.equal(out.source, 'knowdrive');
       assert.equal(kd.calls.length, 1);
       const call = kd.calls[0];
       assert.equal(call.url, '/api/v1/vector_stores/vs_test/search');
       assert.equal(call.auth, 'Bearer sk-test');
-      assert.deepEqual(call.body, { query: 'return policy', max_num_results: 5, mode: 'hybrid', text: 'raw', filter: { all_of: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] } });
+      assert.deepEqual(call.body, { query: 'return policy', max_num_results: 5, mode: 'hybrid', text: 'raw', filter: { all_of: ['bucket:ugm', 'dir:knowbot', 'dir:ugm'] } });
       assert.deepEqual(out.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
       assert.ok(!out.results.some((x) => x.file_id === 'file_x'));
       // title/url looked up from local frontmatter when attributes lack them
@@ -225,7 +225,7 @@ describe('retrievers (unit)', () => {
       const on = await r.search('how do returns work', 4);
       assert.deepEqual(calls.map((c) => c.mode).sort(), ['hybrid', 'vector', 'vector']);
       assert.equal(calls.filter((c) => c.filter.all_of.includes('kind:canonical')).length, 1, 'one card-only query');
-      assert.ok(calls.every((c) => c.filter?.all_of?.[0] === 'knowbot:ugm'), 'both queries stay in the tag window');
+      assert.ok(calls.every((c) => c.filter?.all_of?.[0] === 'bucket:ugm'), 'both queries stay in the tag window');
       assert.deepEqual(on.results.map((x) => x.filename), ['canonical/returns.md', 'policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
       vectorTop = 0.70;
       const off = await r.search('weather this weekend', 4);
@@ -444,7 +444,7 @@ describe('server (HTTP)', () => {
       assert.equal(c.store, 'vs_97c857474b1f4e8892b134c283cf9849');
       const j = await (await fetch(`http://127.0.0.1:${p3}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'returns' }) })).json();
       assert.equal(j.source, 'knowdrive');
-      assert.deepEqual(kd.calls.find((c) => c.url.endsWith('/search')).body, { query: 'returns', max_num_results: 6, mode: 'hybrid', text: 'raw', filter: { all_of: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'], none_of: ['questions'] } });
+      assert.deepEqual(kd.calls.find((c) => c.url.endsWith('/search')).body, { query: 'returns', max_num_results: 6, mode: 'hybrid', text: 'raw', filter: { all_of: ['bucket:ugm', 'dir:knowbot', 'dir:ugm'], none_of: ['questions'] } });
       assert.equal(kd.calls.find((c) => c.url.endsWith('/search')).url, '/api/v1/vector_stores/vs_97c857474b1f4e8892b134c283cf9849/search');
       assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
       assert.equal(j.results[0].url, 'https://example.test/policies/refund-policy');
@@ -456,12 +456,12 @@ describe('server (HTTP)', () => {
     const kdPort = await listen(kd.srv);
     const kb4 = createKnowBotServer({ root: ROOT, corpusDir, dataDir: await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-data-')), libPath: LIB, quiet: true, watch: false,
       env: { LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1`, KNOWDRIVE_BASE_URL: `http://127.0.0.1:${kdPort}`, KNOWDRIVE_API_KEY: 'k',
-        KNOWDRIVE_STORE: 'vs_shared', KNOWDRIVE_PREFIX: 'knowbot/ugm/', KNOWDRIVE_TAG: 'knowbot:ugm' } });
+        KNOWDRIVE_STORE: 'vs_shared', KNOWDRIVE_PREFIX: 'knowbot/ugm/', KNOWDRIVE_TAG: 'bucket:ugm' } });
     const p4 = await listen(kb4.server);
     try {
       const j = await (await fetch(`http://127.0.0.1:${p4}/api/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'returns', k: 3 }) })).json();
       assert.equal(kd.calls.find((c) => c.url.endsWith('/search')).url, '/api/v1/vector_stores/vs_shared/search');
-      assert.deepEqual(kd.calls.find((c) => c.url.endsWith('/search')).body.filter, { all_of: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'], none_of: ['questions'] }, 'prefix enforced in the search via folder tags');
+      assert.deepEqual(kd.calls.find((c) => c.url.endsWith('/search')).body.filter, { all_of: ['bucket:ugm', 'dir:knowbot', 'dir:ugm'], none_of: ['questions'] }, 'prefix enforced in the search via folder tags');
       assert.deepEqual(j.results.map((x) => x.filename), ['policies/refund-policy.md', 'catalog/products/dragon-dice.md']);
     } finally { await close(kb4.server); await close(kd.srv); }
   });

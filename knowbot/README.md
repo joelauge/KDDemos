@@ -42,7 +42,7 @@ The dashboard also works with no server: open it and press **Simulate traffic**.
 
 | Mode | When | Notes |
 |---|---|---|
-| `knowdrive` | `KNOWDRIVE_API_KEY` is set | Hybrid search on `knowbot-ugm`, windowed to tag `knowbot:ugm`. Multilingual: "devoluciones" finds the refund policy. |
+| `knowdrive` | `KNOWDRIVE_API_KEY` is set | Hybrid search on `knowbot-ugm`, windowed to tag `bucket:ugm`. Multilingual: "devoluciones" finds the refund policy. |
 | `local` | no key | BM25 over `corpus/`. The same paths are cited, so answers are comparable, but keyword-only. |
 
 ```bash
@@ -53,7 +53,7 @@ KNOWDRIVE_API_KEY=<developer key from knowdrive.ai/developer-keys> knowbot/scrip
 |---|---|
 | `KNOWDRIVE_BASE_URL` | `https://knowdrive.ai` (production) |
 | `KNOWDRIVE_STORE` | `vs_97c857474b1f4e8892b134c283cf9849` ("Joel's Store") |
-| `KNOWDRIVE_TAG` | `knowbot:ugm` |
+| `KNOWDRIVE_TAG` | `bucket:ugm` |
 | `KNOWDRIVE_PREFIX` | `knowbot/ugm/` (the folder inside the shared store) |
 | `KNOWDRIVE_MIN_SIMILARITY` | `0.745`: relevance floor on vector similarity; below it KnowBot refuses |
 | `KNOWDRIVE_API_KEY_FILE` | path to a file holding the key; re-read on every search, so a rotated key needs no restart |
@@ -71,7 +71,7 @@ KNOWDRIVE_API_KEY=... node knowbot/scripts/seed-knowdrive.mjs --dry-run   # then
 
 `scripts/sync-knowdrive.mjs` keeps the live store identical to `corpus/`. It compares every corpus file with the live
 file at `KNOWDRIVE_PREFIX` + its path and plans `add`, `update` (content differs), `same`, `retag` (missing `knowbot`,
-`knowbot:ugm`, `kind:` or `canonical/TAGS.json` tags) and `remove` (live files tagged `knowbot:ugm` under the prefix that
+`bucket:ugm`, `kind:` or `canonical/TAGS.json` tags) and `remove` (live files tagged `bucket:ugm` under the prefix that
 no longer exist locally). Nothing outside the prefix and tag is touched: the store is shared.
 
 ```bash

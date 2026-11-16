@@ -122,7 +122,7 @@ describe('KnowBot Studio server (trials.mjs): core', () => {
   // ---------------------------------------------------------------------------------------------- 3
   test('3. upload: exact server-chosen tags, path under knowbot/trials/<id>/, registry never written', async () => {
     const t = await c.trial();
-    const r = await c.upload(t, '../../ugm/evil,kind:config,knowbot:ugm.md', Buffer.from('# Hours\n\nWe open at 9am on weekdays.\n'));
+    const r = await c.upload(t, '../../ugm/evil,kind:config,bucket:ugm.md', Buffer.from('# Hours\n\nWe open at 9am on weekdays.\n'));
     assert.equal(r.status, 201);
     const j = await r.json();
     assert.equal(j.file.stage, 'uploaded');
@@ -134,7 +134,7 @@ describe('KnowBot Studio server (trials.mjs): core', () => {
     assert.ok(!call.ingest.path.includes('..'));
     assert.equal(j.usage.files, 1);
     // a duplicate name is kept, with " (2)"
-    const r2 = await c.upload(t, '../../ugm/evil,kind:config,knowbot:ugm.md', Buffer.from('# Hours\n\nSecond copy.\n'));
+    const r2 = await c.upload(t, '../../ugm/evil,kind:config,bucket:ugm.md', Buffer.from('# Hours\n\nSecond copy.\n'));
     assert.equal(r2.status, 201);
     assert.match((await r2.json()).file.name, / \(2\)\.md$/);
     const writes = S.kd.calls.filter((x) => x.url === '/api/v1/ingest' && x.ingest?.path === 'knowbot/_config/instances.json').length;

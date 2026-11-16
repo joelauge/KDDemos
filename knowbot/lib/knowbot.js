@@ -318,7 +318,7 @@ export const serverRetriever = ({ apiBase, instance }) => ({
 });
 
 /** Direct knowDrive search, windowed to `tag` (SPEC: never cite untagged files) and, when set, to `prefix` (stripped). */
-export const knowdriveRetriever = ({ baseUrl = 'https://knowdrive.ai', store, token, mode = 'hybrid', tag = 'knowbot:ugm', prefix = 'knowbot/ugm/' }) => ({
+export const knowdriveRetriever = ({ baseUrl = 'https://knowdrive.ai', store, token, mode = 'hybrid', tag = 'bucket:ugm', prefix = 'knowbot/ugm/' }) => ({
   type: 'knowdrive',
   async search(query, k, signal) {
     const url = `${trimSlash(baseUrl)}/api/v1/vector_stores/${encodeURIComponent(store)}/search`;

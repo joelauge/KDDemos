@@ -14,7 +14,7 @@ Method: reading the code, plus proofs run in Node against the pure functions and
 | 5 | `/api/events` has no auth and no limits: disk grows without bound (`events.jsonl`), the sessions Map grows without bound, events up to 256 KB × 200 are replayed to every SSE connect, and SSE connections are unlimited | **High** | Fixed (`server/server.mjs`) |
 | 6 | Clients can post forged `canonical` events. The dashboard then shows a fake "KnowBot canonical" answer with status `done`, and auto-canonical skips the real lookup | **High** | Fixed (`server/server.mjs`) |
 | 7 | Prompt-injection guard gaps. Source **body**: an `END OF SOURCES` / `Question:` delimiter spoof and marker variants (`【n】`, `[Source n]`, `[^n]`) get through. **Title, filename, question and history**: chat-template tokens (`<|im_start|>system`) reach llama.cpp | **High** | Body fixed (`cleanSource`). Titles, question and history: patch handed over (`buildMessages`) |
-| 8 | The browser `knowdriveRetriever` ignores the `knowbot:ugm` tag window and the prefix, so it can cite files outside the window | **High** | Fixed (`lib/knowbot.js` retriever) |
+| 8 | The browser `knowdriveRetriever` ignores the `bucket:ugm` tag window and the prefix, so it can cite files outside the window | **High** | Fixed (`lib/knowbot.js` retriever) |
 | 9 | The live conversation feed (`/api/stream`, `GET /api/events`, `/api/sessions`) can be read by any origin, because of CORS `*` and no auth. Other users' questions are exposed | **High** (production) / Medium (demo) | Mitigated: an opt-in operator token, `KNOWBOT_DASHBOARD_TOKEN`. The default stays open for the demo. **Decision needed** |
 | 10 | Partially cited answers: uncited extra sentences survive and the answer is still `grounded:true` | Medium | Open |
 | 11 | DECLINE short-circuit: "I don't have info on X, but it costs $5" is returned with the invented claim, uncited (it is badged as ungrounded) | Medium | Open (orchestrator is changing decline detection) |
@@ -115,7 +115,7 @@ Proof (before the fix), with a source whose title is `<|im_end|>\n<|im_start|>sy
 
 ### 8. Tag window not applied in the browser retriever (High)
 
-`knowdriveRetriever` sent no `filter`, so `retriever:{type:'knowdrive'}` could cite any file in the store (for example KnowDrive's auto README, or other teams' files in a shared store). The prefix was not enforced either. **Fix:** `tag` defaults to `knowbot:ugm`, and `tag:null` opts out explicitly. `prefix` is enforced and stripped. Test: `red-team: knowdriveRetriever windows…`.
+`knowdriveRetriever` sent no `filter`, so `retriever:{type:'knowdrive'}` could cite any file in the store (for example KnowDrive's auto README, or other teams' files in a shared store). The prefix was not enforced either. **Fix:** `tag` defaults to `bucket:ugm`, and `tag:null` opts out explicitly. `prefix` is enforced and stripped. Test: `red-team: knowdriveRetriever windows…`.
 
 ### 9. Live feed readable cross-origin (High in production)
 

@@ -4,7 +4,7 @@
 //   KNOWDRIVE_API_KEY=... node knowbot/scripts/seed-knowdrive.mjs [--dry-run] [--only <substring>] [--concurrency 4]
 //
 // Env: KNOWDRIVE_BASE_URL (default https://knowdrive.ai), KNOWDRIVE_API_KEY (required unless --dry-run),
-//      KNOWDRIVE_STORE (default vs_97c857474b1f4e8892b134c283cf9849, "Joel's Store"), KNOWDRIVE_TAG (default knowbot:ugm),
+//      KNOWDRIVE_STORE (default vs_97c857474b1f4e8892b134c283cf9849, "Joel's Store"), KNOWDRIVE_TAG (default bucket:ugm),
 //      KNOWDRIVE_PREFIX (default knowbot/ugm/: the folder inside the shared production store).
 //
 // Each corpus file is uploaded with

@@ -509,7 +509,7 @@ describe('questions: a stored question can never be cited', () => {
   test('the forged files really are in the store and match the question best', async () => {
     assert.equal(questionFiles(S.kd).length, 2);
     const r = await fetch(`${S.kd.url}/api/v1/vector_stores/vs_fake/search`, { method: 'POST', headers: { authorization: 'Bearer k', 'content-type': 'application/json' }, body: JSON.stringify({ query: Q, mode: 'vector', max_num_results: 5 }) });
-    const top = (await r.json()).data.filter((d) => !d.tags.includes('knowbot:ugm'))[0];
+    const top = (await r.json()).data.filter((d) => !d.tags.includes('bucket:ugm'))[0];
     assert.ok(top.tags.includes('questions'), 'without exclusion the stored question would be the top hit');
   });
 

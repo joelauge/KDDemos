@@ -223,7 +223,7 @@ export class InstanceRegistry {
     this.providerKeys = {}; // provider id → { sealed, last4, updatedAt }
     // The built-in bot and bucket come from the server config. Only the bot's bucket links can be changed.
     // root: where knowDrive stores a bucket's uploads. Never shown; membership is the tag.
-    this.builtinBucket = { id: builtin.id, name: builtin.name, tag: builtin.tag || `knowbot:${builtin.id}`, root: builtin.folder, builtin: true };
+    this.builtinBucket = { id: builtin.id, name: builtin.name, tag: builtin.tag || `bucket:${builtin.id}`, root: builtin.folder, builtin: true };
     this.migrated = {}; // bucket id → ISO time its files were given bucket + folder tags
     // Flows group bots and buckets into separate canvases. The built-in bot and bucket live in the demo flow.
     this.flows = new Map();

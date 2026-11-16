@@ -4,7 +4,7 @@
 //   KNOWDRIVE_API_KEY=... node knowbot/scripts/sync-knowdrive.mjs [--apply] [--json] [--concurrency 4] [--verbose]
 //
 // Env: same as seed-knowdrive.mjs: KNOWDRIVE_BASE_URL (default https://knowdrive.ai), KNOWDRIVE_API_KEY (required),
-//      KNOWDRIVE_STORE (default "Joel's Store"), KNOWDRIVE_TAG (default knowbot:ugm), KNOWDRIVE_PREFIX (default knowbot/ugm/).
+//      KNOWDRIVE_STORE (default "Joel's Store"), KNOWDRIVE_TAG (default bucket:ugm), KNOWDRIVE_PREFIX (default knowbot/ugm/).
 //
 // Plan, for every corpus/**/*.md compared with the live file at <PREFIX><relpath>:
 //   add     not in the store                                  → upload (POST /api/v1/ingest)

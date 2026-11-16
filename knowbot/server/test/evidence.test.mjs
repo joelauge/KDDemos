@@ -357,7 +357,7 @@ describe('evidence selector: unreachable sidecar and shared samples', () => {
 describe('evidence selector on the developer API and live bots', () => {
   let S, c, t;
   before(async () => {
-    S = await boot({ agent: quotingAgent(/30 days/), fixtures: [{ store: 'vs_fake', path: 'knowbot/ugm/returns.md', text: RETURNS, tags: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] }] });
+    S = await boot({ agent: quotingAgent(/30 days/), fixtures: [{ store: 'vs_fake', path: 'knowbot/ugm/returns.md', text: RETURNS, tags: ['bucket:ugm', 'dir:knowbot', 'dir:ugm'] }] });
     c = client(S);
   });
   after(async () => { await S.close(); });
@@ -370,7 +370,7 @@ describe('evidence selector on the developer API and live bots', () => {
     assert.equal(r.refused, true);
     assert.equal(S.llm.calls.length, llm0);
     const call = S.att.calls.at(-1);
-    assert.deepEqual(call.scope.tags_all, ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'], 'the bot\'s own tags');
+    assert.deepEqual(call.scope.tags_all, ['bucket:ugm', 'dir:knowbot', 'dir:ugm'], 'the bot\'s own tags');
     assert.ok(call.scope.tags_none.includes('questions'));
     S.att.state.status = 'ok';
     S.att.state.match = /30 days/;
@@ -551,7 +551,7 @@ describe('resolve mode: shared samples, developer API and live bots', () => {
   });
 
   test('/api/canonical and /v1/bots/:id/chat: the retriever reads the resolve window; floor and receipt as with search', async () => {
-    const S = await boot({ env: { KNOWBOT_EVIDENCE: 'resolve' }, agent: quotingAgent(/30 days/), fixtures: [{ store: 'vs_fake', path: 'knowbot/ugm/returns.md', text: RETURNS, tags: ['knowbot:ugm', 'dir:knowbot', 'dir:ugm'] }] });
+    const S = await boot({ env: { KNOWBOT_EVIDENCE: 'resolve' }, agent: quotingAgent(/30 days/), fixtures: [{ store: 'vs_fake', path: 'knowbot/ugm/returns.md', text: RETURNS, tags: ['bucket:ugm', 'dir:knowbot', 'dir:ugm'] }] });
     try {
       S.att.state.sim = (text) => (/30 days/.test(text) ? 0.86 : 0.5);
       const s0 = S.kd.calls.filter((x) => x.url.endsWith('/search')).length;
@@ -560,7 +560,7 @@ describe('resolve mode: shared samples, developer API and live bots', () => {
       assert.match(a.text, /30 days of delivery/);
       assert.match(a.receipt.digest, /^blake3:resolve-/);
       assert.equal(S.kd.calls.filter((x) => x.url.endsWith('/search')).length, s0, 'no knowDrive search ran');
-      assert.equal(S.att.resolveCalls.at(-1).scope.tags_all[0], 'knowbot:ugm');
+      assert.equal(S.att.resolveCalls.at(-1).scope.tags_all[0], 'bucket:ugm');
       // below the built-in floor: refused by the retriever's own floor, as with search
       S.att.state.sim = () => 0.6;
       const off = await (await S.api('/api/canonical', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: 'Do you sell boats?' }) })).json();
