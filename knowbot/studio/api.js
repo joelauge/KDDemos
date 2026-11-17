@@ -257,6 +257,12 @@ export async function getTrial() {
   if (r.restoreKey && r.restoreKey !== t.restoreKey) setState({ trial: { ...T(), restoreKey: r.restoreKey } }, 'trial:restoreKey');
   // a launched bot gets a long-lived token (its 7-day trial token would lapse): kept like any other token
   if (r.token && r.token !== T().token) setState({ trial: { ...T(), token: r.token, expiresAt: r.expiresAt || T().expiresAt } }, 'trial:token');
+  // installed {host, lastSeenAt}: the bot was seen answering on the owner's website (the expiry banner, app.js); the
+  // real expiry comes with it (an extension moves it later than the one this browser remembers)
+  const inst = r.installed && r.installed.host ? { host: String(r.installed.host), lastSeenAt: r.installed.lastSeenAt || null } : null;
+  if ((inst?.host || null) !== (T().installed?.host || null) || (inst && r.expiresAt && r.expiresAt !== T().expiresAt)) {
+    setState({ trial: { ...T(), installed: inst, ...(inst && r.expiresAt ? { expiresAt: r.expiresAt } : {}) } }, 'trial:installed');
+  }
   return { ...r, trial: { ...t, id: r.trialId || t.id, expiresAt: r.expiresAt || t.expiresAt, converted: !!r.converted, email: r.email ?? t.email } };
 }
 

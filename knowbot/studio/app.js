@@ -439,12 +439,14 @@ function paintTrialPill() {
   const t = s.trial;
   // "Saved · 7 days" only once there is something to save (a file or an answer); never on a blank landing
   const built = s.fileOrder.length > 0 || s.thread.length > 0 || !!s.milestones.firstFile;
-  const key = [t.id, t.status, t.expiresAt, built, isLive(), Math.floor(Date.now() / 3600000)].join('|');
+  const key = [t.id, t.status, t.expiresAt, built, isLive(), Math.floor(Date.now() / 3600000), t.installed?.host || ''].join('|');
   if (key === trialPillKey) return;   // called on many store changes; nothing visible changed
   trialPillKey = key;
+  const warned = paintExpiryBanner();
   if (document.documentElement.hasAttribute('data-built') !== built) document.documentElement.toggleAttribute('data-built', built);
   const el = $('#st-trialpill'); if (!el) return;
-  if (!t.id || t.status === 'expired' || !t.expiresAt || !built || isLive()) { setHidden(el, true); return; }
+  // the banner says the same thing louder (installed on a site, 3 days or less): the chip steps aside
+  if (!t.id || t.status === 'expired' || !t.expiresAt || !built || isLive() || warned) { setHidden(el, true); return; }
   const ms = new Date(t.expiresAt).getTime() - Date.now();
   const days = Math.max(0, Math.ceil(ms / 86400000));
   setHidden(el, false);
@@ -457,6 +459,53 @@ function paintTrialPill() {
     el._kbExp = t.expiresAt; el.removeAttribute('title');
     if (!el._kbTip) { el._kbTip = true; const tip = () => { if (!el.title && el._kbExp) el.title = `Your bot and files are saved until ${new Date(el._kbExp).toLocaleString()}.`; }; el.addEventListener('pointerenter', tip); el.addEventListener('focus', tip); }
   }
+}
+
+/** "in 3 days", "in 1 day", "in 5 hours" (the same wording as the warning e-mail, server/expiry-warning.mjs). */
+function stopsIn(ms) {
+  if (ms >= 1.5 * 86400000) return `in ${Math.round(ms / 86400000)} days`;
+  if (ms >= 86400000) return 'in 1 day';
+  const hrs = Math.max(1, Math.round(ms / 3600000));
+  return hrs >= 24 ? 'in 1 day' : `in ${hrs} hour${hrs === 1 ? '' : 's'}`;
+}
+let expiryTick = 0, expiryRO = null;
+/**
+ * The expiry banner: an unlaunched bot that is answering on the owner's website (trial.installed, from GET /trials/:id)
+ * and stops within 3 days. A strip across the top of the panes, there until the bot is launched; "Launch" opens the
+ * Launch sheet. It sits over .st-main's top padding (the strip's own measured height), so no pane is covered and the
+ * page grid is untouched. → true while it shows.
+ */
+function paintExpiryBanner() {
+  const t = getState().trial;
+  const main = $('.st-main');
+  let el = $('#st-expiry');
+  const ms = t.expiresAt ? new Date(t.expiresAt).getTime() - Date.now() : 0;
+  const show = !!(main && t.id && t.status !== 'expired' && t.installed?.host && !isLive() && ms > 0 && ms <= 3 * 86400000);
+  if (!show) {
+    if (el) { el.remove(); main?.removeAttribute('data-expiry'); main?.style.removeProperty('--st-expiry-h'); }
+    return false;
+  }
+  if (!el) {
+    el = h('div', { id: 'st-expiry', class: 'st-expiry', role: 'region', 'aria-label': 'Trial ending' },
+      h('span', { class: 'st-expiry-ico', html: icon('clock', 16), 'aria-hidden': 'true' }),
+      h('p', { class: 'st-expiry-text', role: 'status' }),
+      h('button', { type: 'button', class: 'btn btn-primary st-btn st-expiry-go', onclick: () => launchOpen('header') }, 'Launch'));   // a deliberate pick, like the header's Launch
+    main.prepend(el);
+    main.setAttribute('data-expiry', '');
+    const fit = () => main.style.setProperty('--st-expiry-h', `${Math.ceil(el.getBoundingClientRect().height)}px`);
+    if (typeof ResizeObserver === 'function') { expiryRO?.disconnect(); expiryRO = new ResizeObserver(fit); expiryRO.observe(el); }
+    requestAnimationFrame(fit);
+    // the time left is re-read every few minutes while the Studio stays open
+    if (!expiryTick) expiryTick = setInterval(() => { trialPillKey = ''; updateTrialPill(); }, 300000);
+  }
+  const when = new Date(t.expiresAt).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const text = el.querySelector('.st-expiry-text');
+  const line = `It stops ${stopsIn(ms)} (${when}) unless you launch it.`;
+  if (text.dataset.k !== `${t.installed.host}|${line}`) {
+    text.dataset.k = `${t.installed.host}|${line}`;
+    text.replaceChildren(h('strong', null, `Your bot is answering on ${t.installed.host}.`), ` ${line}`);
+  }
+  return true;
 }
 
 let netState = 'live';

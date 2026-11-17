@@ -341,6 +341,11 @@ export function createDevApi(o = {}) {
     if (r.limited) throw new ApiError(429, 'rate_limit_exceeded', `Rate limit reached (${n} requests per minute for this key). Retry in ${r.retryAfter}s.`, {}, { 'retry-after': String(r.retryAfter) });
   }
 
+  /** A visitor-facing request for a trial bot: the Studio notes which website it came from (trials.mjs noteInstall; the
+   *  host only, written sparingly), so the owner can be warned before an unlaunched bot stops answering there. Never
+   *  awaited: a visitor's request does not wait for it. Calls with the owner's own key are not passed here. */
+  const seenOnSite = (target, req) => { if (target?.kind === 'trial') studio?.noteInstall?.(target.id, req); };
+
   // ---------------------------------------------------------------- targets (live bot or Studio trial)
   async function loadTrialDoc(id) {
     if (!kd || !studio?.store) return null;
@@ -1003,6 +1008,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     const body = await bodyJson(req);
     const { question, history } = readConversation(body);
     const target = await resolveTarget(botId, who);
+    if (who.scope === 'site') seenOnSite(target, req);
     const channel = who.scope === 'site' ? 'site' : typeof body.channel === 'string' && CHANNELS.includes(body.channel) ? body.channel : 'api';
     const callerKey = typeof body.user === 'string' && body.user ? `${who.keyId}|${String(body.user).slice(0, 80)}` : who.keyId;
     return chatTurn(req, res, { target, question, history, channel, callerKey, format: formatOf(body), stream: body.stream === true });
@@ -1025,6 +1031,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     if (target.kind === 'trial' && !who && Array.isArray(target.spec?.surfaces) && !target.spec.surfaces.includes('webchat')) {
       throw new ApiError(403, 'chat_off', 'The website chat is switched off for this bot.');
     }
+    if (!who || who.scope === 'site') seenOnSite(target, req);
     const visitor = typeof body.user === 'string' && body.user ? String(body.user).slice(0, 80) : ip;
     return chatTurn(req, res, { target, question, history, channel: 'web', callerKey: `web:${visitor}`, format: formatOf(body), stream: body.stream === true, status: true });
   }
@@ -1457,7 +1464,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
         authorize: async (key) => {
           if (key) {
             const who = await authKey({ headers: { authorization: `Bearer ${key}` } }, target.id, { site: true });
-            if (who.scope === 'site') return { keyId: null };
+            if (who.scope === 'site') { seenOnSite(target, req); return { keyId: null }; }
             return who;
           }
           if (target.kind === 'live') return { keyId: null };
@@ -1771,6 +1778,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       let owner = false;
       if (bearerOf(req)) { try { const who = await authKey(req, id); owner = who.kind === 'trial' && !who.scope; } catch { owner = false; } }
       if (!s.published && !owner) throw new ApiError(404, 'site_not_found', 'This page is not available.');
+      if (!owner) studio.noteInstall?.(id, req);   // the page that loads this config is where the bot is installed
       const exp = Math.min(Number(s.expiresAt) || now() + limits.siteKeyMs, now() + limits.siteKeyMs);
       res.setHeader('cache-control', 'no-store');
       return send(res, 200, { ...s.site, preview: !s.published, key: trialKey(id, exp, 'site'), keyExpiresAt: new Date(exp).toISOString(),
@@ -1836,6 +1844,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     if ((mt = /^\/v1\/channels\/([^/]+)\/?$/.exec(p))) {
       if (m !== 'GET') throw new ApiError(405, 'method_not_allowed', 'GET only');
       const t = await resolveTarget(decodeURIComponent(mt[1]));
+      seenOnSite(t, req);   // the website line (lib/embed.js) reads this on every page load of the owner's site
       return send(res, 200, channelsInfo(req, t.id, t));
     }
     if ((mt = /^\/v1\/channels\/([^/]+)\/([a-z]+)(?:\/(.+))?$/.exec(p))) return channelRoute(req, res, url, decodeURIComponent(mt[1]), mt[2], mt[3] ? decodeURIComponent(mt[3]) : '');

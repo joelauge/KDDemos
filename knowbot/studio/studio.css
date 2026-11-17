@@ -779,6 +779,21 @@ textarea.st-text { resize: vertical; }
   .st-price[data-level="ghost"] { padding: 0 10px; }
 }
 
+/* ------------------------------------------------------------------ expiry banner (app.js paintExpiryBanner)
+   An unlaunched bot that is answering on the owner's site and stops within 3 days. The strip lies over .st-main's top
+   padding (its own height, measured), so the panes start below it and the page grid keeps its rows. */
+.st-main[data-expiry] { padding-top: var(--st-expiry-h, 46px); }
+.st-expiry {
+  position: absolute; z-index: 6; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; min-height: 46px;
+  padding: 6px var(--st-gutter); background: linear-gradient(var(--surface-warning), var(--surface-warning)), var(--panel); color: var(--warn); border-bottom: 1px solid var(--line); box-shadow: inset 3px 0 0 var(--amber);
+}
+.st-expiry-ico { display: inline-flex; flex: none; }
+.st-expiry-text { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 13.5px; line-height: 1.4; color: var(--strong); overflow-wrap: anywhere; }
+.st-expiry-text strong { font-weight: 650; }
+.st-expiry-go { flex: none; min-height: 32px; padding: 0 14px; }
+@media (max-width: 899px) { .st-expiry { gap: 8px; padding-top: 8px; padding-bottom: 8px; } .st-expiry-text { font-size: 13px; } .st-expiry-go { min-height: 44px; padding: 0 16px; } }
+@media print { .st-expiry { display: none; } .st-main[data-expiry] { padding-top: 0; } }
+
 /* ------------------------------------------------------------------ mobile (< 900 px; SPEC 1.2) */
 @media (max-width: 899px) {
   :root { --st-header-h: 48px; --st-spine-h: 32px; --st-tabs-h: 56px; --st-gutter: 12px; --st-chip-h: 44px; }

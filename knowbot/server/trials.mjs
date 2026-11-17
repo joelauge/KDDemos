@@ -40,9 +40,10 @@ import { createLocalKb } from './builder/local-kb.mjs';
 import { createBuilderKb } from './builder/kb.mjs';
 import { createNumbers } from './numbers.mjs';
 import { createBilling, checkoutModeOf } from './billing.mjs';
-import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng } from './site.mjs';
+import { buildSite, validateSiteEdit, publicSite, siteHtml, overlaySnippet, siteLogo, editsView, logoFromPng, SITE_HOST } from './site.mjs';
 import { agentLimits, agentSettings, priceText as agentPriceText } from './agents.mjs';
-import { sendInfoSwitches, sendInfoAllow, cleanSendInfo } from './sendinfo.mjs';
+import { sendInfoSwitches, sendInfoAllow, cleanSendInfo, sendEmail, emailFrom } from './sendinfo.mjs';
+import { expiryWarningEmail } from './expiry-warning.mjs';
 import { createKdAccount, KdError } from './kdaccount.mjs';
 import { publicBase } from './channels/util.mjs';
 import { createCrm } from './crm/index.mjs';
@@ -1500,6 +1501,7 @@ export function createStudio(o = {}) {
     return T;
   }
   function trialTags(T) { return ['knowbot', 'kind:trial', `trial:${T.id}`, `expires:${yyyymmdd(T.expiresAt)}`]; }
+  const INSTALLED_TAG = 'installed:site';
 
   async function loadSpecDoc(T) {
     if (T.specLoaded) return;
@@ -1543,7 +1545,8 @@ export function createStudio(o = {}) {
       if (T.deleted || closed) return;
       // storejob:running marks the docs of trials with a website import to resume after a restart (resumeAllStoreJobs)
       const running = T.flags.storeJob?.state === 'running' ? ['storejob:running'] : [];
-      const tags = T.converted ? ['knowbot', 'kind:trial-spec', ...running] : [...trialTags(T), 'kind:trial-spec', ...running];
+      // installed:site marks the docs of unlaunched bots seen on a real website: the hourly warning pass loads only those
+      const tags = T.converted ? ['knowbot', 'kind:trial-spec', ...running] : [...trialTags(T), 'kind:trial-spec', ...running, ...(T.flags.installed ? [INSTALLED_TAG] : [])];
       try { await ingest({ storePath: specPath(T.id), tags, mime: 'application/json', bytes: Buffer.from(specDoc(T)) }); }
       catch (e) { log(`[studio] spec doc write failed for ${T.id}: ${e.message}`); }
     };
@@ -4950,7 +4953,132 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       try { await deleteRow(r.id); deleted++; } catch (e) { log(`[studio] sweep delete ${r.id}: ${e.message}`); }
     }
     if (deleted) log(`[studio] sweeper deleted ${deleted} expired trial files (scanned ${rows.length})`);
-    return { deleted, scanned: rows.length };
+    // the same hourly pass warns the owners of installed bots that are about to stop (never changes what is deleted)
+    let warned = 0;
+    try { warned = (await warnExpiring(rows)).sent; } catch (e) { log(`[studio] expiry warnings failed: ${e.message}`); }
+    return { deleted, scanned: rows.length, warned };
+  }
+
+  // ------------------------------------------------------------------------- expiry warning (installed, unlaunched bots)
+  // A trial bot whose website line sits on the owner's real site stops answering there when the trial ends. We notice
+  // the install (flags.installed: the site's host and when it was seen, nothing about visitors), and warn the owner by
+  // e-mail at 3 days and at 1 day before it stops. The Studio shows a banner from the same facts (GET /trials/:id).
+  const INSTALL_FRESH_MS = 7 * DAY;   // "installed" = seen on the site within the last week
+  const WARN_MS = 3 * DAY;
+  const siteUrl = String(env.KNOWBOT_SITE_URL || SITE_HOST).replace(/\/+$/, '');
+  const hostOfUrl = (u) => { try { return new URL(String(u)).hostname.toLowerCase(); } catch { return ''; } };
+  const ownHosts = [hostOfUrl(siteUrl), hostOfUrl(env.KNOWBOT_PUBLIC_URL)].filter(Boolean);
+  const sendMail = typeof o.sendEmail === 'function' ? o.sendEmail : sendEmail;
+  const mailReady = () => typeof o.sendEmail === 'function' || !!env.RESEND_API_KEY;
+  /** The website a visitor-facing request came from (Origin, else Referer): its host only. null for KnowBot's own
+   *  site, this server itself, localhost, a bare IP address, or no / an unreadable header. */
+  function installHostOf(req) {
+    const h = req?.headers || {};
+    const self = String(h['x-forwarded-host'] || h.host || '').split(',')[0].trim().toLowerCase().replace(/:\d+$/, '');
+    for (const raw of [h.origin, h.referer]) {
+      let u; try { u = new URL(String(raw || '')); } catch { continue; }
+      if (!/^https?:$/.test(u.protocol)) continue;
+      const host = u.hostname.toLowerCase().replace(/\.$/, '');
+      if (!host || host.length > 253 || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(host)) return null;   // also: localhost, [::1]
+      if (/^\d+(?:\.\d+){3}$/.test(host) || host.endsWith('.localhost') || host.endsWith('.local')) return null;
+      if (host === self || ownHosts.some((own) => host === own || host.endsWith(`.${own}`))) return null;
+      return host;
+    }
+    return null;
+  }
+  const installMemo = new Map(); // trial id -> { host, at }: repeat page loads from the same site cost nothing
+  /**
+   * A visitor-facing request for a trial bot arrived (devapi: the website line's config, Homepage search, chat, voice).
+   * Remembers the site it came from in flags.installed {host, firstSeenAt, lastSeenAt}. The saved state is written only
+   * on the first sighting, when the host changes (at most once an hour) and when lastSeenAt is more than a day old.
+   * → the saved record when it changed, else null. Never throws.
+   */
+  async function noteInstall(trialId, req) {
+    try {
+      const id = String(trialId || '').toLowerCase();
+      const host = enabled && !closed && TRIAL_ID_RE.test(id) && !deletedTrials.has(id) ? installHostOf(req) : null;
+      if (!host) return null;
+      const t = now();
+      const memo = installMemo.get(id);
+      if (memo && memo.host === host && t - memo.at < DAY) return null;
+      const had = trials.has(id);
+      const T = trialFor(id);
+      await loadSpecDoc(T);
+      if (!T.expiresAt) { if (!had) trials.delete(id); return null; }   // no saved bot: nothing to remember
+      if (T.converted) { installMemo.set(id, { host, at: t }); return null; }
+      if (!(liveExpiry(T, T.expiresAt) > t)) return null;
+      const cur = T.flags.installed || null;
+      const curAt = Date.parse(cur?.lastSeenAt) || 0;
+      const iso = new Date(t).toISOString();
+      if (cur && cur.host === host) {
+        if (t - curAt < DAY) { installMemo.set(id, { host, at: curAt }); return null; }
+        T.flags.installed = { host, firstSeenAt: cur.firstSeenAt || iso, lastSeenAt: iso };
+      } else {
+        if (cur && t - curAt < 3600000) return null;   // two sites taking turns: the saved one changes at most hourly
+        T.flags.installed = { host, firstSeenAt: iso, lastSeenAt: iso };   // the most recently seen site wins
+      }
+      installMemo.set(id, { host, at: t });
+      saveSpecSoon(T);
+      return T.flags.installed;
+    } catch (e) { log(`[studio] install note failed for ${String(trialId).slice(0, 24)}: ${e.message}`); return null; }
+  }
+  /** flags.installed for the owner (GET /trials/:id): {host, lastSeenAt}, or null (never seen, not seen for a week, launched). */
+  function installedOf(T) {
+    const i = T.flags.installed;
+    if (!i || !i.host || T.converted || !(now() - (Date.parse(i.lastSeenAt) || 0) <= INSTALL_FRESH_MS)) return null;
+    return { host: String(i.host), lastSeenAt: i.lastSeenAt };
+  }
+  /**
+   * The hourly warning pass (run by sweep(); callable on its own). Unlaunched bots that are installed on a site and stop
+   * within 3 days get one e-mail at the "3 days or less" mark and one at the "1 day or less" mark; flags.expiryWarned
+   * {for, marks, at} remembers them and starts over when the expiry moves later (an admin extension). Works with no
+   * trial in memory: the candidates come from the store rows (the installed:site doc of a trial whose expires: tag is
+   * within the window), and only those trials are loaded. No address, or mail not configured: nothing sent or marked.
+   */
+  async function warnExpiring(rows = null) {
+    const out = { checked: 0, sent: 0 };
+    if (!enabled || closed) return out;
+    if (!rows) { try { rows = await listRows({ tags_all: 'kind:trial' }); } catch (e) { log(`[studio] expiry warnings: list failed: ${e.message}`); return { ...out, error: e.message }; } }
+    const t = now();
+    const today = yyyymmdd(t), last = yyyymmdd(t + WARN_MS);
+    const ids = new Set();
+    for (const r of rows) {
+      const tags = r.tags || [];
+      if (!tags.includes('kind:trial') || !tags.includes(INSTALLED_TAG)) continue;
+      const exp = tags.find((x) => /^expires:\d{8}$/.test(x))?.slice(8);
+      const tid = tags.find((x) => /^trial:tr_[a-z2-7]{16}$/.test(x))?.slice(6);
+      if (tid && exp && exp >= today && exp <= last) ids.add(tid);
+    }
+    // a bot open in this process whose install is not saved yet (the doc is written a moment after the first sighting)
+    for (const [id, T] of trials) if (T.specLoaded && T.flags?.installed && !T.converted && T.expiresAt) ids.add(id);
+    for (const id of ids) {
+      if (deletedTrials.has(id)) continue;
+      try {
+        const had = trials.has(id);
+        const T = trialFor(id);
+        await loadSpecDoc(T);
+        if (!T.expiresAt) { if (!had) trials.delete(id); continue; }
+        const exp = liveExpiry(T, T.expiresAt);
+        const left = exp - t;
+        if (T.converted || T.deleted || !installedOf(T) || left <= 0 || left > WARN_MS) continue;
+        out.checked++;
+        const mark = left <= DAY ? 1 : 3;
+        let w = T.flags.expiryWarned;
+        if (w && !((Date.parse(w.for) || 0) >= exp)) w = null;   // the expiry moved later since: both warnings are due again
+        const marks = Array.isArray(w?.marks) ? w.marks : [];
+        if (marks.includes(1) || marks.includes(mark)) continue;
+        const to = [T.email, T.kdLink?.email].map((e) => String(e || '').trim()).find((e) => e && e.length <= 254 && EMAIL_RE.test(e));
+        if (!to || !mailReady()) continue;   // the Studio banner still shows; asked again next hour
+        T.expiresAt = exp;
+        const mail = expiryWarningEmail({ host: T.flags.installed.host, botName: botName(T), expiresAt: exp, now: t, link: shareLinkOf(null, T, siteUrl) });
+        await sendMail(env, { from: emailFrom(env, 'KnowBot'), to, subject: mail.subject, html: mail.html, text: mail.text });
+        T.flags.expiryWarned = { for: new Date(exp).toISOString(), marks: [...new Set([...marks, mark])], at: new Date(t).toISOString() };
+        await flushSpec(T);
+        out.sent++;
+        log(`[studio] expiry warning (${mark} day mark) sent for ${T.id}`);
+      } catch (e) { log(`[studio] expiry warning for ${id} failed: ${e.message}`); }
+    }
+    return out;
   }
   let closed = false;
   const sweepTimer = enabled && o.sweep !== false ? setInterval(() => { sweep(); }, Number(o.sweepMs ?? 3600000)) : null;
@@ -5340,7 +5468,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         await billing.confirmSoon(T); // back from checkout before the webhook: the payment is looked up, the bot launched
         const files = await filesOf(T, { maxAgeMs: 0 });
         return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
-          convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email, kd: kdPublic(T), billing: billing.pub(T),
+          convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email, kd: kdPublic(T), billing: billing.pub(T), installed: installedOf(T),
           restoreKey: signRestore(T.id, T.expiresAt), shareLink: shareLinkOf(req, T, selfOriginOf(req)), ...(T.converted ? { token: signToken(T.id, T.expiresAt) } : {}) });
       }
       if (m === 'PATCH') {
@@ -5871,7 +5999,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!T.expiresAt && opts.expiresAt) T.expiresAt = opts.expiresAt;
     return answerFor(T, question, opts);
   }
-  return { handle, close, sweep, trials, numbers, billing, billingPaused: (flags) => billing.paused(flags), signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic,
+  return { handle, close, sweep, warnExpiring, noteInstall, trials, numbers, billing, billingPaused: (flags) => billing.paused(flags), signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic,
     /** The real expiry of a bot whose token, key or link was signed with `e` (an admin may have extended it since). */
     expiryOf: async (id, e) => { if (!TRIAL_ID_RE.test(String(id)) || deletedTrials.has(id)) return Number(e) || 0; const had = trials.has(id); const T = trialFor(id); await loadSpecDoc(T); const x = liveExpiry(T, e); if (!had && !T.expiresAt) trials.delete(id); return x; }, productsFor: productsForTrial,
     // a trial bot's answer on the API, AI agents, channels and the website widget (devapi): the Studio's own pipeline
