@@ -138,6 +138,32 @@ describe('KnowBot Studio server (trials.mjs): checkout, convert, launch', () => 
   });
 
   // ---------------------------------------------------------------------------------------------- 18
+  test('17b. extend: admin gives an expired, unlaunched bot more days; old tokens work again and the sweeper keeps its files', async () => {
+    const t = await c.trial();
+    await c.upload(t, 'own.md', Buffer.from('# Own\n\nOur own document about returns.\n'));
+    await c.json(t, '', 'PATCH', { name: 'Extended Bot' });
+    const ext = (auth, body = {}) => S.api(`/api/studio/trials/${t.trialId}/extend`, { method: 'POST', headers: { 'content-type': 'application/json', ...(auth ? { authorization: `Bearer ${auth}` } : {}), 'x-forwarded-for': nextIp() }, body: JSON.stringify(body) });
+    assert.equal((await ext(null)).status, 401);
+    assert.equal((await ext(t.token)).status, 401, 'a trial token is not an admin token');
+    assert.equal((await ext('dev-admin', { days: 0 })).status, 400);
+    S.clock.skew = 8 * DAY;
+    try {
+      assert.equal((await c.json(t, '', 'GET')).status, 401, 'expired before the extension');
+      const r = await ext('dev-admin', { days: 30 });
+      assert.equal(r.status, 200);
+      const j = await r.json();
+      assert.ok(Date.parse(j.expiresAt) > Date.now() + 37 * DAY, 'about 30 days past the moved clock');
+      assert.ok(j.files >= 1);
+      assert.match(j.link, new RegExp(`/studio/\\?t=${t.trialId}&k=`));
+      assert.equal((await c.json(t, '', 'GET')).status, 200, 'the owner\'s old token works again');
+      const rows = S.kd.rows ? [...S.kd.rows.values()] : null;
+      const sw = await S.kb.studio.sweep();
+      assert.equal((await c.json(t, '/files', 'GET')).status, 200);
+      const files = await (await c.json(t, '/files', 'GET')).json();
+      assert.ok((files.files || files).length >= 1, `the sweeper kept the extended bot's files (deleted ${sw.deleted}, ${rows ? rows.length : '?'} rows)`);
+    } finally { S.clock.skew = 0; }
+  });
+
   test('18. sweeper deletes only kind:trial rows with a past expires:', async () => {
     const old = S.kd.add({ store: 'vs_fake_trials', path: 'knowbot/trials/tr_old/a.md', text: 'old', tags: ['knowbot', 'kind:trial', 'trial:tr_old', 'expires:20200101'] });
     const fresh = S.kd.add({ store: 'vs_fake_trials', path: 'knowbot/trials/tr_new/a.md', text: 'new', tags: ['knowbot', 'kind:trial', 'trial:tr_new', `expires:${yyyymmdd(Date.now() + 3 * DAY)}`] });

@@ -1423,7 +1423,9 @@ export function createStudio(o = {}) {
   /** A launched (converted) bot's tokens and restore keys never lapse with the trial window (onboarding: "back into the
    *  account later"). Its expiry moves out to LIVE_TTL_MS and every new token / key is signed with that. */
   const LIVE_TTL_MS = 10 * 365 * DAY;
-  const liveExpiry = (T, e) => (T.converted ? Math.max(Number(e) || 0, now() + LIVE_TTL_MS) : Number(e));
+  // an admin can give an unlaunched bot more time (POST …/extend): flags.extendedTo, kept in the bot's saved state, outlives
+  // the expiry signed into older tokens, keys and links
+  const liveExpiry = (T, e) => (T.converted ? Math.max(Number(e) || 0, now() + LIVE_TTL_MS) : Math.max(Number(e) || 0, Number(T.flags?.extendedTo) || 0));
   // Restore keys (fixer r1): the emailed / copied link carries ?t=<id>&k=<restore key> so the bot reopens on any device.
   // A restore key is NOT a bearer token: it is HMAC'd under a separate domain, is only accepted by POST /restore
   // (rate-limited), and is exchanged there for the trial bearer. It expires with the trial.
@@ -1492,7 +1494,7 @@ export function createStudio(o = {}) {
     const T = trialFor(id);
     T.expiresAt = Number(data.e);
     await loadSpecDoc(T);
-    if (!(Number(data.e) > now()) && !T.converted) fail(401, 'expired', 'This trial expired and its files were deleted.');
+    if (!(liveExpiry(T, data.e) > now())) fail(401, 'expired', 'This trial expired and its files were deleted.');
     T.expiresAt = liveExpiry(T, data.e);
     T.lastActivityAt = now();
     return T;
@@ -5250,7 +5252,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
           const RT = trialFor(cb.trialId);
           RT.expiresAt = Number(data.e);
           await loadSpecDoc(RT);
-          if (!(Number(data.e) > now()) && !RT.converted) data = null;
+          if (!(liveExpiry(RT, data.e) > now())) data = null;
         }
         if (data) {
           const RT = trialFor(cb.trialId);
@@ -5273,6 +5275,31 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       return sendJson(res, 201, { trialId: tid, token: signToken(tid, expiresAt), restoreKey: signRestore(tid, expiresAt), expiresAt: new Date(expiresAt).toISOString(), quota: { bytes: QUOTA_BYTES, fileBytes: FILE_BYTES }, usage: { bytes: 0, files: 0 }, spec: publicSpec(T) });
     }
 
+    if (sub === 'extend') {
+      // admin: give an unlaunched bot more days (its files, links and keys keep working); never shortens
+      allow('POST');
+      requireAdmin(req);
+      if (!TRIAL_ID_RE.test(id) || deletedTrials.has(id)) fail(404, 'not_found', 'No such trial.');
+      const body = await readBody(req).catch(() => ({}));
+      const days = Number(body?.days ?? 30);
+      if (!Number.isInteger(days) || days < 1 || days > 365) fail(400, 'bad_request', 'days must be a whole number from 1 to 365');
+      const T = trialFor(id);
+      await loadSpecDoc(T);
+      if (!T.expiresAt) { trials.delete(id); fail(404, 'not_found', 'No saved bot with this id.'); }
+      const until = Math.max(now() + days * DAY, Number(T.flags.extendedTo) || 0, T.expiresAt > now() ? T.expiresAt : 0);
+      T.flags = { ...T.flags, extendedTo: until };
+      T.expiresAt = liveExpiry(T, T.expiresAt);
+      let files = 0;
+      if (!T.converted) {
+        const rows = (await listRows({ tags_all: `trial:${T.id}` })).filter((r) => (r.tags || []).includes('kind:trial'));
+        const tag = `expires:${yyyymmdd(until)}`;
+        const old = [...new Set(rows.flatMap((r) => (r.tags || []).filter((t) => t.startsWith('expires:') && t !== tag)))];
+        files = await batchTags(rows.map((r) => r.id), [tag], old);
+      }
+      await flushSpec(T);
+      log(`[studio] admin extended ${T.id} to ${new Date(T.expiresAt).toISOString()} (${files} files)`);
+      return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), files, link: shareLinkOf(req, T) });
+    }
     if (sub === 'convert') {
       allow('POST');
       requireAdmin(req);
@@ -5296,7 +5323,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const T = trialFor(id);
       T.expiresAt = Number(data.e);
       await loadSpecDoc(T);
-      if (!(Number(data.e) > now()) && !T.converted) fail(410, 'expired', 'This trial expired and its files were deleted.');
+      if (!(liveExpiry(T, data.e) > now())) fail(410, 'expired', 'This trial expired and its files were deleted.');
       T.expiresAt = liveExpiry(T, data.e);
       T.lastActivityAt = now();
       return sendJson(res, 200, { trialId: id, token: signToken(id, T.expiresAt), restoreKey: signRestore(id, T.expiresAt), expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T) });
@@ -5748,6 +5775,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const T = trialFor(id);
     await loadSpecDoc(T);
     if (!T.flags.site) { if (!had) trials.delete(id); return null; }
+    if (T.expiresAt) T.expiresAt = liveExpiry(T, T.expiresAt);
     if (!T.expiresAt || T.expiresAt <= now()) return null;
     return { site: publicSite(T.flags.site, siteEditsOf(T), { botId: id, trial: !T.converted, expiresAt: new Date(T.expiresAt).toISOString() }), published: !!T.spec.site?.published, expiresAt: T.expiresAt };
   }
@@ -5843,7 +5871,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!T.expiresAt && opts.expiresAt) T.expiresAt = opts.expiresAt;
     return answerFor(T, question, opts);
   }
-  return { handle, close, sweep, trials, numbers, billing, billingPaused: (flags) => billing.paused(flags), signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic, productsFor: productsForTrial,
+  return { handle, close, sweep, trials, numbers, billing, billingPaused: (flags) => billing.paused(flags), signToken, verifyToken, signRestore, noteAsk, sitePublic, siteLogoPublic,
+    /** The real expiry of a bot whose token, key or link was signed with `e` (an admin may have extended it since). */
+    expiryOf: async (id, e) => { if (!TRIAL_ID_RE.test(String(id)) || deletedTrials.has(id)) return Number(e) || 0; const had = trials.has(id); const T = trialFor(id); await loadSpecDoc(T); const x = liveExpiry(T, e); if (!had && !T.expiresAt) trials.delete(id); return x; }, productsFor: productsForTrial,
     // a trial bot's answer on the API, AI agents, channels and the website widget (devapi): the Studio's own pipeline
     answerTrial, searchTrial, kdFetchFor, kd: kdAcct, crm,
     flush: async () => { await o.leads?.flush?.(); await crm?.idle(); for (const T of trials.values()) { if (T.specDirty || T.jobSaveTimer) await flushSpec(T); if (T.productsTimer) await saveProducts(T); } }, get enabled() { return enabled; }, store,

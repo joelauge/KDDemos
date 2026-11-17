@@ -307,7 +307,7 @@ export function createDevApi(o = {}) {
     if (token.startsWith('kb_trial_')) {
       const d = openTrialKey(token);
       if (!d) throw new ApiError(401, 'invalid_api_key', BAD_KEY);
-      if (!(d.e > now())) throw new ApiError(401, 'expired_api_key', 'This trial key expired with its trial.');
+      if (!(d.e > now())) { const x = studio?.expiryOf ? await studio.expiryOf(d.t, d.e) : 0; if (!(x > now())) throw new ApiError(401, 'expired_api_key', 'This trial key expired with its trial.'); d.e = x; }
       who = d.s === 'site' ? { kind: 'trial', scope: 'site', bot: d.t, keyId: `site:${d.t}`, expiresAt: d.e } : { kind: 'trial', bot: d.t, keyId: `trial:${d.t}`, expiresAt: d.e };
       if (who.scope === 'site' && !site) throw new ApiError(403, 'wrong_scope', 'This key can only ask questions on its Homepage search.');
     } else {
@@ -364,6 +364,7 @@ export function createDevApi(o = {}) {
       }
       if (!spec && T?.spec) spec = T.spec;
       if (!spec) throw new ApiError(404, 'bot_not_found', `No bot "${id}".`);
+      if (expiresAt) expiresAt = Math.max(expiresAt, Number((flags || T?.flags)?.extendedTo) || 0); // an admin extension outlives older keys
       if (expiresAt && expiresAt <= now()) throw new ApiError(404, 'bot_not_found', 'This trial expired and its files were deleted.');
       // the plan ended and its grace period is over (server/billing.mjs): the bot stops answering publicly. Its owner,
       // signed in to the Studio, can still open and test it; nothing is deleted.
@@ -1730,7 +1731,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       if (!studio?.enabled) throw new ApiError(503, 'no_store', 'Studio needs a knowDrive store.');
       const id = decodeURIComponent(mt[1]);
       if (!TRIAL_ID_RE.test(id)) throw new ApiError(404, 'not_found', 'No such trial.');
-      const data = studio.verifyToken(bearerOf(req), id); // throws 401 unauthorized / expired
+      const data = studio.verifyToken(bearerOf(req), id, { allowExpired: true }); // throws 401 unauthorized
+      data.e = studio.expiryOf ? await studio.expiryOf(id, data.e) : Number(data.e);
+      if (!(data.e > now())) throw new ApiError(401, 'expired', 'This trial expired and its files were deleted.');
       const g = googleConfig(env);
       const base = apiBase(req);
       const tgt = await resolveTarget(id).catch(() => null);
