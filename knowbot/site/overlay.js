@@ -256,7 +256,7 @@ button { font: inherit; color: inherit; }
 
   async function loadSite() {
     const r = await fetch(`${API}/api/site/${encodeURIComponent(BOT)}`, { headers: ownerKey ? { authorization: `Bearer ${ownerKey}` } : {}, credentials: 'omit' });
-    if (!r.ok) { const e = new Error('site'); e.status = r.status; throw e; }
+    if (!r.ok) { const e = new Error("We can't answer questions right now. Please try again later."); e.status = r.status; throw e; }
     return r.json();
   }
 
