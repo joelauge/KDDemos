@@ -83,7 +83,10 @@ try {
   await L.idle();
   // three weeks of earlier questions, on every channel (the same question log the bot writes to; the server runs in this process)
   const now = Date.now();
-  const noonAgo = (d) => { const x = new Date(now - d * DAY); x.setUTCHours(17, 0, 0, 0); return x.getTime(); }; // 17:00 UTC = midday in Toronto, the same local day all year
+  // "d days ago" counts the viewer's days (Toronto), not UTC's: between midnight UTC and midnight in Toronto the two
+  // differ by one, and the busy day would sit four days back instead of three. 17:00 UTC = midday in Toronto all year.
+  const [ty, tm, td] = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now)).split('-').map(Number);
+  const noonAgo = (d) => Date.UTC(ty, tm - 1, td - d, 17, 0, 0, 0);
   const ASKS = [['How long is the frame warranty?', 1], ['Do you ship to Canada?', 1], ['What are your opening hours?', 1], ['Can I return a bike I rode once?', 1], ['Is the battery covered?', 1],
     ['Do you price match other shops?', 0], ['Do you sell cargo trailers?', 0], ['What is the capital of France?', 0]];
   const CH = ['web', 'web', 'sms', 'phone', 'whatsapp', 'email', 'site', 'voice'];
@@ -455,7 +458,8 @@ try {
       check('mobile: four tiles, none clipped', m.tiles);
       check('mobile: a single column, every section inside the screen', m.secs && m.cols);
       check('mobile: bars stay big enough to tap; the chart scrolls inside its own box, starting at today', m.bar >= 24 && m.chartScrolls, `${m.bar}px`);
-      await page.locator('.kb-bar', { hasText: '12' }).first().click();
+      // the bar whose count is 12 (not a bar whose date label happens to hold "12")
+      await page.locator('.kb-bar:has(.kb-bar-n:text-is("12"))').first().click();
       await histSettled(page);
       check('mobile: tapping a day shows that day\'s questions', (await rowsOf(page)).length === 12);
       await page.screenshot({ path: path.join(SHOTS, 'stats-phone-light.png') });

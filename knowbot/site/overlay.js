@@ -443,11 +443,29 @@ button { font: inherit; color: inherit; }
   /* track:end */
   const PRIVACY = KBT.privacySignal(navigator, window);
   // a visitor who arrived from a chat link (…?kb_cid=<click id>): kept in this site's own localStorage (not a cookie)
-  // so the order-confirmation page can report the sale (site/sale.js); the newest click replaces the older one
+  // so the order page can report the sale (site/sale.js); the newest click replaces the older one
   try {
     const c = HOSTED ? '' : new URLSearchParams(location.search).get('kb_cid') || '';
     if (KBT.ID.test(c) && !PRIVACY) { sSet('localStorage', 'kb_cid', c); sSet('localStorage', 'kb_cid_at', String(Date.now())); }
   } catch { /* nothing to remember */ }
+  // Sale tracking rides on this script too (as on lib/embed.js): sale.js, from this script's own address, after the page
+  // has loaded. Not on the hosted link (that is KnowBot's page, not the owner's site).
+  /* sales:begin: the same lines in lib/embed.js and site/overlay.js (server/test/sale-detect.test.mjs keeps them in step) */
+  function loadSales(src, bot, api) {
+    const go = () => {
+      try {
+        if (!bot || window.knowbotSale || document.querySelector('script[data-knowbot-sale], script[src*="site/sale.js"]')) return;
+        const s = document.createElement('script');
+        s.src = src; s.async = true; s.dataset.bot = bot; s.dataset.knowbotSale = '1';
+        if (api) s.dataset.api = api;
+        (document.head || document.documentElement).append(s);
+      } catch { /* sale tracking never breaks the page */ }
+    };
+    const idle = () => (window.requestIdleCallback ? window.requestIdleCallback(go, { timeout: 4000 }) : setTimeout(go, 200));
+    try { if (document.readyState === 'complete') idle(); else window.addEventListener('load', idle, { once: true }); } catch { /* same */ }
+  }
+  /* sales:end */
+  try { if (!HOSTED && SRC && !PRIVACY) loadSales(new URL('./sale.js', SRC).href, BOT, API); } catch { /* sale tracking never breaks the page */ }
   /** An outgoing <a> with the answer's tags; its click and middle-click are reported without holding the navigation. */
   function tracked(a, kind, track) {
     const url = a && a.getAttribute('href');

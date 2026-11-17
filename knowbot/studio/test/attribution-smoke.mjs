@@ -7,12 +7,20 @@
 //        opens the product page in a new tab with them and is reported (a beacon) without holding the navigation
 //      - Homepage search (site/overlay.js) and voice mode (lib/voice-mode.js): the same, as "homepage" and "voice"
 //      - Global Privacy Control: the tags stay, there is no click id and nothing is reported
-//   2. Stats & Leads → Clicks & sales before sale tracking is installed: the clicks, and how to turn sale tracking on
-//      (never zeros that look like "no sales"); "Set up sale tracking" opens the card in Set up: the snippet per
-//      platform, Copy, the attribution window
-//   3. the landing page keeps the click id (first-party localStorage, no cookie); the thank-you page's snippet
-//      (site/sale.js) reports an order → it shows as attributed: totals, the chart, top products, the orders table,
-//      the question history row, both CSVs
+//   2. Stats & Leads → Clicks & sales before any order page was seen: the clicks, and that sale tracking needs nothing
+//      installed (never zeros that look like "no sales"); "Check sale tracking" opens the card in Set up: "Already
+//      tracking", the live status ("Not seen yet"), "Shopify: one extra paste" (the custom pixel), the snippet for an
+//      order page without the website line, Copy, the attribution window
+//   3. a fixture store that loads ONLY the normal KnowBot website line on every page (no sale snippet anywhere):
+//      - the landing page keeps the click id (first-party localStorage, no cookie) and checks in → "Waiting for the
+//        first order page"
+//      - a WooCommerce order page with a bare "$" (the currency is not certain): nothing is counted or guessed, the
+//        Studio says so
+//      - a thank-you page that pushes a GA4 purchase to dataLayer → the sale is attributed ("from your store's purchase
+//        event"); a reload does not report it twice
+//      - a WooCommerce order-received page in euros ("1.299,50 €") → attributed ("seen on your order page")
+//      then Stats: totals, the chart, top products, the orders table with how each order was noticed, the question
+//      history row, both CSVs; the Set up card says "Detected on your site" 
 //   Desktop and phone, axe, no console errors, screenshots.
 //
 //   npm run attribution:smoke            # SHOTS=<dir> to keep the screenshots somewhere else
@@ -29,7 +37,7 @@ const { chromium } = require('playwright');
 const SHOTS = outDir('attribution', process.env.SHOTS);
 const Q = 'How much is the Trail Pro?';
 const CLICK_COLS = 'timestamp,bot,channel,link_type,product,price,currency,url,question,answer_id,click_id,order_id,order_total,order_currency';
-const SALE_COLS = 'timestamp,bot,order_id,total,currency,items,channel,clicked_at,product,url,question,click_id,source';
+const SALE_COLS = 'timestamp,bot,order_id,total,currency,items,channel,clicked_at,product,url,question,click_id,source,detected_by';
 
 let failures = 0;
 const check = (cell, name, ok, detail = '') => { console.log(`  [${ok ? 'ok  ' : 'FAIL'}] ${cell}: ${name}${detail && !ok ? ` · ${String(detail).slice(0, 300)}` : ''}`); if (!ok) failures++; return ok; };
@@ -56,17 +64,41 @@ try {
   const report = async () => (await api(T('/attribution?days=7'), { headers: H })).json();
 
   // the customer's site: a homepage with the chat bubble (and its mic), a page with Homepage search, a landing page
-  // that carries the website line (as every page of the owner's site does), and the order-confirmation page
+  // that carries the website line (as every page of the owner's site does), and its order pages. Every page has the
+  // one website line and nothing else from KnowBot: no sale snippet.
   const line = (attrs) => `<script type="module" src="${dev.url}/lib/embed.js" data-api="${dev.url}" data-bot="${t.trialId}" data-key="${key}" ${attrs}></script>`;
   const doc = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
   home = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    if (!/^\/checkout\/order-received\//.test(u.pathname)) res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     if (u.pathname === '/search') return res.end(doc('Lumen Bikes', `<p>Ride further.</p>${line('data-chat="off" data-voice="off" data-homepage="on"')}`));
     if (u.pathname === '/landing') return res.end(doc('Trail Pro', `<p>A product page on the owner's site.</p>${line('data-chat="on" data-voice="off" data-homepage="off"')}`));
+    const theLine = line('data-chat="on" data-voice="off" data-homepage="off"');
     if (u.pathname === '/thanks') {
-      return res.end(doc('Thank you', `<p>Order ${u.searchParams.get('order')} is confirmed.</p>
-<script async src="${dev.url}/site/sale.js" data-api="${dev.url}" data-bot="${t.trialId}" data-order="${u.searchParams.get('order')}" data-total="${u.searchParams.get('total')}" data-currency="USD"></script>`));
+      // a thank-you page as a store with Google Analytics 4 / Tag Manager renders it: the purchase is pushed to
+      // dataLayer a moment after the page has loaded (the customer's name is on the page and in the event)
+      const order = u.searchParams.get('order'), total = Number(u.searchParams.get('total'));
+      return res.end(doc('Thank you', `<p>Thank you, Ada Lovelace. Order ${order} is confirmed.</p>
+<script>window.dataLayer = window.dataLayer || []; dataLayer.push({ event: 'page_view' });
+addEventListener('load', () => setTimeout(() => dataLayer.push({ event: 'purchase', user_data: { email: 'ada@example.com' }, ecommerce: { transaction_id: ${JSON.stringify(order)}, value: ${total}, currency: 'USD',
+  items: [{ item_id: 'trail-pro', item_name: 'Trail Pro', price: ${total}, quantity: 1 }] } }), 900));</script>${theLine}`));
+    }
+    const woo = /^\/checkout\/order-received\/(\d+)\/$/.exec(u.pathname);
+    if (woo) {
+      // WooCommerce's order-received page (templates/checkout/thankyou.php), in euros or with a bare "$"
+      const price = u.searchParams.get('cur') === 'usd' ? '<span class="woocommerce-Price-currencySymbol">&#36;</span>129.90' : '1.299,50&nbsp;<span class="woocommerce-Price-currencySymbol">&euro;</span>';
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Order received</title></head>
+<body class="page woocommerce-checkout woocommerce-page woocommerce-order-received"><main><h1>Order received</h1><div class="woocommerce"><div class="woocommerce-order">
+<p class="woocommerce-notice woocommerce-notice--success woocommerce-thankyou-order-received">Thank you. Your order has been received.</p>
+<ul class="woocommerce-order-overview woocommerce-thankyou-order-details order_details">
+  <li class="woocommerce-order-overview__order order">Order number: <strong>${woo[1]}</strong></li>
+  <li class="woocommerce-order-overview__date date">Date: <strong>November 17, 2026</strong></li>
+  <li class="woocommerce-order-overview__email email">Email: <strong>ada@example.com</strong></li>
+  <li class="woocommerce-order-overview__total total">Total: <strong><span class="woocommerce-Price-amount amount"><bdi>${price}</bdi></span></strong></li>
+  <li class="woocommerce-order-overview__payment-method method">Payment method: <strong>Credit card</strong></li>
+</ul>
+<section class="woocommerce-customer-details"><address>Ada Lovelace<br>1 Main St</address></section></div></div></main>${theLine}</body></html>`);
     }
     return res.end(doc('Lumen Bikes', `<p>Ride further.</p>${line('data-chat="on" data-voice="on" data-homepage="off"')}`));
   });
@@ -220,7 +252,7 @@ try {
   };
   const VIEWS = [{ name: 'desktop', viewport: { width: 1440, height: 1000 } }, { name: 'phone', viewport: { width: 390, height: 844 }, mobile: true }];
 
-  console.log('2. Stats & Leads before sale tracking is installed; the Set up card');
+  console.log('2. Stats & Leads before any order page was seen; the Set up card');
   for (const v of VIEWS) {
     const cell = `not-installed-${v.name}`;
     const context = await studioCtx(v);
@@ -234,35 +266,53 @@ try {
         secOverflow: sec.scrollWidth > sec.clientWidth + 1 };
     });
     check(cell, 'the section shows the clicks and the click rate', /^Clicks\d/.test(s.tiles[0] || '') && Number(/\d+/.exec(s.tiles[0])[0]) >= 6 && /Answers that got a click\d+%/.test(s.tiles[1] || ''), JSON.stringify(s.tiles));
-    check(cell, 'no zero orders or $0: it says sale tracking is not installed and how to turn it on', s.cta && /Sale tracking is not installed yet/.test(s.text) && !/Orders after a click0|\$0/.test(s.text) && !/Sales CSV/.test(s.text), s.text.slice(0, 300));
+    check(cell, 'no zero orders or $0: it says no order page was seen yet, and that most sites need nothing installed', s.cta && /No order page has been seen yet/.test(s.text) && /notices orders by itself, with nothing to install/.test(s.text) && !/Orders after a click0|\$0/.test(s.text) && !/Sales CSV/.test(s.text), s.text.slice(0, 300));
     check(cell, 'the chart, the top products (Trail Pro, Commuter Lite) and the questions are there', s.chart && s.prods.some((x) => /Trail Pro/.test(x)) && s.prods.some((x) => /Commuter Lite/.test(x)) && /How much is the Trail Pro\?/.test(s.text));
     check(cell, 'nothing unfilled on screen', !/\bnull\b|undefined|NaN/.test(s.text));
     check(cell, 'plain words: campaign tags are explained where they are named', /UTM tags: short labels added to the end of a link/.test(s.text));
     check(cell, 'no horizontal overflow', !s.overflow && !s.secOverflow);
     check(cell, 'axe: no violations in Stats & Leads', (await axe(page, '#kb-stats')).length === 0, (await axe(page, '#kb-stats')).join(' | '));
     await shot(page, '#kb-sales', `clicks-sales-not-installed-${v.name}.png`, v);
-    // "Set up sale tracking" leaves Stats and opens the card in Set up
+    // "Check sale tracking" leaves Stats and opens the card in Set up
     await page.locator('.kb-sales-setup').click();
     await page.waitForSelector('#gl-sale', { state: 'visible', timeout: 20000 });
-    await page.waitForFunction(() => /installed|off/i.test(document.querySelector('#gl-sale .gl-sale-state')?.textContent || ''), null, { timeout: 10000 }).catch(() => {});
+    await page.waitForFunction(() => !/Checking/.test(document.querySelector('#gl-sale .gl-sale-state')?.textContent || 'Checking'), null, { timeout: 10000 }).catch(() => {});
     await page.waitForFunction(() => document.activeElement?.id === 'gl-sale-t', null, { timeout: 5000 }).catch(() => {});
     const c = await page.evaluate(() => {
       const card = document.querySelector('#gl-sale');
       const r = card.getBoundingClientRect();
       return { stats: !!document.querySelector('#kb-stats'), tabs: [...card.querySelectorAll('[role="tab"]')].map((x) => x.textContent), state: card.querySelector('.gl-sale-state')?.textContent, text: card.textContent,
+        help: card.querySelector('.gl-si-help')?.textContent, live: card.querySelector('#gl-sale-live')?.textContent, more: [...card.querySelectorAll('details > summary')].map((x) => x.textContent), open: [...card.querySelectorAll('details')].map((x) => x.open),
         win: card.querySelector('.gl-sale-win')?.value, inView: r.top < innerHeight && r.bottom > 0, overflow: document.scrollingElement.scrollWidth > innerWidth + 1, focus: document.activeElement?.id };
     });
     check(cell, 'Set up shows the Sale tracking card (Stats closed), in view and focused', !c.stats && c.inView && c.focus === 'gl-sale-t', JSON.stringify({ stats: c.stats, inView: c.inView, focus: c.focus }));
-    check(cell, 'three platforms, "Not installed yet", a 7-day window', c.tabs.join('|') === 'Shopify|WooCommerce|Any site' && c.state === 'Not installed yet' && c.win === '7', JSON.stringify([c.tabs, c.state, c.win]));
-    check(cell, 'it says where the snippet goes per platform and what is (not) sent', /Customer events/.test(c.text) && /functions\.php/.test(c.text) && /order confirmation/.test(c.text) && /never sends a customer’s name, email or address/.test(c.text) && /sets no cookie/.test(c.text));
+    check(cell, 'it leads with "Already tracking": the website line reports orders on its own, nothing else to install', /^Already tracking: your KnowBot website line reports orders on its own on most sites\./.test(c.help || '') && /nothing else to install/.test(c.help || ''), c.help);
+    check(cell, 'the live status: "Not seen yet", and when it starts', c.state === 'Not seen yet' && /^Not seen yet\. This starts by itself/.test(c.live || '') && c.win === '7', JSON.stringify([c.state, c.live, c.win]));
+    check(cell, 'then "Shopify: one extra paste" and "If your order page doesn’t load the KnowBot line", both closed', c.more.join('|') === 'Shopify: one extra paste|If your order page doesn’t load the KnowBot line' && c.open.every((x) => !x), JSON.stringify([c.more, c.open]));
+    check(cell, 'Shopify: one plain sentence says why the paste is needed, and that no app is', /Shopify does not let any website script run on its checkout and thank-you pages, so on Shopify the order is reported by a small “custom pixel” that you paste once in Shopify’s own settings\. There is no app to install\./.test(c.text) && /Customer events/.test(c.text) && /Additional details/.test(c.text));
+    check(cell, 'it says how an order is noticed, that nothing is guessed, and what is (not) sent', /purchase event/.test(c.text) && /Order received/.test(c.text) && /Never a guess/.test(c.text) && /functions\.php/.test(c.text) && /Never a customer’s name, email or address/.test(c.text) && /sets no cookie/.test(c.text));
+    check(cell, 'plain words: no "idempotent", "beacon", "dataLayer" or "localStorage" in the card\'s own text', !/idempotent|beacon|dataLayer|localStorage|sandbox/i.test(await page.evaluate(() => [...document.querySelectorAll('#gl-sale p, #gl-sale li, #gl-sale summary, #gl-sale h3, #gl-sale h4')].map((x) => x.textContent).join(' '))));
     const codes = {};
-    for (const [i, name] of ['shopify', 'woo', 'any'].entries()) {
-      await page.locator('#gl-sale [role="tab"]').nth(i).click();
-      codes[name] = await page.locator('#gl-sale pre').textContent();
+    await page.locator('#gl-sale-shopify > summary').click();
+    codes.shopify = await page.locator('#gl-sale-shopify pre').textContent();
+    await page.locator('#gl-sale-snippet > summary').click();
+    for (const [i, name] of ['any', 'woo'].entries()) {
+      await page.locator('#gl-sale-snippet [role="tab"]').nth(i).click();
+      codes[name] = await page.locator('#gl-sale-snippet pre').textContent();
     }
-    check(cell, 'each snippet names this bot and nothing personal', codes.shopify.includes(`/v1/bots/${t.trialId}/sale`) && /checkout_completed/.test(codes.shopify) && /woocommerce_thankyou/.test(codes.woo) && codes.woo.includes(t.trialId)
-      && codes.any.includes(`${dev.url}/site/sale.js`) && codes.any.includes(`data-bot="${t.trialId}"`) && !/email|name\b|address/i.test(codes.shopify + codes.any), JSON.stringify(codes).slice(0, 400));
-    await page.locator('#gl-sale .gl-code-tools button[aria-label^="Cop"]').last().click();
+    check(cell, 'the tabs of the snippet: Any site, WooCommerce', c.tabs.join('|') === 'Any site|WooCommerce', c.tabs.join('|'));
+    check(cell, 'each snippet names this bot and nothing personal; the pixel reads the order\'s own note first', codes.shopify.includes(`/v1/bots/${t.trialId}/sale`) && /checkout_completed/.test(codes.shopify) && codes.shopify.indexOf('c.attributes') > 0 && codes.shopify.indexOf('c.attributes') < codes.shopify.indexOf('browser.localStorage')
+      && /woocommerce_thankyou/.test(codes.woo) && codes.woo.includes(t.trialId) && codes.any.includes(`${dev.url}/site/sale.js`) && codes.any.includes(`data-bot="${t.trialId}"`) && !/c\.email|shippingAddress|billingAddress|order\.customer/i.test(codes.shopify) && !/email|name\b|address/i.test(codes.any), JSON.stringify(codes).slice(0, 400));
+    // the pixel, exactly as copied, runs in a bare sandbox (analytics, browser, fetch) and reports the order's own click id
+    const ran = await page.evaluate(async (code) => {
+      const subs = {}, posts = [];
+      new Function('analytics', 'browser', 'fetch', code)({ subscribe: (n, f) => { subs[n] = f; } }, { localStorage: { getItem: async () => 'zzzzzzzzzzzz', setItem: async () => {} } }, (url, init) => { posts.push({ url, body: JSON.parse(init.body) }); return Promise.resolve(); });
+      await subs.checkout_completed({ data: { checkout: { currencyCode: 'USD', totalPrice: { amount: 20 }, order: { id: '9001' }, email: 'ada@example.com', attributes: [{ key: 'kb_cid', value: 'abcdefghijkm' }], lineItems: [{ title: 'Cap', quantity: 1 }] } } });
+      return posts;
+    }, codes.shopify);
+    check(cell, 'the copied pixel posts { click id from the order, order, total, currency, items } and nothing personal', ran.length === 1 && ran[0].url.endsWith(`/v1/bots/${t.trialId}/sale`) && JSON.stringify(ran[0].body) === '{"cid":"abcdefghijkm","order":"9001","total":20,"currency":"USD","via":"pixel","items":[{"title":"Cap","quantity":1}]}', JSON.stringify(ran));
+    await page.locator('#gl-sale-snippet [role="tab"]').nth(0).click();
+    await page.locator('#gl-sale-snippet .gl-code-tools button[aria-label^="Cop"]').last().click();
     const copied = await page.evaluate(() => navigator.clipboard.readText()).catch(() => null);
     check(cell, 'Copy copies the snippet', copied === null || copied === codes.any, String(copied).slice(0, 120));
     await page.locator('#gl-sale .gl-sale-win').selectOption('14');
@@ -274,35 +324,103 @@ try {
     for (let i = 0; i < 30 && win !== 7; i++) { win = (await report()).saleWindowDays; if (win !== 7) await sleep(100); }
     check(cell, 'and back to 7', win === 7);
     check(cell, 'no page overflow; axe: no violations in the card', !c.overflow && (await axe(page, '#gl-sale')).length === 0, (await axe(page, '#gl-sale')).join(' | '));
-    await page.locator('#gl-sale [role="tab"]').nth(0).click();
+    await shot(page, '#gl-sale', `setup-sale-tracking-open-${v.name}.png`, v);
+    await page.locator('#gl-sale-shopify > summary').click();
+    await page.locator('#gl-sale-snippet > summary').click();
     await shot(page, '#gl-sale', `setup-sale-tracking-${v.name}.png`, v);
+    await page.locator('#gl-sale-shopify > summary').click();
+    await shot(page, '#gl-sale', `setup-sale-tracking-shopify-${v.name}.png`, v);
     check(cell, 'no console errors', !errors.length, errors.join(' | '));
     await context.close();
   }
 
-  console.log('3. the landing page keeps the click id; the thank-you page reports the order; the sale is attributed');
+  console.log('3. a store with only the website line: the landing page, an order page it cannot read, a GA4 purchase, a WooCommerce order page');
+  /** Opens the Sale tracking card in Set up and reads its status. */
+  const cardStatus = async (page) => {
+    await page.goto('about:blank');
+    await page.goto(dev.studioUrl, { waitUntil: 'load' });
+    await page.waitForTimeout(1200);
+    await page.evaluate(() => document.dispatchEvent(new CustomEvent('knowbot:open-sale-setup')));
+    await page.waitForSelector('#gl-sale', { state: 'visible', timeout: 20000 });
+    await page.waitForFunction(() => !/Checking/.test(document.querySelector('#gl-sale .gl-sale-state')?.textContent || 'Checking'), null, { timeout: 10000 }).catch(() => {});
+    return page.evaluate(() => { const card = document.querySelector('#gl-sale'); return { state: card.querySelector('.gl-sale-state')?.textContent, tone: card.querySelector('.gl-sale-state')?.className, live: card.querySelector('#gl-sale-live')?.textContent, open: [...card.querySelectorAll('details')].map((x) => x.open), status: card.dataset.status }; });
+  };
   {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
     const page = await ctx.newPage();
     const errors = watchErrors(page);
+    const saleScripts = [];
+    page.on('request', (r) => { if (/\/site\/sale\.js/.test(r.url())) saleScripts.push(r.url()); });
+    /** The next POST to …/sale from this page: { status, body }, or null when none comes in `ms`. */
+    const nextSale = (ms = 10000) => page.waitForResponse((r) => /\/api\/v1\/bots\/[^/]+\/sale$/.test(r.url()), { timeout: ms }).then((r) => ({ status: r.status(), body: JSON.parse(r.request().postData() || '{}'), type: r.request().headers()['content-type'] || '' })).catch(() => null);
+    let sent = nextSale();
     await page.goto(`${homeUrl}/landing?utm_source=knowbot&utm_medium=webchat&kb_cid=${trailCid}`, { waitUntil: 'load' });
     await page.waitForSelector('.kb-launcher', { timeout: 20000 });
     const kept = await page.evaluate(() => ({ cid: localStorage.getItem('kb_cid'), at: Number(localStorage.getItem('kb_cid_at')), cookie: document.cookie }));
     check('sale', 'the landing page keeps the click id in the site\'s own localStorage, and sets no cookie', kept.cid === trailCid && kept.at > 0 && kept.cookie === '' && (await ctx.cookies()).length === 0, JSON.stringify(kept));
-    const sent = page.waitForResponse((r) => /\/sale$/.test(r.url()), { timeout: 10000 });
+    let res = await sent;
+    const tag = await page.evaluate(() => { const x = document.querySelector('script[data-knowbot-sale]'); return x ? { src: x.src, async: x.async, bot: x.dataset.bot, n: document.querySelectorAll('script[src*="site/sale.js"]').length, html: document.documentElement.innerHTML.split('site/sale.js').length - 1 } : null; });
+    check('sale', 'the website line loaded the sale script by itself (one async tag, after the page loaded); the page has no sale snippet', !!tag && tag.async === true && tag.bot === t.trialId && tag.n === 1 && saleScripts.length === 1 && new URL(tag.src).origin === dev.url, JSON.stringify([tag, saleScripts]));
+    check('sale', 'not an order page: the visitor from the chat only says "the line runs here" (a plain-text check-in)', !!res && res.status === 200 && JSON.stringify(res.body) === '{"ping":true,"page":"site"}' && /^text\/plain/.test(res.type), JSON.stringify(res));
+    let st = (await report()).saleTracking;
+    check('sale', 'the report: waiting for the first order page', st.status === 'waiting' && st.installed === false && !!st.siteSeenAt, JSON.stringify(st));
+
+    // a WooCommerce order page that prints a bare "$": the currency is not certain, so nothing is counted or guessed
+    sent = nextSale();
+    await page.goto(`${homeUrl}/checkout/order-received/2001/?cur=usd`, { waitUntil: 'load' });
+    res = await sent;
+    check('sale', 'an order page whose currency is not certain ("$"): no order is sent, only what could not be read', !!res && JSON.stringify(res.body) === '{"ping":true,"via":"page","unread":"currency"}', JSON.stringify(res));
+    st = (await report()).saleTracking;
+    check('sale', 'the report: still waiting, no order counted, and it says the currency could not be read', st.status === 'waiting' && st.unread?.what === 'currency' && st.unread?.via === 'page' && (await report()).totals.orders === 0, JSON.stringify(st));
+    {
+      const context = await studioCtx(VIEWS[0]);
+      const sp = await context.newPage();
+      const c = await cardStatus(sp);
+      check('sale', 'the Studio card: "Waiting for the first order page", the unread order page in plain words, the snippet section opened', c.state === 'Waiting for the first order page' && /^Waiting for the first order page\. Your KnowBot line was seen on your site/.test(c.live || '') && /its currency could not be read for certain, so nothing was counted or guessed/.test(c.live || '') && c.open[1] === true, JSON.stringify(c));
+      await shot(sp, '#gl-sale', 'setup-sale-tracking-waiting-desktop.png', VIEWS[0]);
+      await context.close();
+    }
+
+    // the thank-you page of a store that tells Google Analytics about purchases: only the website line is on it
+    sent = nextSale(15000);
     await page.goto(`${homeUrl}/thanks?order=1001&total=1899.00`, { waitUntil: 'load' });
-    const res = await sent.catch(() => null);
-    const body = res ? JSON.parse(res.request().postData() || '{}') : null;
-    check('sale', 'the thank-you page reports click id, order id, total and currency, nothing else', !!res && res.status() === 200 && JSON.stringify(Object.keys(body).sort()) === '["cid","currency","order","total"]' && body.cid === trailCid && body.order === '1001', JSON.stringify(body));
+    res = await sent;
+    const body = res?.body || null;
+    check('sale', 'a GA4 purchase pushed to dataLayer after the page loaded is reported with no extra snippet: click id, order, total, currency, item names, "event"', !!res && res.status === 200 && JSON.stringify(Object.keys(body).sort()) === '["cid","currency","items","order","total","via"]' && body.cid === trailCid && body.order === '1001' && body.total === '1899' && body.currency === 'USD' && body.via === 'event' && JSON.stringify(body.items) === '[{"title":"Trail Pro","quantity":1,"price":"1899"}]', JSON.stringify(body));
+    check('sale', 'nothing personal left the page (the name and email on it and in the event stay there)', !!body && !/ada|lovelace|example\.com/i.test(JSON.stringify(body)));
+    check('sale', 'the page\'s own dataLayer still works: its entries are all there', await page.evaluate(() => Array.isArray(window.dataLayer) && window.dataLayer.length === 2 && window.dataLayer[1].event === 'purchase'));
     // a reload of the thank-you page does not report it again
     let again = 0;
-    page.on('request', (r) => { if (/\/sale$/.test(r.url())) again++; });
+    const count = (r) => { if (/\/sale$/.test(r.url())) again++; };
+    page.on('request', count);
     await page.reload({ waitUntil: 'load' });
-    await page.waitForTimeout(500);
-    const r = await report();
-    check('sale', 'one order, once: $1,899 after the Trail Pro click', again === 0 && r.totals.orders === 1 && r.totals.revenue?.[0]?.amount === 1899 && r.sales[0].title === 'Trail Pro' && r.sales[0].question === Q && r.saleTracking.installed === true, JSON.stringify(r.totals));
+    await page.waitForTimeout(2500);
+    let r = await report();
+    check('sale', 'one order, once: $1,899 after the Trail Pro click, noticed from the store\'s purchase event', again === 0 && r.totals.orders === 1 && r.totals.revenue?.[0]?.amount === 1899 && r.sales[0].title === 'Trail Pro' && r.sales[0].question === Q && r.sales[0].via === 'event' && r.saleTracking.installed === true && r.saleTracking.status === 'detected' && r.saleTracking.via === 'event' && r.saleTracking.unread === null, JSON.stringify([r.totals, r.saleTracking]));
+    page.off('request', count);
+
+    // a WooCommerce order-received page in euros, read from the page itself
+    sent = nextSale();
+    await page.goto(`${homeUrl}/checkout/order-received/2002/`, { waitUntil: 'load' });
+    res = await sent;
+    check('sale', 'a WooCommerce order page ("1.299,50 €") is read: order 2002, 1299.50 EUR, "page"; no name, email or address', !!res && res.status === 200 && JSON.stringify(res.body) === JSON.stringify({ cid: trailCid, order: '2002', total: '1299.50', currency: 'EUR', via: 'page' }), JSON.stringify(res));
+    r = await report();
+    check('sale', 'two orders now; the newest was seen on the order page', r.totals.orders === 2 && r.sales[0].order === '2002' && r.sales[0].total === 1299.5 && r.sales[0].currency === 'EUR' && r.sales[0].via === 'page' && r.saleTracking.via === 'page', JSON.stringify(r.sales.map((x) => [x.order, x.total, x.currency, x.via])));
+    check('sale', 'still no cookie on the customer\'s site, and one sale script per page', (await ctx.cookies()).length === 0 && saleScripts.length === 5, JSON.stringify([await ctx.cookies(), saleScripts.length]));
     check('sale', 'no console errors on the customer\'s pages', !errors.length, errors.join(' | '));
     await ctx.close();
+
+    // Global Privacy Control: the line does not even load the sale script; nothing is kept or sent
+    const gpc = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+    await gpc.addInitScript(() => { Object.defineProperty(navigator, 'globalPrivacyControl', { get: () => true }); });
+    const gp = await gpc.newPage();
+    let gpcSale = 0;
+    gp.on('request', (q) => { if (/\/sale$|\/site\/sale\.js/.test(q.url())) gpcSale++; });
+    await gp.goto(`${homeUrl}/thanks?order=1005&total=10.00&kb_cid=${trailCid}`, { waitUntil: 'load' });
+    await gp.waitForSelector('.kb-launcher', { timeout: 20000 });
+    await gp.waitForTimeout(2500);
+    check('sale', 'Global Privacy Control: no click id kept, the sale script is not loaded, nothing is sent', gpcSale === 0 && (await gp.evaluate(() => localStorage.getItem('kb_cid'))) === null && (await report()).totals.orders === 2, String(gpcSale));
+    await gpc.close();
   }
   for (const v of VIEWS) {
     const cell = `installed-${v.name}`;
@@ -313,12 +431,14 @@ try {
     const s = await page.evaluate(() => {
       const sec = document.querySelector('#kb-sales');
       return { tiles: [...sec.querySelectorAll('.kb-sales-tiles .kb-sales-tile')].map((x) => x.textContent), cta: !!sec.querySelector('.kb-sales-setup'), label: sec.querySelector('.kb-sales-src')?.textContent,
-        orders: [...sec.querySelectorAll('#kb-sales-oh ~ .kb-leads-scroll tbody tr')].map((r) => [...r.cells].map((c) => c.textContent)), legend: [...sec.querySelectorAll('.kb-chart-key li')].map((x) => x.textContent),
+        orders: [...sec.querySelectorAll('#kb-sales-oh ~ .kb-leads-scroll tbody tr')].map((r) => [...r.cells].map((c) => c.textContent)), head: [...sec.querySelectorAll('#kb-sales-oh ~ .kb-leads-scroll thead th')].map((c) => c.textContent), legend: [...sec.querySelectorAll('.kb-chart-key li')].map((x) => x.textContent),
         csv: [...sec.querySelectorAll('[data-csv]')].map((b) => b.dataset.csv), table: [...sec.querySelectorAll('figcaption table tbody tr')].map((r) => r.textContent),
         overflow: document.scrollingElement.scrollWidth > innerWidth + 1, secOverflow: sec.scrollWidth > sec.clientWidth + 1 };
     });
-    check(cell, 'totals: orders and sales after a click, with the currency', /Orders after a click1reported by your site, within 7 days of a click/.test(s.tiles[2] || '') && /Sales after a click\$1,899\.00/.test(s.tiles[3] || '') && !s.cta, JSON.stringify(s.tiles));
-    check(cell, 'the order is listed, labelled "Reported by your site"', s.label === 'Reported by your site' && s.orders.length === 1 && s.orders[0][1] === '1001' && /\$1,899\.00/.test(s.orders[0][2]) && /Trail Pro/.test(s.orders[0][3]) && s.orders[0][4] === Q && s.orders[0][5] === 'Website chat', JSON.stringify(s.orders));
+    check(cell, 'totals: orders and sales after a click, per currency', /Orders after a click2reported by your site, within 7 days of a click/.test(s.tiles[2] || '') && /Sales after a click\$1,899\.00 \+ €1,299\.50/.test(s.tiles[3] || '') && !s.cta, JSON.stringify(s.tiles));
+    const o1 = s.orders.find((x) => x[1] === '1001') || [];
+    check(cell, 'the orders are listed, labelled "Reported by your site"', s.label === 'Reported by your site' && s.orders.length === 2 && /\$1,899\.00/.test(o1[2]) && /Trail Pro/.test(o1[3]) && o1[4] === Q && o1[5] === 'Website chat', JSON.stringify(s.orders));
+    check(cell, 'each order says how it was noticed: the store\'s purchase event, the order page', s.head.at(-1) === 'How it was noticed' && o1[6] === 'From your store’s purchase event' && s.orders[0][1] === '2002' && /€1,299\.50/.test(s.orders[0][2]) && s.orders[0][6] === 'Seen on your order page', JSON.stringify([s.head, s.orders.map((x) => x[6])]));
     check(cell, 'the chart has a legend and a table for screen readers with the day\'s clicks, orders and sales', s.legend.join('|') === 'Clicks|Orders after a click' && s.table.some((x) => /\$1,899\.00/.test(x)), JSON.stringify([s.legend, s.table]));
     // top products by sales
     await page.locator('#kb-sales [data-sort="revenue"]').click();
@@ -332,16 +452,22 @@ try {
     check(cell, 'no horizontal overflow', !s.overflow && !s.secOverflow);
     check(cell, 'axe: no violations', (await axe(page, '#kb-stats')).length === 0, (await axe(page, '#kb-stats')).join(' | '));
     if (v.name === 'desktop') {
-      for (const [kind, head, want] of [['clicks', CLICK_COLS, /,web,product,Trail Pro,1899,USD,/], ['sales', SALE_COLS, /,1001,1899,USD,,web,/]]) {
+      for (const [kind, head, want] of [['clicks', CLICK_COLS, /,web,product,Trail Pro,1899,USD,/], ['sales', SALE_COLS, /,1001,1899,USD,Trail Pro,web,[^\r\n]*,reported by your site,from your store's purchase event\r\n/]]) {
         const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.locator(`#kb-sales [data-csv="${kind}"]`).click()]);
         const file = path.join(SHOTS, `sample-${kind}.csv`);
         await dl.saveAs(file);
         const text = (await fsp.readFile(file, 'utf8')).replace(/^﻿/, '');
         check(cell, `the ${kind} CSV downloads with its header and the row`, new RegExp(`^knowbot-${kind}-.*\\.csv$`).test(dl.suggestedFilename()) && text.split('\r\n')[0] === head && want.test(text), text.slice(0, 300));
+        if (kind === 'sales') check(cell, 'the sales CSV says how each order was noticed', /,2002,1299\.5,EUR,[^\r\n]*,reported by your site,seen on your order page\r\n/.test(text), text.slice(0, 400));
       }
     }
     await page.locator('#kb-hist-q').fill('');
     await shot(page, '#kb-sales', `clicks-sales-${v.name}.png`, v);
+    // the Set up card now says what it saw
+    const c = await cardStatus(page);
+    check(cell, 'the Studio card: "Detected on your site", which detector fired last, and the latest order', c.state === 'Detected on your site' && /chip green/.test(c.tone || '') && /^Detected on your site: your order page was read\. Last seen .+\. The latest order after a click came in on /.test(c.live || '') && !/could not be read/.test(c.live || '') && c.status === 'detected', JSON.stringify(c));
+    check(cell, 'axe: no violations in the card; no page overflow', (await axe(page, '#gl-sale')).length === 0 && await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth + 1), (await axe(page, '#gl-sale')).join(' | '));
+    await shot(page, '#gl-sale', `setup-sale-tracking-detected-${v.name}.png`, v);
     check(cell, 'no console errors', !errors.length, errors.join(' | '));
     await context.close();
   }

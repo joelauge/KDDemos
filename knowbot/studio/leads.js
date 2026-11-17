@@ -25,6 +25,7 @@ import * as api from './api.js';
 import { getState } from './store.js';
 import { icon } from './icons.js';
 import { crmSection } from './crm.js';
+import { SALE_VIA_LABEL } from './salesnippets.js';
 
 const CHANNELS = [
   ['web', 'Website chat'], ['site', 'Homepage search'], ['sms', 'SMS'], ['whatsapp', 'WhatsApp'], ['email', 'Email'],
@@ -628,8 +629,8 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
           big('Sales after a click', revenue.length ? revenue.map((r) => fmtMoney(r.amount, r.currency)).join(' + ') : fmtMoney(0, a.currency || 'USD'), revenue.length ? 'order totals reported by your site' : 'no orders in this range yet', 'kb-sales-money')]
         : [h('li', { class: 'kb-sales-tile kb-sales-cta' },
           h('strong', { class: 'kb-sales-cta-t' }, 'See which answers lead to orders'),
-          h('span', { class: 'kb-sales-tile-sub' }, 'Sale tracking is not installed yet, so orders are not counted here. Paste one snippet on your order confirmation page to turn it on. Your store’s own analytics already count these visits (see “How clicks and sales are counted” below).'),
-          h('button', { type: 'button', class: 'btn btn-primary st-btn st-btn-primary kb-sales-setup', onclick: setup }, 'Set up sale tracking'))]));
+          h('span', { class: 'kb-sales-tile-sub' }, 'No order page has been seen yet, so orders are not counted here. On most sites your KnowBot website line notices orders by itself, with nothing to install; some stores need one paste. Your store’s own analytics already count these visits (see “How clicks and sales are counted” below).'),
+          h('button', { type: 'button', class: 'btn btn-primary st-btn st-btn-primary kb-sales-setup', onclick: setup }, 'Check sale tracking'))]));
 
     // per day: clicks and orders, both counts, on one axis; revenue is in the table for screen readers and in the tooltip
     const days = a.byDay || [];
@@ -707,7 +708,7 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
       h('h4', { class: 'kb-sales-h4', id: 'kb-sales-oh' }, 'Orders after a click', h('span', { class: 'kb-leads-count st-mono' }, sales.length.toLocaleString()), h('span', { class: 'chip gray is-label no-dot kb-sales-src' }, 'Reported by your site')),
       sales.length
         ? h('div', { class: 'kb-leads-scroll', tabindex: '0', role: 'region', 'aria-labelledby': 'kb-sales-oh' }, h('table', { class: 'data-table is-static kb-leads-table kb-sales-table' },
-          h('thead', null, h('tr', null, ['When', 'Order', 'Total', 'Clicked', 'Question', 'Where'].map((x) => h('th', { scope: 'col' }, x)))),
+          h('thead', null, h('tr', null, ['When', 'Order', 'Total', 'Clicked', 'Question', 'Where', 'How it was noticed'].map((x) => h('th', { scope: 'col' }, x)))),
           h('tbody', null, sales.slice(0, 200).map((s) => h('tr', null,
             h('td', { class: 'kb-leads-when' }, h('time', { datetime: s.at }, fmtTime(s.at))),
             h('td', { class: 'st-mono' }, s.order),
@@ -717,8 +718,9 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
             h('td', { class: 'kb-leads-q' }, s.question && searchable(s.question)
               ? h('button', { type: 'button', class: 'st-link-btn kb-leads-qlink', title: 'See this question in the question history', onclick: () => showInHistory({ range: f.range, q: searchable(s.question) }) }, s.question)
               : (s.question || h('span', { class: 'kb-leads-dim' }, '–'))),
-            h('td', null, channelLabel(s.channel)))))))
-        : h('p', { class: 'empty-state kb-leads-empty' }, `Sale tracking is installed${a.saleTracking.lastSeenAt ? ` (your order page last checked in on ${fmtShortDay(a.saleTracking.lastSeenAt)})` : ''}. No order has followed a click in ${rangeWords()} yet.`),
+            h('td', null, channelLabel(s.channel)),
+            h('td', { class: 'kb-sales-via', 'data-via': s.via || 'snippet' }, SALE_VIA_LABEL[s.via] || SALE_VIA_LABEL.snippet))))))
+        : h('p', { class: 'empty-state kb-leads-empty' }, `Sale tracking is working${a.saleTracking.lastSeenAt ? ` (your order page last checked in on ${fmtShortDay(a.saleTracking.lastSeenAt)})` : ''}. No order has followed a click in ${rangeWords()} yet.`),
       sales.length > 200 ? h('p', { class: 'kb-leads-hint' }, `Showing 200 of ${sales.length.toLocaleString()}. The CSV has them all.`) : null);
 
     const help = h('details', { class: 'kb-sales-help' },
@@ -726,8 +728,8 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
       h('div', { class: 'kb-sales-help-in' },
         h('p', null, h('b', null, 'Campaign tags. '), 'Every link in an answer on your website gets campaign tags (also called UTM tags: short labels added to the end of a link that analytics tools read). They say the visit came from your bot (source “knowbot”), from where (webchat, homepage or voice) and which bot. They do not identify anyone.'),
         h('p', null, h('b', null, 'In your store’s own analytics, with nothing to set up. '), 'In Shopify, open Analytics, then Reports, and look at sessions and sales by marketing source or referrer: your bot shows up as “knowbot”. In Google Analytics, open Reports, then Acquisition, then Traffic acquisition, and look for “knowbot / webchat”. Other tools list it under the campaign source “knowbot”.'),
-        h('p', null, h('b', null, 'Orders shown here. '), `With sale tracking installed, your order confirmation page tells KnowBot when an order follows a click within ${winWords} (the newest click counts). These are reported by your site, not verified payments, so check them against your store’s own orders. `,
-          h('button', { type: 'button', class: 'st-link-btn', onclick: setup }, installed ? 'Change sale tracking' : 'Set up sale tracking')),
+        h('p', null, h('b', null, 'Orders shown here. '), `Your KnowBot website line notices the order page on your site and tells KnowBot when an order follows a click within ${winWords} (the newest click counts). Each order says how it was noticed: from your store’s purchase event, seen on your order page, or reported by your snippet or your store’s pixel (Shopify). These are reported by your site, not verified payments, so check them against your store’s own orders. `,
+          h('button', { type: 'button', class: 'st-link-btn', onclick: setup }, installed ? 'Change sale tracking' : 'Check sale tracking')),
         h('p', null, h('b', null, 'What can be missed. '), 'A visitor who blocks tracking scripts, who buys later on another device or browser, or whose checkout is on a different web address from your shop. A link opened with “open in a new tab” from the right-click menu still carries its tags, but its click is only counted if an order follows.'),
         h('p', null, h('b', null, 'Privacy. '), 'A click keeps the time, the question, the link and a random click id for that answer. No name, address or visitor id, and no cookie. When a visitor’s browser asks not to be tracked (Global Privacy Control or Do Not Track), no click or order is recorded for them; the campaign tags stay because they identify nobody.')));
 

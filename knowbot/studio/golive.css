@@ -715,6 +715,10 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .gl-sale-body > * { min-width: 0; }
 .gl-sale-steps { margin: 0; padding: 0 0 0 18px; display: grid; gap: 6px; font-size: 12.5px; line-height: 1.5; color: var(--text); }
 .gl-sale-steps b { color: var(--strong); }
+.gl-sale-live { margin: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; line-height: 1.5; color: var(--strong); max-width: 86ch; }
+.gl-sale-p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text); max-width: 78ch; }
+.gl-sale ol.gl-sale-steps { list-style: none; padding-left: 0; }
+.gl-sale-more { margin-top: 0; }
 .gl-sale-note { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); max-width: 78ch; }
 .gl-sale-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
 .gl-sale-winlabel { color: var(--strong); }

@@ -303,8 +303,8 @@ describe('attribution: the store (server/leads.mjs)', () => {
     await L.chatClick({ botId: 'tr_bot', cid: linkClickId(b, P2), url: P2 });
     clock.t += DAY;
     await L.sale({ botId: 'tr_bot', cid: linkClickId(a, P1), order: '1001', total: 1299, currency: 'USD', items: [{ title: 'Trail Pro', quantity: 1 }] });
-    await L.sale({ botId: 'tr_bot', cid: linkClickId(b, P2), order: '1002', total: 799, currency: 'USD' });
-    await L.sale({ botId: 'tr_bot', cid: linkClickId(b, P2), order: 'EU-1003', total: 20, currency: 'EUR' });
+    await L.sale({ botId: 'tr_bot', cid: linkClickId(b, P2), order: '1002', total: 799, currency: 'USD', via: 'event' });
+    await L.sale({ botId: 'tr_bot', cid: linkClickId(b, P2), order: 'EU-1003', total: 20, currency: 'EUR', via: 'pixel' });
     assert.equal((await L.sale({ botId: 'tr_bot', cid: linkClickId(b, P2), order: '=1+1', total: 20, currency: 'EUR' })).reason, 'bad_order', 'an order id never starts like a formula');
     assert.ok(c);
     const r = await L.attribution('tr_bot', { days: 7, tz: 0 });
@@ -329,15 +329,20 @@ describe('attribution: the store (server/leads.mjs)', () => {
     const sales = (await L.salesCsv('tr_bot', { days: 7 })).trim().split('\r\n');
     assert.equal(sales[0], SALE_COLUMNS.join(','));
     assert.equal(sales.length, 4);
-    assert.match(sales.at(-1), /,tr_bot,1001,1299,USD,Trail Pro,web,2026-06-16T12:00:00\.000Z,Trail Pro,https:\/\/shop\.example\/products\/trail-pro,Which bike for trails\?,[a-z0-9]{12},reported by your site$/);
+    assert.match(sales.at(-1), /,tr_bot,1001,1299,USD,Trail Pro,web,2026-06-16T12:00:00\.000Z,Trail Pro,https:\/\/shop\.example\/products\/trail-pro,Which bike for trails\?,[a-z0-9]{12},reported by your site,reported by your snippet$/);
+    // each order says how it was noticed (the newest first): the Shopify pixel, the store's purchase event, the snippet
+    assert.deepEqual(r.sales.map((x) => [x.order, x.via]), [['EU-1003', 'pixel'], ['1002', 'event'], ['1001', 'snippet']]);
+    assert.deepEqual(sales.slice(1).map((line) => line.split(',').slice(-2).join(',')), ["reported by your site,reported by your store's pixel", "reported by your site,from your store's purchase event", 'reported by your site,reported by your snippet']);
+    assert.equal((await L.sale({ botId: 'tr_bot', cid: linkClickId(a, P1), order: '1009', total: 5, currency: 'USD', via: '<b>' })).attributed, true);
+    assert.equal((await L.attribution('tr_bot', { days: 7 })).sales[0].via, 'snippet', 'an unknown detector name is not kept');
     // per-question rows for the question history
     const rows = await L.attributionRows('tr_bot');
-    assert.deepEqual(rows.map((x) => [x.question, x.channel, x.clicks, x.orders, x.total, x.currency]).sort(), [['Which bike for the city?', 'site', 1, 1, 799, 'USD'], ['Which bike for trails?', 'web', 2, 1, 1299, 'USD']]);
+    assert.deepEqual(rows.map((x) => [x.question, x.channel, x.clicks, x.orders, x.total, x.currency]).sort(), [['Which bike for the city?', 'site', 1, 1, 799, 'USD'], ['Which bike for trails?', 'web', 2, 2, 1304, 'USD']]);
   });
   test('sale tracking not installed: the report says so; a ping (once a day) marks it installed', async () => {
     const { L, clock } = fresh();
     show(L);
-    assert.deepEqual((await L.attribution('tr_bot')).saleTracking, { installed: false, lastSeenAt: null, lastSaleAt: null });
+    assert.deepEqual((await L.attribution('tr_bot')).saleTracking, { installed: false, lastSeenAt: null, lastSaleAt: null, status: 'none', via: null, siteSeenAt: null, unread: null });
     assert.equal(await L.salePing('tr_bot'), true);
     assert.equal(await L.salePing('tr_bot'), false, 'once a day');
     clock.t += DAY;
@@ -346,6 +351,43 @@ describe('attribution: the store (server/leads.mjs)', () => {
     assert.equal(st.installed, true);
     assert.equal(st.lastSaleAt, null);
     assert.equal(st.lastSeenAt, new Date(clock.t).toISOString());
+    assert.deepEqual([st.status, st.via], ['detected', 'snippet']);
+  });
+  test('the status the Studio shows: not seen, waiting (the line ran on the site), detected (and by which detector), an order page that could not be read', async () => {
+    const { L, clock } = fresh();
+    const id = show(L);
+    const st = async () => (await L.attribution('tr_bot')).saleTracking;
+    assert.equal((await st()).status, 'none');
+    // the website line ran on the owner's site for a visitor from the chat: waiting for an order page
+    assert.equal(await L.salePing('tr_bot', { page: 'site' }), true);
+    assert.equal(await L.salePing('tr_bot', { page: 'site' }), false, 'once a day');
+    const siteAt = new Date(clock.t).toISOString();
+    assert.deepEqual(await st(), { installed: false, lastSeenAt: null, lastSaleAt: null, status: 'waiting', via: null, siteSeenAt: siteAt, unread: null });
+    // an order page was seen but its currency could not be read: still waiting, and it says what was unclear
+    clock.t += 3600000;
+    assert.equal(await L.salePing('tr_bot', { via: 'page', unread: 'currency' }), true);
+    assert.equal(await L.salePing('tr_bot', { via: 'page', unread: 'currency' }), false);
+    assert.equal(await L.salePing('tr_bot', { via: 'page', unread: '<script>' }), true, 'an unknown reason is dropped: this is a plain order-page check-in');
+    let s = await st();
+    assert.deepEqual([s.installed, s.status, s.via], [true, 'detected', 'page']);
+    assert.equal(s.unread, null, 'the same moment: the page that was read wins');
+    // … a later unread page shows until an order page is read again
+    clock.t += 3600000;
+    assert.equal(await L.salePing('tr_bot', { via: 'event', unread: 'total' }), true);
+    s = await st();
+    assert.deepEqual(s.unread, { via: 'event', what: 'total', at: new Date(clock.t).toISOString() });
+    assert.equal(s.status, 'detected');
+    // a sale noticed from the store's purchase event: detected, by that detector; the unread note is gone
+    clock.t += 3600000;
+    await L.chatClick({ botId: 'tr_bot', cid: linkClickId(id, P1), url: P1 });
+    assert.equal((await L.sale({ botId: 'tr_bot', cid: linkClickId(id, P1), order: '1001', total: 10, currency: 'USD', via: 'event' })).attributed, true);
+    s = await st();
+    assert.deepEqual([s.status, s.via, s.unread, s.lastSaleAt, s.siteSeenAt], ['detected', 'event', null, new Date(clock.t).toISOString(), siteAt]);
+    // only an unread order page so far: waiting, never "detected"
+    const { L: L2 } = fresh();
+    await L2.salePing('tr_bot', { via: 'page', unread: 'total' });
+    s = (await L2.attribution('tr_bot')).saleTracking;
+    assert.deepEqual([s.installed, s.status, s.via, s.unread.what], [true, 'waiting', null, 'total']);
   });
   test('durable with the leads data: events survive a restart, the durable copy holds them, and they age out after the retention window', async () => {
     const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-attr-'));
@@ -362,7 +404,7 @@ describe('attribution: the store (server/leads.mjs)', () => {
       assert.deepEqual(lines.map((e) => e.kind), ['shown', 'chatclick', 'sale']);
       // what is stored: time, bot, channel, answer id, question, link, click id. No address, no visitor id.
       assert.deepEqual(Object.keys(lines[1]).sort(), ['answer', 'at', 'bot', 'channel', 'cid', 'currency', 'kind', 'linkKind', 'price', 'title', 'url', 'v']);
-      assert.deepEqual(Object.keys(lines[2]).sort(), ['answer', 'at', 'bot', 'channel', 'cid', 'clickAt', 'clickSeen', 'currency', 'kind', 'linkKind', 'order', 'source', 'title', 'total', 'url', 'v']);
+      assert.deepEqual(Object.keys(lines[2]).sort(), ['answer', 'at', 'bot', 'channel', 'cid', 'clickAt', 'clickSeen', 'currency', 'kind', 'linkKind', 'order', 'source', 'title', 'total', 'url', 'v', 'via']);
       assert.ok(saved.get('tr_bot').includes('"kind":"sale"'), 'the durable copy holds the sale');
       // a restart (the local file): the click id is still known, and the order is still recorded once
       const L2 = createLeads({ dataDir, now: () => clock.t + DAY });
@@ -403,7 +445,8 @@ describe('attribution: the click and sale endpoints through the server', () => {
     const dk = await (await c.json(t, '/devkey')).json();
     key = dk.key;
   });
-  after(async () => { await S.close(); await shop.close(); });
+  // the leads data's delayed save must not be in flight when the fake knowDrive closes
+  after(async () => { await S.kb.leads?.flush?.(); await S.kb.leads?.idle?.(); await S.close(); await shop.close(); });
 
   test('a web chat answer carries the tags and a click id for its links; the click beacon is recorded and shows in the report', async () => {
     const a = await web(Q);
@@ -531,7 +574,8 @@ describe('attribution: the click and sale endpoints through the server', () => {
     const j = await report();
     assert.equal(j.totals.orders, 1);
     assert.deepEqual(j.totals.revenue, [{ currency: 'USD', amount: 1299, orders: 1 }]);
-    assert.deepEqual([j.sales[0].order, j.sales[0].total, j.sales[0].title, j.sales[0].question, j.sales[0].channel, j.sales[0].source], ['1001', 1299, 'Trail Pro', Q, 'web', 'site']);
+    assert.deepEqual([j.sales[0].order, j.sales[0].total, j.sales[0].title, j.sales[0].question, j.sales[0].channel, j.sales[0].source, j.sales[0].via], ['1001', 1299, 'Trail Pro', Q, 'web', 'site', 'snippet']);
+    assert.deepEqual([j.saleTracking.status, j.saleTracking.via], ['detected', 'snippet']);
     assert.doesNotMatch(JSON.stringify(j), /lee@example\.com|1 Main St|"Lee"/, 'customer details are never kept');
     assert.equal((await S.api(`/v1/bots/${t.trialId}/sale`)).status, 405);
     // limited per address
@@ -587,5 +631,28 @@ describe('attribution: the click and sale endpoints through the server', () => {
     assert.deepEqual([now.totals.shown, now.totals.clicks, now.totals.orders], [before.totals.shown, before.totals.clicks, before.totals.orders]);
     await c.json(t, '/leads', 'PATCH', { tracking: true });
     assert.match((await web(Q)).track.cid, /^[a-z0-9]{10}$/);
+  });
+  test('the sale endpoint keeps how each order was noticed, and the check-ins behind the Studio status', async () => {
+    const a = await web(Q);
+    const url = a.products[0].url, cid = linkClickId(a.track.cid, url);
+    await post(`/v1/bots/${t.trialId}/click`, { cid, url }, { ip: nextIp() });
+    const sale = (body, h = {}) => post(`/v1/bots/${t.trialId}/sale`, body, { origin: 'https://shop.example', ip: nextIp(), ...h });
+    const before = (await report()).totals.orders;
+    // the website line's own detection says how it noticed the order; a Shopify pixel posts from a sandbox with no origin
+    const viaEvent = await sale({ cid, order: '1002', total: 20, currency: 'USD', via: 'event' });
+    assert.deepEqual(await viaEvent.json(), { ok: true, attributed: true });
+    const viaPixel = await sale({ cid, order: '1003', total: 30, currency: 'USD', via: 'pixel' }, { origin: 'null' });
+    assert.deepEqual(await viaPixel.json(), { ok: true, attributed: true });
+    assert.equal(viaPixel.headers.get('access-control-allow-origin'), '*');
+    const j2 = await report();
+    assert.deepEqual(j2.sales.slice(0, 2).map((x) => [x.order, x.via]), [['1003', 'pixel'], ['1002', 'event']]);
+    assert.equal(j2.saleTracking.via, 'pixel');
+    // check-ins: the line ran on the site; an order page that could not be read (nothing about it is kept but that)
+    assert.deepEqual(await (await sale({ ping: true, page: 'site' })).json(), { ok: true, attributed: false, reason: 'no_click' });
+    assert.deepEqual(await (await sale({ ping: true, via: 'page', unread: 'currency', order: '9', total: 5, email: 'lee@example.com' })).json(), { ok: true, attributed: false, reason: 'no_click' });
+    const j3 = await report();
+    assert.ok(j3.saleTracking.siteSeenAt);
+    assert.equal(j3.totals.orders, before + 2);
+    assert.doesNotMatch(JSON.stringify(j3), /lee@example\.com/);
   });
 });

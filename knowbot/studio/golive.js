@@ -27,6 +27,7 @@ import { mountWidget } from './kdw.js';
 import { apiForScriptHost } from '../lib/site-config.js';
 import { mountNumbers, numberCache } from './numbers.js';
 import { siteSettings } from './sitebrand.js';
+import { shopifyPixel, wooHook, anySiteLine, SALE_VIA_HOW } from './salesnippets.js';
 import { TOOLS, toolSwitches, setFeature, normalizeSurfaces, featureLabel, agentSwitches, AGENTS_FEATURE, sendInfoSwitches, SEND_INFO_HELP } from './surfaces.js';
 
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
@@ -670,22 +671,35 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
 
 
   // ------------------------------------------------------------ Sale tracking (server/leads.mjs sale; site/sale.js)
-  // Links in the bot's answers already carry campaign tags the store's own analytics read. This card is the optional
-  // second step: one snippet on the order-confirmation page, so orders that follow a click show up in Stats & Leads.
+  // Nothing to install on most sites: the KnowBot website line loads site/sale.js by itself, which notices a completed
+  // order on the page it is on (the store's purchase event, a WooCommerce order page) and reports it for the click.
+  // This card says so, shows what the server has seen (saleTracking: status, the detector that fired last, an order
+  // page that could not be read), and keeps the two pastes for the places the line cannot run: Shopify's checkout (a
+  // custom pixel, because Shopify runs no site script there) and an order page without the line (the snippet).
   // Owner-facing: it may name the owner's store platform. Nothing here is shown to visitors.
   let saleCard = null;
   const SALE_WINDOWS = [1, 3, 7, 14, 30];
   const saleSnippets = () => {
     const bot = botId();
     // the script's address stays inside the longer snippet text (a customer pastes it once: it is never versioned)
-    const apiAttr = apiAttrFor(siteBase, apiBase);
-    const saleUrl = `${apiRoot}/v1/bots/${bot}/sale`;
-    return {
-      shopify: `// Shopify admin > Settings > Customer events > Add custom pixel\nanalytics.subscribe('checkout_completed', async (event) => {\n  const c = event.data.checkout;\n  const cid = await browser.localStorage.getItem('kb_cid');\n  const body = cid\n    ? { cid, order: String((c.order && c.order.id) || c.token), total: c.totalPrice && c.totalPrice.amount, currency: c.currencyCode,\n        items: (c.lineItems || []).map((i) => ({ title: i.title, quantity: i.quantity })) }\n    : { ping: true };\n  fetch('${saleUrl}', { method: 'POST', keepalive: true, body: JSON.stringify(body) });\n});`,
-      woo: `// WooCommerce: add to your theme's functions.php (or a code snippets plugin)\nadd_action('woocommerce_thankyou', function ($order_id) {\n  $order = wc_get_order($order_id);\n  if (!$order) return;\n  printf('<script async src="%s"${apiAttr} data-bot="%s" data-order="%s" data-total="%s" data-currency="%s"></script>',\n    esc_url('${siteBase}site/sale.js'), esc_attr('${bot}'), esc_attr($order->get_order_number()),\n    esc_attr($order->get_total()), esc_attr($order->get_currency()));\n});`,
-      any: `<!-- On your order confirmation ("thank you") page. Replace the three values with the order's own. -->\n<script async src="${siteBase}site/sale.js"${apiAttr} data-bot="${bot}"\n        data-order="ORDER_ID" data-total="ORDER_TOTAL" data-currency="USD"></script>`,
-    };
+    const o = { bot, siteBase, apiAttr: apiAttrFor(siteBase, apiBase) };
+    return { shopify: shopifyPixel(`${apiRoot}/v1/bots/${bot}/sale`), woo: wooHook(o), any: anySiteLine(o) };
   };
+  const saleDay = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+  /** The chip and the sentence for what the server has seen: { chip, tone, text }. */
+  function saleStatus(r) {
+    const t = r?.saleTracking || {};
+    const status = t.status || (t.installed ? 'detected' : 'none');
+    if (r?.tracking === false) return { chip: 'Link tracking is off', tone: 'gray', text: 'Link tracking is switched off for this bot, so clicks and orders are not counted. Turn “Track links” back on in Stats & Leads to use this.' };
+    const unread = t.unread ? ` An order page was seen${t.unread.at ? ` on ${saleDay(t.unread.at)}` : ''}, but its ${t.unread.what === 'order' ? 'order number' : t.unread.what === 'currency' ? 'currency' : 'total'} could not be read for certain, so nothing was counted or guessed. The snippet under “If your order page doesn’t load the KnowBot line” makes it exact.` : '';
+    if (status === 'detected') {
+      const seen = t.lastSeenAt ? ` Last seen ${saleDay(t.lastSeenAt)}.` : '';
+      const last = t.lastSaleAt ? ` The latest order after a click came in on ${saleDay(t.lastSaleAt)}.` : ' No order has followed a click yet; the first one will show in Stats & Leads.';
+      return { chip: 'Detected on your site', tone: 'green', text: `Detected on your site: ${SALE_VIA_HOW[t.via] || SALE_VIA_HOW.snippet}.${seen}${last}${unread}` };
+    }
+    if (status === 'waiting') return { chip: 'Waiting for the first order page', tone: 'gray', text: `Waiting for the first order page.${t.siteSeenAt ? ` Your KnowBot line was seen on your site on ${saleDay(t.siteSeenAt)}.` : ''} The first order placed after a click will show here and in Stats & Leads.${unread}` };
+    return { chip: 'Not seen yet', tone: 'gray', text: 'Not seen yet. This starts by itself once your KnowBot website line is on your site and a visitor opens a link from one of your bot’s answers.' };
+  }
   function saleTrackingCard() {
     const winId = `gl-sale-win-${rid(4)}`;
     const win = h('select', { id: winId, class: 'input gl-sale-win' }, SALE_WINDOWS.map((d) => h('option', { value: String(d) }, d === 1 ? '1 day' : `${d} days`)));
@@ -695,38 +709,62 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       try { const r = await api.setSaleWindow(days); win.value = String(r.saleWindowDays); announce(`Orders now count when they come within ${r.saleWindowDays === 1 ? '1 day' : `${r.saleWindowDays} days`} of a click.`, 'polite'); }
       catch { announce("Couldn't change that. Try again in a moment.", 'assertive'); }
     });
-    const state = h('span', { class: 'chip gray is-label gl-si-state gl-sale-state' }, 'Optional');
+    const state = h('span', { class: 'chip gray is-label gl-si-state gl-sale-state' }, 'Checking…');
+    const live = h('p', { class: 'gl-sale-live', id: 'gl-sale-live' }, 'Checking what your site has reported…');
     const step = (name, ...kids) => h('li', null, h('b', null, name), ' ', ...kids);
+    const more = (id, title, ...kids) => h('details', { class: 'gl-ag-more gl-sale-more', id }, h('summary', null, title), h('div', { class: 'gl-ag-more-b' }, ...kids));
+    const shopify = more('gl-sale-shopify', 'Shopify: one extra paste',
+      h('p', { class: 'gl-sale-p' }, 'Shopify does not let any website script run on its checkout and thank-you pages, so on Shopify the order is reported by a small “custom pixel” that you paste once in Shopify’s own settings. There is no app to install.'),
+      h('ol', { class: 'gl-sale-steps' },
+        step('1.', 'In your Shopify admin, open Settings, then Customer events.'),
+        step('2.', 'Press Add custom pixel and name it KnowBot.'),
+        step('3.', 'Paste the code below, press Save, then Connect.')),
+      codeTabs([{ label: 'Shopify custom pixel', lang: 'js', code: () => saleSnippets().shopify }], 'gl-sale-pixel'),
+      h('p', { class: 'gl-sale-note' }, 'On your shop’s pages, your KnowBot line adds the click to the cart as a note called “kb_cid”, so the order carries it through checkout. You will see it under Additional details on those orders in Shopify. The pixel reads it from there.'));
+    const snippet = more('gl-sale-snippet', 'If your order page doesn’t load the KnowBot line',
+      h('p', { class: 'gl-sale-p' }, 'Some sites send buyers to a checkout or thank-you page that does not carry your website line, or print the order in a way that cannot be read for certain. Put this on the page a customer sees after paying and it reports the exact order.'),
+      codeTabs([
+        { label: 'Any site', lang: 'html', code: () => saleSnippets().any },
+        { label: 'WooCommerce', lang: 'js', code: () => saleSnippets().woo },
+      ], 'gl-sale-code'),
+      h('ul', { class: 'gl-sale-steps' },
+        step('Any site:', 'fill in the order id, the order total as a plain number (129.90) and the three-letter currency.'),
+        step('WooCommerce:', 'paste the code into your theme’s functions.php, or add it with a code snippets plugin. It fills in the order number, total and currency for you.')));
     saleCard = h('section', { class: 'card gl-si gl-sale', id: 'gl-sale', 'aria-labelledby': 'gl-sale-t' },
       h('div', { class: 'gl-si-head' },
         h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: icon('trending', 18) }),
         h('div', { class: 'gl-si-text' }, h('h3', { class: 'gl-si-t', id: 'gl-sale-t', tabindex: '-1' }, 'Sale tracking'),
-          h('p', { class: 'gl-si-help' }, 'See which answers lead to orders. Links in your bot’s answers on your website already carry campaign tags, so your store’s own analytics count visits and sales from your bot with nothing to set up. To see those orders in Stats & Leads too, paste this once on your order confirmation (“thank you”) page.')),
+          h('p', { class: 'gl-si-help' }, h('b', null, 'Already tracking: '), 'your KnowBot website line reports orders on its own on most sites. When a visitor opens a link from an answer and then buys, the same line notices the order page and tells KnowBot which answer led to it. There is nothing else to install.')),
         state),
       h('div', { class: 'gl-sale-body' },
-        codeTabs([
-          { label: 'Shopify', lang: 'js', code: () => saleSnippets().shopify },
-          { label: 'WooCommerce', lang: 'js', code: () => saleSnippets().woo },
-          { label: 'Any site', lang: 'html', code: () => saleSnippets().any },
-        ], 'gl-sale-code'),
-        h('h4', { class: 'gl-h4' }, 'Where it goes'),
+        live,
+        h('h4', { class: 'gl-h4' }, 'How an order is noticed'),
         h('ul', { class: 'gl-sale-steps' },
-          step('Shopify:', 'Settings, then Customer events, then Add custom pixel. Name it KnowBot, paste the Shopify code, press Save, then Connect. (An older store that still has the “Additional scripts” box on its order status page can paste the Any site line there instead, with Shopify’s own order values.)'),
-          step('WooCommerce:', 'paste the WooCommerce code into your theme’s functions.php, or add it with a code snippets plugin. It fills in the order number, total and currency for you.'),
-          step('Any other site:', 'put the Any site line on the page a customer sees after paying, and fill in the order id, the order total as a plain number (129.90) and the three-letter currency.')),
-        h('p', { class: 'gl-sale-note' }, 'Your website line (above) remembers which answer a visitor clicked, in their browser on your site. It sets no cookie. The snippet sends the order id, total, currency and item names. It never sends a customer’s name, email or address, and orders that did not start from your bot are not sent at all.'),
+          step('Your store’s purchase event.', 'If your site already tells Google Analytics or Google Tag Manager about purchases, your KnowBot line reads the same event: the order number, total and currency.'),
+          step('Your order page.', 'On WooCommerce, the “Order received” page is read directly.'),
+          step('Never a guess.', 'If an order page’s total or currency is not clear, nothing is counted. This card tells you, and the snippet below makes it exact.')),
+        shopify, snippet,
+        h('p', { class: 'gl-sale-note' }, 'Your website line remembers which answer a visitor clicked, in their browser on your site. KnowBot sets no cookie. Only the order id, total, currency and item names are sent. Never a customer’s name, email or address, and orders that did not start from your bot are not sent at all. Your store’s own analytics also count these visits, from the campaign tags on every link.'),
         h('div', { class: 'gl-sale-row' },
           h('label', { class: 'gl-sale-winlabel', for: winId }, 'Count an order when it comes within'), win, h('span', { class: 'gl-sale-winlabel' }, 'of a click'),
           h('button', { type: 'button', class: 'st-link-btn gl-sale-stats', id: 'gl-sale-stats', onclick: () => document.dispatchEvent(new CustomEvent('knowbot:open-sales')) }, 'See clicks and sales'))));
-    // what the server knows: the window, and whether an order page has reported in yet
+    // what the server knows: the window, and what the owner's site has reported so far
+    const paint = (r) => {
+      const st = saleStatus(r);
+      state.textContent = st.chip;
+      state.className = `chip ${st.tone} is-label gl-si-state gl-sale-state`;
+      live.textContent = st.text;
+      saleCard.dataset.status = r?.tracking === false ? 'off' : (r?.saleTracking?.status || 'none');
+      if (r?.saleTracking?.unread) snippet.open = true;
+      if (r?.saleTracking?.via === 'pixel') shopify.open = true;
+    };
     Promise.resolve(typeof api.attribution === 'function' ? api.attribution(30) : null).then((r) => {
-      if (!r || closing) return;
+      if (closing) return;
+      if (!r) return paint(null);
       if (SALE_WINDOWS.includes(Number(r.saleWindowDays))) win.value = String(r.saleWindowDays);
       else if (r.saleWindowDays) { win.append(h('option', { value: String(r.saleWindowDays) }, `${r.saleWindowDays} days`)); win.value = String(r.saleWindowDays); }
-      const on = !!r.saleTracking?.installed;
-      state.textContent = r.tracking === false ? 'Link tracking is off' : on ? 'Installed' : 'Not installed yet';
-      state.className = `chip ${on && r.tracking !== false ? 'green' : 'gray'} is-label gl-si-state gl-sale-state`;
-    }).catch(() => {});
+      paint(r);
+    }).catch(() => paint(null));
     return saleCard;
   }
 

@@ -824,8 +824,8 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     return res.end();
   }
   /**
-   * POST /v1/bots/:id/sale {cid, order, total, currency, items?} | {ping:true}: the owner's order-confirmation page
-   * reports an order for a click id (site/sale.js). Public (it runs on the owner's site, any origin), limited per
+   * POST /v1/bots/:id/sale {cid, order, total, currency, items?, via?} | {ping:true, via?, unread?, page?}: the owner's
+   * site reports an order for a click id (site/sale.js, loaded by the website line; or the owner's Shopify custom pixel). Public (it runs on the owner's site, any origin), limited per
    * address and per bot, idempotent per order id. Only a click id this bot issued, inside the owner's attribution
    * window, creates a sale; amounts are checked; fields other than these are ignored (no customer details are kept).
    * → 200 {ok, attributed, duplicate?, reason?}; 400 for a malformed report.
@@ -837,9 +837,14 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     const target = await resolveTarget(botId);
     if (!trackingOn(target) || typeof leads?.sale !== 'function') return send(res, 200, { ok: true, attributed: false, reason: 'tracking_off' });
     const bot = leadBotOf(target);
-    leads.salePing?.(bot);
-    if (body.ping === true || body.cid == null || body.cid === '') return send(res, 200, { ok: true, attributed: false, reason: 'no_click' });
-    const r = await leads.sale({ botId: bot, cid: body.cid, order: body.order, total: body.total, currency: body.currency, items: body.items, windowDays: saleWindowOf(target) });
+    const via = typeof body.via === 'string' ? body.via : null;
+    if (body.ping === true || body.cid == null || body.cid === '') {
+      // a check-in: an order page was seen (which detector, and what it could not read), or the website line ran on the site
+      await leads.salePing?.(bot, { page: body.page === 'site' ? 'site' : null, via, unread: typeof body.unread === 'string' ? body.unread : null });
+      return send(res, 200, { ok: true, attributed: false, reason: 'no_click' });
+    }
+    leads.salePing?.(bot, { via });                           // an order page was seen and read, whether or not the order counts
+    const r = await leads.sale({ botId: bot, cid: body.cid, order: body.order, total: body.total, currency: body.currency, items: body.items, windowDays: saleWindowOf(target), via: via || 'snippet' });
     if (!r.ok) throw new ApiError(400, 'invalid_request', 'This order report is not valid: it needs cid, order, total (a plain number) and currency (three letters).', { reason: r.reason });
     return send(res, 200, r);
   }

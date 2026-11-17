@@ -114,17 +114,29 @@ Source: /studio/
 
 Every tagged link carries campaign tags, also called UTM tags: short labels at the end of the link that analytics tools read. They say the visit came from your bot (source knowbot), from where (webchat, homepage or voice) and which bot. So your store's analytics attribute visits and orders to your bot with nothing to set up. In Shopify, open Analytics, then Reports, and look at sessions and sales by marketing source or referrer for "knowbot". In Google Analytics, open Reports, Acquisition, Traffic acquisition and look for "knowbot / webchat". The tags never replace campaign tags a link already has.
 
-## Sale tracking on your order confirmation page
+## Sale tracking needs nothing extra on most sites
 
 Source: /studio/
 
-To see orders in Stats & Leads too, open Set up and find the Sale tracking card. Copy the snippet for your platform and paste it once. Shopify: Settings, Customer events, Add custom pixel, paste, Save, Connect. WooCommerce: paste the code into your theme's functions.php or a code snippets plugin. Any other site: put the line on the page shown after payment and fill in the order id, the total as a plain number and the three-letter currency. Your website line must be on your site too: it remembers which answer the visitor clicked.
+Sale tracking runs in the same place as your KnowBot website line: there is no second thing to install. When a visitor opens a link from an answer and later reaches your order page, the same line notices the order and reports it, and it shows in Stats & Leads under Clicks & sales. It notices an order in two ways: from the purchase event your site already sends to Google Analytics or Google Tag Manager, or by reading a WooCommerce "Order received" page. If an order page's total or currency is not clear, nothing is counted and nothing is guessed. Open Set up and find the Sale tracking card to see the status: Detected on your site, Waiting for the first order page, or Not seen yet.
+
+## Sale tracking on Shopify needs one paste
+
+Source: /studio/
+
+Shopify does not let any website script run on its checkout and thank-you pages, so on Shopify the order is reported by a small custom pixel that you paste once. There is no app to install. Open Set up, find the Sale tracking card, open "Shopify: one extra paste" and copy the code. In your Shopify admin open Settings, then Customer events, press Add custom pixel, name it KnowBot, paste the code, press Save, then Connect. On your shop's pages your KnowBot line adds the click to the cart as a note called kb_cid, so the order carries it through checkout; you will see it under Additional details on those orders.
+
+## If your order page does not load your KnowBot line
+
+Source: /studio/
+
+Some sites send buyers to a checkout or thank-you page that does not carry the website line, or print the order in a way that cannot be read for certain. For those, open Set up, find the Sale tracking card and open "If your order page doesn't load the KnowBot line". Any site: put the line on the page shown after payment and fill in the order id, the total as a plain number and the three-letter currency. WooCommerce: paste the code into your theme's functions.php or a code snippets plugin; it fills in the values for you.
 
 ## How an order is matched to an answer
 
 Source: /studio/
 
-A link clicked in the chat carries a random click id. Your site keeps it in the visitor's browser, and the order confirmation page sends it back with the order id, total, currency and item names. An order counts when it comes within 7 days of the click; you can change that to between 1 and 30 days in the Sale tracking card. The newest click wins. Each order is counted once. Orders are labelled "Reported by your site": they are what your page reported, not verified payments, so check them against your store's orders.
+A link clicked in the chat carries a random click id. Your site keeps it in the visitor's browser, and your order page sends it back with the order id, total, currency and item names. Each order in Stats & Leads says how it was noticed: from your store's purchase event, seen on your order page, or reported by your snippet or your store's pixel. An order counts when it comes within 7 days of the click; you can change that to between 1 and 30 days in the Sale tracking card. The newest click wins. Each order is counted once. Orders are labelled "Reported by your site": they are what your page reported, not verified payments, so check them against your store's orders.
 
 ## What click and sale tracking can miss
 

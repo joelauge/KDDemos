@@ -193,7 +193,7 @@ th[aria-sort="ascending"] .kb-leads-sort-ico, th[aria-sort="descending"] .kb-lea
 .kb-sales-tile { background: var(--bg); }
 .kb-sales-cols { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px 24px; align-items: start; }
 .kb-sales-cols > * { min-width: 0; }
-.kb-sales-money .kb-sales-tile-n { font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }
+.kb-sales-money .kb-sales-tile-n { font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; white-space: normal; min-width: 0; }
 .kb-sales-cta { grid-column: span 2; align-content: start; gap: 6px; border-style: dashed; border-color: var(--line-2); }
 .kb-sales-cta-t { font: 700 15px/1.3 var(--display); color: var(--strong); }
 .kb-sales-setup { justify-self: start; margin-top: 4px; }

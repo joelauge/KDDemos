@@ -247,9 +247,11 @@ try {
     }
     // phone width: the notice fits
     const t5 = { ...t1 };
-    const P = await studioPage(browser, t5, { viewport: { width: 390, height: 844 } });
+    // the payment fails before the phone opens the Studio: the page reads the billing state once when it loads, so
+    // failing it afterwards raced that read and the notice sometimes never showed
     pay.sent.length = 0;
-    pay.failInvoice(s2 ? s2.subscription : s1.subscription);
+    await pay.failInvoice(s2 ? s2.subscription : s1.subscription);
+    const P = await studioPage(browser, t5, { viewport: { width: 390, height: 844 } });
     const shown = await P.page.locator('#co-bill-notice').waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
     const fit = shown ? await P.page.evaluate(() => { const r = document.getElementById('co-bill-notice').getBoundingClientRect(); const b = document.getElementById('co-bill-action').getBoundingClientRect(); return { scroll: document.documentElement.scrollWidth <= innerWidth + 1, inside: r.left >= 0 && r.right <= innerWidth + 0.5, btn: b.right <= innerWidth && b.bottom <= innerHeight }; }) : null;
     check('phone: the billing notice fits, no horizontal page scroll', !!fit && fit.scroll && fit.inside && fit.btn, JSON.stringify(fit));

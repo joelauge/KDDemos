@@ -122,7 +122,9 @@ export function csvCell(v) {
 }
 export const csvRow = (cells) => cells.map(csvCell).join(',');
 export const CLICK_COLUMNS = Object.freeze(['timestamp', 'bot', 'channel', 'link_type', 'product', 'price', 'currency', 'url', 'question', 'answer_id', 'click_id', 'order_id', 'order_total', 'order_currency']);
-export const SALE_COLUMNS = Object.freeze(['timestamp', 'bot', 'order_id', 'total', 'currency', 'items', 'channel', 'clicked_at', 'product', 'url', 'question', 'click_id', 'source']);
+/** How an order was noticed, in the owner's words (the Stats orders table and the sales CSV). */
+export const SALE_VIA_TEXT = Object.freeze({ snippet: 'reported by your snippet', event: "from your store's purchase event", page: 'seen on your order page', pixel: "reported by your store's pixel" });
+export const SALE_COLUMNS = Object.freeze(['timestamp', 'bot', 'order_id', 'total', 'currency', 'items', 'channel', 'clicked_at', 'product', 'url', 'question', 'click_id', 'source', 'detected_by']);
 export const itemsText = (items = []) => (items || []).map((i) => `${(i.quantity || 1) > 1 ? `${i.quantity} x ` : ''}${i.title || ''}${i.variant ? ` (${i.variant})` : ''}`).join('; ');
 
 export const CONSENT_LABEL = Object.freeze({
@@ -402,16 +404,25 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
   //            url, title?, source:'site'}  an order the owner's own order-confirmation page reported (site/sale.js,
   //            POST /v1/bots/:id/sale) for a click id this module issued, inside the attribution window. Reported by
   //            the site, not a verified payment. No customer name, email or address is accepted or kept.
-  // saleping   {kind:'saleping', at, bot}  the sale snippet ran on an order page (at most one a day): "it is installed".
+  //            `via` says how the order was noticed: 'snippet' (the owner's own snippet or call; also every report from
+  //            before detection existed), 'event' (the store's purchase event in dataLayer), 'page' (read from the order
+  //            page itself), 'pixel' (the owner's Shopify custom pixel).
+  // saleping   {kind:'saleping', at, bot, page?:'site', via?, unread?}  site/sale.js checked in, at most once a day per
+  //            sort: an order page was seen (no `page`; `via` the detector, `unread` = 'order' | 'total' | 'currency'
+  //            when it could not read the order for certain, so nothing was guessed), or (page:'site') the website line
+  //            ran on a page of the owner's site for a visitor who came from the chat.
   const SHOWN_LINKS_MAX = 16, CLICKS_PER_ANSWER = 30, SALES_PER_ANSWER = 5;
   const LINK_KINDS = ['product', 'source', 'link'];
   const hostKey = (u) => { try { return new URL(/^https?:\/\//i.test(u) ? u : `https://${u}`).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } };
   // a renderer may hand the browser the link in its normal form (https://shop.example → https://shop.example/)
   const normUrl = (u) => { try { return new URL(u).href; } catch { return String(u || ''); } };
+  const SALE_VIAS = ['snippet', 'event', 'page', 'pixel'], UNREAD = ['order', 'total', 'currency'];
+  const viaOf = (v) => (SALE_VIAS.includes(v) ? v : 'snippet');
+  const pingKey = (e) => `${e.page === 'site' ? 'site' : 'order'}|${e.via || ''}|${e.unread || ''}`;
   /** The bot's attribution index (answers by click id, their clicks, orders by id), built once and kept current by append. */
   function attOf(st) {
     if (st.att) return st.att;
-    const A = { shown: new Map(), clicks: new Map(), orders: new Map(), sales: new Map(), pingDay: '' };
+    const A = { shown: new Map(), clicks: new Map(), orders: new Map(), sales: new Map(), pings: new Map() };
     for (const e of st.events) attAdd(A, e);
     st.att = A;
     return A;
@@ -420,7 +431,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     if (e.kind === 'shown' && e.cid) A.shown.set(e.cid, e);
     else if (e.kind === 'chatclick' && e.cid) { const b = e.cid.slice(0, 10); const l = A.clicks.get(b); if (l) l.push(e); else A.clicks.set(b, [e]); }
     else if (e.kind === 'sale') { A.orders.set(String(e.order), e); const b = String(e.cid || '').slice(0, 10); A.sales.set(b, (A.sales.get(b) || 0) + 1); }
-    else if (e.kind === 'saleping') A.pingDay = new Date(Number(e.at)).toISOString().slice(0, 10);
+    else if (e.kind === 'saleping') A.pings.set(pingKey(e), new Date(Number(e.at)).toISOString().slice(0, 10));
   }
   /**
    * An answer with links was shown on a chat surface. links: [{url, kind:'product'|'source'|'link', title?, price?, currency?}].
@@ -494,7 +505,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
    * anything that is not {cid, order, total, currency, items[{title, quantity, price}]} is ignored (no customer details).
    * → { ok, attributed, duplicate?, reason? }   ok:false = a malformed report (400); attributed:false = not ours to count
    */
-  async function sale({ botId, cid, order, total, currency, items = null, windowDays = 7, at = null } = {}) {
+  async function sale({ botId, cid, order, total, currency, items = null, windowDays = 7, at = null, via = 'snippet' } = {}) {
     try {
       const orderId = String(order ?? '').trim();
       const amount = amountOf(total), cur = String(currency || '').trim().toUpperCase();
@@ -517,20 +528,25 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
       const list = (Array.isArray(items) ? items : []).slice(0, 20).map((i) => ({ title: oneLine(i?.title).slice(0, 120), quantity: Math.max(1, Math.min(999, Math.floor(Number(i?.quantity)) || 1)),
         ...(amountOf(i?.price) != null ? { price: amountOf(i.price) } : {}) })).filter((i) => i.title);
       append(botId, { v: 1, kind: 'sale', at: t, bot: campaignOf(botId), cid: r.id, order: orderId, total: amount, currency: cur, ...(list.length ? { items: list } : {}),
-        clickAt, clickSeen: !!last, channel: r.sh.channel, answer: r.sh.answer || null, linkKind: link?.k || null, url: link?.u || null, ...(link?.t ? { title: link.t } : {}), source: 'site' });
+        clickAt, clickSeen: !!last, channel: r.sh.channel, answer: r.sh.answer || null, linkKind: link?.k || null, url: link?.u || null, ...(link?.t ? { title: link.t } : {}), source: 'site', via: viaOf(via) });
       log(`[leads] bot ${campaignOf(botId)}: sale reported by the site (${cur} ${amount}, ${r.sh.channel})`);
       return { ok: true, attributed: true };
     } catch (e) { log(`[leads] sale not recorded: ${e.message}`); return { ok: false, attributed: false, reason: 'error' }; }
   }
-  /** The sale snippet ran on an order page (with or without a click id): remembered once a day, so the report can say it is installed. */
-  async function salePing(botId) {
+  /**
+   * site/sale.js checked in: an order page was seen (with or without a click id; `via` the detector, `unread` what it
+   * could not read), or with page:'site' the website line ran on the owner's site. Remembered once a day per sort, so
+   * the Studio can say whether sale tracking works without keeping anything about a visitor.
+   */
+  async function salePing(botId, { page = null, via = null, unread = null } = {}) {
     try {
       if (!botId) return false;
       const st = stateOf(botId);
       await st.ready;
+      const e = { v: 1, kind: 'saleping', at: now(), bot: campaignOf(botId), ...(page === 'site' ? { page: 'site' } : { ...(SALE_VIAS.includes(via) ? { via } : {}), ...(UNREAD.includes(unread) ? { unread } : {}) }) };
       const A = attOf(st), day = new Date(now()).toISOString().slice(0, 10);
-      if (A.pingDay === day) return false;
-      append(botId, { v: 1, kind: 'saleping', at: now(), bot: campaignOf(botId) });
+      if (A.pings.get(pingKey(e)) === day) return false;
+      append(botId, e);
       return true;
     } catch { return false; }
   }
@@ -581,7 +597,6 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     }
     const saleByCid = new Map(saleEv.map((s) => [s.cid, s]));
     const pings = every.filter((e) => e.kind === 'saleping'), allSales = every.filter((e) => e.kind === 'sale');
-    const lastOf = (list) => list.reduce((m, e) => Math.max(m, Number(e.at)), 0) || null;
     const clickedAnswers = shownEv.filter((e) => clicked.has(e.cid)).length;
     return {
       days: d, since: iso(since), retentionDays: keepDays, windowDays: Math.max(1, Math.min(30, Math.floor(Number(windowDays)) || 7)), currency,
@@ -592,8 +607,26 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
       clicks: clickEv.map((e) => ({ at: iso(e.at), bot: e.bot, channel: e.channel, kind: e.linkKind, url: e.url, title: e.title || '', price: e.price ?? null, currency: e.currency || null,
         question: questionOf(e.cid), answer: e.answer || null, cid: e.cid, ...(saleByCid.has(e.cid) ? { order: saleByCid.get(e.cid).order, orderTotal: saleByCid.get(e.cid).total, orderCurrency: saleByCid.get(e.cid).currency } : {}) })).reverse(),
       sales: saleEv.map((s) => ({ at: iso(s.at), bot: s.bot, order: s.order, total: s.total, currency: s.currency, items: s.items || [], itemsText: itemsText(s.items || []), channel: s.channel,
-        clickedAt: iso(s.clickAt), clickSeen: s.clickSeen !== false, kind: s.linkKind || null, url: s.url || null, title: s.title || '', question: questionOf(s.cid), answer: s.answer || null, cid: s.cid, source: 'site' })).reverse(),
-      saleTracking: { installed: !!(pings.length || allSales.length), lastSeenAt: iso(Math.max(lastOf(pings) || 0, lastOf(allSales) || 0) || null), lastSaleAt: iso(lastOf(allSales)) },
+        clickedAt: iso(s.clickAt), clickSeen: s.clickSeen !== false, kind: s.linkKind || null, url: s.url || null, title: s.title || '', question: questionOf(s.cid), answer: s.answer || null, cid: s.cid, source: 'site', via: viaOf(s.via) })).reverse(),
+      saleTracking: saleTrackingOf(pings, allSales, iso),
+    };
+  }
+  /**
+   * What the Studio shows about sale tracking. status: 'detected' (an order page was seen and read: by a sale, or by an
+   * order-page check-in), 'waiting' (the website line was seen running on the site, no order page yet), 'none'.
+   * `via` is the detector that fired last; `unread` is set while the newest order page seen could not be read.
+   */
+  function saleTrackingOf(pings, sales, iso) {
+    const lastOf = (list) => list.reduce((m, e) => (m && Number(m.at) >= Number(e.at) ? m : e), null);
+    const orderPings = pings.filter((e) => e.page !== 'site');
+    const read = lastOf([...orderPings.filter((e) => !e.unread), ...sales]), unread = lastOf(orderPings.filter((e) => e.unread)), site = lastOf(pings.filter((e) => e.page === 'site'));
+    const lastSale = lastOf(sales), seen = lastOf([...orderPings, ...sales]);
+    const stuck = unread && (!read || Number(unread.at) > Number(read.at));
+    return {
+      installed: !!seen, lastSeenAt: iso(seen?.at), lastSaleAt: iso(lastSale?.at),
+      status: read ? 'detected' : site || unread ? 'waiting' : 'none',
+      via: read ? viaOf(read.via) : null, siteSeenAt: iso(site?.at),
+      unread: stuck ? { via: viaOf(unread.via), what: unread.unread, at: iso(unread.at) } : null,
     };
   }
   /** Per answered question: its clicks and attributed sale, for the question history (matched there by text, channel and time). */
@@ -618,7 +651,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
   /** CSV of the attributed sales (SALE_COLUMNS), newest first. */
   async function salesCsv(botIds, o = {}) {
     const r = await attribution(botIds, o);
-    return `${[csvRow(SALE_COLUMNS), ...r.sales.map((s) => csvRow([s.at, s.bot, s.order, s.total, s.currency, s.itemsText, s.channel, s.clickedAt || '', s.title, s.url || '', s.question, s.cid, 'reported by your site']))].join('\r\n')}\r\n`;
+    return `${[csvRow(SALE_COLUMNS), ...r.sales.map((s) => csvRow([s.at, s.bot, s.order, s.total, s.currency, s.itemsText, s.channel, s.clickedAt || '', s.title, s.url || '', s.question, s.cid, 'reported by your site', SALE_VIA_TEXT[s.via] || SALE_VIA_TEXT.snippet]))].join('\r\n')}\r\n`;
   }
 
   return { lead, checkout, link, click, agent, agentDay, linkRecord, linksOf, report, csv, shown, chatClick, sale, salePing, attribution, attributionRows, clicksCsv, salesCsv, retentionDays: keepDays, persist,

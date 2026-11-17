@@ -10,17 +10,39 @@
 //   data-voice     voice mode with the orb: the chat bubble always has a mic (data-voice="off" removes it); with the chat
 //                  off, data-voice="on" (or the saved Voice switch) shows the round voice button
 //   data-homepage  the homepage search over this page (../site/overlay.js)
+//   data-sales     "off": do not look for completed orders on this site (../site/sale.js; on unless switched off)
 // A feature attribute left out follows the bot's saved switches (GET <api>/api/v1/channels/:bot → website), so the
 // owner can switch features on and off in the Studio without touching the page. Without data-mode and without any of
 // these attributes, a bot whose switches can't be read keeps the old behaviour (the chat bubble). Old snippets
 // (data-mode="voice", data-mode="inline", data-voice="on" in the chat) work as before.
 import { mount, ensureCss } from './widget.js';
 import { apiForScriptHost } from './site-config.js';
-import { rememberClickId } from './track.js';
+import { rememberClickId, privacySignal } from './track.js';
 
 // A visitor who arrived from a link in the chat (…?kb_cid=<click id>): the id is kept in this site's own localStorage
-// (not a cookie) so the order-confirmation page can report the sale (site/sale.js). Nothing is sent from here.
+// (not a cookie) so the order page can report the sale. Nothing is sent from here.
 rememberClickId();
+
+// Sale tracking rides on this same line, with nothing else to install: once the page has loaded and the browser is
+// idle, ../site/sale.js is fetched (small, cached, async). On whatever page this line runs it spots a completed order
+// (the store's own purchase event, a WooCommerce order page, …) and reports it for the stored click id; on a Shopify
+// storefront it puts the click id in the cart. data-sales="off" on the line turns it off; so do Global Privacy
+// Control and Do Not Track.
+/* sales:begin: the same lines in lib/embed.js and site/overlay.js (server/test/sale-detect.test.mjs keeps them in step) */
+function loadSales(src, bot, api) {
+  const go = () => {
+    try {
+      if (!bot || window.knowbotSale || document.querySelector('script[data-knowbot-sale], script[src*="site/sale.js"]')) return;
+      const s = document.createElement('script');
+      s.src = src; s.async = true; s.dataset.bot = bot; s.dataset.knowbotSale = '1';
+      if (api) s.dataset.api = api;
+      (document.head || document.documentElement).append(s);
+    } catch { /* sale tracking never breaks the page */ }
+  };
+  const idle = () => (window.requestIdleCallback ? window.requestIdleCallback(go, { timeout: 4000 }) : setTimeout(go, 200));
+  try { if (document.readyState === 'complete') idle(); else window.addEventListener('load', idle, { once: true }); } catch { /* same */ }
+}
+/* sales:end */
 
 const me = new URL(import.meta.url);
 const script = [...document.querySelectorAll('script[src]')].find((s) => s.src === me.href)
@@ -50,6 +72,7 @@ const botId = /^[a-z0-9_-]{1,64}$/i.test(d.bot || '') ? d.bot : instance;
 // the widget's API is the origin (it adds /api/…); voice and the channel config live under <origin>/api/v1
 const apiRoot = String(apiBase).replace(/\/+$/, '').replace(/\/api$/, '');
 const v1Base = `${apiRoot}/api`;
+try { if (botId && d.sales !== 'off' && !privacySignal()) loadSales(new URL('../site/sale.js', me).href, botId, new URL(apiRoot).origin); } catch { /* sale tracking never breaks the page */ }
 // An instance's name, greeting and starter questions come from the server unless the page sets them.
 const instanceConfig = async () => {
   if (!instance) return null;
