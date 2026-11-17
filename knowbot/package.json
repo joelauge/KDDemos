@@ -14,6 +14,7 @@
     "studio:dev": "node studio/test/dev-server.mjs",
     "studio:smoke": "node studio/test/smoke.mjs",
     "leads:smoke": "node studio/test/leads-smoke.mjs",
+    "attribution:smoke": "node studio/test/attribution-smoke.mjs",
     "site:smoke": "node studio/test/site-smoke.mjs",
     "voice:smoke": "node studio/test/voice-smoke.mjs",
     "tools:smoke": "node studio/test/tools-shots.mjs",

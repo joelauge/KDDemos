@@ -103,6 +103,8 @@ export function productList(a) {
     .map(({ url, title, price = null, compareAt = null, currency = null, availability = null, image = null }) => ({ url, title, price, compareAt, currency, availability, image }));
 }
 const withProducts = (a) => { const p = productList(a); return p.length ? { products: p } : {}; };
+/** The link tags and click id for the cards and chips on screen (devapi chatTrack); absent when tracking is off. */
+const withTrack = (a) => (a?.track && !a.refused ? { track: a.track } : {});
 
 /** The citations a browser shows as chips: number, human title, file, and the source page when there is one. */
 export function citationChips(a) {
@@ -198,7 +200,7 @@ export function handleWebVoice(ws, cx) {
     const onScreen = !a.refused && !phone && productList(a).length ? ` ${ON_SCREEN_LINE}` : '';
     const spoken = a.refused ? NOT_IN_DATA : `${formatSpoken(a, 450, { names, attribute: false })}${onScreen}`;
     transcript.push({ role: 'user', text: q }, { role: 'agent', text: spoken });
-    sendJson({ type: 'answer', question: q, text: a.refused ? NOT_IN_DATA : a.answer, spoken, refused: !!a.refused, citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a) });
+    sendJson({ type: 'answer', question: q, text: a.refused ? NOT_IN_DATA : a.answer, spoken, refused: !!a.refused, citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a), ...withTrack(a) });
   }
 
   // ---------------------------------------------------------------- gemini engine
@@ -296,7 +298,7 @@ export function handleWebVoice(ws, cx) {
     let note;
     if (engine === 'gemini') {
       runShared = createToolRunner({ ask: (q) => askFor(q).then((a) => {
-        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false }), citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a), ...(a.instant ? { instant: true } : {}) });
+        sendJson({ type: 'citations', query: a.question, refused: !!a.refused, say: a.refused ? NOT_IN_DATA : formatSpoken(a, 450, { names, attribute: false }), citations: citationChips(a), proofUrl: a.proofUrl || null, ...withProducts(a), ...withTrack(a), ...(a.instant ? { instant: true } : {}) });
         return a;
       }), sendInfo: cx.sendInfo ? (x) => cx.sendInfo({ ...x, callerKey }) : null, env, botName: cx.botName, org: cx.org, callSid: sid, log, getTranscript: () => transcript,
         sendMedia: cx.sendInfo ? cx.sendInfoMedia : null, onScreen: !phone, takeMessage: takeMessages ? (m) => cx.takeMessage({ ...m, callerKey }) : null });

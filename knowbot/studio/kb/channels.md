@@ -101,3 +101,33 @@ To add it to your homepage, paste one line of code into your homepage, just befo
 Source: /studio/
 
 A channel that is missing its provider settings answers with a clear "channel not configured" message instead of failing silently. Provider messages are checked with a signature when the secret is set. 
+
+## Tracking clicks from the chat to your product pages
+
+Source: /studio/
+
+When your bot answers on your website (the chat bubble, Homepage search or voice mode), the product cards, source links and links in the answer are tagged, and each click is counted. Open Stats & Leads and look at Clicks & sales: clicks, the share of answers that got a click, a chart by day, the top products and the questions that led to clicks. You can download the clicks as a CSV. This is on by default. The Track links switch at the top of Stats & Leads turns it off: links then go out untouched and nothing is counted.
+
+## Seeing bot sales in your store's own analytics
+
+Source: /studio/
+
+Every tagged link carries campaign tags, also called UTM tags: short labels at the end of the link that analytics tools read. They say the visit came from your bot (source knowbot), from where (webchat, homepage or voice) and which bot. So your store's analytics attribute visits and orders to your bot with nothing to set up. In Shopify, open Analytics, then Reports, and look at sessions and sales by marketing source or referrer for "knowbot". In Google Analytics, open Reports, Acquisition, Traffic acquisition and look for "knowbot / webchat". The tags never replace campaign tags a link already has.
+
+## Sale tracking on your order confirmation page
+
+Source: /studio/
+
+To see orders in Stats & Leads too, open Set up and find the Sale tracking card. Copy the snippet for your platform and paste it once. Shopify: Settings, Customer events, Add custom pixel, paste, Save, Connect. WooCommerce: paste the code into your theme's functions.php or a code snippets plugin. Any other site: put the line on the page shown after payment and fill in the order id, the total as a plain number and the three-letter currency. Your website line must be on your site too: it remembers which answer the visitor clicked.
+
+## How an order is matched to an answer
+
+Source: /studio/
+
+A link clicked in the chat carries a random click id. Your site keeps it in the visitor's browser, and the order confirmation page sends it back with the order id, total, currency and item names. An order counts when it comes within 7 days of the click; you can change that to between 1 and 30 days in the Sale tracking card. The newest click wins. Each order is counted once. Orders are labelled "Reported by your site": they are what your page reported, not verified payments, so check them against your store's orders.
+
+## What click and sale tracking can miss
+
+Source: /studio/
+
+Some orders will not be matched: a visitor who blocks tracking scripts, who clicks on a phone and buys later on a laptop, who clears their browser data, or whose checkout runs on a different web address from your shop. A link opened from the right-click menu still carries its tags, but its click is only counted if an order follows. Visitors whose browser sends Global Privacy Control or Do Not Track are never counted. Your store's own analytics and KnowBot may therefore show slightly different numbers.

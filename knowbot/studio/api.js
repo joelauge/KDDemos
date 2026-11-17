@@ -431,6 +431,13 @@ const historyQs = (p = {}) => { const sp = new URLSearchParams(); for (const [k,
 export async function history(params = {}) { return request('GET', trialPath(`/history?${historyQs(params)}`)); }
 /** GET /history.csv?…the same filters -> the raw Response (text/csv): date,time,channel,question,outcome. */
 export async function historyCsv(params = {}) { return request('GET', trialPath(`/history.csv?${historyQs(params)}`), { raw: true }); }
+/** GET /attribution?days=&tz= (Clicks & sales, studio/leads.js) -> {totals, byDay, products, questions, clicks, sales, saleTracking, saleWindowDays, tracking}. */
+export async function attribution(days = 30, tz = -new Date().getTimezoneOffset()) { return request('GET', trialPath(`/attribution?days=${encodeURIComponent(days)}&tz=${encodeURIComponent(tz)}`)); }
+/** GET /clicks.csv | /sales.csv ?days=&tz= -> the raw Response (text/csv). */
+export async function clicksCsv(days = 30, tz = -new Date().getTimezoneOffset()) { return request('GET', trialPath(`/clicks.csv?days=${encodeURIComponent(days)}&tz=${encodeURIComponent(tz)}`), { raw: true }); }
+export async function salesCsv(days = 30, tz = -new Date().getTimezoneOffset()) { return request('GET', trialPath(`/sales.csv?days=${encodeURIComponent(days)}&tz=${encodeURIComponent(tz)}`), { raw: true }); }
+/** PATCH /leads {saleWindowDays} -> {tracking, saleWindowDays}: how many days after a click an order still counts (1 to 30). */
+export async function setSaleWindow(days) { return request('PATCH', trialPath('/leads'), { body: { saleWindowDays: Number(days) } }); }
 /** PATCH /leads {tracking} -> {tracking}: tracked links on (default) or off for this bot. */
 export async function setLeadTracking(tracking) { return request('PATCH', trialPath('/leads'), { body: { tracking: !!tracking } }); }
 /** GET /notes -> {tags:[{tag, count}]}: the tags this bot's notes and files already use (knowDrive topic:* tags). */

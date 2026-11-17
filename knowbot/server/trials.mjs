@@ -5025,8 +5025,12 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   // ------------------------------------------------------------------------- leads report (server/leads.mjs)
   // GET /trials/:id/leads?days=7|30 → { interactions:{total, answered, refused, byChannel, byDay, sends}, leads:[…],
   //   conversions:{sent, clicks, clickedSends, items:[…]}, links:{sent, clicks}, tracking, days, retentionDays }
-  // GET /trials/:id/leads.csv?days=… → the CRM export (leads.mjs CSV_COLUMNS). PATCH /trials/:id/leads {tracking:boolean}.
+  // GET /trials/:id/leads.csv?days=… → the CRM export (leads.mjs CSV_COLUMNS). PATCH /trials/:id/leads {tracking?:boolean, saleWindowDays?:1..30}.
+  // GET /trials/:id/attribution?days=&tz= → Clicks & sales (leads.mjs attribution); /clicks.csv and /sales.csv are its exports.
   // The trial token is required (auth below): leads are never served on a public endpoint.
+  const SALE_WINDOW_DAYS = 7;
+  /** The owner's attribution window in days (1 to 30; 7 unless set): how long after a click an order still counts. */
+  const saleWindowOf = (T) => { const d = Math.floor(Number(T?.flags?.saleWindowDays)); return d >= 1 && d <= 30 ? d : SALE_WINDOW_DAYS; };
   const leadDays = (url) => { const d = Math.floor(Number(url.searchParams.get('days'))); return [1, 7, 30, 90].includes(d) ? d : 30; };
   async function leadsReport(T, days) {
     await questionsReady;
@@ -5048,7 +5052,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     }
     const r = o.leads ? await o.leads.report([T.id], { days }) : { days, leads: [], conversions: { sent: 0, clicks: 0, clickedSends: 0, items: [] }, links: { sent: 0, clicks: 0 }, retentionDays: null };
     const { agentItems, ...rest } = r; // the per-question list is for the CSV; the report shows the counts
-    return { botId: T.id, ...rest, agents: rest.agents || { questions: 0, answered: 0, refused: 0, limited: 0, free: 0, paid: 0, owner: 0, byDay: [] }, interactions, tracking: T.flags?.leadTracking !== false, available: !!o.leads };
+    return { botId: T.id, ...rest, agents: rest.agents || { questions: 0, answered: 0, refused: 0, limited: 0, free: 0, paid: 0, owner: 0, byDay: [] }, interactions, tracking: T.flags?.leadTracking !== false, saleWindowDays: saleWindowOf(T), available: !!o.leads };
   }
 
   // ------------------------------------------------------------------------- question history (server/questions.mjs questionHistory)
@@ -5076,6 +5080,28 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     await questionsReady;
     if (!questionsMod?.questionHistory) fail(503, 'unavailable', 'The question history is not available right now.');
     const r = await withTimeout(Promise.resolve(questionsMod.questionHistory(historyQuery(T, url))), 20000);
+    // each answered question's clicks and attributed sale (server/leads.mjs): matched by its words, channel and time,
+    // because the question log and the click log are kept apart (the click log never holds more than the question log)
+    if (o.leads?.attributionRows && Array.isArray(r?.items) && r.items.length) {
+      try {
+        const rows = await o.leads.attributionRows([T.id]);
+        const key = (q, ch) => `${ch}|${String(q || '').toLowerCase().replace(/\s+/g, ' ').trim()}`;
+        const pool = new Map();
+        for (const x of rows) { const k = key(x.question, x.channel); if (pool.has(k)) pool.get(k).push(x); else pool.set(k, [x]); }
+        for (const it of r.items) {
+          if (it.outcome !== 'answered') continue;
+          const list = pool.get(key(it.q, it.channel));
+          if (!list?.length) continue;
+          const t = Date.parse(it.at);
+          let best = -1, gap = 10 * 60000;
+          list.forEach((x, i) => { const g = Math.abs(x.at - t); if (!x.used && g <= gap) { best = i; gap = g; } });
+          if (best < 0) continue;
+          const x = list[best]; x.used = true;
+          it.clicks = x.clicks;
+          if (x.orders) it.sale = { orders: x.orders, total: x.total, currency: x.currency };
+        }
+      } catch (e) { log(`[studio] history: clicks not joined: ${e.message}`); }
+    }
     return { botId: T.id, ...r, retention: { questionsDays: null, leadsDays: o.leads?.retentionDays ?? 90, allDays: questionsMod.HISTORY_ALL_DAYS || 730 } };
   }
 
@@ -5520,11 +5546,16 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (sub === 'leads' && !fid) {
       if (m === 'PATCH') {
         const b = await readBody(req);
-        if (typeof b?.tracking !== 'boolean') fail(400, 'bad_request', 'tracking must be true or false', { field: 'tracking' });
-        T.flags = { ...(T.flags || {}), leadTracking: b.tracking };
-        if (b.tracking) delete T.flags.leadTracking; // on is the default
+        const hasWindow = b && b.saleWindowDays !== undefined;
+        if (typeof b?.tracking !== 'boolean' && (!hasWindow || b.tracking !== undefined)) fail(400, 'bad_request', 'tracking must be true or false', { field: 'tracking' });
+        const win = hasWindow ? Math.floor(Number(b.saleWindowDays)) : null;
+        if (hasWindow && !(win >= 1 && win <= 30)) fail(400, 'bad_request', 'saleWindowDays must be a whole number of days from 1 to 30', { field: 'saleWindowDays' });
+        T.flags = { ...(T.flags || {}) };
+        if (typeof b.tracking === 'boolean') { T.flags.leadTracking = b.tracking; if (b.tracking) delete T.flags.leadTracking; } // on is the default
+        // the attribution window: how long after a click an order still counts (server/leads.mjs sale); 7 days unless set
+        if (hasWindow) { T.flags.saleWindowDays = win; if (win === SALE_WINDOW_DAYS) delete T.flags.saleWindowDays; }
         saveSpecSoon(T);
-        return sendJson(res, 200, { tracking: b.tracking });
+        return sendJson(res, 200, { tracking: T.flags.leadTracking !== false, saleWindowDays: saleWindowOf(T) });
       }
       allow('GET');
       return sendJson(res, 200, await leadsReport(T, leadDays(url)));
@@ -5536,6 +5567,22 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const name = `knowbot-leads-${String(T.spec?.name || T.id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'bot'}-${new Date(now()).toISOString().slice(0, 10)}.csv`;
       res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
       return res.end(`\ufeff${body}`); // a BOM so spreadsheet apps read UTF-8 names and questions correctly
+    }
+    // Clicks & sales (server/leads.mjs attribution): links clicked in the chat surfaces and the orders the owner's site reported
+    if (sub === 'attribution' && !fid) {
+      allow('GET');
+      const tz = url.searchParams.has('tz') ? Number(url.searchParams.get('tz')) : 0;
+      const r = o.leads?.attribution ? await o.leads.attribution([T.id], { days: leadDays(url), tz, windowDays: saleWindowOf(T) }) : null;
+      return sendJson(res, 200, { botId: T.id, available: !!r, tracking: T.flags?.leadTracking !== false, saleWindowDays: saleWindowOf(T), ...(r || {}) });
+    }
+    if ((sub === 'clicks.csv' || sub === 'sales.csv') && !fid) {
+      allow('GET');
+      const kind = sub === 'clicks.csv' ? 'clicks' : 'sales';
+      const opts = { days: leadDays(url), tz: url.searchParams.has('tz') ? Number(url.searchParams.get('tz')) : 0, windowDays: saleWindowOf(T) };
+      const body = o.leads?.clicksCsv ? await (kind === 'clicks' ? o.leads.clicksCsv([T.id], opts) : o.leads.salesCsv([T.id], opts)) : '';
+      const name = `knowbot-${kind}-${String(T.spec?.name || T.id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'bot'}-${new Date(now()).toISOString().slice(0, 10)}.csv`;
+      res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${name}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+      return res.end(`\ufeff${body}`);
     }
     if (sub === 'history' && !fid) {
       allow('GET');

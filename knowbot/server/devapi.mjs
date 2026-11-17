@@ -32,6 +32,8 @@
 // (liveAdapter; never a stored question or a `kind:config` file). It is logged to the questions loop with its channel.
 //   POST /v1/bots/:botId/web           the website chat widget (lib/widget.js): public, per-address limit, SSE with the
 //                                      pipeline's status steps; a trial bot while its Website chat switch is on
+//   POST /v1/bots/:botId/click         a visitor clicked a link in a chat surface (lib/track.js; a beacon, 204)
+//   POST /v1/bots/:botId/sale          the owner's order page reports an order for a click id (site/sale.js)
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -185,6 +187,10 @@ export function createDevApi(o = {}) {
     siteKeyMs: Number(env.KNOWBOT_SITE_KEY_MS || 6 * 3600 * 1000), // a site key's life (never past its trial)
     channel: Number(env.KNOWBOT_CHANNEL_RATE_LIMIT || 12), // per caller per bot per channel
     web: Number(env.KNOWBOT_WEB_RATE_LIMIT || 30),          // the website chat widget: questions per minute per visitor address
+    click: Number(env.KNOWBOT_CLICK_RATE_LIMIT || 30),      // chat link clicks reported per minute per visitor address
+    clickBot: Number(env.KNOWBOT_CLICK_BOT_RATE_LIMIT || 600), // … and per bot (all visitors)
+    sale: Number(env.KNOWBOT_SALE_RATE_LIMIT || 10),        // order reports per minute per address
+    saleBot: Number(env.KNOWBOT_SALE_BOT_RATE_LIMIT || 120), // … and per bot
     ...(o.limits || {}),
   };
   // "send me this": one shared instance (server.mjs passes the same one to the Studio), else this module's own
@@ -759,6 +765,84 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   const trackerFor = (req, target, channel) => (trackingOn(target)
     ? (url, { kind = 'source', cid = null, via = null } = {}) => leads.link({ botId: leadBotOf(target), url, channel, delivery: via === 'text' ? 'sms' : via || channel, kind, cid, base: linkBase(req) })
     : null);
+  // ---------------------------------------------------------------- links clicked inside a chat surface (lib/track.js)
+  const CHAT_TRACK_CHANNELS = new Set(['web', 'site', 'voice']);
+  /** The visitor's browser asks not to be tracked (Global Privacy Control or Do Not Track): no click id, no click record. */
+  const privacyAsked = (req) => String(req?.headers?.['sec-gpc'] || '') === '1' || String(req?.headers?.dnt || '') === '1';
+  /**
+   * What a chat surface needs to tag an answer's links: { source, medium, campaign, cid? }, or null when the owner
+   * turned "Track links" off, the answer has no outgoing link, or the surface is not a visitor's (the Studio, the API).
+   * The answer and its links are recorded (leads.shown) so a later click or order can only name links this answer
+   * really carried. With a privacy signal the tags stay (they identify nobody) but there is no click id and no record.
+   */
+  function chatTrack(req, target, channel, a) {
+    try {
+      if (!CHAT_TRACK_CHANNELS.has(channel) || !a || a.refused || !trackingOn(target) || typeof leads?.shown !== 'function') return null;
+      const proof = a.proofUrl || null;
+      const links = [
+        ...(a.products || []).map((p) => ({ url: p?.url, kind: 'product', title: p?.title, price: p?.price, currency: p?.currency })),
+        ...(a.citations || []).filter((c) => c?.url && c.url !== proof).map((c) => ({ url: c.url, kind: 'source', title: c.title || c.file })),
+        ...[...String(a.answer || '').matchAll(/\]\((https?:\/\/[^\s()[\]]+)\)/g)].map((m) => ({ url: m[1], kind: 'link' })),
+      ].filter((l) => typeof l.url === 'string' && /^https?:\/\//i.test(l.url));
+      if (!links.length) return null;
+      const bot = leadBotOf(target);
+      const base = { source: 'knowbot', medium: channel === 'site' ? 'homepage' : channel === 'voice' ? 'voice' : 'webchat', campaign: campaignOf(bot) };
+      if (privacyAsked(req)) return base;
+      const cid = leads.shown({ botId: bot, channel, answerId: a.id, question: scrubQuestion(a.question), links });
+      return cid ? { ...base, cid } : base;
+    } catch (e) { log(`[track] ${target?.id}: ${e.message}`); return null; }
+  }
+  /** The hosts of the bot's own site (its store, the site it was imported from): a click on one of their pages is accepted. */
+  const siteHostsOf = (target) => { const s = siteOf(target); return s ? [s] : []; };
+  /** The owner's attribution window (days from the click to the order), 1 to 30, default 7; kept on the Studio bot's flags. */
+  const saleWindowOf = (target) => {
+    const id = leadBotOf(target);
+    const flags = (id && studio?.trials?.get?.(id)?.flags) || target?.flags || target?.T?.flags || null;
+    const d = Math.floor(Number(flags?.saleWindowDays));
+    return d >= 1 && d <= 30 ? d : 7;
+  };
+  /** A beacon's body: JSON sent as text/plain (navigator.sendBeacon), at most 4 KB. */
+  async function beaconJson(req) {
+    const raw = await o.readRaw(req, 4096).catch((e) => { throw new ApiError(Number(e.status) === 413 ? 413 : 400, 'invalid_request', 'The request body is too large or unreadable.'); });
+    try { const j = JSON.parse(String(raw || '').trim() || '{}'); return j && typeof j === 'object' && !Array.isArray(j) ? j : {}; } catch { throw new ApiError(400, 'invalid_json', 'The body must be JSON.'); }
+  }
+  /**
+   * POST /v1/bots/:id/click {cid, url}: a visitor clicked a link in the chat bubble, Homepage search or voice mode
+   * (lib/track.js sendClick: navigator.sendBeacon, so the click never waits for this). Public, limited per address and
+   * per bot. Only a click id this bot issued, for a link of that answer (or a page on the bot's own site), is recorded:
+   * nothing is redirected and no other URL is stored. "Track links" off, or a privacy signal: nothing is recorded.
+   */
+  async function botClick(req, res, botId) {
+    const ip = ipOf(req);
+    if (limit(`click:${ip}`, limits.click).limited || limit(`clickbot:${String(botId).toLowerCase()}`, limits.clickBot).limited) throw new ApiError(429, 'rate_limit_exceeded', 'Too many requests.', {}, { 'retry-after': '60' });
+    const body = await beaconJson(req);
+    const target = await resolveTarget(botId);
+    if (!trackingOn(target) || privacyAsked(req) || typeof leads?.chatClick !== 'function') { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
+    const r = await leads.chatClick({ botId: leadBotOf(target), cid: body.cid, url: body.url, hosts: siteHostsOf(target) });
+    if (!r.ok) throw new ApiError(r.reason === 'limit' ? 429 : 400, r.reason === 'limit' ? 'rate_limit_exceeded' : 'invalid_request', 'This click was not recorded.', { reason: r.reason });
+    res.writeHead(204, { 'cache-control': 'no-store' });
+    return res.end();
+  }
+  /**
+   * POST /v1/bots/:id/sale {cid, order, total, currency, items?} | {ping:true}: the owner's order-confirmation page
+   * reports an order for a click id (site/sale.js). Public (it runs on the owner's site, any origin), limited per
+   * address and per bot, idempotent per order id. Only a click id this bot issued, inside the owner's attribution
+   * window, creates a sale; amounts are checked; fields other than these are ignored (no customer details are kept).
+   * → 200 {ok, attributed, duplicate?, reason?}; 400 for a malformed report.
+   */
+  async function botSale(req, res, botId) {
+    const ip = ipOf(req);
+    if (limit(`sale:${ip}`, limits.sale).limited || limit(`salebot:${String(botId).toLowerCase()}`, limits.saleBot).limited) throw new ApiError(429, 'rate_limit_exceeded', 'Too many requests.', {}, { 'retry-after': '60' });
+    const body = await beaconJson(req);
+    const target = await resolveTarget(botId);
+    if (!trackingOn(target) || typeof leads?.sale !== 'function') return send(res, 200, { ok: true, attributed: false, reason: 'tracking_off' });
+    const bot = leadBotOf(target);
+    leads.salePing?.(bot);
+    if (body.ping === true || body.cid == null || body.cid === '') return send(res, 200, { ok: true, attributed: false, reason: 'no_click' });
+    const r = await leads.sale({ botId: bot, cid: body.cid, order: body.order, total: body.total, currency: body.currency, items: body.items, windowDays: saleWindowOf(target) });
+    if (!r.ok) throw new ApiError(400, 'invalid_request', 'This order report is not valid: it needs cid, order, total (a plain number) and currency (three letters).', { reason: r.reason });
+    return send(res, 200, r);
+  }
   /** One click id per sender, channel and day: every reply's links and the sender's inbound lead share it, so a click
    * on any link the bot texted / e-mailed back is tied to that lead. */
   const senderCid = (target, channel, callerKey) => (callerKey ? createHash('sha256').update(`${leadBotOf(target)}|${channel}|${String(callerKey).toLowerCase()}|${new Date(now()).toISOString().slice(0, 10)}`).digest('hex').replace(/[^a-z0-9]/g, '').slice(0, 10) : newClickId());
@@ -864,7 +948,7 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
   const publicAnswer = (a, req, format = 'prose') => ({
     id: a.id, object: 'knowbot.answer', created: Math.floor(now() / 1000), bot: a.bot, question: a.question, answer: answerText(a, format), format: a.refused ? 'text' : format, citations: a.citations.map(({ similarity, ...c }) => c),
     refused: a.refused, grounded: a.grounded, proof: { hits: a.proof.hits, quoted: a.proof.quoted, lines: a.proof.lines || [], floor: a.proof.floor, ...(a.proof.receipt ? { receipt: a.proof.receipt } : {}) }, ...(a.proofId ? { proofUrl: proofUrlFor(req, a.proofId) } : {}),
-    ...(a.guard ? { guard: a.guard } : {}), ...(a.failure ? { failure: a.failure } : {}), ...(!a.refused && a.products?.length ? { products: a.products } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
+    ...(a.guard ? { guard: a.guard } : {}), ...(a.failure ? { failure: a.failure } : {}), ...(!a.refused && a.products?.length ? { products: a.products } : {}), ...(a.track ? { track: a.track } : {}), usage: { latencyMs: a.latencyMs, ...(a.tokens ? { promptTokens: a.tokens.prompt, completionTokens: a.tokens.completion, tokensEstimated: a.tokens.estimated } : {}) },
   });
   const footnotes = (a, format = 'prose') => (a.refused ? a.answer : `${answerText(a, format)}\n\n${a.citations.map((c) => `[${c.n}] ${c.title && c.title !== c.file ? `${c.title}${c.page ? `, page ${c.page}` : ''}${c.section ? `, “${c.section}”` : ''} — ` : ''}${c.file}${c.url ? ` <${c.url}>` : ''}`).join('\n')}`.trim());
 
@@ -979,6 +1063,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     const a = await answer(target, question, { history, channel, callerKey, cards, onRetrieval, onEvent, pin });
     a.proofId = a.refused ? null : saveProof(a, channel);
     if (siKey) rememberAnswer(siKey, a, req);
+    // links a visitor can click in the chat bubble / Homepage search: their tags and the answer's click id (lib/track.js)
+    const track = chatTrack(req, target, channel, a);
+    if (track) a.track = track;
     return a;
   }
 
@@ -1304,6 +1391,9 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
       a.proofId = a.refused ? null : saveProof(a, channel);
       a.proofUrl = proofUrlFor(req, a.proofId);
       rememberAnswer(`${target.id}|${channel}|${callerKey}`, a, req);
+      // voice mode's cards and source chips (the website only: a phone has no links to click)
+      const track = cards ? chatTrack(req, target, channel, a) : null;
+      if (track) a.track = track; else delete a.track;
       return a;
     };
     if (!speculative) return commit();
@@ -1725,6 +1815,10 @@ ${p.receipt?.digest ? `<p class="meta mono">Receipt <span class="file">${e(Strin
     if ((mt = /^\/v1\/bots\/([^/]+)\/(agent\.json|llms\.txt)$/.exec(p))) {
       if (m !== 'GET' && m !== 'HEAD') throw new ApiError(405, 'method_not_allowed', 'GET only');
       return agentDiscovery(req, res, decodeURIComponent(mt[1]), mt[2]);
+    }
+    if ((mt = /^\/v1\/bots\/([^/]+)\/(click|sale)$/.exec(p))) {
+      if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only');
+      return mt[2] === 'click' ? botClick(req, res, decodeURIComponent(mt[1])) : botSale(req, res, decodeURIComponent(mt[1]));
     }
     if ((mt = /^\/v1\/bots\/([^/]+)\/(chat|web|voice|preview)$/.exec(p))) {
       if (m !== 'POST') throw new ApiError(405, 'method_not_allowed', 'POST only');

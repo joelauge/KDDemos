@@ -583,7 +583,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
         feats);
       chGrid.append(h('div', { role: 'listitem', class: 'gl-toolitem' }, card));
     });
-    panel.append(intro, chGrid, sendInfoCard(), voiceSetupCard(), h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
+    panel.append(intro, chGrid, sendInfoCard(), saleTrackingCard(), voiceSetupCard(), h('p', { class: 'gl-plan-note' }, 'Website, KnowBot number and Email are in your one plan with every feature. AI agents are free up to a daily limit, then metered if you turn on paid access. Your KnowBot number\'s own usage is billed separately.'), chDetail);
     motion.stagger($$('.gl-tool', chGrid), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: motion.DUR[3], easing: 'spring', fill: 'backwards' }, 60);
     paintSwitches();
     paintCardStatus();
@@ -596,7 +596,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       if ('voiceSetup' in d.patch) paintVoiceSetup();
     });
     cleanups.push(off);
-    loadDev().then(() => { if (!closing && cur.tab === 'channels') { idPill.querySelector('code').textContent = botId(); paintCardStatus({ animate: true }); paintSendInfo(); renderDetail(cur.channel, { quiet: true }); } });
+    loadDev().then(() => { if (!closing && cur.tab === 'channels') { idPill.querySelector('code').textContent = botId(); paintCardStatus({ animate: true }); paintSendInfo(); saleCard?.querySelector('[role="tab"][aria-selected="true"]')?.click(); renderDetail(cur.channel, { quiet: true }); } });
   }
 
   // ------------------------------------------------------------ "Send me this" (server/sendinfo.mjs; spec.sendInfo)
@@ -666,6 +666,68 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
     st.textContent = !s.on || !n ? 'Off' : n === 2 ? 'Email and text' : em ? 'Email only' : 'Text only';
     st.className = `chip ${s.on && n ? 'green' : 'gray'} is-label gl-si-state`;
     siCard.classList.toggle('is-off', !s.on || !n);
+  }
+
+
+  // ------------------------------------------------------------ Sale tracking (server/leads.mjs sale; site/sale.js)
+  // Links in the bot's answers already carry campaign tags the store's own analytics read. This card is the optional
+  // second step: one snippet on the order-confirmation page, so orders that follow a click show up in Stats & Leads.
+  // Owner-facing: it may name the owner's store platform. Nothing here is shown to visitors.
+  let saleCard = null;
+  const SALE_WINDOWS = [1, 3, 7, 14, 30];
+  const saleSnippets = () => {
+    const bot = botId();
+    // the script's address stays inside the longer snippet text (a customer pastes it once: it is never versioned)
+    const apiAttr = apiAttrFor(siteBase, apiBase);
+    const saleUrl = `${apiRoot}/v1/bots/${bot}/sale`;
+    return {
+      shopify: `// Shopify admin > Settings > Customer events > Add custom pixel\nanalytics.subscribe('checkout_completed', async (event) => {\n  const c = event.data.checkout;\n  const cid = await browser.localStorage.getItem('kb_cid');\n  const body = cid\n    ? { cid, order: String((c.order && c.order.id) || c.token), total: c.totalPrice && c.totalPrice.amount, currency: c.currencyCode,\n        items: (c.lineItems || []).map((i) => ({ title: i.title, quantity: i.quantity })) }\n    : { ping: true };\n  fetch('${saleUrl}', { method: 'POST', keepalive: true, body: JSON.stringify(body) });\n});`,
+      woo: `// WooCommerce: add to your theme's functions.php (or a code snippets plugin)\nadd_action('woocommerce_thankyou', function ($order_id) {\n  $order = wc_get_order($order_id);\n  if (!$order) return;\n  printf('<script async src="%s"${apiAttr} data-bot="%s" data-order="%s" data-total="%s" data-currency="%s"></script>',\n    esc_url('${siteBase}site/sale.js'), esc_attr('${bot}'), esc_attr($order->get_order_number()),\n    esc_attr($order->get_total()), esc_attr($order->get_currency()));\n});`,
+      any: `<!-- On your order confirmation ("thank you") page. Replace the three values with the order's own. -->\n<script async src="${siteBase}site/sale.js"${apiAttr} data-bot="${bot}"\n        data-order="ORDER_ID" data-total="ORDER_TOTAL" data-currency="USD"></script>`,
+    };
+  };
+  function saleTrackingCard() {
+    const winId = `gl-sale-win-${rid(4)}`;
+    const win = h('select', { id: winId, class: 'input gl-sale-win' }, SALE_WINDOWS.map((d) => h('option', { value: String(d) }, d === 1 ? '1 day' : `${d} days`)));
+    win.value = '7';
+    win.addEventListener('change', async () => {
+      const days = Number(win.value);
+      try { const r = await api.setSaleWindow(days); win.value = String(r.saleWindowDays); announce(`Orders now count when they come within ${r.saleWindowDays === 1 ? '1 day' : `${r.saleWindowDays} days`} of a click.`, 'polite'); }
+      catch { announce("Couldn't change that. Try again in a moment.", 'assertive'); }
+    });
+    const state = h('span', { class: 'chip gray is-label gl-si-state gl-sale-state' }, 'Optional');
+    const step = (name, ...kids) => h('li', null, h('b', null, name), ' ', ...kids);
+    saleCard = h('section', { class: 'card gl-si gl-sale', id: 'gl-sale', 'aria-labelledby': 'gl-sale-t' },
+      h('div', { class: 'gl-si-head' },
+        h('span', { class: 'gl-chcard-ico', 'aria-hidden': 'true', html: icon('trending', 18) }),
+        h('div', { class: 'gl-si-text' }, h('h3', { class: 'gl-si-t', id: 'gl-sale-t', tabindex: '-1' }, 'Sale tracking'),
+          h('p', { class: 'gl-si-help' }, 'See which answers lead to orders. Links in your bot’s answers on your website already carry campaign tags, so your store’s own analytics count visits and sales from your bot with nothing to set up. To see those orders in Stats & Leads too, paste this once on your order confirmation (“thank you”) page.')),
+        state),
+      h('div', { class: 'gl-sale-body' },
+        codeTabs([
+          { label: 'Shopify', lang: 'js', code: () => saleSnippets().shopify },
+          { label: 'WooCommerce', lang: 'js', code: () => saleSnippets().woo },
+          { label: 'Any site', lang: 'html', code: () => saleSnippets().any },
+        ], 'gl-sale-code'),
+        h('h4', { class: 'gl-h4' }, 'Where it goes'),
+        h('ul', { class: 'gl-sale-steps' },
+          step('Shopify:', 'Settings, then Customer events, then Add custom pixel. Name it KnowBot, paste the Shopify code, press Save, then Connect. (An older store that still has the “Additional scripts” box on its order status page can paste the Any site line there instead, with Shopify’s own order values.)'),
+          step('WooCommerce:', 'paste the WooCommerce code into your theme’s functions.php, or add it with a code snippets plugin. It fills in the order number, total and currency for you.'),
+          step('Any other site:', 'put the Any site line on the page a customer sees after paying, and fill in the order id, the order total as a plain number (129.90) and the three-letter currency.')),
+        h('p', { class: 'gl-sale-note' }, 'Your website line (above) remembers which answer a visitor clicked, in their browser on your site. It sets no cookie. The snippet sends the order id, total, currency and item names. It never sends a customer’s name, email or address, and orders that did not start from your bot are not sent at all.'),
+        h('div', { class: 'gl-sale-row' },
+          h('label', { class: 'gl-sale-winlabel', for: winId }, 'Count an order when it comes within'), win, h('span', { class: 'gl-sale-winlabel' }, 'of a click'),
+          h('button', { type: 'button', class: 'st-link-btn gl-sale-stats', id: 'gl-sale-stats', onclick: () => document.dispatchEvent(new CustomEvent('knowbot:open-sales')) }, 'See clicks and sales'))));
+    // what the server knows: the window, and whether an order page has reported in yet
+    Promise.resolve(typeof api.attribution === 'function' ? api.attribution(30) : null).then((r) => {
+      if (!r || closing) return;
+      if (SALE_WINDOWS.includes(Number(r.saleWindowDays))) win.value = String(r.saleWindowDays);
+      else if (r.saleWindowDays) { win.append(h('option', { value: String(r.saleWindowDays) }, `${r.saleWindowDays} days`)); win.value = String(r.saleWindowDays); }
+      const on = !!r.saleTracking?.installed;
+      state.textContent = r.tracking === false ? 'Link tracking is off' : on ? 'Installed' : 'Not installed yet';
+      state.className = `chip ${on && r.tracking !== false ? 'green' : 'gray'} is-label gl-si-state gl-sale-state`;
+    }).catch(() => {});
+    return saleCard;
   }
 
   // ------------------------------------------------------------ Voice (spec.voiceSetup; server/channels/voice-brain.mjs)

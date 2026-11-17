@@ -2077,6 +2077,8 @@ export class KnowBot {
       text: String(final.answer ?? ''), citations, grounded: !!final.grounded, refused: !!final.refused, fallback: false,
       products: final.refused ? [] : Array.isArray(final.products) ? final.products : [],
       ...(final.proofUrl ? { proofUrl: final.proofUrl } : {}), ...(final.sendInfo ? { sendInfo: final.sendInfo } : {}),
+      // the tags and click id for this answer's links (lib/track.js); absent when the owner turned link tracking off
+      ...(final.track && typeof final.track === 'object' ? { track: final.track } : {}),
       latencyMs: { retrieval: ms(t0, t1 ?? t2), generation: ms(t1 ?? t2, t2), total: ms(t0, now()) },
       engine: { type: 'server', model: null }, surface: this.surface, sessionId: this.sessionId, turnId,
     };

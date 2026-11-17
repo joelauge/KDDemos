@@ -22,6 +22,7 @@
 
 import { createOrb, createMeter, orbId, ORB_PRESETS } from './voice-orb.js';
 import { micErrorMessage, downsampleToPcm16, createBargeIn, rmsOf, BARGE_RESUME_MS } from './voice-widget.js';
+import { trackLinks } from './track.js';
 
 const CSS = `
 .kbvm{--vm-ink:#15151f;--vm-text:#33333f;--vm-mute:#5f6170;--vm-line:#dadce3;--vm-soft:#f4f4f7;--vm-bg:#fff;--vm-acc:var(--kbvm-accent,#4f46e5);--vm-on-acc:var(--kbvm-on-accent,#fff);--vm-bad:#b91c1c;--vm-badbg:#fef2f2;--vm-end:#b91c1c;
@@ -189,10 +190,14 @@ export function openVoiceMode(host, o = {}) {
     loadCards().then((html) => {
       if (seq !== prodSeq || stopped) return;
       prods.innerHTML = html(list);
+      if (track) trackLinks(prods, track, { endpoint: clickEndpoint, kinds: [['a.kb-prod', 'product']] });
       prods.querySelectorAll('.kb-prod-media img').forEach((img) => img.addEventListener('error', () => img.remove(), { once: true }));
     }).catch(() => { /* no cards: the source chips still link the products */ if (seq === prodSeq) showChips(lastShown.list, lastShown.proofUrl, false, []); });
   }
   let lastShown = { list: [], proofUrl: null };
+  // the tags and click id of the answer on screen (lib/track.js; sent with the answer when the owner tracks links)
+  let track = null;
+  const clickEndpoint = String(o.endpoint || '').replace(/^ws/i, 'http').replace(/\/voice\/live\/?(?:\?.*)?$/, '/click');
   /** Source chips; a source that is one of the product cards is left out (its card links it). */
   function showChips(list, proofUrl, refused, products = []) {
     chips.textContent = '';
@@ -205,10 +210,12 @@ export function openVoiceMode(host, o = {}) {
       const inTitle = /\bhttps?:\/\/[^\s)]+/i.exec(String(c.title || ''))?.[0];
       const bare = noUrls(String(c.title || '')).replace(/\s*[·|–-]\s*$/, '').trim();
       if (carded.size && ((typeof c.url === 'string' && carded.has(pageKey(c.url))) || (inTitle && carded.has(pageKey(inTitle))) || cardTitles.has(bare.toLowerCase()))) continue;
-      const href = (typeof c.url === 'string' && /^https?:\/\//.test(c.url) && c.url) || (typeof proofUrl === 'string' && /^https?:\/\//.test(proofUrl) && proofUrl) || null;
+      const page = typeof c.url === 'string' && /^https?:\/\//.test(c.url) && c.url !== proofUrl ? c.url : null;
+      const href = page || (typeof proofUrl === 'string' && /^https?:\/\//.test(proofUrl) && proofUrl) || null;
       const kids = [el('b', { text: String(c.n) }), document.createTextNode(noUrls(String(c.title || '')).replace(/\s*[·|–-]\s*$/, '').trim() || c.file || 'Source')];
-      chips.append(el('li', null, href ? el('a', { class: 'kbvm-chip', href, target: '_blank', rel: 'noopener noreferrer' }, ...kids, el('span', { class: 'kbvm-sr', text: ' (opens in a new tab)' })) : el('span', { class: 'kbvm-chip' }, ...kids)));
+      chips.append(el('li', null, href ? el('a', { class: 'kbvm-chip', href, target: '_blank', rel: 'noopener noreferrer', ...(page ? { 'data-kb-src': '1' } : {}) }, ...kids, el('span', { class: 'kbvm-sr', text: ' (opens in a new tab)' })) : el('span', { class: 'kbvm-chip' }, ...kids)));
     }
+    if (track) trackLinks(chips, track, { endpoint: clickEndpoint, kinds: [['a[data-kb-src]', 'source']] });
   }
 
   // ------------------------------------------------------------------------------------------------ audio graph
@@ -439,6 +446,7 @@ export function openVoiceMode(host, o = {}) {
       case 'searching': setState('thinking'); break;
       case 'citations': {
         const products = productsOf(m.products, m.refused);
+        track = m.track && !m.refused ? m.track : null;
         lastCites = { citations: m.citations || [], proofUrl: m.proofUrl || null, refused: !!m.refused, products };
         showChips(lastCites.citations, lastCites.proofUrl, lastCites.refused, products);
         showProducts(products);
@@ -447,6 +455,7 @@ export function openVoiceMode(host, o = {}) {
       case 'answer': {
         const text = plain(m.text);
         const products = productsOf(m.products, m.refused);
+        track = m.track && !m.refused ? m.track : null;
         showChips(m.citations, m.proofUrl, m.refused, products);
         showProducts(products);
         caption.classList.remove('is-user');

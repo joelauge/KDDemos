@@ -343,7 +343,7 @@ describe('leads: every surface through the server', () => {
     assert.match(text, /,studio,email,kim@example\.com,,How long is the frame warranty\?,knowbot,webchat,tr_[a-z2-7]{16},[a-z0-9]{10},/);
     // tracking off: links go out as they are, no short link is made
     assert.equal((await api(T(trial, '/leads'), { method: 'PATCH', headers: H(trial), body: JSON.stringify({ tracking: 'no' }) })).status, 400);
-    assert.deepEqual(await (await api(T(trial, '/leads'), { method: 'PATCH', headers: H(trial), body: JSON.stringify({ tracking: false }) })).json(), { tracking: false });
+    assert.deepEqual(await (await api(T(trial, '/leads'), { method: 'PATCH', headers: H(trial), body: JSON.stringify({ tracking: false }) })).json(), { tracking: false, saleWindowDays: 7 });
     F.reset();
     assert.equal((await ask(trial, 'How long is the frame warranty?')).status, 'grounded');
     assert.equal((await ask(trial, 'email me that at kim@example.com')).sendInfo.status, 'sent');

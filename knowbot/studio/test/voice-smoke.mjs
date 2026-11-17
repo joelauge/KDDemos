@@ -458,7 +458,7 @@ try {
           };
         }, null, { timeout: 30000 }).then((x) => x.jsonValue()).catch(() => null);
         check(cell, 'a product answer shows the web chat’s card under the spoken answer: new-tab link, named, focusable',
-          !!got && got.href === `${dev.shopUrl}/products/commuter-lite` && got.target === '_blank' && /noopener/.test(got.rel) && /Commuter Lite/.test(got.label) && /opens in a new tab/.test(got.label)
+          !!got && got.href.split("?")[0] === `${dev.shopUrl}/products/commuter-lite` && /utm_medium=voice/.test(got.href) && got.target === '_blank' && /noopener/.test(got.rel) && /Commuter Lite/.test(got.label) && /opens in a new tab/.test(got.label)
           && got.title === 'Commuter Lite' && /799/.test(got.price) && got.focused && got.underCaption, JSON.stringify(got));
         check(cell, 'the cards use the shared styles, scroll sideways inside the panel, no page overflow', !!got && got.display === 'flex' && /auto|scroll/.test(got.ox) && got.inPanel && !got.pageOverflow, JSON.stringify(got && { display: got.display, ox: got.ox, inPanel: got.inPanel, pageOverflow: got.pageOverflow }));
         check(cell, 'the product page is not repeated as a source chip', !!got && !got.chipLinks.some((h) => /\/products\/commuter-lite/.test(h)) && !got.chipText.some((t) => /Commuter Lite|https?:/.test(t)), JSON.stringify(got && [got.chipLinks, got.chipText]));

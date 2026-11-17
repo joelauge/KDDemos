@@ -390,6 +390,84 @@ button { font: inherit; color: inherit; }
     if (focus && isOpen) (ui.mic || ui.input).focus({ preventScroll: true });
   }
 
+  // ------------------------------------------------------------------------------------------------ link tags and clicks
+  // Links out of the search (product cards, source pages) carry the owner's campaign tags and a click id, and report
+  // their click, when the answer says so (final.track: the owner's "Track links" switch). No cookie is set; with Global
+  // Privacy Control or Do Not Track the click id and the report are left out.
+  /* track:begin: a copy of lib/track.js (this classic script cannot import). server/test/attribution.test.mjs keeps the two in step. */
+  const KBT = (() => {
+    const B32 = 'abcdefghijkmnpqrstuvwxyz23456789';
+    const CONTENT = { product: 'product_chat', source: 'source_chat', link: 'link_chat' };
+    const ID = /^[a-z0-9]{6,20}$/;
+    function appendTracking(url, o) {
+      const { source = 'knowbot', medium = 'webchat', campaign = 'bot', content = '', cid = '' } = o || {};
+      const s = String(url ?? '').trim();
+      let u;
+      try { u = new URL(s); } catch { return s; }
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return s;
+      const hashAt = s.indexOf('#');
+      const head = hashAt >= 0 ? s.slice(0, hashAt) : s, hash = hashAt >= 0 ? s.slice(hashAt) : '';
+      const has = (k) => u.searchParams.has(k);
+      const add = [];
+      if (!['utm_source', 'utm_medium', 'utm_campaign'].some(has)) {
+        add.push(['utm_source', source], ['utm_medium', medium], ['utm_campaign', campaign]);
+        if (content && !has('utm_content')) add.push(['utm_content', content]);
+      }
+      if (cid && !has('kb_cid')) add.push(['kb_cid', cid]);
+      const q = add.filter(([, v]) => v != null && String(v) !== '').map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
+      if (!q) return s;
+      const sep = !head.includes('?') ? '?' : /[?&]$/.test(head) ? '' : '&';
+      return `${head}${sep}${q}${hash}`;
+    }
+    function linkSuffix(url) {
+      const s = String(url ?? '');
+      let x = 0x811c9dc5;
+      for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 0x01000193) >>> 0; }
+      return B32[x & 31] + B32[(x >>> 5) & 31];
+    }
+    const linkClickId = (base, url) => (base && ID.test(String(base)) ? `${base}${linkSuffix(url)}` : '');
+    function privacySignal(nav, win) {
+      try {
+        if (nav?.globalPrivacyControl === true || nav?.globalPrivacyControl === '1') return true;
+        const dnt = nav?.doNotTrack ?? win?.doNotTrack ?? nav?.msDoNotTrack;
+        return dnt === '1' || dnt === 'yes' || dnt === 1;
+      } catch { return false; }
+    }
+    function chatLink(url, kind, track, privacy) {
+      if (!track || !track.medium) return { href: url, cid: '' };
+      const cid = privacy ? '' : linkClickId(track.cid, url);
+      return { href: appendTracking(url, { medium: track.medium, campaign: track.campaign || 'bot', content: CONTENT[kind] || CONTENT.link, cid }), cid };
+    }
+    return { appendTracking, linkSuffix, linkClickId, privacySignal, chatLink, ID };
+  })();
+  /* track:end */
+  const PRIVACY = KBT.privacySignal(navigator, window);
+  // a visitor who arrived from a chat link (…?kb_cid=<click id>): kept in this site's own localStorage (not a cookie)
+  // so the order-confirmation page can report the sale (site/sale.js); the newest click replaces the older one
+  try {
+    const c = HOSTED ? '' : new URLSearchParams(location.search).get('kb_cid') || '';
+    if (KBT.ID.test(c) && !PRIVACY) { sSet('localStorage', 'kb_cid', c); sSet('localStorage', 'kb_cid_at', String(Date.now())); }
+  } catch { /* nothing to remember */ }
+  /** An outgoing <a> with the answer's tags; its click and middle-click are reported without holding the navigation. */
+  function tracked(a, kind, track) {
+    const url = a && a.getAttribute('href');
+    if (!url || !track || !track.medium) return a;
+    const t = KBT.chatLink(url, kind, track, PRIVACY);
+    a.setAttribute('href', t.href);
+    a.dataset.kbTracked = kind;
+    if (!t.cid) return a;
+    const report = (e) => {
+      if (e.type !== 'click' && e.button !== 1) return;
+      try {
+        const endpoint = `${API}/api/v1/bots/${encodeURIComponent(BOT)}/click`, body = JSON.stringify({ cid: t.cid, url, kind });
+        if (!(navigator.sendBeacon && navigator.sendBeacon(endpoint, body))) fetch(endpoint, { method: 'POST', body, keepalive: true, credentials: 'omit' }).catch(() => {});
+      } catch { /* tracking never breaks a link */ }
+    };
+    a.addEventListener('click', report);
+    a.addEventListener('auxclick', report);
+    return a;
+  }
+
   // ------------------------------------------------------------------------------------------------ asking
   async function ask(qRaw) {
     const q = String(qRaw || '').replace(/\s+/g, ' ').trim().slice(0, 500);
@@ -453,7 +531,7 @@ button { font: inherit; color: inherit; }
     const L = site.links || {};
     const fid = (final.proof?.quoted || []).find((x) => x.n === c.n && x.fileId)?.fileId;
     const page = safeUrl(c.url) || safeUrl(fid && L.byId?.[fid]) || safeUrl(L.byName?.[String(c.file || '').split('/').pop()]);
-    if (page) return { href: page, where: hostOf(page) };
+    if (page) return { href: page, where: hostOf(page), page: true };
     const proof = safeUrl(final.proofUrl);
     return proof ? { href: proof, where: 'Proof page' } : { href: null, where: '' };
   }
@@ -497,10 +575,10 @@ button { font: inherit; color: inherit; }
       list.append(h('li', { id: `${id}-s${c.n}`, class: 'src', tabindex: '-1' },
         h('span', { class: 'src-n', 'aria-hidden': 'true' }, String(c.n)),
         h('div', { class: 'src-body' },
-          s.href ? h('a', { class: 'src-link', href: s.href, target: '_blank', rel: 'noopener' }, title, h('span', { class: 'sr' }, ' (opens in a new tab)')) : h('b', null, title),
+          s.href ? tracked(h('a', { class: 'src-link', href: s.href, target: '_blank', rel: 'noopener' }, title, h('span', { class: 'sr' }, ' (opens in a new tab)')), 'source', s.page ? final.track : null) : h('b', null, title),
           h('span', { class: 'src-where' }, [s.where, c.page ? `page ${c.page}` : null, c.section || null].filter(Boolean).join(' · ')))));
     }
-    const prods = productCards(final.products);
+    const prods = productCards(final.products, final.track);
     if (prods) a.append(prods);
     a.append(h('section', { class: 'sources', 'aria-label': 'Sources' }, h('h3', { class: 'h3' }, 'Sources'), list));
   }
@@ -514,7 +592,7 @@ button { font: inherit; color: inherit; }
   };
   const BAG = '<path d="M6 8h12l-1 12H7L6 8z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>';
   const cleanHref = (u) => (safeUrl(u) && !/[\s"'<>`]/.test(u) ? u : null);
-  function productCards(list) {
+  function productCards(list, track) {
     const items = (Array.isArray(list) ? list : []).slice(0, 12).map((p) => {
       const url = cleanHref(p?.url), title = String(p?.title ?? '').trim();
       if (!url || !title) return null;
@@ -529,10 +607,10 @@ button { font: inherit; color: inherit; }
         media.append(img);
       } else media.append(svg(BAG, 22));
       const name = [title, price && (was ? `${price}, was ${was}` : price), out && 'out of stock'].filter(Boolean).join(', ');
-      return h('li', null, h('a', { class: `prod${out ? ' out' : ''}`, href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': `${name} (opens in a new tab)` }, media,
+      return h('li', null, tracked(h('a', { class: `prod${out ? ' out' : ''}`, href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': `${name} (opens in a new tab)` }, media,
         h('span', { class: 'prod-body' }, h('span', { class: 'prod-t' }, title),
           price ? h('span', { class: 'prod-p' }, h('b', null, price), was ? h('s', null, was) : null) : null,
-          out ? h('span', { class: 'prod-chip' }, 'Out of stock') : null)));
+          out ? h('span', { class: 'prod-chip' }, 'Out of stock') : null)), 'product', track));
     }).filter(Boolean).slice(0, 4);
     return items.length ? h('ul', { class: 'prods', 'aria-label': items.length === 1 ? 'Product' : 'Products' }, items) : null;
   }

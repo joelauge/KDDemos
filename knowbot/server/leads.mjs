@@ -19,6 +19,9 @@
 //             call made with the bot's own key. 'limited' is a question turned away by the free limit (at most 100 a day
 //             are recorded; the rest are only counted in memory).
 //
+//   shown, chatclick, sale, saleping: links clicked INSIDE a chat surface (the chat bubble, Homepage search, web voice
+//             mode) and the orders the owner's site reported for them. See "chat clicks and attributed sales" below.
+//
 // Tracked links (on by default; the owner turns it off per bot): every http(s) link a bot sends a person in a text,
 // e-mail or WhatsApp reply (the proof page, the answer's source links, checkout links) gets
 //   utm_source=knowbot, utm_medium=<channel the conversation is on: sms|email|phone|whatsapp|webchat|voice|homepage>,
@@ -44,8 +47,9 @@
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
+import { appendTracking, linkClickId, linkSuffix, UTM_SOURCE, CLICK_ID_RE } from '../lib/track.js';
 
-export const UTM_SOURCE = 'knowbot';
+export { appendTracking, linkClickId, linkSuffix, UTM_SOURCE, CLICK_ID_RE }; // one helper for sent links and chat links (lib/track.js)
 export const MEDIUMS = Object.freeze(['sms', 'email', 'phone', 'whatsapp', 'webchat', 'voice', 'homepage']);
 const MEDIUM_OF = { studio: 'webchat', web: 'webchat', api: 'webchat', webchat: 'webchat', chat: 'webchat', site: 'homepage', homepage: 'homepage',
   voice: 'voice', webvoice: 'voice', phone: 'phone', call: 'phone', sms: 'sms', text: 'sms', whatsapp: 'whatsapp', email: 'email' };
@@ -54,7 +58,6 @@ export const mediumOf = (channel) => MEDIUM_OF[String(channel || '').toLowerCase
 /** utm_campaign: the bot's id (already URL-safe; anything else is slugged). */
 export const campaignOf = (botId) => String(botId || 'bot').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'bot';
 export const LINK_ID_RE = /^[A-Za-z0-9]{8,16}$/;
-export const CLICK_ID_RE = /^[a-z0-9]{6,20}$/;
 const DAY = 86400000;
 const B62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const B32 = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -67,31 +70,6 @@ const oneLine = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').r
 /** True for an absolute http(s) URL. */
 export function isHttpUrl(u) {
   try { const x = new URL(String(u || '').trim()); return x.protocol === 'http:' || x.protocol === 'https:'; } catch { return false; }
-}
-
-/**
- * The link with the tracking parameters appended. Only http(s) links change. The existing query string and #hash are
- * kept byte for byte (a cart permalink's `attributes%5Bcall%5D=…` is never re-encoded); utm_* are added only when the link
- * has none of its own (an owner's own campaign tags win), kb_cid only when it has none, so appending twice is a no-op.
- */
-export function appendTracking(url, { source = UTM_SOURCE, medium = 'webchat', campaign = 'bot', content = '', cid = '' } = {}) {
-  const s = String(url ?? '').trim();
-  let u;
-  try { u = new URL(s); } catch { return s; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return s;
-  const hashAt = s.indexOf('#');
-  const head = hashAt >= 0 ? s.slice(0, hashAt) : s, hash = hashAt >= 0 ? s.slice(hashAt) : '';
-  const has = (k) => u.searchParams.has(k);
-  const add = [];
-  if (!['utm_source', 'utm_medium', 'utm_campaign'].some(has)) {
-    add.push(['utm_source', source], ['utm_medium', medium], ['utm_campaign', campaign]);
-    if (content && !has('utm_content')) add.push(['utm_content', content]);
-  }
-  if (cid && !has('kb_cid')) add.push(['kb_cid', cid]);
-  const q = add.filter(([, v]) => v != null && String(v) !== '').map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
-  if (!q) return s;
-  const sep = !head.includes('?') ? '?' : /[?&]$/.test(head) ? '' : '&';
-  return `${head}${sep}${q}${hash}`;
 }
 
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'\])]+[^\s<>"'\]).,;:!?”’]/g;
@@ -143,6 +121,8 @@ export function csvCell(v) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 export const csvRow = (cells) => cells.map(csvCell).join(',');
+export const CLICK_COLUMNS = Object.freeze(['timestamp', 'bot', 'channel', 'link_type', 'product', 'price', 'currency', 'url', 'question', 'answer_id', 'click_id', 'order_id', 'order_total', 'order_currency']);
+export const SALE_COLUMNS = Object.freeze(['timestamp', 'bot', 'order_id', 'total', 'currency', 'items', 'channel', 'clicked_at', 'product', 'url', 'question', 'click_id', 'source']);
 export const itemsText = (items = []) => (items || []).map((i) => `${(i.quantity || 1) > 1 ? `${i.quantity} x ` : ''}${i.title || ''}${i.variant ? ` (${i.variant})` : ''}`).join('; ');
 
 export const CONSENT_LABEL = Object.freeze({
@@ -215,6 +195,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
       dropped += all.length - kept.length;
       // events recorded while the file was loading stay after the stored ones
       st.events = [...kept, ...st.events];
+      st.att = null; // the attribution index is rebuilt from the loaded events
       for (const ev of kept) if (ev.kind === 'link' && ev.id && !links.has(ev.id)) links.set(ev.id, { ...ev });
       if (f && (dropped || restored)) st.chain = st.chain.then(() => fsp.mkdir(path.dirname(f), { recursive: true })).then(() => fsp.writeFile(f, jsonl(st.events))).catch((e) => log(`[leads] could not prune ${key}: ${e.message}`));
       if (restored) log(`[leads] bot ${key}: restored ${kept.length} events from the durable copy`);
@@ -226,6 +207,7 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     const st = stateOf(bot);
     st.events.push(ev);
     if (st.events.length > MAX_EVENTS) st.events.splice(0, st.events.length - MAX_EVENTS);
+    if (st.att) attAdd(st.att, ev);
     const f = fileOf(bot);
     if (f) {
       st.chain = st.chain.then(() => st.ready).then(() => fsp.mkdir(path.dirname(f), { recursive: true })).then(() => fsp.appendFile(f, `${JSON.stringify(ev)}\n`))
@@ -407,7 +389,239 @@ export function createLeads({ dataDir = null, env = {}, now = () => Date.now(), 
     return `${[csvRow(CSV_COLUMNS), ...rows.map((x) => csvRow(x.cells))].join('\r\n')}\r\n`;
   }
 
-  return { lead, checkout, link, click, agent, agentDay, linkRecord, linksOf, report, csv, retentionDays: keepDays, persist,
+
+  // ------------------------------------------------------------------ chat clicks and attributed sales
+  // shown      {kind:'shown', at, bot, channel:'web'|'site'|'voice', cid, answer, question, links:[{u, k, t?, p?, c?}]}
+  //            one answer on a chat surface that carried links (product cards, source links, links in the text). `cid`
+  //            is the answer's click id (10 characters); each link's own click id is cid + 2 characters derived from
+  //            the link (lib/track.js linkClickId), so a click id names the bot's answer and the link, never a person.
+  // chatclick  {kind:'chatclick', at, bot, channel, cid, answer, linkKind, url, title?, price?, currency?}
+  //            one click on such a link, reported by the browser (POST /v1/bots/:id/click). Only links of a known
+  //            answer (or pages on the bot's own site) are accepted, so this is never a place to store arbitrary URLs.
+  // sale       {kind:'sale', at, bot, cid, order, total, currency, items?, clickAt, clickSeen, channel, answer, linkKind,
+  //            url, title?, source:'site'}  an order the owner's own order-confirmation page reported (site/sale.js,
+  //            POST /v1/bots/:id/sale) for a click id this module issued, inside the attribution window. Reported by
+  //            the site, not a verified payment. No customer name, email or address is accepted or kept.
+  // saleping   {kind:'saleping', at, bot}  the sale snippet ran on an order page (at most one a day): "it is installed".
+  const SHOWN_LINKS_MAX = 16, CLICKS_PER_ANSWER = 30, SALES_PER_ANSWER = 5;
+  const LINK_KINDS = ['product', 'source', 'link'];
+  const hostKey = (u) => { try { return new URL(/^https?:\/\//i.test(u) ? u : `https://${u}`).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } };
+  // a renderer may hand the browser the link in its normal form (https://shop.example → https://shop.example/)
+  const normUrl = (u) => { try { return new URL(u).href; } catch { return String(u || ''); } };
+  /** The bot's attribution index (answers by click id, their clicks, orders by id), built once and kept current by append. */
+  function attOf(st) {
+    if (st.att) return st.att;
+    const A = { shown: new Map(), clicks: new Map(), orders: new Map(), sales: new Map(), pingDay: '' };
+    for (const e of st.events) attAdd(A, e);
+    st.att = A;
+    return A;
+  }
+  function attAdd(A, e) {
+    if (e.kind === 'shown' && e.cid) A.shown.set(e.cid, e);
+    else if (e.kind === 'chatclick' && e.cid) { const b = e.cid.slice(0, 10); const l = A.clicks.get(b); if (l) l.push(e); else A.clicks.set(b, [e]); }
+    else if (e.kind === 'sale') { A.orders.set(String(e.order), e); const b = String(e.cid || '').slice(0, 10); A.sales.set(b, (A.sales.get(b) || 0) + 1); }
+    else if (e.kind === 'saleping') A.pingDay = new Date(Number(e.at)).toISOString().slice(0, 10);
+  }
+  /**
+   * An answer with links was shown on a chat surface. links: [{url, kind:'product'|'source'|'link', title?, price?, currency?}].
+   * → the answer's click id (the browser derives each link's own from it), or null when there is nothing to track.
+   */
+  function shown({ botId, channel = 'web', answerId = null, question = '', links = [], at = null } = {}) {
+    try {
+      if (!botId) return null;
+      const list = [], seen = new Set();
+      for (const l of Array.isArray(links) ? links : []) {
+        const u = String(l?.url || '').trim();
+        if (!isHttpUrl(u) || u.length > 2000 || seen.has(u)) continue;
+        seen.add(u);
+        const price = l.price == null || l.price === '' ? null : Number(l.price);
+        list.push({ u, k: LINK_KINDS.includes(l.kind) ? l.kind : 'link', ...(l.title ? { t: oneLine(l.title).slice(0, 120) } : {}),
+          ...(Number.isFinite(price) ? { p: price } : {}), ...(l.currency && /^[A-Za-z]{3}$/.test(l.currency) ? { c: String(l.currency).toUpperCase() } : {}) });
+        if (list.length >= SHOWN_LINKS_MAX) break;
+      }
+      if (!list.length) return null;
+      const cid = newClickId();
+      append(botId, { v: 1, kind: 'shown', at: Number.isFinite(at) ? at : now(), bot: campaignOf(botId), channel: String(channel || 'web'), cid,
+        answer: answerId ? String(answerId).slice(0, 40) : null, question: oneLine(question).slice(0, 300), links: list });
+      return cid;
+    } catch (e) { log(`[leads] shown links not recorded: ${e.message}`); return null; }
+  }
+  /** The answer (and the link) a click id belongs to, or a reason it is not accepted. */
+  function resolveClickId(A, cid, t) {
+    const id = String(cid || '');
+    if (!/^[a-z0-9]{12}$/.test(id)) return { reason: 'invalid' };
+    const base = id.slice(0, 10), sh = A.shown.get(base);
+    if (!sh || t - Number(sh.at) > keepMs) return { reason: 'unknown_click' };
+    return { id, base, sh, link: sh.links.find((l) => linkClickId(base, l.u) === id || linkClickId(base, normUrl(l.u)) === id) || null };
+  }
+  /**
+   * One click on a chat link. `url` is the link as the answer gave it (before the tags). Accepted only when the click id
+   * was issued for this bot, belongs to that link, and the link is one of that answer's (or a page on one of `hosts`,
+   * the bot's own site). → { ok, duplicate?, reason? }
+   */
+  async function chatClick({ botId, cid, url, hosts = [], at = null } = {}) {
+    try {
+      const u = String(url || '').trim();
+      if (!botId || !isHttpUrl(u) || u.length > 2000) return { ok: false, reason: 'invalid' };
+      const st = stateOf(botId);
+      await st.ready;
+      const A = attOf(st), t = Number.isFinite(at) ? at : now();
+      const r = resolveClickId(A, cid, t);
+      if (r.reason) return { ok: false, reason: r.reason };
+      if (linkClickId(r.base, u) !== r.id) return { ok: false, reason: 'mismatch' };
+      let link = r.sh.links.find((l) => l.u === u || normUrl(l.u) === normUrl(u));
+      if (!link) {
+        const h = hostKey(u);
+        if (!h || !(hosts || []).map(hostKey).includes(h)) return { ok: false, reason: 'not_this_answer' };
+        link = { u, k: 'link' };
+      }
+      const prior = A.clicks.get(r.base) || [];
+      if (prior.some((c) => c.cid === r.id && t - Number(c.at) < 3000)) return { ok: true, duplicate: true }; // click + auxclick, a double click
+      if (prior.length >= CLICKS_PER_ANSWER) return { ok: false, reason: 'limit' };
+      append(botId, { v: 1, kind: 'chatclick', at: t, bot: campaignOf(botId), channel: r.sh.channel, cid: r.id, answer: r.sh.answer || null, linkKind: link.k, url: link.u,
+        ...(link.t ? { title: link.t } : {}), ...(link.p != null ? { price: link.p } : {}), ...(link.c ? { currency: link.c } : {}) });
+      return { ok: true };
+    } catch (e) { log(`[leads] click not recorded: ${e.message}`); return { ok: false, reason: 'error' }; }
+  }
+  const ORDER_ID_RE = /^[A-Za-z0-9#][A-Za-z0-9 _.#/:-]{0,63}$/;
+  const amountOf = (v) => {
+    const n = typeof v === 'number' ? v : /^\d{1,9}(?:\.\d{1,4})?$/.test(String(v ?? '').trim()) ? Number(v) : NaN;
+    return Number.isFinite(n) && n >= 0 && n <= 10000000 ? Math.round(n * 100) / 100 : null;
+  };
+  /**
+   * An order reported by the owner's order-confirmation page for a click id. Recorded once per order id; only for a
+   * click id this bot issued, no older than `windowDays` (from the click, else from the answer). Amounts are checked;
+   * anything that is not {cid, order, total, currency, items[{title, quantity, price}]} is ignored (no customer details).
+   * → { ok, attributed, duplicate?, reason? }   ok:false = a malformed report (400); attributed:false = not ours to count
+   */
+  async function sale({ botId, cid, order, total, currency, items = null, windowDays = 7, at = null } = {}) {
+    try {
+      const orderId = String(order ?? '').trim();
+      const amount = amountOf(total), cur = String(currency || '').trim().toUpperCase();
+      if (!botId || !ORDER_ID_RE.test(orderId) || orderId.includes('@')) return { ok: false, attributed: false, reason: 'bad_order' };
+      if (amount == null) return { ok: false, attributed: false, reason: 'bad_total' };
+      if (!/^[A-Z]{3}$/.test(cur)) return { ok: false, attributed: false, reason: 'bad_currency' };
+      const st = stateOf(botId);
+      await st.ready;
+      const A = attOf(st), t = Number.isFinite(at) ? at : now();
+      if (A.orders.has(orderId)) return { ok: true, attributed: true, duplicate: true };
+      const r = resolveClickId(A, cid, t);
+      if (r.reason) return { ok: r.reason !== 'invalid', attributed: false, reason: r.reason };
+      const clicks = (A.clicks.get(r.base) || []).filter((c) => c.cid === r.id && Number(c.at) <= t);
+      const last = clicks[clicks.length - 1] || null;
+      const clickAt = Number(last?.at ?? r.sh.at);
+      const win = Math.max(1, Math.min(30, Math.floor(Number(windowDays)) || 7));
+      if (t - clickAt > win * DAY) return { ok: true, attributed: false, reason: 'outside_window' };
+      if ((A.sales.get(r.base) || 0) >= SALES_PER_ANSWER) return { ok: true, attributed: false, reason: 'limit' };
+      const link = last ? { u: last.url, k: last.linkKind, t: last.title } : r.link;
+      const list = (Array.isArray(items) ? items : []).slice(0, 20).map((i) => ({ title: oneLine(i?.title).slice(0, 120), quantity: Math.max(1, Math.min(999, Math.floor(Number(i?.quantity)) || 1)),
+        ...(amountOf(i?.price) != null ? { price: amountOf(i.price) } : {}) })).filter((i) => i.title);
+      append(botId, { v: 1, kind: 'sale', at: t, bot: campaignOf(botId), cid: r.id, order: orderId, total: amount, currency: cur, ...(list.length ? { items: list } : {}),
+        clickAt, clickSeen: !!last, channel: r.sh.channel, answer: r.sh.answer || null, linkKind: link?.k || null, url: link?.u || null, ...(link?.t ? { title: link.t } : {}), source: 'site' });
+      log(`[leads] bot ${campaignOf(botId)}: sale reported by the site (${cur} ${amount}, ${r.sh.channel})`);
+      return { ok: true, attributed: true };
+    } catch (e) { log(`[leads] sale not recorded: ${e.message}`); return { ok: false, attributed: false, reason: 'error' }; }
+  }
+  /** The sale snippet ran on an order page (with or without a click id): remembered once a day, so the report can say it is installed. */
+  async function salePing(botId) {
+    try {
+      if (!botId) return false;
+      const st = stateOf(botId);
+      await st.ready;
+      const A = attOf(st), day = new Date(now()).toISOString().slice(0, 10);
+      if (A.pingDay === day) return false;
+      append(botId, { v: 1, kind: 'saleping', at: now(), bot: campaignOf(botId) });
+      return true;
+    } catch { return false; }
+  }
+
+  /**
+   * "Clicks & sales" for one bot: totals, a per-day series (the viewer's days: tz = minutes east of UTC), top products
+   * and questions, the clicks and the attributed sales (newest first).
+   */
+  async function attribution(botIds, { days = 30, tz = 0, windowDays = 7 } = {}) {
+    const ids = [...new Set((Array.isArray(botIds) ? botIds : [botIds]).filter(Boolean).map(campaignOf))];
+    const d = Math.max(1, Math.min(keepDays, Math.floor(Number(days)) || 30));
+    const since = now() - d * DAY;
+    const off = Math.max(-840, Math.min(840, Math.round(Number(tz)) || 0)) * 60000;
+    const dayOf = (t) => new Date(Number(t) + off).toISOString().slice(0, 10);
+    const iso = (t) => (t ? new Date(Number(t)).toISOString() : null);
+    const every = (await Promise.all(ids.map(eventsOf))).flat();
+    const shownAll = new Map(every.filter((e) => e.kind === 'shown').map((e) => [e.cid, e]));
+    const inRange = every.filter((e) => Number(e.at) >= since).sort((a, b) => a.at - b.at);
+    const shownEv = inRange.filter((e) => e.kind === 'shown'), clickEv = inRange.filter((e) => e.kind === 'chatclick'), saleEv = inRange.filter((e) => e.kind === 'sale');
+    const questionOf = (cid) => shownAll.get(String(cid || '').slice(0, 10))?.question || '';
+    // revenue per currency; the series and the tables use the currency with the most orders
+    const money = new Map();
+    for (const s of saleEv) { const m = money.get(s.currency) || { currency: s.currency, amount: 0, orders: 0 }; m.amount = Math.round((m.amount + s.total) * 100) / 100; m.orders++; money.set(s.currency, m); }
+    const revenue = [...money.values()].sort((a, b) => b.orders - a.orders || b.amount - a.amount);
+    const currency = revenue[0]?.currency || null;
+    const byDay = new Map();
+    for (let i = d - 1; i >= 0; i--) { const day = dayOf(now() - i * DAY); byDay.set(day, { day, shown: 0, clicks: 0, orders: 0, revenue: 0 }); }
+    const dayRow = (t) => byDay.get(dayOf(t));
+    const clicked = new Set(every.filter((e) => e.kind === 'chatclick').map((e) => e.cid.slice(0, 10)));
+    const channels = {};
+    const chan = (c) => (channels[c] ||= { shown: 0, clicks: 0, orders: 0 });
+    const products = new Map(), questions = new Map();
+    const prod = (url, title, price, cur) => { let p = products.get(url); if (!p) { p = { url, title: title || url, price: price ?? null, currency: cur || null, clicks: 0, orders: 0, revenue: 0 }; products.set(url, p); } return p; };
+    const ques = (text) => { const k = String(text || '').toLowerCase(); let q = questions.get(k); if (!q) { q = { question: text || '', shown: 0, clicks: 0, orders: 0, revenue: 0 }; questions.set(k, q); } return q; };
+    for (const e of shownEv) { const r = dayRow(e.at); if (r) r.shown++; chan(e.channel).shown++; if (e.question) ques(e.question).shown++; }
+    for (const e of clickEv) {
+      const r = dayRow(e.at); if (r) r.clicks++;
+      chan(e.channel).clicks++;
+      if (e.linkKind === 'product') prod(e.url, e.title, e.price, e.currency).clicks++;
+      const q = questionOf(e.cid); if (q) ques(q).clicks++;
+    }
+    for (const s of saleEv) {
+      const mine = s.currency === currency;
+      const r = dayRow(s.at); if (r) { r.orders++; if (mine) r.revenue = Math.round((r.revenue + s.total) * 100) / 100; }
+      chan(s.channel).orders++;
+      if (s.linkKind === 'product' && s.url) { const p = prod(s.url, s.title, null, null); p.orders++; if (mine) p.revenue = Math.round((p.revenue + s.total) * 100) / 100; }
+      const q = questionOf(s.cid); if (q) { const x = ques(q); x.orders++; if (mine) x.revenue = Math.round((x.revenue + s.total) * 100) / 100; }
+    }
+    const saleByCid = new Map(saleEv.map((s) => [s.cid, s]));
+    const pings = every.filter((e) => e.kind === 'saleping'), allSales = every.filter((e) => e.kind === 'sale');
+    const lastOf = (list) => list.reduce((m, e) => Math.max(m, Number(e.at)), 0) || null;
+    const clickedAnswers = shownEv.filter((e) => clicked.has(e.cid)).length;
+    return {
+      days: d, since: iso(since), retentionDays: keepDays, windowDays: Math.max(1, Math.min(30, Math.floor(Number(windowDays)) || 7)), currency,
+      totals: { shown: shownEv.length, clicks: clickEv.length, clickedAnswers, rate: shownEv.length ? Math.min(1, clickedAnswers / shownEv.length) : null, orders: saleEv.length, revenue },
+      byDay: [...byDay.values()], channels,
+      products: [...products.values()].sort((a, b) => b.clicks - a.clicks || b.revenue - a.revenue).slice(0, 50),
+      questions: [...questions.values()].filter((q) => q.clicks || q.orders).sort((a, b) => b.clicks - a.clicks || b.orders - a.orders).slice(0, 50),
+      clicks: clickEv.map((e) => ({ at: iso(e.at), bot: e.bot, channel: e.channel, kind: e.linkKind, url: e.url, title: e.title || '', price: e.price ?? null, currency: e.currency || null,
+        question: questionOf(e.cid), answer: e.answer || null, cid: e.cid, ...(saleByCid.has(e.cid) ? { order: saleByCid.get(e.cid).order, orderTotal: saleByCid.get(e.cid).total, orderCurrency: saleByCid.get(e.cid).currency } : {}) })).reverse(),
+      sales: saleEv.map((s) => ({ at: iso(s.at), bot: s.bot, order: s.order, total: s.total, currency: s.currency, items: s.items || [], itemsText: itemsText(s.items || []), channel: s.channel,
+        clickedAt: iso(s.clickAt), clickSeen: s.clickSeen !== false, kind: s.linkKind || null, url: s.url || null, title: s.title || '', question: questionOf(s.cid), answer: s.answer || null, cid: s.cid, source: 'site' })).reverse(),
+      saleTracking: { installed: !!(pings.length || allSales.length), lastSeenAt: iso(Math.max(lastOf(pings) || 0, lastOf(allSales) || 0) || null), lastSaleAt: iso(lastOf(allSales)) },
+    };
+  }
+  /** Per answered question: its clicks and attributed sale, for the question history (matched there by text, channel and time). */
+  async function attributionRows(botIds) {
+    const ids = [...new Set((Array.isArray(botIds) ? botIds : [botIds]).filter(Boolean).map(campaignOf))];
+    const every = (await Promise.all(ids.map(eventsOf))).flat();
+    const rows = new Map();
+    for (const e of every) if (e.kind === 'shown') rows.set(e.cid, { at: Number(e.at), channel: e.channel, question: e.question || '', answer: e.answer || null, clicks: 0, orders: 0, total: 0, currency: null });
+    for (const e of every) {
+      const r = (e.kind === 'chatclick' || e.kind === 'sale') && rows.get(String(e.cid || '').slice(0, 10));
+      if (!r) continue;
+      if (e.kind === 'chatclick') r.clicks++;
+      else if (!r.currency || r.currency === e.currency) { r.orders++; r.total = Math.round((r.total + e.total) * 100) / 100; r.currency = e.currency; }
+    }
+    return [...rows.values()].filter((r) => r.clicks || r.orders);
+  }
+  /** CSV of the clicks (CLICK_COLUMNS), newest first. */
+  async function clicksCsv(botIds, o = {}) {
+    const r = await attribution(botIds, o);
+    return `${[csvRow(CLICK_COLUMNS), ...r.clicks.map((c) => csvRow([c.at, c.bot, c.channel, c.kind, c.title, c.price ?? '', c.currency || '', c.url, c.question, c.answer || '', c.cid, c.order || '', c.orderTotal ?? '', c.orderCurrency || '']))].join('\r\n')}\r\n`;
+  }
+  /** CSV of the attributed sales (SALE_COLUMNS), newest first. */
+  async function salesCsv(botIds, o = {}) {
+    const r = await attribution(botIds, o);
+    return `${[csvRow(SALE_COLUMNS), ...r.sales.map((s) => csvRow([s.at, s.bot, s.order, s.total, s.currency, s.itemsText, s.channel, s.clickedAt || '', s.title, s.url || '', s.question, s.cid, 'reported by your site']))].join('\r\n')}\r\n`;
+  }
+
+  return { lead, checkout, link, click, agent, agentDay, linkRecord, linksOf, report, csv, shown, chatClick, sale, salePing, attribution, attributionRows, clicksCsv, salesCsv, retentionDays: keepDays, persist,
     /** fn(event, extra) for every new lead (after it is recorded). → a function that removes the listener. */
     on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
     /** { read(bot) → jsonl|null, write(bot, jsonl) }: where a bot's events are kept across restarts (set once, at start-up). */

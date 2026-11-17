@@ -45,3 +45,9 @@ API keys are stored only as hashes, and stored provider keys are sealed with AES
 Source: /studio/
 
 KnowBot does not train AI models on your files or on your customers' questions. Its knowledge engine, KnowDB, reads (attends to) your files at the moment it answers a question; it does not learn from them or train on them.
+
+## Clicks and sale tracking
+
+Source: /studio/
+
+A click on a link in your bot's answer records the time, the question, the link and a random click id for that answer. It records no name, email address or visitor id, and KnowBot sets no cookie on your site. The click id is kept in the visitor's browser storage on your own site so an order can be matched; depending on where you trade, your cookie or consent notice may need to mention it. The sale snippet sends the order id, total, currency and item names, never a customer's name, email or address, and orders that did not start from your bot are not sent at all. When a visitor's browser sends Global Privacy Control or Do Not Track, no click id is added and no click or order is recorded. Clicks and reported orders are kept for 90 days, like leads.

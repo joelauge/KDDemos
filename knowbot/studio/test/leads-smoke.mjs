@@ -290,7 +290,9 @@ try {
       const co = await page.locator('#kb-leads-co ~ .kb-leads-scroll tbody tr').allTextContents();
       check('checkout links sent, with the click', co.length === 1 && /E-City 500/.test(co[0]) && /Clicked/.test(co[0]), co.join(' | '));
       const text = await view.textContent();
-      check('no provider names in the copy', !/twilio|stripe|shopify|resend|postmark|sendgrid|mailgun|gemini|knowdrive/i.test(text));
+      // the one place a platform is named: "How clicks and sales are counted" says where the owner's own store analytics show it
+      const helpText = await page.locator('#kb-sales .kb-sales-help').textContent().catch(() => '') || '';
+      check('no provider names in the copy', !/twilio|stripe|shopify|resend|postmark|sendgrid|mailgun|gemini|knowdrive/i.test(text.replace(helpText, '')) && !/twilio|stripe|resend|postmark|sendgrid|mailgun|gemini|knowdrive/i.test(helpText));
       check('it says which time zone the days use and how long things are kept', /your time zone \(UTC−[45]\)/.test(text) && /kept for as long as your bot exists/.test(text) && /kept for 90 days/.test(text));
 
       // ---- ranges, the tracking switch, the CSVs

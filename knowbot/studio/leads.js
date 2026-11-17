@@ -10,12 +10,15 @@
 //                          "Add what's missing" on the ones the files could not answer
 //                        - What people ask (most asked + gaps), Interactions by channel, AI agents, the Leads table
 //                          (sortable; a lead's question opens it in the history), Checkout links sent
+//                        - Clicks & sales: links opened from the bot's answers on the website (chat bubble, Homepage
+//                          search, voice mode), the click rate, a per-day chart, top products and questions, and the
+//                          orders the owner's order page reported after a click (or how to turn that on); two CSVs
 //                        - Connect your CRM (studio/crm.js): send new leads to a CRM, an email list, Zapier or a webhook
 //                        - Track links, Download leads CSV, Download questions CSV
-//                      opts.section 'crm' scrolls to (and focuses) that section once the view is painted.
+//                      opts.section 'crm' | 'sales' scrolls to (and focuses) that section once the view is painted.
 //   initStatsRoute()   wires #stats: opens the view when the page loads on it, and follows Back / Forward.
 //
-// Data: GET /api/studio/trials/:id/leads[.csv] (server/leads.mjs), /history[.csv] (server/questions.mjs questionHistory)
+// Data: GET /api/studio/trials/:id/leads[.csv], /attribution, /clicks.csv, /sales.csv (server/leads.mjs), /history[.csv] (server/questions.mjs questionHistory)
 // and /insights. Days and times are the viewer's own (the browser's UTC offset is sent as `tz`).
 // Self-contained (styles in leads.css, loaded on first open). Customer-facing copy never names a provider.
 import * as api from './api.js';
@@ -145,7 +148,7 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
   if (!getState().trial?.id) return;
   const opener = invoker || (document.activeElement && document.activeElement !== document.body ? document.activeElement : null);
   const f = { ...(parseRoute() || parseRoute(ROUTE)), ...(filters || {}) };
-  const st = { leads: null, hist: null, insights: null, items: [], dayCounts: {}, cursor: null, busy: false, seq: 0, sort: { key: 'at', dir: -1 } };
+  const st = { leads: null, att: null, prodSort: 'clicks', hist: null, insights: null, items: [], dayCounts: {}, cursor: null, busy: false, seq: 0, sort: { key: 'at', dir: -1 } };
   const prevTitle = document.title;
   const app = document.getElementById('st-app');
 
@@ -165,7 +168,7 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
   const qCsvBtn = h('button', { type: 'button', class: 'btn btn-ghost st-btn kb-stats-csv kb-stats-csv-q', onclick: () => download('questions') }, ico('table'), h('span', null, h('span', { class: 'st-sr' }, 'Download '), 'Questions CSV'));
   const trackSw = h('button', { type: 'button', role: 'switch', 'aria-checked': 'true', class: 'kb-leads-switch', 'aria-describedby': 'kb-leads-track-hint', onclick: () => toggleTracking() },
     h('span', { class: 'kb-leads-knob', 'aria-hidden': 'true' }), h('span', { class: 'kb-leads-switch-label' }, 'Track links'));
-  const trackHint = h('span', { id: 'kb-leads-track-hint', class: 'kb-leads-hint' }, 'Adds campaign tags and a short tracking link to every link your bot sends by text, email or WhatsApp.');
+  const trackHint = h('span', { id: 'kb-leads-track-hint', class: 'kb-leads-hint' }, 'Adds campaign tags to the links in your bot’s answers and messages, and counts their clicks. Off: links go out as they are and nothing is counted.');
   const back = h('button', { type: 'button', class: 'st-iconbtn kb-stats-back', 'aria-label': 'Back to your bot', title: 'Back to your bot (Esc)', onclick: () => close() }, h('span', { class: 'kb-stats-flip', 'aria-hidden': 'true', html: icon('arrowRight', 18) }));
   const botName = (getState().spec?.name || '').trim();
   const el = h('section', { id: 'kb-stats', class: 'kb-stats', 'aria-labelledby': titleId },
@@ -193,7 +196,7 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
   let crmEl = null, wantSection = section;
   const showSection = (name) => {
     wantSection = name;
-    const target = name === 'crm' ? el.querySelector('#kb-crm') : null;
+    const target = name === 'crm' ? el.querySelector('#kb-crm') : name === 'sales' ? el.querySelector('#kb-sales') : null;
     if (!target) return; // not painted yet: paint() comes back here
     wantSection = null;
     target.scrollIntoView({ block: 'start' });
@@ -248,9 +251,10 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
     body.setAttribute('aria-busy', 'true');
     status.textContent = 'Loading…';
     try {
-      const [rep, hist, ins] = await Promise.all([api.leads(leadDays()), api.history(histParams({ limit: PAGE })), st.insights ? st.insights : api.insights().catch(() => null)]);
+      const [rep, hist, ins, att] = await Promise.all([api.leads(leadDays()), api.history(histParams({ limit: PAGE })), st.insights ? st.insights : api.insights().catch(() => null),
+        api.attribution(leadDays(), tzOffset()).catch(() => null)]);
       if (seq !== st.seq || !view) return;
-      st.leads = rep; st.hist = hist; st.insights = ins;
+      st.leads = rep; st.hist = hist; st.insights = ins; st.att = att;
       st.items = hist.items || []; st.dayCounts = { ...(hist.dayCounts || {}) }; st.cursor = hist.nextCursor || null;
       paint();
       status.textContent = `Showing ${rangeWords()}: ${plural(hist.total || 0, 'question')}, ${plural(rep.leads.length, 'lead')}, ${plural(rep.conversions.sent, 'checkout link')} sent.`;
@@ -306,6 +310,7 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
     try {
       const r = await api.setLeadTracking(next);
       st.leads.tracking = r.tracking;
+      if (st.att) { st.att.tracking = r.tracking; body.querySelector('#kb-sales')?.replaceWith(salesSection(st.att) || ''); }
       status.textContent = r.tracking ? 'Link tracking is on.' : 'Link tracking is off: links are sent as they are.';
     } catch {
       trackSw.setAttribute('aria-checked', String(!next));
@@ -314,11 +319,11 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
   }
 
   async function download(kind) {
-    const btn = kind === 'leads' ? leadsCsvBtn : qCsvBtn;
+    const btn = kind === 'leads' ? leadsCsvBtn : kind === 'questions' ? qCsvBtn : body.querySelector(`[data-csv="${kind}"]`) || qCsvBtn;
     btn.disabled = true;
     status.textContent = 'Preparing the CSV…';
     try {
-      const res = kind === 'leads' ? await api.leadsCsv(leadDays()) : await api.historyCsv(histParams());
+      const res = kind === 'leads' ? await api.leadsCsv(leadDays()) : kind === 'clicks' ? await api.clicksCsv(leadDays(), tzOffset()) : kind === 'sales' ? await api.salesCsv(leadDays(), tzOffset()) : await api.historyCsv(histParams());
       const blob = await res.blob();
       const name = (/filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '')?.[1])
         || `knowbot-${kind}-${(getState().spec?.name || 'bot').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bot'}-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -351,9 +356,9 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
       f.range === 'all' ? h('p', { class: 'kb-stats-note' }, ico('info', 13), ` “All” shows every question since ${fmtDay(hist.range.from, { month: 'short', day: 'numeric', year: 'numeric' })}${hist.range.all && hist.range.days >= (hist.range.reachDays || 730) ? ' (it goes back two years at most)' : ''}. Leads, checkout links and clicks are only kept for ${keep} days, so those show the last ${keep} days.`) : null,
       h('div', { id: 'kb-qsec', class: 'kb-stats-q' }),
       h('div', { class: 'kb-stats-cols' }, asksSection(st.insights), h('div', { id: 'kb-chsec' })),
-      agentsSection(data.agents), leadsSection(data.leads), (crmEl ||= crmSection({ announce: (t) => { status.textContent = t; } })), checkoutSection(data.conversions.items || []),
+      salesSection(st.att), agentsSection(data.agents), leadsSection(data.leads), (crmEl ||= crmSection({ announce: (t) => { status.textContent = t; } })), checkoutSection(data.conversions.items || []),
       h('p', { class: 'kb-leads-foot' }, ico('lock', 12),
-        h('span', null, `Only you can see this. Days and times are in your time zone (${tzName()}). Questions are kept for as long as your bot exists, with email addresses and long numbers masked; leads, checkout links and clicks are kept for ${keep} days. Tracked links carry utm_source=knowbot, utm_medium (the channel) and utm_campaign (this bot), so your own analytics can count visits and sales from them. The leads CSV lists each AI agent question on channel "agent".`)),
+        h('span', null, `Only you can see this. Days and times are in your time zone (${tzName()}). Questions are kept for as long as your bot exists, with email addresses and long numbers masked; leads, checkout links, clicks and reported orders are kept for ${keep} days. Tracked links carry utm_source=knowbot, utm_medium (the channel) and utm_campaign (this bot), so your own analytics can count visits and sales from them. The leads CSV lists each AI agent question on channel "agent".`)),
     ].filter(Boolean));
     paintQuestions();
     if (wantSection) showSection(wantSection);
@@ -541,6 +546,8 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
       h('time', { class: 'kb-hist-time st-mono', datetime: it.at }, fmtClock(it.at)),
       h('div', { class: 'kb-hist-main' }, q,
         h('div', { class: 'kb-hist-meta' }, h('span', { class: 'kb-hist-ch' }, channelLabel(it.channel)), tag,
+          it.clicks ? h('span', { class: 'kb-out kb-out-click' }, ico('external', 12), it.clicks === 1 ? 'Link clicked' : `Links clicked ${it.clicks}×`) : null,
+          it.sale ? h('span', { class: 'kb-out kb-out-sale', title: 'An order your site reported after a click on this answer' }, ico('card', 12), `Sale ${fmtMoney(it.sale.total, it.sale.currency)}${it.sale.orders > 1 ? ` · ${it.sale.orders} orders` : ''}`) : null,
           ...(it.flags || []).map((fl) => h('span', { class: 'kb-out kb-out-flag' }, ico('warn', 12), `Flagged: ${flagLabel(fl)}`)), add),
         detail));
   }
@@ -595,6 +602,144 @@ export async function openLeads({ filters = null, push = true, invoker = null, s
         h('span', { class: 'kb-leads-bar-track', 'aria-hidden': 'true' }, h('span', { class: 'kb-leads-bar-fill', style: `width:${Math.max(3, Math.round((r.n / max) * 100))}%` })),
         h('span', { class: 'kb-leads-bar-n st-mono', 'aria-hidden': 'true' }, r.n.toLocaleString()))))));
     return sec;
+  }
+
+
+  // ---- Clicks & sales (server/leads.mjs attribution): links opened from the bot's answers on the website, and the
+  // orders the owner's own order page reported after those clicks ("reported by your site", never called payments)
+  const fmtMoney = (n, cur) => {
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur || 'USD', maximumFractionDigits: 2 }).format(Number(n) || 0); }
+    catch { return `${(Number(n) || 0).toLocaleString()} ${cur || ''}`.trim(); }
+  };
+  const fmtShortDay = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+  function salesSection(a) {
+    if (!a || a.available === false || !a.totals) return null;
+    const t = a.totals, installed = !!a.saleTracking?.installed, win = a.windowDays || a.saleWindowDays || 7;
+    const winWords = win === 1 ? '1 day' : `${win} days`;
+    const revenue = t.revenue || [];
+    const csvBtn = (kind, label) => h('button', { type: 'button', class: 'btn btn-ghost st-btn kb-stats-csv', 'data-csv': kind, onclick: () => download(kind) }, ico('table'), h('span', null, h('span', { class: 'st-sr' }, 'Download '), label));
+    const big = (label, value, sub, cls = '') => h('li', { class: `kb-sales-tile ${cls}`.trim() }, h('span', { class: 'kb-sales-tile-label' }, label), h('strong', { class: 'kb-sales-tile-n st-mono' }, value), h('span', { class: 'kb-sales-tile-sub' }, sub));
+    const setup = () => { close(); document.dispatchEvent(new CustomEvent('knowbot:open-sale-setup')); };
+    const tiles = h('ul', { class: 'kb-sales-tiles', 'aria-label': 'Clicks and sales totals' },
+      big('Clicks', Number(t.clicks || 0).toLocaleString(), 'on product cards and links in answers'),
+      big('Answers that got a click', t.rate == null ? '–' : `${Math.round(t.rate * 100)}%`, t.shown ? `${Number(t.clickedAnswers || 0).toLocaleString()} of ${plural(t.shown, 'answer')} that showed a product or link` : 'no answer has shown a product or link yet'),
+      ...(installed
+        ? [big('Orders after a click', Number(t.orders || 0).toLocaleString(), `reported by your site, within ${winWords} of a click`),
+          big('Sales after a click', revenue.length ? revenue.map((r) => fmtMoney(r.amount, r.currency)).join(' + ') : fmtMoney(0, a.currency || 'USD'), revenue.length ? 'order totals reported by your site' : 'no orders in this range yet', 'kb-sales-money')]
+        : [h('li', { class: 'kb-sales-tile kb-sales-cta' },
+          h('strong', { class: 'kb-sales-cta-t' }, 'See which answers lead to orders'),
+          h('span', { class: 'kb-sales-tile-sub' }, 'Sale tracking is not installed yet, so orders are not counted here. Paste one snippet on your order confirmation page to turn it on. Your store’s own analytics already count these visits (see “How clicks and sales are counted” below).'),
+          h('button', { type: 'button', class: 'btn btn-primary st-btn st-btn-primary kb-sales-setup', onclick: setup }, 'Set up sale tracking'))]));
+
+    // per day: clicks and orders, both counts, on one axis; revenue is in the table for screen readers and in the tooltip
+    const days = a.byDay || [];
+    const weekly = days.length > 45;
+    const buckets = [];
+    const sum = (run, k) => run.reduce((n, d) => n + (d[k] || 0), 0);
+    if (weekly) for (let i = days.length % 7; i <= days.length - 7; i += 7) { const run = days.slice(i, i + 7); buckets.push({ day: run[0].day, dayEnd: run[6].day, clicks: sum(run, 'clicks'), orders: sum(run, 'orders'), revenue: sum(run, 'revenue') }); }
+    else for (const d of days) buckets.push({ day: d.day, dayEnd: '', clicks: d.clicks, orders: d.orders, revenue: d.revenue });
+    const peak = Math.max(0, ...buckets.map((b) => Math.max(b.clicks, b.orders)));
+    const top = niceMax(peak);
+    const nameOf = (b) => (b.dayEnd ? `${fmtDay(b.day, { month: 'short', day: 'numeric' })} to ${fmtDay(b.dayEnd, { month: 'short', day: 'numeric' })}` : fmtDay(b.day));
+    const sumOf = (b) => `${plural(b.clicks, 'click')}${installed ? `, ${plural(b.orders, 'order')}${b.orders && a.currency ? ` (${fmtMoney(b.revenue, a.currency)})` : ''}` : ''}`;
+    const every = buckets.length <= 10 ? 1 : buckets.length <= 31 ? 5 : 7;
+    const tickAt = (i) => (buckets.length - 1 - i) % every === 0;
+    const pct = (n) => (n ? Math.max(2, (n / top) * 100) : 0);
+    const cols = buckets.map((b, i) => h('div', { class: 'kb-sbar', title: `${nameOf(b)}: ${sumOf(b)}` },
+      h('span', { class: 'kb-bar-col' },
+        b.clicks ? h('span', { class: 'kb-bar-n st-mono' }, b.clicks.toLocaleString()) : null,
+        h('span', { class: 'kb-sbar-pair', style: `height:${pct(Math.max(b.clicks, b.orders))}%` },
+          h('i', { class: 'kb-sbar-c', style: `height:${b.clicks ? Math.max(4, (b.clicks / Math.max(b.clicks, b.orders)) * 100) : 0}%` }),
+          installed ? h('i', { class: 'kb-sbar-o', style: `height:${b.orders ? Math.max(4, (b.orders / Math.max(b.clicks, b.orders)) * 100) : 0}%` }) : null)),
+      h('span', { class: `kb-bar-x${tickAt(i) ? ' is-tick' : ''}` }, tickAt(i) ? fmtDay(b.day, { month: 'short', day: 'numeric' }) : '')));
+    const ticks = top <= 1 ? [1, 0] : [top, top / 2, 0];
+    const scroller = h('div', { class: 'kb-chart-scroll' }, h('div', { class: `kb-chart-plot kb-sales-plot${buckets.length > 45 ? ' is-dense' : ''}`, style: `--n:${buckets.length}` }, cols));
+    const active = buckets.filter((b) => b.clicks || b.orders);
+    const chart = peak
+      ? h('figure', { class: 'kb-chart kb-sales-chart', role: 'group', 'aria-label': `Clicks${installed ? ' and orders' : ''} per ${weekly ? 'week' : 'day'}: ${plural(t.clicks, 'click')}${installed ? ` and ${plural(t.orders, 'order')}` : ''} in ${rangeWords()}. The table after the chart lists each ${weekly ? 'week' : 'day'}.` },
+        h('div', { class: 'kb-chart-y', 'aria-hidden': 'true' }, ticks.map((x) => h('span', { class: 'st-mono' }, Number.isInteger(x) ? x.toLocaleString() : ''))),
+        h('div', { class: 'kb-chart-area', 'aria-hidden': 'true' }, h('div', { class: 'kb-chart-grid' }, ticks.map(() => h('i'))), scroller),
+        h('figcaption', { class: 'kb-sales-cap' },
+          h('ul', { class: 'kb-chart-key', 'aria-label': 'Legend' },
+            h('li', null, h('i', { class: 'kb-key kb-sbar-c', 'aria-hidden': 'true' }), 'Clicks'),
+            installed ? h('li', null, h('i', { class: 'kb-key kb-sbar-o', 'aria-hidden': 'true' }), 'Orders after a click') : null),
+          h('table', { class: 'st-sr' },
+            h('caption', null, `Clicks${installed ? ' and orders' : ''} by ${weekly ? 'week' : 'day'} (only ${weekly ? 'weeks' : 'days'} with activity)`),
+            h('thead', null, h('tr', null, [weekly ? 'Week' : 'Day', 'Clicks', ...(installed ? ['Orders', 'Sales'] : [])].map((x) => h('th', { scope: 'col' }, x)))),
+            h('tbody', null, active.map((b) => h('tr', null, h('th', { scope: 'row' }, nameOf(b)), h('td', null, String(b.clicks)), ...(installed ? [h('td', null, String(b.orders)), h('td', null, a.currency ? fmtMoney(b.revenue, a.currency) : '')] : [])))))))
+      : null;
+    if (chart) requestAnimationFrame(() => { scroller.scrollLeft = scroller.scrollWidth; });
+
+    // top products: by clicks, or by the sales that followed a click on them
+    const prodBox = h('div', { class: 'kb-sales-box' });
+    const paintProducts = () => {
+      const by = st.prodSort === 'revenue' && installed ? 'revenue' : 'clicks';
+      const list = [...(a.products || [])].sort((x, y) => (by === 'revenue' ? y.revenue - x.revenue || y.orders - x.orders : 0) || y.clicks - x.clicks).slice(0, 10);
+      const sortBtn = (k, label) => h('button', { type: 'button', class: 'st-seg-btn', 'aria-pressed': String(by === k), onclick: () => { st.prodSort = k; paintProducts(); prodBox.querySelector(`[data-sort="${k}"]`)?.focus(); }, 'data-sort': k }, label);
+      prodBox.replaceChildren(...[
+        h('div', { class: 'kb-sec-head' }, h('h4', { class: 'kb-sales-h4', id: 'kb-sales-ph' }, 'Top products'),
+          installed ? h('div', { class: 'st-seg kb-sales-sort', role: 'group', 'aria-label': 'Order the products' }, sortBtn('clicks', 'By clicks'), sortBtn('revenue', 'By sales')) : null),
+        list.length
+          ? h('div', { class: 'kb-leads-scroll', tabindex: '0', role: 'region', 'aria-labelledby': 'kb-sales-ph' }, h('table', { class: 'data-table is-static kb-leads-table kb-sales-table' },
+            h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Product'), h('th', { scope: 'col', class: 'kb-num' }, 'Clicks'), ...(installed ? [h('th', { scope: 'col', class: 'kb-num' }, 'Orders'), h('th', { scope: 'col', class: 'kb-num' }, 'Sales')] : []))),
+            h('tbody', null, list.map((p) => h('tr', null,
+              h('td', { class: 'kb-leads-q' }, h('a', { href: p.url, target: '_blank', rel: 'noopener noreferrer', class: 'kb-sales-prod' }, p.title || p.url, h('span', { class: 'st-sr' }, ' (opens in a new tab)')),
+                p.price != null ? h('span', { class: 'kb-leads-consent' }, p.currency ? fmtMoney(p.price, p.currency) : String(p.price)) : null),
+              h('td', { class: 'kb-num st-mono' }, Number(p.clicks || 0).toLocaleString()),
+              ...(installed ? [h('td', { class: 'kb-num st-mono' }, Number(p.orders || 0).toLocaleString()), h('td', { class: 'kb-num st-mono' }, p.orders && a.currency ? fmtMoney(p.revenue, a.currency) : '–')] : []))))))
+          : h('p', { class: 'empty-state kb-leads-empty' }, 'No product card has been clicked in this range yet.'),
+        installed && list.length ? h('p', { class: 'kb-leads-hint' }, 'Sales are the totals of orders that followed a click on that product’s card. An order can hold other items too.') : null].filter(Boolean));
+    };
+    paintProducts();
+    const qs = (a.questions || []).slice(0, 10);
+    const qBox = h('div', { class: 'kb-sales-box' },
+      h('h4', { class: 'kb-sales-h4' }, installed ? 'Questions that led to clicks and sales' : 'Questions that led to clicks'),
+      qs.length
+        ? h('ol', { class: 'kb-sales-qs' }, qs.map((q) => h('li', null,
+          searchable(q.question)
+            ? h('button', { type: 'button', class: 'st-link-btn kb-sales-q', title: 'See this question in the question history', onclick: () => showInHistory({ range: f.range, q: searchable(q.question) }) }, q.question)
+            : h('span', { class: 'kb-sales-q' }, q.question),
+          h('span', { class: 'kb-sales-qn' }, plural(q.clicks, 'click'), installed && q.orders ? ` · ${plural(q.orders, 'order')}${a.currency && q.revenue ? ` · ${fmtMoney(q.revenue, a.currency)}` : ''}` : ''))))
+        : h('p', { class: 'empty-state kb-leads-empty' }, 'No answer’s links have been clicked in this range yet.'));
+
+    const sales = a.sales || [];
+    const salesBox = !installed ? null : h('div', { class: 'kb-sales-box' },
+      h('h4', { class: 'kb-sales-h4', id: 'kb-sales-oh' }, 'Orders after a click', h('span', { class: 'kb-leads-count st-mono' }, sales.length.toLocaleString()), h('span', { class: 'chip gray is-label no-dot kb-sales-src' }, 'Reported by your site')),
+      sales.length
+        ? h('div', { class: 'kb-leads-scroll', tabindex: '0', role: 'region', 'aria-labelledby': 'kb-sales-oh' }, h('table', { class: 'data-table is-static kb-leads-table kb-sales-table' },
+          h('thead', null, h('tr', null, ['When', 'Order', 'Total', 'Clicked', 'Question', 'Where'].map((x) => h('th', { scope: 'col' }, x)))),
+          h('tbody', null, sales.slice(0, 200).map((s) => h('tr', null,
+            h('td', { class: 'kb-leads-when' }, h('time', { datetime: s.at }, fmtTime(s.at))),
+            h('td', { class: 'st-mono' }, s.order),
+            h('td', { class: 'st-mono kb-leads-when' }, fmtMoney(s.total, s.currency)),
+            h('td', { class: 'kb-leads-q' }, s.title || (s.kind === 'source' ? 'A source link' : s.kind === 'link' ? 'A link in the answer' : 'A link'),
+              h('span', { class: 'kb-leads-consent' }, s.clickedAt ? `${s.clickSeen ? 'clicked' : 'answer shown'} ${fmtTime(s.clickedAt)}` : '')),
+            h('td', { class: 'kb-leads-q' }, s.question && searchable(s.question)
+              ? h('button', { type: 'button', class: 'st-link-btn kb-leads-qlink', title: 'See this question in the question history', onclick: () => showInHistory({ range: f.range, q: searchable(s.question) }) }, s.question)
+              : (s.question || h('span', { class: 'kb-leads-dim' }, '–'))),
+            h('td', null, channelLabel(s.channel)))))))
+        : h('p', { class: 'empty-state kb-leads-empty' }, `Sale tracking is installed${a.saleTracking.lastSeenAt ? ` (your order page last checked in on ${fmtShortDay(a.saleTracking.lastSeenAt)})` : ''}. No order has followed a click in ${rangeWords()} yet.`),
+      sales.length > 200 ? h('p', { class: 'kb-leads-hint' }, `Showing 200 of ${sales.length.toLocaleString()}. The CSV has them all.`) : null);
+
+    const help = h('details', { class: 'kb-sales-help' },
+      h('summary', null, 'How clicks and sales are counted'),
+      h('div', { class: 'kb-sales-help-in' },
+        h('p', null, h('b', null, 'Campaign tags. '), 'Every link in an answer on your website gets campaign tags (also called UTM tags: short labels added to the end of a link that analytics tools read). They say the visit came from your bot (source “knowbot”), from where (webchat, homepage or voice) and which bot. They do not identify anyone.'),
+        h('p', null, h('b', null, 'In your store’s own analytics, with nothing to set up. '), 'In Shopify, open Analytics, then Reports, and look at sessions and sales by marketing source or referrer: your bot shows up as “knowbot”. In Google Analytics, open Reports, then Acquisition, then Traffic acquisition, and look for “knowbot / webchat”. Other tools list it under the campaign source “knowbot”.'),
+        h('p', null, h('b', null, 'Orders shown here. '), `With sale tracking installed, your order confirmation page tells KnowBot when an order follows a click within ${winWords} (the newest click counts). These are reported by your site, not verified payments, so check them against your store’s own orders. `,
+          h('button', { type: 'button', class: 'st-link-btn', onclick: setup }, installed ? 'Change sale tracking' : 'Set up sale tracking')),
+        h('p', null, h('b', null, 'What can be missed. '), 'A visitor who blocks tracking scripts, who buys later on another device or browser, or whose checkout is on a different web address from your shop. A link opened with “open in a new tab” from the right-click menu still carries its tags, but its click is only counted if an order follows.'),
+        h('p', null, h('b', null, 'Privacy. '), 'A click keeps the time, the question, the link and a random click id for that answer. No name, address or visitor id, and no cookie. When a visitor’s browser asks not to be tracked (Global Privacy Control or Do Not Track), no click or order is recorded for them; the campaign tags stay because they identify nobody.')));
+
+    return h('section', { id: 'kb-sales', class: 'kb-leads-sec kb-sales', 'aria-labelledby': 'kb-sales-h' },
+      h('div', { class: 'kb-sec-head' },
+        h('h3', { id: 'kb-sales-h', tabindex: '-1' }, 'Clicks & sales', f.range === 'all' ? h('span', { class: 'kb-leads-hint kb-sec-aside' }, `last ${leadDays()} days`) : null),
+        h('div', { class: 'kb-stats-dl kb-sales-dl' }, csvBtn('clicks', 'Clicks CSV'), installed ? csvBtn('sales', 'Sales CSV') : null)),
+      h('p', { class: 'kb-leads-hint kb-sales-intro' }, 'Links people opened from your bot’s answers on your website (the chat bubble, Homepage search and voice mode), and the orders your site reported after those clicks.'),
+      a.tracking === false ? h('p', { class: 'kb-stats-note' }, ico('info', 13), ' “Track links” is off, so new clicks and orders are not counted. Turn it on at the top of this page.') : null,
+      tiles, chart,
+      h('div', { class: 'kb-sales-cols' }, prodBox, qBox),
+      salesBox, help);
   }
 
   /** AI agents (server/agents.mjs): questions other AI assistants asked, how they were answered, and the usage meter. */

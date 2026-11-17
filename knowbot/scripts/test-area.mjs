@@ -23,8 +23,8 @@ const T = (...names) => names.map((n) => (n.includes('/') ? n : `server/test/${n
 export const AREAS = {
   sendinfo: { about: '"Send me this": answers by e-mail or text', tests: T('sendinfo', 'sendinfo-render', 'sendinfo-switch'),
     src: [/^server\/sendinfo/, /^server\/test\/sendinfo/] },
-  leads: { about: 'Stats & Leads: the leads report and the question history', aka: ['stats', 'history'], tests: T('leads', 'history'), smokes: ['leads:smoke'],
-    src: [/^server\/leads\.mjs$/, /^server\/test\/history/, /^studio\/leads\./, /^studio\/test\/leads-smoke/] },
+  leads: { about: 'Stats & Leads: the leads report, the question history, clicks and attributed sales', aka: ['stats', 'history', 'attribution', 'clicks', 'sales'], tests: T('leads', 'history', 'attribution'), smokes: ['leads:smoke', 'attribution:smoke'],
+    src: [/^server\/leads\.mjs$/, /^server\/test\/history/, /^studio\/leads\./, /^studio\/test\/leads-smoke/, /^site\/sale\.js$/, /^studio\/test\/attribution-smoke/] },
   crm: { about: 'lead delivery: CRM, e-mail list, webhook and Zapier connectors, the outbox', aka: ['connectors', 'zapier', 'webhook'], tests: T('crm-outbox', 'crm-connectors', 'crm-http'), smokes: ['leads:smoke'],
     src: [/^server\/crm\//, /^server\/oauthstate\.mjs$/, /^server\/test\/(?:fake-crm|crm-)/, /^studio\/crm\./, /^integrations\//] },
   channels: { about: 'SMS, WhatsApp, e-mail, shop channels and the tool switches', tests: T('channels', 'surfaces'),
@@ -52,7 +52,7 @@ export const AREAS = {
     src: [/^studio\/checkout\./, /^server\/(?:billing|checkout|stripe)/, /^server\/test\/(?:billing|checkout|stripe)/] },
 };
 // Shared plumbing: a change here can break any area, so --changed runs everything.
-const EVERYTHING = [/^package(?:-lock)?\.json$/, /^server\/test\/(?:fake-knowdrive|fake-llm|fake-anthropic|trials-helpers)\.mjs$/, /^lib\/(?:embed|widget|site-config)\.js$/, /^scripts\/test-area\.mjs$/, /^cloudflare\//, /^vendor\//];
+const EVERYTHING = [/^package(?:-lock)?\.json$/, /^server\/test\/(?:fake-knowdrive|fake-llm|fake-anthropic|trials-helpers)\.mjs$/, /^lib\/(?:embed|widget|site-config|track)\.js$/, /^scripts\/test-area\.mjs$/, /^cloudflare\//, /^vendor\//];
 // Never needs a test run.
 const NOTHING = [/\.md$/, /^\.github\//, /^studio\/test\/screens\//, /^studio\/test\/fixtures\//, /^eval\//, /^demo\//, /^\.[^/]+$/, /^CNAME$/, /\.(?:png|svg|jpg)$/, /^scripts\/(?!stamp-assets|build-site|check-site|test-area|test\/|builder-eval|evidence-|voice-live-test)/];
 

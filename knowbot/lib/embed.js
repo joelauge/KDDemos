@@ -16,6 +16,11 @@
 // (data-mode="voice", data-mode="inline", data-voice="on" in the chat) work as before.
 import { mount, ensureCss } from './widget.js';
 import { apiForScriptHost } from './site-config.js';
+import { rememberClickId } from './track.js';
+
+// A visitor who arrived from a link in the chat (…?kb_cid=<click id>): the id is kept in this site's own localStorage
+// (not a cookie) so the order-confirmation page can report the sale (site/sale.js). Nothing is sent from here.
+rememberClickId();
 
 const me = new URL(import.meta.url);
 const script = [...document.querySelectorAll('script[src]')].find((s) => s.src === me.href)

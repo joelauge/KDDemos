@@ -710,6 +710,19 @@ a.gl-proofchip:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .gl-si-state { padding: 2px 8px; font-size: 11px; line-height: 1.5; white-space: nowrap; }
 .gl-si-body { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 10px 20px; padding-top: 10px; border-top: 1px solid var(--line); }
 .gl-si-media { display: grid; gap: 8px; padding-left: 14px; border-left: 1px solid var(--line); }
+/* Sale tracking (Set up): the snippet for the order-confirmation page, where it goes per platform, the window */
+.gl-sale-body { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); min-width: 0; }
+.gl-sale-body > * { min-width: 0; }
+.gl-sale-steps { margin: 0; padding: 0 0 0 18px; display: grid; gap: 6px; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.gl-sale-steps b { color: var(--strong); }
+.gl-sale-note { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); max-width: 78ch; }
+.gl-sale-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
+.gl-sale-winlabel { color: var(--strong); }
+.gl-sale-win { width: auto; min-height: 34px; padding: 4px 28px 4px 10px; }
+.gl-sale-stats { margin-left: auto; }
+@media (max-width: 700px) { .gl-sale .gl-si-head { grid-template-columns: auto minmax(0, 1fr); } .gl-sale .gl-sale-state { grid-column: 2; justify-self: start; } }
+@container (max-width: 560px) { .gl-inline .gl-sale .gl-si-head { grid-template-columns: auto minmax(0, 1fr); } .gl-inline .gl-sale .gl-sale-state { grid-column: 2; justify-self: start; } }
+@media (max-width: 899px) { .gl-sale-win { min-height: 44px; } .gl-sale-stats { margin-left: 0; min-height: 44px; } }
 .gl-si-crm { margin: 10px 0 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
 .gl-si-row { display: grid; gap: 2px; min-width: 0; }
 .gl-si-row .gl-switch { font-weight: 500; color: var(--strong); }

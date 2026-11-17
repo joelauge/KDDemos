@@ -1,5 +1,6 @@
 // KnowBot UI: floating widget, inline panel, full-page chat. Plain ESM, imports the core library.
 import { KnowBot, safeHttpUrl, isSoldOut } from './knowbot.js';
+import { trackLinks } from './track.js';
 
 const CSS_URL = new URL('./knowbot.css', import.meta.url).href;
 let uid = 0;
@@ -294,6 +295,12 @@ class ChatView {
     const secs = (a.latencyMs.total / 1000).toFixed(1);
     html += `<div class="kb-actions"><button type="button" class="kb-fb" data-r="up" aria-pressed="false" aria-label="Helpful">${ICON.up}</button><button type="button" class="kb-fb" data-r="down" aria-pressed="false" aria-label="Not helpful">${ICON.down}</button><span class="kb-meta">${secs}s · ${a.citations.length} source${a.citations.length === 1 ? '' : 's'}</span></div>`;
     msg.innerHTML = html;
+    // links out of the chat (product cards, source links, links in the answer) carry the owner's campaign tags and report
+    // their click (lib/track.js); the answer carries `track` only when the owner's "Track links" switch is on
+    if (a.track && this.bot.botId) {
+      trackLinks(msg, a.track, { endpoint: `${this.bot.apiRoot()}/api/v1/bots/${encodeURIComponent(this.bot.botId)}/click`,
+        kinds: [['a.kb-prod', 'product'], ['.kb-sources a.kb-src-title, .kb-sources a.kb-src-dl', 'source'], ['.kb-md a[href]', 'link']] });
+    }
     // a photo that fails to load leaves the card's quiet placeholder, never a broken image
     msg.querySelectorAll('.kb-prod-media img').forEach((img) => img.addEventListener('error', () => { img.outerHTML = BAG; }, { once: true }));
     msg.querySelectorAll('.kb-fb').forEach((b) => b.addEventListener('click', () => {

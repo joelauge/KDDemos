@@ -723,6 +723,21 @@ function openMissingNote(question, invoker) {
 }
 // Set up → "Connect your CRM" (golive.js) opens that section of Stats & Leads
 document.addEventListener('knowbot:open-crm', () => openLeads({ section: 'crm' }));
+// Set up → "See clicks and sales" opens that section of Stats & Leads; Stats → "Set up sale tracking" opens its card in Set up
+document.addEventListener('knowbot:open-sales', () => openLeads({ section: 'sales' }));
+document.addEventListener('knowbot:open-sale-setup', () => {
+  openSetup({});
+  let tries = 0;
+  const go = () => {
+    const card = document.getElementById('gl-sale');
+    if (!card) { if (++tries < 60) setTimeout(go, 100); return; }
+    const show = () => { if (!card.isConnected) return; card.scrollIntoView({ block: 'start' }); card.querySelector('#gl-sale-t')?.focus({ preventScroll: true }); };
+    show();
+    // Set up finishes painting (and Stats hands focus back to its opener) just after it mounts: land on the card again
+    setTimeout(() => { if (!card.contains(document.activeElement)) show(); }, 450);
+  };
+  go();
+});
 // #stats is the Stats & Leads view: a deep link, a reload or Back / Forward on it opens the view once the bot is known
 whenReady(() => initStatsRoute({ addMissing: openMissingNote }));
 /** "Write a note": samplebot.js's note form (the "Didn't get the answer you needed?" form, titled for a first note). */

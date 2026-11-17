@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { siteFiles, scanRefs } from './stamp-assets.mjs';
 
 // Paths other sites and customers' pages load by name: they must exist, unversioned, in every deploy.
-const MUST_EXIST = ['index.html', '404.html', 'CNAME', 'studio/index.html', 'dashboard/index.html', 'site/index.html', 'site/overlay.js', 'site/site.js',
-  'lib/embed.js', 'lib/widget.js', 'lib/knowbot.js', 'lib/knowbot.css', 'lib/site-config.js', 'lib/voice-mode.js', 'lib/voice-launcher.js', 'lib/voice-widget.js', 'lib/voice-orb.js',
+const MUST_EXIST = ['index.html', '404.html', 'CNAME', 'studio/index.html', 'dashboard/index.html', 'site/index.html', 'site/overlay.js', 'site/site.js', 'site/sale.js',
+  'lib/embed.js', 'lib/widget.js', 'lib/knowbot.js', 'lib/knowbot.css', 'lib/site-config.js', 'lib/track.js', 'lib/voice-mode.js', 'lib/voice-launcher.js', 'lib/voice-widget.js', 'lib/voice-orb.js',
   'demo/chat.html', 'vendor/kd-theme/tokens.css', 'corpus/MANIFEST.json', 'studio/samples/lumen-bikes/questions.json'];
 const OTHER = /(?:\b(?:src|href)=|new URL\(\s*)(["'])((?:\.{1,2}\/)[^"'`?#\s$\\<>]+\.[a-z0-9]{2,5})(?:[?#][^"']*)?\1/g;
 
