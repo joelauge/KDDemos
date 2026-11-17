@@ -4,7 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { runAnswer } from '../answer.mjs';
-import { isProductAsk, isPolicyLine, productLead } from '../../lib/knowbot.js';
+import { isProductAsk, isPolicyLine, productLead, productMatchesAsk } from '../../lib/knowbot.js';
 
 const URL = 'https://theultimategamemaster.com/products/blank-magnetic-charts';
 const TITLE = 'Blank Magnetic Charts - Custom DM Reference Sheets for TTRPG Game Master Screens';
@@ -64,6 +64,16 @@ describe('product asks lead with the product', () => {
     const a = await ask('Can I return the magnetic charts?');
     assert.ok(/full refund/.test(a.text), a.text);
     assert.ok(!/^Yes, we have/.test(a.text));
+  });
+
+  test('the lead names only the thing asked for', async () => {
+    assert.ok(productMatchesAsk(TITLE, 'Do you have magnetic charts?'));
+    assert.ok(productMatchesAsk('Magnetic Dice Tray', 'do you sell dice trays?'));
+    assert.ok(!productMatchesAsk('Magnetic Dice Tray', 'Do you sell dice?'));
+    assert.ok(productMatchesAsk('Dragon Dice Set (7 pieces)', 'got any dice sets'));
+    const tray = { ...card, url: URL, title: 'Magnetic Dice Tray', price: 29.99 };
+    const a = await bot('Roll your dice in the magnetic dice tray.', [tray])('Do you sell dice?');
+    assert.ok(!/^Yes, we have/.test(a.text), a.text);
   });
 
   test('no product card: the answer is unchanged', async () => {

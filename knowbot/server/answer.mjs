@@ -301,7 +301,7 @@ export async function runAnswer(o) {
       const cards = await productsP;
       if (aborted()) return null;
       const norm = (u) => String(u || '').replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
-      const pick = fin.citations.map((c) => ({ c, p: cards.find((p) => c.url && norm(p.url) === norm(c.url)) })).find((x) => x.p);
+      const pick = fin.citations.map((c) => ({ c, p: cards.find((p) => c.url && norm(p.url) === norm(c.url) && (kbLib.productMatchesAsk(p.title, question) || kbLib.productMatchesAsk(p.title, standalone))) })).find((x) => x.p);
       const lead = pick && kbLib.productLead(pick.p, pick.c.n);
       if (lead) {
         const parts = String(fin.text).split('\n').filter((l) => l.trim()).map((l) => quotedLineParts(l));

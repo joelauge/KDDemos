@@ -1301,6 +1301,19 @@ const PRODUCT_ASK = /\b(?:do|does)\s+(?:you|y['’]?all|u|the (?:store|shop))\s+
 const POLICY_WORDS = /\b(?:refunds?|returns?|returning|money[- ]back|guarantee[sd]?|warrant(?:y|ies)|ship(?:s|ping|ped)?|deliver(?:y|ies|ed)?|exchange|trial|nights?)\b/i;
 /** The question asks whether the store has a product (not about a policy). */
 export function isProductAsk(q) { const t = String(q || ''); return PRODUCT_ASK.test(t) && !POLICY_WORDS.test(t); }
+const stem = (w) => w.toLowerCase().replace(/(?:ies)$/, 'y').replace(/(?:es|s)$/, (m, i, str) => (str.length > 3 ? '' : m));
+/**
+ * The product is the thing asked for: the head noun of its name ("Magnetic Dice Tray" → "tray", "Blank Magnetic
+ * Charts - Custom DM …" → "charts") is one of the question's words. "Do you sell dice?" is not answered "Yes, we have
+ * the Magnetic Dice Tray".
+ */
+export function productMatchesAsk(title, q) {
+  const name = String(title || '').split(/\s+[-–—|:]\s+|\s*[(:|]/)[0];
+  const words = name.match(/[a-z0-9]+/gi) || [];
+  const head = words.length ? stem(words[words.length - 1]) : '';
+  if (!head) return false;
+  return (String(q || '').match(/[a-z0-9]+/gi) || []).some((w) => stem(w) === head);
+}
 /** A product page's stock line (refund, shipping or guarantee wording) says nothing about the product itself. */
 export function isPolicyLine(t) { return POLICY_WORDS.test(String(t || '')); }
 const priceOf = (p) => {
