@@ -1294,6 +1294,36 @@ function whereOf(s, at) {
  * One item: "<opener> In “Title”, page N, it says: “line” [1]. <closer>"
  * Several: an opener, then one cited bullet per item (one location line when they all come from one place), then a closer.
  */
+/* ---------- product asks: lead with the product ---------- */
+// "Do you have magnetic charts?", "do you sell dice trays", "looking for a GM screen": the visitor wants the product
+// first. A question about the product's policies (returns, shipping, warranty…) is not one of these.
+const PRODUCT_ASK = /\b(?:do|does)\s+(?:you|y['’]?all|u|the (?:store|shop))\s+(?:guys\s+)?(?:have|sell|carry|stock|offer|make|got)\b|\bhave you got\b|\bgot any\b|\b(?:i(?:['’]m| am)|we(?:['’]re| are))\s+looking for\b|\bwhere (?:can|do) i (?:buy|get|find|order)\b|\bcan i (?:buy|get|order|purchase)\b|\b(?:is|are) (?:there|these|this|it|they) (?:an?y?\s+)?(?:available|in stock|for sale)\b|\bin stock\b/i;
+const POLICY_WORDS = /\b(?:refunds?|returns?|returning|money[- ]back|guarantee[sd]?|warrant(?:y|ies)|ship(?:s|ping|ped)?|deliver(?:y|ies|ed)?|exchange|trial|nights?)\b/i;
+/** The question asks whether the store has a product (not about a policy). */
+export function isProductAsk(q) { const t = String(q || ''); return PRODUCT_ASK.test(t) && !POLICY_WORDS.test(t); }
+/** A product page's stock line (refund, shipping or guarantee wording) says nothing about the product itself. */
+export function isPolicyLine(t) { return POLICY_WORDS.test(String(t || '')); }
+const priceOf = (p) => {
+  const n = Number(p?.price);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const cur = String(p.currency || '').toUpperCase();
+  const amt = n % 1 ? n.toFixed(2) : String(n);
+  return cur === 'USD' || cur === 'CAD' || cur === 'AUD' || !cur ? `$${amt}${cur && cur !== 'USD' ? ` ${cur}` : ''}` : `${amt} ${cur}`;
+};
+/**
+ * "Yes, we have [“Title”](url) [n]. It's $17.99 and in stock." — every word of it from the product's own data
+ * (its page title, price and availability), never from the model. null when the product has no title or link.
+ */
+export function productLead(p, n) {
+  const title = cleanLine(String(p?.title || '')).replace(/[[\]“”"]/g, '').slice(0, 120).trim();
+  if (!title || !p?.url) return null;
+  const price = priceOf(p);
+  const av = String(p.availability || '').toLowerCase();
+  const stock = /out of stock|sold out|unavailable/.test(av) ? 'out of stock right now' : /in stock|available/.test(av) ? 'in stock' : '';
+  const tail = price && stock ? ` It's ${price} and ${stock}.` : price ? ` It's ${price}.` : stock ? ` It's ${stock}.` : '';
+  return `Yes, we have [“${title}”](${p.url})${n ? ` [${n}]` : ''}.${tail}`;
+}
+
 export function guideText(items, sources, seed = '') {
   const h = voiceHash(seed);
   const links = [...new Set(items.map((x) => linkOf(sources[x.si])).filter(Boolean))];

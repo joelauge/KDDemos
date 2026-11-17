@@ -38,7 +38,7 @@ export const AREAS = {
   site: { about: 'Homepage search (site/, overlay) and the deployable site build', tests: T('site', 'scripts/test/stamp-assets.test.mjs', 'scripts/test/test-area.test.mjs'), smokes: ['site:smoke'],
     src: [/^server\/site\.mjs$/, /^site\//, /^studio\/sitebrand\.js$/, /^scripts\/(?:stamp-assets|build-site|check-site)/, /^scripts\/test\//, /^studio\/test\/site-smoke/] },
   answers: { about: 'the answer pipeline: retrieval, evidence, citations, recall, questions, notes', aka: ['answer'],
-    tests: T('lib/test/core.test.mjs', 'lib/test/recall.test.mjs', 'evidence', 'recall', 'parity', 'questions', 'history', 'research', 'trials-answers', 'trials-notes'),
+    tests: T('lib/test/core.test.mjs', 'lib/test/recall.test.mjs', 'evidence', 'recall', 'parity', 'product-lead', 'questions', 'history', 'research', 'trials-answers', 'trials-notes'),
     src: [/^server\/(?:answer|evidence|retrievers|research|questions)\.mjs$/, /^lib\/knowbot\.(?:js|css)$/, /^lib\/test\//, /^attendd\//, /^corpus\//, /^scripts\/evidence-/] },
   devapi: { about: 'the developer API and AI agents (MCP)', aka: ['agents'], tests: T('devapi', 'agents'), smokes: ['tools:smoke'],
     src: [/^server\/(?:devapi|agents)\.mjs$/, /^studio\/test\/tools-shots/] },

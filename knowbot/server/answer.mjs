@@ -293,6 +293,26 @@ export async function runAnswer(o) {
     const verdict = verdictP ? await verdictP : null;
     if (aborted()) return null;
     if (verdict) fin = kbLib.applyVerdict(fin, verdict);
+    // "Do you have magnetic charts?": the answer leads with the product (its title, link, price and stock, from the
+    // product's own data), not with whatever line of its page was quoted; a stock policy line ("return it within 30
+    // nights…") the question didn't ask about is dropped. Product asks wait for the cards (already running) for this.
+    let productLeadLine = null;
+    if (mode === 'select' && !fin0.tabular && (kbLib.isProductAsk(question) || kbLib.isProductAsk(standalone))) {
+      const cards = await productsP;
+      if (aborted()) return null;
+      const norm = (u) => String(u || '').replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+      const pick = fin.citations.map((c) => ({ c, p: cards.find((p) => c.url && norm(p.url) === norm(c.url)) })).find((x) => x.p);
+      const lead = pick && kbLib.productLead(pick.p, pick.c.n);
+      if (lead) {
+        const parts = String(fin.text).split('\n').filter((l) => l.trim()).map((l) => quotedLineParts(l));
+        const closer = [...parts].reverse().find((x) => x.closer)?.closer || parts.filter((x) => x.courtesyOnly).map((x) => x.body).pop() || '';
+        const facts = parts.filter((x) => !x.courtesyOnly && x.body && /\[\d{1,3}\]/.test(x.body) && !/\[\d{1,3}\]:\s*$/.test(x.body));
+        const useful = facts.filter((x) => !kbLib.isPolicyLine(x.body));
+        const body = useful.length ? useful.map((x) => x.body).join('\n') : '';
+        productLeadLine = lead;
+        fin = { ...fin, text: [lead, body, closer || kbLib.FOLLOW_UPS.product].filter(Boolean).join('\n') };
+      }
+    }
     const outLines = String(fin.text).split('\n').filter((l) => l.trim());
     // proof claims: the cited lines only (a courtesy opener/closer is not a claim, and a "Here's what “X” says [1]:"
     // pointer line only names the place), each matched to its quote by marker and quoted text, never by position
@@ -316,6 +336,10 @@ export async function runAnswer(o) {
     const summaryText = fin0.summary ? String(fin0.summary).trim() : null;
     const claims = claimLines.map((x) => {
       const l = x.body;
+      if (productLeadLine && l.startsWith(productLeadLine.split(' [')[0].slice(0, 40))) {
+        return { sentence: l.replace(/\s*\[\d{1,3}\]/g, '').trim(), n: Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null, quote: null, file: null, locator: null, product: true,
+          verified: true, check: "the product's own page data: its title, link, price and stock" };
+      }
       const bare = (t) => String(t).replace(/\s*\[\d{1,3}\]/g, '').replace(/\s+/g, ' ').trim();
       if (summaryText && bare(l) === bare(summaryText)) {
         const sn = Number(/\[(\d{1,3})\]/.exec(l)?.[1] ?? 0) || null;
