@@ -96,8 +96,13 @@ export function createKdStep(ctx, { h, $$ }) {
     if (e.shiftKey && (document.activeElement === first || !M.dialog.contains(document.activeElement))) { e.preventDefault(); lastEl.focus(); }
     else if (!e.shiftKey && (document.activeElement === lastEl || !M.dialog.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
   }
+  // While the files are moving the dialog stays open (closing it mid-move left people with nowhere to go); if the move
+  // runs long, closing is allowed again and Launch picks it up where it left off.
+  const MOVE_HOLD_MS = 3 * 60000;
+  const moveHeld = () => !!M && M.state === 'moving' && Date.now() - (M.movingSince || 0) < MOVE_HOLD_MS;
   function close(reason = 'close') {
     if (!M) return;
+    if (moveHeld() && (reason === 'close' || reason === 'esc' || reason === 'scrim')) return;
     const S = M; M = null;
     S.off();
     for (const t of S.timers) clearTimeout(t);
@@ -161,6 +166,9 @@ export function createKdStep(ctx, { h, $$ }) {
     const prev = M.state;
     M.state = state;
     const b = M.body;
+    if (state === 'moving') M.movingSince ||= Date.now(); else M.movingSince = 0;
+    const xBtn = M.dialog.querySelector('.co-x');
+    if (xBtn) xBtn.hidden = moveHeld();
     const keepFocus = M.dialog.contains(document.activeElement) && document.activeElement !== M.dialog;
     b.innerHTML = '';
     if (state !== 'blocked') clearError();
@@ -201,13 +209,16 @@ export function createKdStep(ctx, { h, $$ }) {
     } else if (state === 'moving') {
       setSteps('files');
       const mv = s.move || {};
-      const total = mv.total || 0, ready = mv.ready || 0;
-      const pct = total ? Math.round((ready / total) * 100) : 0;
+      const total = mv.total || 0, ready = mv.ready || 0, copied = Math.max(mv.copied || 0, ready);
+      // two halves: copied into the account, then read by KnowDrive (so the bar moves from the start)
+      const pct = total ? Math.round(((copied + ready) / (2 * total)) * 100) : 0;
+      const held = moveHeld();
+      const where = !total ? 'Getting started.' : copied < total ? `Copying: ${copied} of ${total}.` : `Copied. KnowDrive is reading them: ${ready} of ${total} ready.`;
       b.append(who(),
         h('p', { class: 'kda-wait' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }), `Moving ${plural(total, 'file')} into your KnowDrive account…`),
         h('div', { class: 'kda-bar', role: 'progressbar', 'aria-label': 'Files moved', 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(ready), 'aria-valuetext': `${ready} of ${total} ready` },
           h('span', { style: { width: `${pct}%` } })),
-        h('p', { class: 'kda-fine', id: 'kda-progress' }, `${ready} of ${total} ready. Usually a minute or two. You can close this: it keeps going, and Launch picks up where it left off.`));
+        h('p', { class: 'kda-fine', id: 'kda-progress' }, `${where} ${held ? 'Please keep this open. It usually takes a minute or two, and checkout comes next.' : 'This is taking longer than usual. You can close this: it keeps going, and Launch picks up where it left off.'}`));
       poll();
     } else if (state === 'partial') {
       setSteps('files');

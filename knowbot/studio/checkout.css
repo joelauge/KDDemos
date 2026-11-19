@@ -265,6 +265,7 @@
 .co-peek { display: none; }
 .co-x { position: absolute; top: 12px; right: 12px; z-index: 2; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
 .co-x:hover { background: var(--raise); color: var(--strong); }
+.co-x[hidden] { display: none; }
 
 .co-sr-receipt { display: grid; gap: 12px; align-content: start; padding: 24px 24px 22px; background: var(--panel-2); border-right: 1px dashed var(--line-2); min-width: 0;
   background-image: radial-gradient(80% 60% at 0% 0%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%); }
