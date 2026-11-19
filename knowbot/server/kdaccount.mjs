@@ -96,6 +96,18 @@ export function createKdAccount(o = {}) {
     const doc = Object.fromEntries([...clients].map(([k, v]) => [k, { client_id: v.client_id, ...(v.client_secret ? { sealedSecret: sealKey(v.client_secret, tokenKey) } : {}) }]));
     try { await fsp.mkdir(path.dirname(clientFile), { recursive: true }); await fsp.writeFile(clientFile, JSON.stringify(doc, null, 2)); } catch (e) { log(`[kd] could not save the client registration: ${e.message}`); }
   }
+  /**
+   * The client a link's sign-in was issued to. A refresh token only works with that client, and a registered client is
+   * otherwise remembered in a local file that a restart loses, so every link carries its own (the secret sealed).
+   */
+  const clientOfLink = async (link) => {
+    if (link?.client?.client_id) {
+      let client_secret;
+      try { client_secret = link.client.sealedSecret ? openKey(link.client.sealedSecret, tokenKey) : undefined; } catch { client_secret = undefined; }
+      return { client_id: String(link.client.client_id), ...(client_secret ? { client_secret } : {}) };
+    }
+    return clientFor(link?.clientRedirect || env.KNOWBOT_KD_REDIRECT_URI || '');
+  };
   const registering = new Map();
   /** The OAuth client for a redirect URI: KNOWBOT_KD_CLIENT_ID when pinned, else registered once (DCR) and cached. */
   async function clientFor(redirectUri) {
@@ -212,7 +224,8 @@ export function createKdAccount(o = {}) {
     const tok = await tokenCall({ grant_type: 'authorization_code', code: String(code), redirect_uri: d.r, code_verifier: d.v }, client);
     if (!tok.refresh_token) throw new KdError('upstream', 'KnowDrive returned no refresh token, so KnowBot could not stay signed in');
     const who = await discover(tok.access_token, claimsOf(tok.id_token));
-    const link = { ...who, sealed: sealKey(tok.refresh_token, tokenKey), scope: tok.scope || scope, authBase, apiBase, clientRedirect: d.r, linkedAt: new Date(now()).toISOString(), status: 'linked' };
+    const link = { ...who, sealed: sealKey(tok.refresh_token, tokenKey), scope: tok.scope || scope, authBase, apiBase, clientRedirect: d.r, linkedAt: new Date(now()).toISOString(), status: 'linked',
+      client: { client_id: client.client_id, ...(client.client_secret ? { sealedSecret: sealKey(client.client_secret, tokenKey) } : {}) } };
     return { state: d, link, access: { token: tok.access_token, exp: now() + Math.max(30, Number(tok.expires_in) || 300) * 1000 } };
   }
 
@@ -232,7 +245,7 @@ export function createKdAccount(o = {}) {
       inflight.set(key, (async () => {
         let refresh;
         try { refresh = openKey(link.sealed, tokenKey); } catch { throw new KdError('reconnect', 'The saved KnowDrive sign-in cannot be read (the server secret changed)', 401); }
-        const client = await clientFor(link.clientRedirect || env.KNOWBOT_KD_REDIRECT_URI || '');
+        const client = await clientOfLink(link);
         const tok = await tokenCall({ grant_type: 'refresh_token', refresh_token: refresh }, client);
         cache.set(key, { token: tok.access_token, exp: now() + Math.max(30, Number(tok.expires_in) || 300) * 1000 });
         if (tok.refresh_token && tok.refresh_token !== refresh) {
@@ -253,7 +266,7 @@ export function createKdAccount(o = {}) {
     try {
       const md = await metadata();
       if (!md.revocation_endpoint) return false;
-      const client = await clientFor(link.clientRedirect || '');
+      const client = await clientOfLink(link);
       const r = await doFetch(md.revocation_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout(10000),
         body: new URLSearchParams({ token: openKey(link.sealed, tokenKey), token_type_hint: 'refresh_token', client_id: client.client_id, ...(client.client_secret ? { client_secret: client.client_secret } : {}) }) });
       return r.ok;

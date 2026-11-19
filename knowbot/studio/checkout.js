@@ -1183,6 +1183,8 @@ export function mount(ctx) {
 
   async function openSheet({ source = 'card', from = null, invoker = null, kdChecked = false } = {}) {
     if (sheet) { sheet.email?.focus(); return; }
+    // already paid for (or in its free period) but not live yet: never the price again, the setup check instead
+    if (billing?.awaitingLaunch && !getState().trial.converted) { if (pollWake) pollWake(); else pollConversion(); return; }
     // no checkout on this server yet: the sheet says so at once, before anyone is sent to create an account
     if (kdNeeded() && !kdChecked && !checkoutOff()) {
       let k = null;
@@ -1493,11 +1495,14 @@ export function mount(ctx) {
     again.addEventListener('click', () => { if (pollWake) pollWake(); else pollConversion(); });
     const keep = h('button', { type: 'button', class: 'btn btn-primary co-btn co-btn-primary is-small' }, 'Keep testing');
     keep.addEventListener('click', () => focusBotComposer());
-    const acts = h('div', { class: 'co-act-actions', hidden: true }, keep, again);
+    // paid, but the bot's KnowDrive sign-in has to be renewed before it can go live
+    const recon = h('button', { type: 'button', class: 'btn btn-primary co-btn co-btn-primary is-small', id: 'co-act-reconnect', hidden: true }, 'Reconnect KnowDrive');
+    recon.addEventListener('click', () => { kdStep().then((k) => k.open({ invoker: recon, reconnect: true, onContinue: () => { if (pollWake) pollWake(); else pollConversion(); } })).catch(() => {}); });
+    const acts = h('div', { class: 'co-act-actions', hidden: true }, recon, keep, again);
     const card = h('div', { class: 'co-act' },
       h('div', { class: 'co-act-head' }, h('span', { class: 'co-act-ico', html: icon('rocket', 16) }), h('div', null, title, line)), meter, skel, acts, live);
     el.append(card);
-    let st = null, t0 = Date.now() - (Number(data && data.elapsed) || 0), tick = 0;
+    let st = null, wasKd = false, t0 = Date.now() - (Number(data && data.elapsed) || 0), tick = 0;
     const paintClock = () => {
       const e = Date.now() - t0;
       clk.textContent = st === 'checking' || st === 'pending' ? ` · ${clock(e)}` : '';
@@ -1507,7 +1512,10 @@ export function mount(ctx) {
     function update(d = {}) {
       const next = d.state || 'checking';
       if (d.t0) t0 = d.t0;
-      const changed = next !== st;
+      const needKd = !!d.reconnect && next !== 'done';
+      const paid = !!d.paid;
+      const changed = next !== st || needKd !== wasKd;
+      wasKd = needKd;
       st = next;
       card.dataset.state = st;
       setActFlag(st === 'done' ? null : st === 'slow' ? 'pending' : st);
@@ -1516,9 +1524,15 @@ export function mount(ctx) {
       skel.hidden = st !== 'checking';
       const email = getState().trial.email;
       if (st === 'checking') { title.textContent = `Activating ${botNameMid()}…`; text.textContent = 'Confirming your payment, usually a few seconds'; }
-      else if (st === 'pending') { title.textContent = 'Payment received? We\'re finishing setup.'; text.textContent = 'Checking again automatically every 5 s · usually under a minute'; }
+      else if (st === 'pending') { title.textContent = paid ? 'Payment received. We\'re finishing setup.' : 'Payment received? We\'re finishing setup.'; text.textContent = paid ? 'Checking again automatically every 5 s. You won\'t be charged again.' : 'Checking again automatically every 5 s · usually under a minute'; }
       else if (st === 'slow') { title.textContent = 'Taking longer than usual: we\'ll email you'; text.textContent = `We'll email ${email || 'you'} the moment ${botName()} is live. Keep testing meanwhile: your bot is saved.`; }
       else if (st === 'done') { title.textContent = 'Payment confirmed. Thank you!'; text.textContent = `${botName()} now answers from your KnowDrive account.`; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
+      recon.hidden = !needKd; keep.hidden = needKd;
+      if (needKd) {
+        title.textContent = 'Payment received. Reconnect KnowDrive to finish.';
+        text.textContent = `Your KnowDrive sign-in needs renewing before ${botName()} can go live. Reconnect it and setup finishes by itself. You won't be charged again.`;
+        acts.hidden = false; meter.hidden = true; skel.hidden = true;
+      }
       paintClock();
       clearInterval(tick);
       if (st === 'checking' || st === 'pending') tick = setInterval(() => { if (!card.isConnected) { clearInterval(tick); return; } paintClock(); }, 1000);
@@ -1637,6 +1651,8 @@ export function mount(ctx) {
       try { r = await api.getTrial(); } catch { r = null; }
       if (gen !== pollGen) return;
       const elapsed = Date.now() - t0;
+      if (r && r.billing) setBilling(r.billing);
+      const why = { paid: !!r?.billing?.awaitingLaunch, reconnect: r?.kd?.status === 'reconnect' || r?.billing?.launchError === 'kd_reconnect' };
       if (r && r.converted) {
         pollWake = null;
         setBilling(r.billing);
@@ -1647,10 +1663,10 @@ export function mount(ctx) {
       }
       if (elapsed >= POLL_MAX_MS) {
         pollWake = null;
-        cardInst.activating?.update({ state: 'slow' });
+        cardInst.activating?.update({ state: 'slow', ...why });
         return;   // the card announces its own state; "Check now" restarts a fresh 2-minute poll
       }
-      cardInst.activating?.update({ state: elapsed >= POLL_FOR_MS ? 'pending' : 'checking' });
+      cardInst.activating?.update({ state: why.reconnect || elapsed >= POLL_FOR_MS ? 'pending' : 'checking', ...why });
       // a background poll; "Check now" wakes it early
       await new Promise((res) => { const t = setTimeout(res, elapsed >= POLL_FOR_MS ? POLL_SLOW_MS : POLL_MS); pollWake = () => { clearTimeout(t); pollWake = null; res(); }; });
     }
@@ -1707,6 +1723,14 @@ export function mount(ctx) {
     if (!launched && !t.converted && (params.get('launch') === '1' || /^#launch$/.test(location.hash))) {
       try { const u = new URL(location.href); u.searchParams.delete('launch'); u.searchParams.delete('k'); u.hash = ''; history.replaceState(history.state, '', u.pathname + (u.search || '')); } catch { /* ignore */ }
       setTimeout(() => openSheet({ source: 'return' }), motion.reduced() ? 80 : 500);
+    }
+    // paid for on an earlier visit but not live yet (the launch could not finish): pick the setup check up again
+    if (!launched && !t.converted && t.id && cfg().checkout?.mode === 'hosted') {
+      api.billing().then((r) => {
+        setBilling(r && r.billing);
+        if (r?.billing?.awaitingLaunch && !r.converted && !activatingKey) { activatingKey = t.id; pollConversion(); }
+        else if (r?.converted && !getState().trial.converted) { activatingKey = t.id; pollConversion(); }
+      }).catch(() => {});
     }
     if (launched && !activatingKey) {
       activatingKey = t.id;

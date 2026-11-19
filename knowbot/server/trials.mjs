@@ -1467,7 +1467,7 @@ export function createStudio(o = {}) {
     if (!kdAcct || !T?.kdLink?.sealed) return null;
     let c = kdClients.get(T.id);
     if (!c || c.link !== T.kdLink) {
-      c = { link: T.kdLink, client: kdAcct.client(T.id, T.kdLink, { onRotate: (sealed) => { if (T.kdLink) { T.kdLink.sealed = sealed; saveSpecSoon(T); } }, onReconnect: (e) => kdNeedsReconnect(T, e) }) };
+      c = { link: T.kdLink, client: kdAcct.client(T.id, T.kdLink, { onRotate: async (sealed) => { if (T.kdLink) { T.kdLink.sealed = sealed; await flushSpec(T); } } /* saved at once: a restart must not lose a rotated sign-in */, onReconnect: (e) => kdNeedsReconnect(T, e) }) };
       kdClients.set(T.id, c);
     }
     return c.client;
@@ -1678,7 +1678,7 @@ export function createStudio(o = {}) {
     },
     saveTrial: (T) => flushSpec(T),
     // the same convert the admin route runs: a linked bot's account is its KnowDrive account (the customer-store model)
-    launch: (T, { customerId } = {}) => convert(T, { account: kdReady(T) ? T.kdLink.account : String(customerId || 'knowbot').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), bucketId: `bot-${T.id.slice(3, 15)}` }),
+    launch: (T, { customerId } = {}) => convert(T, { account: T.kdLink?.account && T.kdLink.moved ? T.kdLink.account /* also while the sign-in needs reconnecting */ : String(customerId || 'knowbot').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), bucketId: `bot-${T.id.slice(3, 15)}` }),
     onChange: (T, state) => pushEvent(T, 'billing', { billing: state }) });
   // Lead delivery to the owner's CRMs (server/crm): connections live in T.flags.crm (saved in the spec doc, kept when
   // the bot launches); the outbox and delivery log are <bot root>/_crm.json; the bot's leads themselves get a durable
@@ -4796,6 +4796,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       await flushSpec(T);
       pushEvent(T, 'kd', kdPublic(T));
       log(`[kd] ${T.id} signed in to KnowDrive account ${r.link.account}${same ? ' (reconnected)' : ''}`);
+      // a bot that is already paid for but could not launch (its sign-in had to be reconnected) launches now
+      if (!T.converted && T.flags.billing?.status) billing.confirm(T).then(() => pushEvent(T, 'billing', { billing: billing.pub(T), converted: !!T.converted })).catch((e) => log(`[billing] launch after reconnect for ${T.id}: ${e.message}`));
       return kdPage(res, { ...where, ok: true });
     } catch (e) {
       const ref = randomBytes(4).toString('hex');

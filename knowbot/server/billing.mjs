@@ -94,7 +94,14 @@ export function createBilling({ env = {}, log = () => {}, now = () => Date.now()
   const graceMs = graceMsOf(env);
   const webhookSecret = () => env.KNOWBOT_BILLING_WEBHOOK_SECRET || env.STRIPE_WEBHOOK_SECRET || '';
   const amountOf = (interval) => Math.round(Number(interval === 'year' ? prices.year : prices.month) * 100);
-  const pub = (T) => billingPublic(T?.flags?.billing, now());
+  // a subscription that is paid for (or in its free period) while the bot is not live yet: the Studio must show
+  // "finishing setup" with the reason, never the price again
+  const pub = (T) => {
+    const p = billingPublic(T?.flags?.billing, now());
+    const b = T?.flags?.billing;
+    if (p && !T.converted && !ENDED.has(b.status)) { p.awaitingLaunch = true; p.launchError = b.launchError || null; }
+    return p;
+  };
   const paused = (flags) => billingPaused(flags?.billing, now());
   const changed = (T) => { try { onChange(T, pub(T)); } catch { /* no open Studio */ } };
 

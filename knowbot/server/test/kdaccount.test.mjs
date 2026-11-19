@@ -207,6 +207,31 @@ describe('kdaccount.mjs: PKCE, state, sealing, refresh', () => {
     assert.doesNotMatch(logs.join('\n'), TOKEN_RE, 'no token is ever logged');
   });
 
+  test('a server restart (the local client registration is lost) does not break an existing sign-in', async () => {
+    const ru = 'http://api.test/api/studio/kd/callback';
+    const A = createKdAccount({ env: { KNOWBOT_KD_AUTH_URL: kd.url }, secret: 'same-secret' });
+    const { url } = await A.start({ trialId: 'tr_dddddddddddddddd', bearer: 'b', origin: null, redirectUri: ru });
+    const u = new URL(url);
+    const r = await fetch(`${kd.url}/-/oauth/authorize`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: u.searchParams.get('client_id'), redirect_uri: ru, state: u.searchParams.get('state'), code_challenge: u.searchParams.get('code_challenge'), code_challenge_method: 'S256', email: 'restart@example.com', action: 'create' }) });
+    const back = new URL(r.headers.get('location'));
+    const out = await A.finish({ state: back.searchParams.get('state'), code: back.searchParams.get('code') });
+    assert.equal(out.link.client.client_id, u.searchParams.get('client_id'), 'the link remembers the client it was issued to');
+    assert.doesNotMatch(JSON.stringify(out.link), TOKEN_RE);
+    // the saved link, read back by a fresh process with no local registration: it registers a NEW client for new
+    // sign-ins, but the old sign-in still refreshes with its own client
+    const saved = JSON.parse(JSON.stringify(out.link));
+    const B = createKdAccount({ env: { KNOWBOT_KD_AUTH_URL: kd.url }, secret: 'same-secret' });
+    const fresh = new URL((await B.start({ trialId: 'tr_eeeeeeeeeeeeeeee', bearer: 'b', origin: null, redirectUri: ru })).url);
+    assert.notEqual(fresh.searchParams.get('client_id'), saved.client.client_id, 'the restarted server registered another client');
+    const token = await B.accessFor('k-restart', saved, { force: true });
+    assert.match(token, /^kdat_/);
+    // a link saved before links carried their client (older bots) falls back to the registered client, as before
+    const legacy = { ...JSON.parse(JSON.stringify(out.link)), sealed: saved.sealed };
+    delete legacy.client;
+    await assert.rejects(() => B.accessFor('k-legacy', legacy, { force: true }), (e) => e instanceof KdError && e.code === 'reconnect');
+  });
+
   test('the fake authorization server isolates accounts: KnowBot’s own key never reaches an owned store', async () => {
     const a = kd.auth.createAccount('iso@example.com');
     const r = await fetch(`${kd.url}/api/v1/vector_stores/${a.store}/files`, { headers: { authorization: 'Bearer fake-key' } });
