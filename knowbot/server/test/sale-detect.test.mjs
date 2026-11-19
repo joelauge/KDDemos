@@ -516,8 +516,8 @@ describe('sale detection: lib/embed.js and site/overlay.js load site/sale.js the
     assert.equal(norm(block(overlay)), norm(block(embed)));
   });
   test('both call it for their bot, from their own address, never under a privacy signal; the hosted link does not', () => {
-    assert.match(embed, /if \(botId && d\.sales !== 'off' && !privacySignal\(\)\) loadSales\(new URL\('\.\.\/site\/sale\.js', me\)\.href, botId, new URL\(apiRoot\)\.origin\)/);
-    assert.match(overlay, /if \(!HOSTED && SRC && !PRIVACY\) loadSales\(new URL\('\.\/sale\.js', SRC\)\.href, BOT, API\)/);
+    assert.match(embed, /if \(botId && d\.sales !== 'off' && !privacySignal\(\)\) loadSales\(new URL\('\.\.\/site\/sale\.js(?:\?v=\w+)?', me\)\.href, botId, new URL\(apiRoot\)\.origin\)/);
+    assert.match(overlay, /if \(!HOSTED && SRC && !PRIVACY\) loadSales\(new URL\('\.\/sale\.js(?:\?v=\w+)?', SRC\)\.href, BOT, API\)/);
   });
   /** Runs the loader in a fake page. → the script tags it added. */
   function loader({ readyState = 'complete', present = false, running = false } = {}) {
