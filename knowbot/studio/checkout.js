@@ -1645,6 +1645,7 @@ export function mount(ctx) {
       emit('setup:post', { role: 'assistant', text: '', card: { type: 'activating', data: { state: 'checking', elapsed: 0 } }, scroll: true });
     }
     cardInst.activating?.update({ state: 'checking', t0 });
+    endReturning();
     for (;;) {
       if (gen !== pollGen) return;
       let r = null;
@@ -1712,6 +1713,17 @@ export function mount(ctx) {
   }
   sub('billing:event', (d) => { if (d && typeof d === 'object') setBilling(d.billing); });
 
+  // Back from checkout: say so at once. The bot's state is still loading and the launch can take a little while, so the
+  // owner must never look at a silent page. The setup card takes over as soon as it is posted.
+  let returning = null;
+  const endReturning = () => { if (returning) { returning.remove(); returning = null; } };
+  if (params.get('launched') === '1' || /^#launched\b/.test(location.hash)) {
+    returning = h('div', { class: 'co-returning', role: 'status' }, h('span', { class: 'kda-spin', 'aria-hidden': 'true' }),
+      h('div', null, h('b', null, 'Welcome back. Setting up your bot…'), h('span', null, 'This usually takes under a minute. Keep this page open.')));
+    document.body.append(returning);
+    setTimeout(endReturning, 90000);
+  }
+
   sub('trial:ready', (d) => {
     const launched = params.get('launched') === '1' || /^#launched\b/.test(location.hash);
     const t = getState().trial;
@@ -1736,8 +1748,8 @@ export function mount(ctx) {
       activatingKey = t.id;
       // Reloading should not re-run the activation beat; keep ?t= for B.
       try { const u = new URL(location.href); u.searchParams.delete('launched'); u.searchParams.delete('k'); if (/^#launched\b/.test(u.hash)) u.hash = ''; history.replaceState(history.state, '', u.pathname + (u.search || '') + u.hash); } catch { /* ignore */ }
-      if (t.converted) postSuccess({ burst: true, data: { files: d && d.files } });
-      else setTimeout(pollConversion, 600);
+      if (t.converted) { endReturning(); postSuccess({ burst: true, data: { files: d && d.files } }); }
+      else setTimeout(pollConversion, 0);
       return;
     }
     if (d && d.restored && t.converted && !getState().milestones.launched) postSuccess({ burst: true, data: { files: d.files } });

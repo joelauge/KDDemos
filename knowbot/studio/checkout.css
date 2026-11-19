@@ -744,3 +744,8 @@
 .co-backin { display: grid; gap: 4px; }
 .co-backin-note { margin: 0 2px; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
 .co-today { margin: 8px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+
+/* back from checkout, before the bot's state has loaded: a visible "setting up" strip (checkout.js) */
+.co-returning { position: fixed; top: 76px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 32px); padding: 12px 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--strong); box-shadow: 0 10px 30px rgb(0 0 0 / .14); }
+.co-returning b { display: block; font-size: 14px; }
+.co-returning span:not(.kda-spin) { display: block; font-size: 13px; color: var(--muted); }

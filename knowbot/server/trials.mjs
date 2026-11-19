@@ -4824,9 +4824,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if ((!ready.size && moved.length) || moved.some((id) => !ready.has(lcId(id)))) fail(409, 'kd_incomplete', "This bot's files are not all in the KnowDrive account yet.");
     // KnowBot's shared copies go now: the customer's store is the only home (a copy that fails to delete keeps its
     // trial and expiry tags, so the sweeper removes it when the trial would have expired)
-    const shared = await listRows({ tags_all: `trial:${T.id}` });
-    let removed = 0;
-    for (const r of shared.filter(isTrialFileRow)) { try { await deleteRow(r.id); removed++; } catch (e) { log(`[kd] convert ${T.id}: delete ${r.id}: ${e.message}`); } }
+    // They are removed after the bot is marked live (below), a few at a time: the owner is waiting on this launch, and
+    // deleting a hundred files one by one first took over a minute.
+    const shared = (await listRows({ tags_all: `trial:${T.id}` })).filter(isTrialFileRow);
     const idMap = new Map([...ready].map(([src, r]) => [src, r.id]));
     const remap = (m) => { if (!(m instanceof Map)) return m; const out = new Map(); for (const [k, v] of m) out.set(idMap.get(lcId(k)) || k, v); return out; };
     T.summaries = remap(T.summaries); if (T.storeManifest) T.storeManifest = remap(T.storeManifest);
@@ -4843,7 +4843,15 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     }
     await flushSpec(T);
     await retagSideDocs(T);
-    log(`[studio] converted ${T.id} → KnowDrive account ${L.account} bucket:${bucketId} (${ready.size} files in the customer's store, ${removed} shared copies removed)`);
+    log(`[studio] converted ${T.id} → KnowDrive account ${L.account} bucket:${bucketId} (${ready.size} files in the customer's store, ${shared.length} shared copies to remove)`);
+    T.sharedCleanup = (async () => {
+      const queue = shared.slice();
+      let removed = 0;
+      await Promise.all(Array.from({ length: Math.min(6, queue.length) }, async () => {
+        while (queue.length && !closed) { const r = queue.shift(); try { await deleteRow(r.id); removed++; } catch (e) { log(`[kd] convert ${T.id}: delete ${r.id}: ${e.message}`); } }
+      }));
+      log(`[kd] convert ${T.id}: ${removed}/${shared.length} shared copies removed`);
+    })().catch((e) => log(`[kd] convert ${T.id}: cleanup: ${e.message}`)).finally(() => { T.sharedCleanup = null; });
     return ready.size;
   }
   /** A launched bot's fetch against its customer's store (the registry's owned buckets). */
@@ -5471,7 +5479,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (!sub) {
       if (m === 'GET') {
         await resumeStoreJob(T); // an import a restart interrupted goes on as soon as its bot is opened
-        await billing.confirmSoon(T); // back from checkout before the webhook: the payment is looked up, the bot launched
+        // back from checkout before the webhook: the payment is looked up and the bot launched. The page does not wait
+        // for a launch that takes longer than a moment: it answers now and the Studio's own check sees the rest.
+        await Promise.race([billing.confirmSoon(T), sleep(1500)]);
         const files = await filesOf(T, { maxAgeMs: 0 });
         return sendJson(res, 200, { trialId: T.id, expiresAt: new Date(T.expiresAt).toISOString(), spec: publicSpec(T), files, usage: usageOf(T, files), converted: T.converted,
           convertedFiles: T.converted ? (T.convertedFiles ?? files.length) : null, email: T.email, kd: kdPublic(T), billing: billing.pub(T), installed: installedOf(T),
