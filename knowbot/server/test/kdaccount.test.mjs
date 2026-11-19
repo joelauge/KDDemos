@@ -272,7 +272,7 @@ describe('launch with a KnowDrive account (HTTP flow)', () => {
     const copies = S.kd.auth.storeFiles(acct.store);
     assert.equal(copies.length, 3);
     for (const f of own) {
-      const cp = copies.find((x) => x.tags.includes(`kbsrc:${f.id}`));
+      const cp = copies.find((x) => x.tags.includes(`kbsrc:${String(f.id).toLowerCase()}`));
       assert.ok(cp, `copy of ${f.name}`);
       assert.equal(String(cp.blob), DOCS[f.name], 'original bytes');
       assert.ok(cp.filename.endsWith(`/${f.name}`) && cp.filename.startsWith('KnowBot/'), cp.filename);

@@ -314,13 +314,14 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   function add({ store = 'vs_fake', path, text, tags = [], bytes, mime = 'text/plain', pipeline = false, hash = null, blob = null }) {
     // same path in the same store replaces the file (how the registry and spec docs are rewritten)
     for (const f of files.values()) if (f.store === store && f.filename === path) { for (const t of f.timers || []) clearTimeout(t); files.delete(f.id); }
-    const id = `file_${(++seq).toString(36).padStart(4, '0')}${Math.random().toString(36).slice(2, 8)}`;
+    // like production: ids are mixed case, and tags are folded to lowercase (so a tag built from an id never equals it)
+    const id = `file_${(++seq).toString(36).padStart(4, '0')}${Math.random().toString(36).slice(2, 8)}Q`;
     // chunker 'production' (opt-in): Markdown files are cut like production knowDrive (heading-path prefixed atoms)
     const atoms = chunker === 'production' && /\.(?:md|markdown)$/i.test(String(path || '')) ? atomizeProduction(text) : atomize(text);
     const created = nowSec();
     // production dedup: a byte-identical copy of a live file is stored, but never searchable under its own tags
     const dupOf = hash ? [...files.values()].find((x) => x.store === store && x.hash === hash)?.id ?? null : null;
-    const f = { id, store, hash, dupOf, blob, filename: path, tags: [...new Set(tags)], bytes: bytes ?? Buffer.byteLength(String(text || '')), mime_type: mime, text: String(text || ''),
+    const f = { id, store, hash, dupOf, blob, filename: path, tags: [...new Set(tags.map((t) => String(t).toLowerCase()))], bytes: bytes ?? Buffer.byteLength(String(text || '')), mime_type: mime, text: String(text || ''),
       status: 'in_progress', phase: 'pending', atom_count: 0, atoms_vectorized: 0, chunk_count: 0, created_at: created, updated_at: created, last_error: null, atoms };
     files.set(id, f);
     const touch = () => { f.updated_at = nowSec(); };
@@ -700,7 +701,7 @@ ${signup ? '<button id="kd-create" name="action" value="create">Create account</
             const f = files.get(id);
             if (!f || f.store !== call.store) continue;
             const rm = new Set(b.tags_remove || []);
-            f.tags = [...new Set([...f.tags.filter((t) => !rm.has(t)), ...(b.tags_add || [])])];
+            f.tags = [...new Set([...f.tags.filter((t) => !rm.has(t)), ...(b.tags_add || []).map((t) => String(t).toLowerCase())])];
             updated++;
           }
           return json(200, { updated });

@@ -4566,6 +4566,10 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   //   POST   /api/studio/trials/:id/kd/move          copies the files (idempotent, resumable; retries failed files)
   //   DELETE /api/studio/trials/:id/kd               signs out (before launch only)
   // Progress rides the trial's events stream as `kd` (the same body as GET /kd, without `movable`).
+  // KnowDrive folds tags to lowercase, so the kbsrc:<shared file id> tag on a copy never equals the mixed-case id it
+  // was built from: both sides are compared in lowercase
+  const lcId = (id) => String(id || '').toLowerCase();
+  const srcOfCopy = (r) => lcId((r.tags || []).find((t) => t.startsWith('kbsrc:'))?.slice(6)) || null;
   const kdMoveWaitMs = Math.max(1000, Number(o.kdMoveWaitMs ?? 20 * 60000));
   const kdPollMs = Math.max(20, Number(o.kdPollMs ?? 1500));
   const KD_FAILED_MAX = 50;
@@ -4640,7 +4644,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     // idempotent and resumable: every copy carries kbsrc:<shared file id>; a live copy is reused, a failed one replaced
     const bySrc = new Map();
     for (const r of await listRows({ tags_all: kdTagOf(T) }, via)) {
-      const src = (r.tags || []).find((t) => t.startsWith('kbsrc:'))?.slice(6);
+      const src = srcOfCopy(r);
       if (src && (!bySrc.has(src) || deriveStage(r) !== 'failed')) bySrc.set(src, r);
     }
     const queue = files.slice();
@@ -4649,7 +4653,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       while (queue.length && !stop) {
         const f = queue.shift();
         const it = items[f.id];
-        const have = bySrc.get(f.id);
+        const have = bySrc.get(lcId(f.id));
         if (have && deriveStage(have) !== 'failed') { it.copyId = have.id; it.status = deriveStage(have) === 'ready' ? 'ready' : 'copied'; it.error = null; kdEventSoon(T); continue; }
         try {
           if (have) await deleteRow(have.id, via).catch(() => {});
@@ -4813,18 +4817,18 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     try { copies = await listRows({ tags_all: kdTagOf(T) }, via); }
     catch (e) { if (e?.code === 'kd_reconnect') fail(409, 'kd_reconnect', 'The KnowDrive sign-in for this bot expired; the owner must reconnect it in the Studio.'); throw e; }
     const ready = new Map();
-    for (const r of copies) { const src = (r.tags || []).find((t) => t.startsWith('kbsrc:'))?.slice(6); if (src && deriveStage(r) === 'ready') ready.set(src, r); }
+    for (const r of copies) { const src = srcOfCopy(r); if (src && deriveStage(r) === 'ready') ready.set(src, r); }
     const moved = Object.entries(T.kdMove?.items || {}).filter(([, it]) => it.status === 'ready').map(([id]) => id);
-    if ((!ready.size && moved.length) || moved.some((id) => !ready.has(id))) fail(409, 'kd_incomplete', "This bot's files are not all in the KnowDrive account yet.");
+    if ((!ready.size && moved.length) || moved.some((id) => !ready.has(lcId(id)))) fail(409, 'kd_incomplete', "This bot's files are not all in the KnowDrive account yet.");
     // KnowBot's shared copies go now: the customer's store is the only home (a copy that fails to delete keeps its
     // trial and expiry tags, so the sweeper removes it when the trial would have expired)
     const shared = await listRows({ tags_all: `trial:${T.id}` });
     let removed = 0;
     for (const r of shared.filter(isTrialFileRow)) { try { await deleteRow(r.id); removed++; } catch (e) { log(`[kd] convert ${T.id}: delete ${r.id}: ${e.message}`); } }
     const idMap = new Map([...ready].map(([src, r]) => [src, r.id]));
-    const remap = (m) => { if (!(m instanceof Map)) return m; const out = new Map(); for (const [k, v] of m) out.set(idMap.get(k) || k, v); return out; };
+    const remap = (m) => { if (!(m instanceof Map)) return m; const out = new Map(); for (const [k, v] of m) out.set(idMap.get(lcId(k)) || k, v); return out; };
     T.summaries = remap(T.summaries); if (T.storeManifest) T.storeManifest = remap(T.storeManifest);
-    if (T.flags.storePdfUrls) T.flags.storePdfUrls = Object.fromEntries(Object.entries(T.flags.storePdfUrls).map(([k, v]) => [idMap.get(k) || k, v]));
+    if (T.flags.storePdfUrls) T.flags.storePdfUrls = Object.fromEntries(Object.entries(T.flags.storePdfUrls).map(([k, v]) => [idMap.get(lcId(k)) || k, v]));
     T.spec = { ...T.spec, sampleSet: null, sources: {} };
     if (T.flags.sharedSet) { T.flags.sharedSet = null; T.flags.sharedAt = null; }
     T.converted = true; T.convertedFiles = ready.size; T.convertedBucket = bucketId.toLowerCase(); T.expiresAt = liveExpiry(T, T.expiresAt);
