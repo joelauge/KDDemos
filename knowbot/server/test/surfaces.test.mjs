@@ -134,8 +134,8 @@ describe('the Builder reads surface changes in plain words (parseIntent)', () =>
   });
 });
 
-describe('landing: "Where should it answer?" (studio/index.html, landing.js) never shows a price', () => {
-  const html = read('studio/index.html');
+describe('landing: "Where should it answer?" (index.html, landing.js) never shows a price', () => {
+  const html = read('index.html');
   const land = html.slice(html.indexOf('<div id="kl-landing"'), html.indexOf('<!-- end landing -->') > 0 ? html.indexOf('<!-- end landing -->') : html.indexOf('id="st-app"'));
   test('a toggle per tool (Website, KnowBot number, Email, AI agents) covering every feature; website and AI agents pressed by default', () => {
     const btns = [...land.matchAll(/<button type="button" class="kl-ch kl-tool"[^>]*data-tool="(\w+)" data-surfaces="([\w,]+)" aria-pressed="(true|false)">[\s\S]*?<span class="kl-ch-t">([^<]+)<span/g)];

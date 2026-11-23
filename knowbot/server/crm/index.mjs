@@ -384,7 +384,7 @@ export function createCrm(o = {}) {
   async function rewrite(T) { const box = await boxOf(T); box.T = T; box.dirty = true; return writeNow(box); }
 
   // ------------------------------------------------------------------ leads in
-  const studioUrlOf = (T) => { const s = peekState(T)?.studio; return s && ORIGIN_RE.test(s) ? `${s}/studio/?t=${encodeURIComponent(T.id)}#stats` : null; };
+  const studioUrlOf = (T) => { const s = peekState(T)?.studio; return s && ORIGIN_RE.test(s) ? `${s}/?t=${encodeURIComponent(T.id)}#stats` : null; };
   const linksOf = async (bot, cid) => { try { return cid ? (await o.leads?.linksOf?.(bot, cid)) || [] : []; } catch { return []; } };
   /** A lead the bot just captured (leads.mjs event; extra.answer: the answer text, when the bot sent one). */
   function onLead(ev, extra = {}) {

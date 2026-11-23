@@ -291,7 +291,7 @@ describe('KnowBot Studio server (trials.mjs): answers r3-r7, proof run, misc rou
     const g = await (await c.json(t, '')).json();
     assert.ok(g.restoreKey && g.shareLink.includes(`?t=${t.trialId}&k=`), g.shareLink);
     const em = await (await S.api(`/api/studio/trials/${t.trialId}/email`, { method: 'POST', headers: c.h(t, null, { 'content-type': 'application/json', origin: 'https://studio.example' }), body: JSON.stringify({ email: 'a@b.co' }) })).json();
-    assert.match(em.link, new RegExp(`^https://studio\\.example/studio/\\?t=${t.trialId}&k=[\\w.-]+$`));
+    assert.match(em.link, new RegExp(`^https://studio\\.example/\\?t=${t.trialId}&k=[\\w.-]+$`));
     const k = decodeURIComponent(new URL(em.link).searchParams.get('k'));
     const other = nextIp();
     const r = await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': other }, body: JSON.stringify({ k }) });

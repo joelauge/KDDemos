@@ -208,7 +208,7 @@ describe('the KnowBot plan: checkout → webhook → launched, then the subscrip
     assert.equal(S.pay.products.get(PLAN_PRODUCT_ID).name, 'KnowBot');
     // back to the Studio: the existing return contract (t, launched=1, the restore key) and the Launch sheet on cancel
     const ok = new URL(b.success_url), no = new URL(b.cancel_url);
-    assert.equal(`${ok.origin}${ok.pathname}`, 'http://studio.test/studio/');
+    assert.equal(`${ok.origin}${ok.pathname}`, 'http://studio.test/');
     assert.deepEqual([ok.searchParams.get('t'), ok.searchParams.get('launched'), ok.hash], [t.trialId, '1', '#launched']);
     assert.deepEqual([no.searchParams.get('t'), no.searchParams.get('launched'), no.searchParams.get('launch'), no.hash], [t.trialId, null, '1', '#launch']);
     const rs = await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': nextIp() }, body: JSON.stringify({ k: ok.searchParams.get('k') }) });
@@ -294,7 +294,7 @@ describe('the KnowBot plan: checkout → webhook → launched, then the subscrip
     assert.ok(url.startsWith(`${S.pay.url}/portal/bps_`), url);
     const req = S.pay.requests.find((x) => x.path === '/v1/billing_portal/sessions');
     assert.equal(req.body.customer, session.customer);
-    assert.equal(req.body.return_url, `http://studio.test/studio/?t=${t.trialId}#billing`);
+    assert.equal(req.body.return_url, `http://studio.test/?t=${t.trialId}#billing`);
     // a bot that never subscribed has nothing to manage
     const t0 = await c.trial();
     const np = await c.call(t0, '/billing/portal', 'POST', {});

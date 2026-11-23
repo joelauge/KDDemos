@@ -12,11 +12,11 @@
 //            vendor/kd-theme/tokens.css. The global element reset, page chrome and keyframes are left out.
 //   react    install react + react-dom <REACT_VERSION> and esbuild in a scratch directory (never in this repo's
 //            dependencies) and bundle them into one ESM file plus four thin specifier modules
-//            (react, react/jsx-runtime, react-dom, react-dom/client) in vendor/react/<version>/; studio/index.html's
+//            (react, react/jsx-runtime, react-dom, react-dom/client) in vendor/react/<version>/; index.html's
 //            importmap points the bare specifiers at them, so the widgets' React components share one React.
 //
 // Writes plain files only: no symlinks, no node_modules (a symlink once broke the Pages deploy). Afterwards update
-// the versions in vendor/README.md and in studio/index.html's importmap if they changed.
+// the versions in vendor/README.md and in index.html's importmap if they changed.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -122,7 +122,7 @@ async function tokens() {
    (${css.length} bytes, sha256 ${sha.slice(0, 16)}, fetched ${new Date().toISOString().slice(0, 10)}).
    ${names.size} custom properties: light (:root), operating modes ([data-kd-mode]) and dark (html.dark / .dark).
    The source's global element reset, page chrome and keyframes are deliberately NOT here. Fonts: the tokens name
-   Plus Jakarta Sans and JetBrains Mono (design contract 1.4); the page loads them (studio/index.html). Do not edit:
+   Plus Jakarta Sans and JetBrains Mono (design contract 1.4); the page loads them (index.html). Do not edit:
    re-run the script. */\n`;
   mkdirSync(join(VENDOR, 'kd-theme'), { recursive: true });
   writeFileSync(join(VENDOR, 'kd-theme', 'tokens.css'), head + rules.join('\n') + '\n');
@@ -175,5 +175,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     else if (p === 'react') react();
     else throw new Error(`unknown part ${p} (widgets | tokens | react)`);
   }
-  console.log('done. Check vendor/README.md and the importmap in studio/index.html for the versions.');
+  console.log('done. Check vendor/README.md and the importmap in index.html for the versions.');
 }

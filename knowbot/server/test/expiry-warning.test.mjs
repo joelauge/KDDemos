@@ -22,7 +22,7 @@ describe('expiry warning e-mail (pure)', () => {
     assert.equal(stopTimeText(at), 'Friday, November 20 at 3:00 PM UTC');
   });
   test('subject, body, button, plain text: plain words, the host, the stop time, no vendor names, nothing untrue', () => {
-    const link = 'https://knowbot.knowdrive.ai/studio/?t=tr_aaaaaaaaaaaaaaaa&k=abc.def';
+    const link = 'https://knowbot.knowdrive.ai/?t=tr_aaaaaaaaaaaaaaaa&k=abc.def';
     const m = expiryWarningEmail({ host: 'shop.example', botName: 'Lumen <Help>', expiresAt: at, now: at - 2 * DAY, link });
     assert.equal(m.subject, 'Your bot on shop.example stops answering in 2 days');
     for (const part of [m.html, m.text]) {
@@ -34,7 +34,7 @@ describe('expiry warning e-mail (pure)', () => {
       assert.ok(!/—|–/.test(part), 'no dashes');
       assert.ok(!/were deleted|have been deleted|has stopped/i.test(part), 'nothing has happened yet');
     }
-    assert.ok(m.html.includes('href="https://knowbot.knowdrive.ai/studio/?t=tr_aaaaaaaaaaaaaaaa&amp;k=abc.def"'), 'the button links to the bot');
+    assert.ok(m.html.includes('href="https://knowbot.knowdrive.ai/?t=tr_aaaaaaaaaaaaaaaa&amp;k=abc.def"'), 'the button links to the bot');
     assert.equal((m.html.match(/<a /g) || []).length, 1, 'one button, no other link');
     assert.ok(m.html.includes('Lumen &lt;Help&gt;') && !m.html.includes('<Help>'), 'the bot name is escaped');
     assert.ok(m.text.includes(link));
@@ -77,7 +77,7 @@ describe('expiry warning (server)', () => {
   test('install: a real site counts; no origin, localhost, KnowBot\'s own site, this server and the owner\'s key do not', async () => {
     const t = await bot();
     const dk = await (await S.api(`/api/studio/trials/${t.trialId}/devkey`, { headers: c.h(t) })).json();
-    for (const h of [{}, { origin: 'null' }, { origin: 'http://localhost:5173' }, { origin: 'http://127.0.0.1:8080' }, { origin: 'https://knowbot.knowdrive.ai' }, { referer: 'https://knowbot.knowdrive.ai/studio/?t=x' },
+    for (const h of [{}, { origin: 'null' }, { origin: 'http://localhost:5173' }, { origin: 'http://127.0.0.1:8080' }, { origin: 'https://knowbot.knowdrive.ai' }, { referer: 'https://knowbot.knowdrive.ai/?t=x' },
       { origin: S.base }, { origin: 'http://192.168.1.20:3000' }, { origin: 'chrome-extension://abcdef' }]) {
       assert.equal((await visit(t, h)).status, 200);
     }
@@ -184,7 +184,7 @@ describe('expiry warning (server)', () => {
       assert.ok(m.html.includes('Keep my bot running') && !VENDORS.test(m.html + m.text));
       const exp = Date.parse((await (await c.json(t, '')).json()).expiresAt);
       assert.ok(m.text.includes(new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' }).format(new Date(exp))), 'the day it stops');
-      const link = /https:\/\/knowbot\.knowdrive\.ai\/studio\/\?t=(tr_[a-z2-7]{16})&k=(\S+)/.exec(m.text);
+      const link = /https:\/\/knowbot\.knowdrive\.ai\/\?t=(tr_[a-z2-7]{16})&k=(\S+)/.exec(m.text);
       assert.ok(link && link[1] === t.trialId, 'a link to the bot in the Studio, on the public site');
       const back = await S.api(`/api/studio/trials/${t.trialId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': nextIp() }, body: JSON.stringify({ k: decodeURIComponent(link[2]) }) });
       assert.equal(back.status, 200, 'the link\'s key reopens the bot');

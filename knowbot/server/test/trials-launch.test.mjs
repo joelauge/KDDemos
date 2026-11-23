@@ -51,12 +51,12 @@ describe('KnowBot Studio server (trials.mjs): checkout, convert, launch', () => 
     assert.equal(u.searchParams.get('email'), 'ana@example.com');
     assert.equal(u.searchParams.get('price'), '549', 'the one plan price');
     assert.equal(u.searchParams.get('total'), '549', 'one plan line: total = price');
-    assert.equal(u.searchParams.get('return'), `http://127.0.0.1:9999/studio/?t=${t.trialId}&launched=1`);
+    assert.equal(u.searchParams.get('return'), `http://127.0.0.1:9999/?t=${t.trialId}&launched=1`);
     assert.match(u.search, /bot=Lumen\+Help/);
     assert.ok(S.kd.calls.some((x) => x.ingest?.path === `knowbot/trials/${t.trialId}/_spec.json`), 'the spec doc is flushed on checkout');
     const em = await (await c.json(t, '/email', 'POST', { email: 'ana@example.com' })).json();
     assert.equal(em.sent, false, 'no mail webhook configured: never claim it was sent');
-    assert.match(em.link, new RegExp(`/studio/\\?t=${t.trialId}`));
+    assert.match(em.link, new RegExp(`/\\?t=${t.trialId}`));
   });
 
   // ---------------------------------------------------------------------------------------------- 17
@@ -154,7 +154,7 @@ describe('KnowBot Studio server (trials.mjs): checkout, convert, launch', () => 
       const j = await r.json();
       assert.ok(Date.parse(j.expiresAt) > Date.now() + 37 * DAY, 'about 30 days past the moved clock');
       assert.ok(j.files >= 1);
-      assert.match(j.link, new RegExp(`/studio/\\?t=${t.trialId}&k=`));
+      assert.match(j.link, new RegExp(`/\\?t=${t.trialId}&k=`));
       assert.equal((await c.json(t, '', 'GET')).status, 200, 'the owner\'s old token works again');
       const rows = S.kd.rows ? [...S.kd.rows.values()] : null;
       const sw = await S.kb.studio.sweep();

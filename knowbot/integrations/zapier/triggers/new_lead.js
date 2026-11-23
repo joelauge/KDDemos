@@ -34,7 +34,7 @@ const sample = {
   links: [{ url: 'https://example.com/warranty?utm_source=knowbot&utm_medium=webchat', kind: 'proof' }],
   consent: { code: 'asked_to_send', label: 'Asked the bot to send them the answer' },
   source: { utm_source: 'knowbot', utm_medium: 'webchat', utm_campaign: 'tr_abcdefghijklmnop', clickId: 'abcdefghjk', page: null },
-  studioUrl: 'https://knowbot.app/studio/?t=tr_abcdefghijklmnop#stats',
+  studioUrl: 'https://knowbot.app/?t=tr_abcdefghijklmnop#stats',
 };
 
 module.exports = {

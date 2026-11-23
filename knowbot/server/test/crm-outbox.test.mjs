@@ -24,7 +24,7 @@ async function connected(name = 'a', opts) {
 describe('the standard lead payload', () => {
   test('a stable id, the consent label, links and UTM; only its own fields', () => {
     const ev = { kind: 'lead', bot: BOT, at: 1731240000000, type: 'email', value: 'ada@example.com', consent: 'asked_to_send', channel: 'sms', cid: 'abcdefghjk', question: 'Do you ship to Canada?' };
-    const p = leadPayload(ev, { botName: 'Lumen', links: [{ url: 'https://shop.test/p?utm_source=knowbot&utm_medium=sms&utm_campaign=tr_x&kb_cid=abcdefghjk', kind: 'proof' }], answer: 'Yes, in 5 days.', studioUrl: 'https://knowbot.app/studio/?t=x#stats' });
+    const p = leadPayload(ev, { botName: 'Lumen', links: [{ url: 'https://shop.test/p?utm_source=knowbot&utm_medium=sms&utm_campaign=tr_x&kb_cid=abcdefghjk', kind: 'proof' }], answer: 'Yes, in 5 days.', studioUrl: 'https://knowbot.app/?t=x#stats' });
     assert.equal(p.id, leadIdOf(ev));
     assert.match(p.id, /^ld_[0-9a-f]{24}$/);
     assert.equal(leadIdOf({ ...ev }), p.id, 'the same lead is the same id');
@@ -74,7 +74,7 @@ describe('webhook connector', () => {
     assert.equal(h.body.contact.email, 'grace@example.com');
     assert.equal(h.body.consent.label, 'Asked the bot to send them the answer');
     assert.equal(h.body.bot.name, 'Lumen Helper');
-    assert.equal(h.body.studioUrl, `https://knowbot.app/studio/?t=${BOT}#stats`);
+    assert.equal(h.body.studioUrl, `https://knowbot.app/?t=${BOT}#stats`);
   });
 
   test('SSRF: only public https addresses, checked again after DNS and on every redirect', async () => {

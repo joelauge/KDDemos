@@ -29,7 +29,7 @@ const LIVE = args.includes('--live');
 const ONLY = (args.find((a) => a.startsWith('--only=')) || '').slice(7);
 const MODE = LIVE ? 'live' : 'local';
 const OUT = outDir(path.join('onboarding', MODE), process.env.OUT);
-const STUDIO_LIVE = process.env.LIVE_STUDIO_URL || 'https://knowbot.knowdrive.ai/studio/';
+const STUDIO_LIVE = process.env.LIVE_STUDIO_URL || 'https://knowbot.knowdrive.ai/';
 const NOT_IN_DATA = "Looks like we don't have that in our files.";
 const VIEWPORTS = [
   { name: 'desktop', viewport: { width: 1440, height: 900 }, mobile: false },

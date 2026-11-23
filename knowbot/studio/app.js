@@ -35,6 +35,8 @@ import { siteSettings } from './sitebrand.js';
 import { mountWidget, mountStatusCard, gaugeProps } from './kdw.js';
 import { openLeads, initStatsRoute } from './leads.js';
 import { mountFtue } from './ftue.js';
+// resolved from this file, not the page: the Studio is served at the site root while its files live in studio/
+const KD_LOGO = new URL('../dashboard/logo.svg', import.meta.url).href;
 
 const { getState, setState, on, emit, mark } = store;
 const { icon, fileIcon } = icons;
@@ -169,7 +171,7 @@ function renderHeader() {
   const el = slots.header;
   el.innerHTML = '';
   const brand = h('a', { class: 'st-brand', href: './', 'aria-label': 'KnowBot Studio, start page' },
-    h('img', { class: 'st-logo', src: '../dashboard/logo.svg', alt: '', width: 30, height: 21 }),
+    h('img', { class: 'st-logo', src: KD_LOGO, alt: '', width: 30, height: 21 }),
     h('span', { class: 'st-wordmark' }, 'KnowBot ', h('span', { class: 'st-wordmark-2' }, 'Studio')));
   // WCAG 2.5.3 (label in name): controls with visible text carry no aria-label; their extra context is a description,
   // so the accessible name always starts with (and equals) what a speech user sees.
@@ -705,7 +707,7 @@ function renderSetupPane() {
   });
   composerEl.addEventListener('input', autoGrow);
   const head = h('div', { class: 'st-setup-head' },
-    h('span', { class: 'st-glyph st-glyph-lg st-glyph-kd', 'aria-hidden': 'true', html: '<img class="st-kd-logo" src="../dashboard/logo.svg" alt="" width="20" height="14">' }),
+    h('span', { class: 'st-glyph st-glyph-lg st-glyph-kd', 'aria-hidden': 'true', html: `<img class="st-kd-logo" src="${KD_LOGO}" alt="" width="20" height="14">` }),
     h('div', { class: 'st-setup-title' }, h('h2', null, 'Builder'), h('p', { id: 'st-setup-sub' }, setupSubtitle())));
   el.append(head, hintEl, logEl, h('div', { class: 'st-composer-wrap' }, formEl));
   if (typed) { composerEl.value = typed; autoGrow(); }
@@ -1147,7 +1149,7 @@ function createAssistant({ typing = false, id, still = false, decision = null } 
   const chips = chipsEl();
   chips.hidden = true;
   const el = h('article', { class: 'st-msg st-msg-a', dataset: { id: id || uid('a') } },
-    h('div', { class: 'st-glyph st-glyph-kd', 'aria-hidden': 'true', html: '<img class="st-kd-logo" src="../dashboard/logo.svg" alt="" width="20" height="14">' }),
+    h('div', { class: 'st-glyph st-glyph-kd', 'aria-hidden': 'true', html: `<img class="st-kd-logo" src="${KD_LOGO}" alt="" width="20" height="14">` }),
     h('div', { class: 'st-msg-main' }, h('span', { class: 'st-sr' }, 'Builder: '), textEl, srEl, cardsEl, chips));
   const rec = { id: el.dataset.id, role: 'assistant', text: '', cards: [], chips: null, el, textEl, srEl, cardsEl, chipsEl: chips, buf: '', done: false };
   if (typing) {

@@ -4938,7 +4938,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   function kdPage(res, { origin = null, trialId = null, ok, code = null, message = '', ref = null, type = 'knowbot:kd', crm: crmId = null, title: titleIn = null, body: bodyIn = null }) {
     const nonce = randomBytes(12).toString('base64');
     const msg = JSON.stringify({ type, ok: !!ok, ...(crmId ? { crm: crmId } : {}), ...(code ? { code } : {}), ...(ref ? { ref } : {}), ...(!ok && crmId && message ? { message } : {}) }).replace(/</g, '\\u003c');
-    const back = origin && trialId ? `${origin}/studio/?t=${encodeURIComponent(trialId)}` : null;
+    const back = origin && trialId ? `${origin}/?t=${encodeURIComponent(trialId)}` : null;
     const title = titleIn || (ok ? "You're signed in to KnowDrive" : "KnowDrive sign-in didn't finish");
     const body = ok ? (bodyIn || 'You can close this window and go back to KnowBot Studio.') : `${message || 'Something went wrong.'}${ref ? ` (ref ${ref})` : ''} Close this window and try again from KnowBot Studio.`;
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEsc(title)}</title>
@@ -6004,7 +6004,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         // our own checkout: back to the Studio's "Activating…" (launched=1, the restore key so it also lands on another
         // device) when paid, back to the Launch sheet when cancelled
         limitTrialAndIp(T, req, 'planpay', 10, 30, 'checkouts');
-        const back = `${originOf(req)}/studio/?t=${T.id}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
+        const back = `${originOf(req)}/?t=${T.id}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
         const r = await billing.startCheckout(T, { interval, email, kdAccount, successUrl: `${back}&launched=1#launched`, cancelUrl: `${back}&launch=1#launch` });
         T.checkoutStartedAt = new Date(now()).toISOString();
         await flushSpec(T);
@@ -6028,7 +6028,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       // the KnowDrive account the bot's files live in (signed with the rest; KnowDrive must check it is the payer's)
       if (kdAccount) u.searchParams.set('kd_account', kdAccount);
       u.searchParams.set('sig', checkoutSig(T.id, surfaces, interval, each, total, kdAccount));
-      u.searchParams.set('return', `${originOf(req)}/studio/?t=${T.id}&launched=1`);
+      u.searchParams.set('return', `${originOf(req)}/?t=${T.id}&launched=1`);
       T.checkoutStartedAt = new Date(now()).toISOString();
       await flushSpec(T);
       log(`[studio] checkout started ${T.id} (${botName(T)})`);
@@ -6038,7 +6038,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     if (sub === 'billing') {
       if (!fid) { allow('GET'); return sendJson(res, 200, { mode: billing.mode(), converted: !!T.converted, billing: billing.pub(T) }); }
       if (fid === 'confirm') { allow('POST'); limitTrialAndIp(T, req, 'billconfirm', 30, 60, 'payment checks'); return sendJson(res, 200, await billing.confirm(T, (await readBody(req).catch(() => ({})))?.sessionId)); }
-      if (fid === 'portal') { allow('POST'); limitTrialAndIp(T, req, 'billportal', 10, 30, 'billing pages'); return sendJson(res, 200, await billing.portal(T, `${originOf(req)}/studio/?t=${T.id}#billing`)); }
+      if (fid === 'portal') { allow('POST'); limitTrialAndIp(T, req, 'billportal', 10, 30, 'billing pages'); return sendJson(res, 200, await billing.portal(T, `${originOf(req)}/?t=${T.id}#billing`)); }
     }
     fail(404, 'not_found', `no such endpoint ${p}`);
   }
@@ -6119,7 +6119,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return siteLogo(siteEditsOf(T));
   }
   function shareLinkOf(req, T, origin = originOf(req)) {
-    return `${origin}/studio/?t=${encodeURIComponent(T.id)}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
+    return `${origin}/?t=${encodeURIComponent(T.id)}&k=${encodeURIComponent(signRestore(T.id, T.expiresAt))}`;
   }
   /** Origin for a link handed back to the caller itself: Origin, else the Host it reached us on, else the public default. */
   function selfOriginOf(req) {

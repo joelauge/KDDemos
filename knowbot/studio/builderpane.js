@@ -2,6 +2,8 @@
 // Width and hidden state are kept per browser (localStorage 'kb-studio-builder'); the pre-paint script in index.html
 // applies them before first paint so the layout never jumps. Phones (< 900 px) keep their Builder | Bot tabs.
 
+// resolved from this file, not the page: the Studio is served at the site root while its files live in studio/
+const KD_LOGO = new URL('../dashboard/logo.svg', import.meta.url).href;
 const KEY = 'kb-studio-builder';
 const MIN = 300;            // narrowest Builder
 const BOT_MIN = 440;        // the bot pane always keeps this much room
@@ -134,7 +136,7 @@ export function mountBuilderPane(setup, main) {
     r.type = 'button'; r.className = 'st-rail';
     r.setAttribute('aria-label', 'Show the Builder'); r.setAttribute('aria-controls', 'st-setup');
     r.title = `Show the Builder (${SHORTCUT})`;
-    r.innerHTML = `<span class="st-glyph st-glyph-kd" aria-hidden="true"><img class="st-kd-logo" src="../dashboard/logo.svg" alt="" width="16" height="11"></span>${ICON_SHOW}<span class="st-rail-label">Builder</span><i class="st-rail-dot" aria-hidden="true"></i><span class="st-sr st-rail-sr"></span>`;
+    r.innerHTML = `<span class="st-glyph st-glyph-kd" aria-hidden="true"><img class="st-kd-logo" src="${KD_LOGO}" alt="" width="16" height="11"></span>${ICON_SHOW}<span class="st-rail-label">Builder</span><i class="st-rail-dot" aria-hidden="true"></i><span class="st-sr st-rail-sr"></span>`;
     r.addEventListener('click', () => showBuilder({ focus: true }));
     setup.prepend(r);
   }

@@ -1521,7 +1521,7 @@ export function openGoLive(ctx, { tab = 'channels', channel = null, invoker = nu
       const f = h('div', { class: 'gl-sp-frame' }, h('p', { class: 'gl-note' }, 'Loading the preview…'));
       loadDev().then((d) => {
         if (d.status !== 'ok' || !f.isConnected) return;
-        const page = new URL('../site/', location.href);
+        const page = new URL('../site/', import.meta.url);
         page.searchParams.set('bot', d.botId);
         if (/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(apiBase)) page.searchParams.set('api', apiBase);
         page.hash = `k=${encodeURIComponent(d.key)}`;

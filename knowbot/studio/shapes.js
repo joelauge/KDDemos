@@ -327,7 +327,7 @@ export function mountShapes(selectorHost, frameHost, o = {}) {
       .then((r) => (r.ok ? r.json() : null)).catch(() => null)]).then(([d, s]) => {
       if (stopped) return;
       if (!d || !s) { note.textContent = 'Your page is still getting ready. Try again in a moment.'; return; }
-      const page = new URL('../site/', location.href);
+      const page = new URL('../site/', import.meta.url);
       page.searchParams.set('bot', d.botId);
       if (/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(new URL(base).origin)) page.searchParams.set('api', new URL(base).origin);
       page.hash = `k=${encodeURIComponent(d.key)}`;

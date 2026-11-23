@@ -163,7 +163,7 @@ export async function startDevServer({ speed = 1, port = 0, host = '127.0.0.1', 
   pay.state.webhook = { url: `${url}/api/studio/numbers/webhook`, secret: DEV_NUMBER_SECRETS.STRIPE_WEBHOOK_SECRET };
   if (env.KNOWBOT_BILLING_WEBHOOK_SECRET) pay.state.webhooks.push({ url: `${url}/api/studio/billing/webhook`, secret: env.KNOWBOT_BILLING_WEBHOOK_SECRET });
   return {
-    url, studioUrl: `${url}/studio/`, port: actual, kd, llm, kb, dataDir, sink, shop, shopUrl: shop.url, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null, numbers: tw ? { provider: tw, payments: pay } : null, payments: pay,
+    url, studioUrl: `${url}/`, port: actual, kd, llm, kb, dataDir, sink, shop, shopUrl: shop.url, channelSecrets: channels ? DEV_CHANNEL_SECRETS : null, numbers: tw ? { provider: tw, payments: pay } : null, payments: pay,
     async close() {
       await new Promise((r) => kb.server.close(() => r()));
       await shop.close();
