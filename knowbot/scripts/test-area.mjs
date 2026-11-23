@@ -45,7 +45,7 @@ export const AREAS = {
   numbers: { about: 'KnowBot numbers and the KnowDrive account step', aka: ['kdaccount'], tests: T('numbers', 'kdaccount', 'kdaccount-store'), smokes: ['kd:smoke'],
     src: [/^server\/(?:numbers|kdaccount|oauthstate)\.mjs$/, /^studio\/(?:numbers|kdaccount)\.js$/, /^studio\/test\/kd-smoke/, /^server\/test\/fake-stripe/] },
   studio: { about: 'Studio core: trials, uploads, events, launch, the server itself', aka: ['core'],
-    tests: T('server', 'instances', 'providers', 'trials', 'trials-launch', 'trials-modes', 'expiry-warning'), smokes: ['studio:smoke', 'ftue:smoke', 'onboarding:e2e', 'expiry:smoke'],
+    tests: T('server', 'instances', 'providers', 'trials', 'trials-launch', 'trials-modes', 'expiry-warning', 'scripts/test/bots.test.mjs'), smokes: ['studio:smoke', 'ftue:smoke', 'onboarding:e2e', 'expiry:smoke', 'bots:smoke'],
     src: [/^server\/(?:trials|server|instances|providers|expiry-warning)\.mjs$/, /^studio\/[^/]+\.(?:js|css|html)$/, /^studio\/samples\//, /^studio\/test\/[^/]+\.mjs$/, /^dashboard\//] },
   billing: { about: 'the KnowBot plan: our own checkout, billing, and the cases that touch paying (convert, numbers, the account step)', aka: ['checkout', 'stripe'],
     tests: T('billing', 'trials-launch', 'numbers', 'kdaccount', 'kdaccount-store'), smokes: ['kd:smoke'],

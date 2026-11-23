@@ -21,6 +21,7 @@
     "ftue:smoke": "node studio/test/ftue-smoke.mjs",
     "kd:smoke": "node studio/test/kd-smoke.mjs",
     "root:smoke": "node studio/test/root-smoke.mjs",
+    "bots:smoke": "node studio/test/bots-smoke.mjs",
     "expiry:smoke": "node studio/test/expiry-smoke.mjs",
     "builder:eval": "node scripts/builder-eval.mjs",
     "onboarding:e2e": "node studio/test/onboarding-e2e.mjs"

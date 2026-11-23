@@ -25,6 +25,7 @@
 // are named as whole relative-path literals (mountModules) so the stamper sees them.
 
 import * as store from './store.js';
+import * as bots from './bots.js';
 import * as api from './api.js';
 import * as motion from './motion.js';
 import * as icons from './icons.js';
@@ -1488,14 +1489,19 @@ function logKey() { return `kb-studio-log:${getState().trial.id || 'none'}`; }
 let saveTimer = 0;
 function saveLog() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    if (!getState().trial.id) return;
-    const data = messages.slice(-60).map((m) => ({ role: m.role, text: m.text, anchor: m.el?.dataset.anchor || '', key: m.key || undefined,
-      cards: (m.cards || []).filter((c) => !SKIP_RESTORE.has(c.type)), chips: m.role === 'assistant' ? (m.chips || []).filter((c) => !c.run) : null }));
-    const json = JSON.stringify(data);
-    try { localStorage.setItem(logKey(), json); } catch { try { sessionStorage.setItem(logKey(), json); } catch { /* ignore */ } }
-  }, 250);
+  saveTimer = setTimeout(writeLog, 250);
 }
+function writeLog() {
+  saveTimer = 0;
+  // a bot the server no longer has keeps no conversation here (the "it expired" turn is not worth restoring)
+  if (!getState().trial.id || getState().trial.status === 'expired') return;
+  const data = messages.slice(-60).map((m) => ({ role: m.role, text: m.text, anchor: m.el?.dataset.anchor || '', key: m.key || undefined,
+    cards: (m.cards || []).filter((c) => !SKIP_RESTORE.has(c.type)), chips: m.role === 'assistant' ? (m.chips || []).filter((c) => !c.run) : null }));
+  const json = JSON.stringify(data);
+  try { localStorage.setItem(logKey(), json); } catch { try { sessionStorage.setItem(logKey(), json); } catch { /* ignore */ } }
+}
+/** Before this page lets go of the open bot (another bot opens, or a new one starts): its conversation is saved now, under its own key. */
+function flushLog() { if (saveTimer) { clearTimeout(saveTimer); writeLog(); } }
 const restoredKeys = new Set();
 function restoreLog({ retireChips: retireAll = false } = {}) {
   let data = null;
@@ -2633,6 +2639,8 @@ function openMoreMenu(anchor) {
   const item = (ico, label, fn, extra = {}) => h('li', { role: 'none' }, h('button', { type: 'button', role: 'menuitem', class: 'st-menu-item', onclick: () => { closeMenu(); fn(); }, ...extra },
     h('span', { html: icon(ico, 16) }), h('span', { class: 'st-menu-main' }, label)));
   const list = h('ul', { class: 'st-menu-list', role: 'menu', 'aria-label': 'More options' },
+    botsSection(),
+    h('li', { role: 'separator', class: 'st-menu-sep' }),
     item('edit', 'Bot settings', () => openSpec()),
     t.id && isMobile() ? item('chart', 'Stats & Leads', () => openLeads()) : null,
     ftue ? item('question', 'Show the guide', () => ftue.show()) : null,
@@ -2641,10 +2649,104 @@ function openMoreMenu(anchor) {
     item('command', 'Command palette', () => openPalette()),
     item('table', detailsOn() ? 'Hide details' : 'Show details', toggleDetails),
     mods.checkout?.billing?.canManage ? item('card', 'Manage billing', () => mods.checkout.manageBilling()) : null,
-    // a live bot can't be deleted from here (Start over deletes the bot and its files), but its owner can begin another
-    t.converted ? item('plus', 'Start a new bot', () => confirmNewBot()) : item('refresh', 'Start over', () => confirmStartOver()),
+    // Start over deletes the open bot and its files, so a live bot never offers it; "New bot" is in the list above
+    t.converted ? null : item('refresh', 'Start over', () => confirmStartOver()),
     t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, h('span', { html: icon('checkCircle', 14) }), ` Saved until ${new Date(t.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`) : null);
   openMenu(anchor, list);
+}
+
+// ------------------------------------------------------------------ your bots (studio/bots.js: every bot this browser has opened)
+
+const seenBots = new Set();   // bots whose "last seen" time was already moved to this visit
+/** The open bot's entry follows its identity and status (created, opened by a link, renamed, launched). */
+function rememberBot() {
+  const s = getState(); const t = s.trial;
+  if (!t.id || !t.token || t.status === 'expired') return;
+  // until the server has answered for this bot, the spec in memory is the default one: only the token is news then
+  const known = t.status === 'ready';
+  const before = bots.readBots();
+  const after = bots.upsertBot(before, {
+    id: t.id, token: t.token, restoreKey: t.restoreKey || undefined, expiresAt: t.expiresAt || undefined,
+    converted: known ? !!t.converted : (t.converted ? true : undefined),
+    name: known ? s.spec.name : undefined,
+    avatar: known ? { initials: displayInitials(s.spec), hue: Number.isFinite(s.spec.avatar?.hue) ? s.spec.avatar.hue : 0 } : undefined,
+    milestones: s.milestones,
+  });
+  if (seenBots.has(t.id) && bots.sameBots(before, after)) return;
+  seenBots.add(t.id);
+  bots.writeBots(after);
+}
+/** The server no longer has this bot (deleted, expired, not found), or its owner started over: it leaves the list. */
+function forgetBot(id) {
+  if (!id) return;
+  seenBots.delete(id);
+  const before = bots.readBots();
+  const after = bots.removeBot(before, id);
+  if (after !== before) bots.writeBots(after);
+  try { localStorage.removeItem(`kb-studio-log:${id}`); sessionStorage.removeItem(`kb-studio-log:${id}`); } catch { /* ignore */ }
+}
+on('change:trial', rememberBot);
+on('change:spec', rememberBot);
+on('change:milestones', rememberBot);
+
+/** What the menu lists: the remembered bots plus the open one (also when storage is blocked), live first. */
+function botRows() {
+  const s = getState(); const t = s.trial;
+  let list = bots.readBots();
+  const open = t.id && t.token && t.status !== 'expired' ? t.id : null;
+  if (open && t.status === 'ready') {
+    list = bots.upsertBot(list, { id: t.id, token: t.token, converted: !!t.converted, name: s.spec.name,
+      avatar: { initials: displayInitials(s.spec), hue: Number.isFinite(s.spec.avatar?.hue) ? s.spec.avatar.hue : 0 } });
+  } else if (open && !list.some((e) => e.id === open)) list = bots.upsertBot(list, { id: t.id, token: t.token, converted: !!t.converted });
+  return bots.sortBots(list).map((e) => ({ id: e.id, label: bots.botLabel(e, e.id === open), converted: e.converted, current: e.id === open,
+    spec: { name: e.name || 'SampleBot', avatar: e.avatar || { initials: 'SB', hue: 0 } } }));
+}
+
+/** The "Your bots" block at the top of the menu: one row per bot with its status, then "New bot". */
+function botsSection() {
+  const labelId = 'st-bots-label';
+  const rows = botRows().map((b) => {
+    const av = h('span', { class: 'st-avatar', 'aria-hidden': 'true' });
+    paintAvatar(av, b.spec);
+    if (b.spec.name === 'SampleBot') av.classList.add('is-placeholder');
+    return h('button', { type: 'button', role: 'menuitem', class: `st-menu-item st-bot-row${b.current ? ' is-current' : ''}`, 'aria-current': b.current ? 'true' : null,
+      title: b.label, dataset: { bot: b.id, state: b.converted ? 'live' : 'draft' },
+      onclick: () => { closeMenu(!!b.current); if (!b.current) switchBot(b.id); } },
+      av,
+      h('span', { class: 'st-bot-name' }, b.label),
+      b.current ? h('span', { class: 'st-bot-here', 'aria-hidden': 'true', html: icon('check', 14) }) : null,
+      b.current ? h('span', { class: 'st-sr' }, ', open now, ') : h('span', { class: 'st-sr' }, ', '),
+      b.converted ? h('span', { class: 'chip green is-label no-dot st-bot-tag is-live' }, 'Live') : h('span', { class: 'chip gray is-label no-dot st-bot-tag' }, 'Not launched'));
+  });
+  const add = h('button', { type: 'button', role: 'menuitem', class: 'st-menu-item st-bot-new', onclick: () => { closeMenu(); newBot(); } },
+    h('span', { html: icon('plus', 16) }), h('span', { class: 'st-menu-main' }, 'New bot'));
+  return h('li', { role: 'none', class: 'st-menu-section' },
+    h('div', { class: 'st-menu-label', id: labelId }, 'Your bots'),
+    h('div', { role: 'group', 'aria-labelledby': labelId, class: 'st-bots' },
+      rows.length ? h('div', { role: 'none', class: 'st-bots-scroll' }, rows) : null, add));
+}
+
+/** Open another remembered bot here: it becomes this browser's bot and the page reloads at the root (the usual boot restores it). */
+function switchBot(id) {
+  const target = bots.readBots().find((e) => e.id === id);
+  if (!target || id === getState().trial.id) return;
+  rememberBot();
+  flushLog();
+  if (!store.openOtherTrial(target)) { toast({ kind: 'error', text: "This browser isn't saving data, so another bot can't be opened here." }); return; }
+  announce(`Opening ${bots.botLabel(target)}.`);
+  history.replaceState(null, '', location.pathname);   // no ?t=, ?launched= or #stats of the bot being left
+  location.reload();
+}
+
+/** A fresh bot, at once. The bot that was open stays in the list (nothing is deleted). */
+async function newBot() {
+  const s = getState();
+  const empty = s.trial.status === 'ready' && !s.trial.converted && s.spec.name === 'SampleBot' && !s.fileOrder.length && !s.thread.length && !messages.some((m) => m.role === 'user');
+  if (empty) {   // a new bot would be this same empty one again
+    toast({ kind: 'info', text: 'This bot is new and still empty. Say what it is for, or add files, to begin.' });
+    return;
+  }
+  await startNewBot({ keep: true });
 }
 
 // Dialog helpers: focus trap + inert background + focus return.
@@ -3014,7 +3116,9 @@ function paletteCommands() {
     { id: 'leads', label: 'Stats & Leads · questions by day, question history, leads, clicks, CSV', ico: 'users', run: () => openLeads() },
     { id: 'crm', label: 'Connect your CRM · HubSpot, Salesforce, Pipedrive, Zoho, Mailchimp, Constant Contact, Zapier, webhook', ico: 'link', run: () => openLeads({ section: 'crm' }) },
     { id: 'details', label: detailsOn() ? 'Hide details (atoms, stages, gauges)' : 'Show details (atoms, stages, gauges)', ico: 'table', run: () => toggleDetails() },
-    ...(getState().trial.converted ? [{ id: 'newbot', label: 'Start a new bot (this one stays live)', ico: 'plus', run: () => confirmNewBot() }] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
+    ...botRows().filter((b) => !b.current).map((b) => ({ id: `bot:${b.id}`, label: `Open ${b.label} (${b.converted ? 'Live' : 'Not launched'})`, ico: 'bot', run: () => switchBot(b.id) })),
+    { id: 'newbot', label: 'New bot (this one stays in Your bots)', ico: 'plus', run: () => newBot() },
+    ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
     { id: 'motion', label: motion.reduced() ? 'Full motion' : 'Reduce motion', ico: 'motion', run: toggleMotion },
   ];
@@ -5096,7 +5200,7 @@ function onExpired() {
   renderIdentityAll();
   if (messages.length) { logEl.innerHTML = ''; messages.length = 0; }
   updateTrialPill();
-  localSay('', { reply: true, card: { type: 'expired', data: {} }, chips: [{ id: 'new_bot', label: 'Start a new bot', kind: 'primary', run: startNewBot, local: true }] });
+  localSay('', { reply: true, card: { type: 'expired', data: {} }, chips: [{ id: 'new_bot', label: 'Start a new bot', kind: 'primary', run: () => startNewBot(), local: true }] });
 }
 
 // ------------------------------------------------------------------ start over (confirmed, destructive)
@@ -5167,17 +5271,17 @@ function confirmAction({ title, body, confirm = 'Confirm', danger = true } = {})
 }
 on('confirm:ask', (d) => { if (d && typeof d.done === 'function') confirmAction(d).then(d.done); });
 
-/** From a live bot: a fresh bot in this browser. The live bot keeps running and is reopened with its Studio link. */
-async function confirmNewBot() {
-  const name = botName();
-  const ok = await confirmAction({ title: 'Start a new bot?', confirm: 'Start a new bot', danger: false,
-    body: `${name} stays live and keeps answering. This browser will open a new, empty bot. To come back to ${name}, use its Studio link, shown on its live card. Copy it first if you have not saved it.` });
-  if (ok) await startNewBot();
-}
-async function startNewBot() {
-  try { sessionStorage.removeItem(logKey()); } catch { /* ignore */ }
+/**
+ * A fresh bot in this page. keep: the bot that was open is still there (the menu's "New bot"): it stays in Your bots
+ * with its conversation. Otherwise that bot is gone (deleted by Start over, expired, never found): its entry and its
+ * conversation go too.
+ */
+async function startNewBot({ keep = false } = {}) {
+  const oldKey = logKey();
+  if (keep) { rememberBot(); flushLog(); }
+  else { clearTimeout(saveTimer); saveTimer = 0; forgetBot(getState().trial.id); }
   store.resetTrialState();
-  try { localStorage.removeItem(logKey()); } catch { /* ignore */ }
+  if (!keep) { try { sessionStorage.removeItem(oldKey); localStorage.removeItem(oldKey); } catch { /* ignore */ } }
   expiredShown = false; samplesTurnSent = false; atomizedSent = false; firstAnswerSent = false; refusalSent = false; askedCount = 0; insightsShown = 0; insightsRec = null; clearTimeout(insightsTimer); emailOffered = false;
   sentEvents.clear(); closeMissQs.clear(); summaryStarters.clear(); announcedReady.clear(); pendingRejects = []; learn = null; groundedCount = 0;
   gapNotes.clear(); learningQs.clear(); reaskWaits.length = 0; successPosted = false; learnQueued = null; activatingUntil = 0;
@@ -5185,7 +5289,9 @@ async function startNewBot() {
   logEl.innerHTML = ''; messages.length = 0;
   renderIdentityAll();
   renderB0();
-  window.__kbLandingShow?.();   // the first view again (landing.js), as for a first visit
+  // the first view again (landing.js), as for a first visit. Not for "New bot": the landing has no header, so the
+  // menu that lists the other bots would be out of reach; the empty Builder offers the same ways to begin.
+  if (!keep) window.__kbLandingShow?.();
   const r = await createTrialWithRetry();
   resolveTrial();
   await modulesP;
@@ -5334,10 +5440,19 @@ async function ensureTrial() {
   const tParam = params.get('t');
   const kParam = params.get('k');
   const localLive = !!(s.trial.id && s.trial.token);
+  const remembered = bots.readBots();
+  // the saved blob does not carry the restore key; the list of bots does (it is the fallback for a token that stopped working)
+  const mine = localLive ? remembered.find((e) => e.id === s.trial.id) : null;
+  if (mine && mine.restoreKey && !s.trial.restoreKey) setState({ trial: { ...getState().trial, restoreKey: mine.restoreKey } }, 'trial:restoreKey');
   if (tParam && kParam && !(s.trial.id === tParam && s.trial.token)) {
     // a shared / emailed link carries a restore key: exchange it for this trial's bearer, then restore as usual
     try {
       await api.restoreTrial(tParam, kParam);
+      // the link opened a different bot than the one saved here: the saved bot's progress marks are not this bot's
+      if (localLive && getState().trial.id !== s.trial.id) {
+        const m = remembered.find((e) => e.id === getState().trial.id)?.milestones;
+        setState({ milestones: { firstFile: 0, firstReady: 0, ownFile: 0, firstCited: 0, firstRefusal: 0, proofRun: 0, emailOffered: 0, launchShown: 0, launched: 0, ...(m || {}) } }, 'milestones:other-bot');
+      }
       params.delete('k');
       history.replaceState(null, '', `${location.pathname}?t=${encodeURIComponent(tParam)}${location.hash}`);
     } catch (err) {
@@ -5364,6 +5479,7 @@ async function ensureTrial() {
     }
   }
   if (getState().trial.id && getState().trial.token) {
+    let keyTried = false;
     for (let attempt = 0; ; attempt++) {
       try {
         const r = await api.getTrial();
@@ -5386,6 +5502,19 @@ async function ensureTrial() {
       } catch (err) {
         restoring = false;
         if (err.status === 401 || err.status === 404 || err.code === 'expired') {
+          // the stored token stopped working: the stored restore key may still open the bot (once)
+          const cur = getState().trial;
+          if (!keyTried && cur.restoreKey && err.code !== 'expired') {
+            keyTried = true;
+            try { await api.restoreTrial(cur.id, cur.restoreKey); continue; }
+            catch (e2) {
+              if (!(e2.status === 401 || e2.status === 404 || e2.status === 410 || e2.code === 'expired' || e2.code === 'not_found')) {
+                keyTried = false;   // the network, not an answer: try again after the wait
+                await countdown(Math.min(30, 2 ** Math.min(attempt, 4) * 2));
+                continue;
+              }
+            }
+          }
           setState({ trial: { ...getState().trial, status: 'expired' } }, 'expired');
           return { expired: true };
         }
@@ -5769,6 +5898,8 @@ async function boot() {
   if (!t) return;
   booted = true;
   if (t.expired) {
+    // the server no longer has this bot (its stored token and its restore key were both tried): it leaves Your bots
+    forgetBot(getState().trial.id);
     resolveTrial();
     onExpired();
     return;

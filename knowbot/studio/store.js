@@ -5,7 +5,7 @@
 //
 // Exports (exact, SPEC 3.3): getState, setState, on, once, emit, registerCard, renderCard, hydrate, persist,
 // mark, FILE_HUES. Additive helpers (B may add; existing signatures never change): off, listenerCount,
-// hasCard, setCardContext, resetTrialState, STORAGE_KEY, batch.
+// hasCard, setCardContext, resetTrialState, STORAGE_KEY, batch, openOtherTrial.
 
 export const FILE_HUES = 8;                 // hue index = order % 8 -> CSS var(--f{i})
 export const STORAGE_KEY = 'kb-studio:v1';
@@ -175,6 +175,7 @@ export function renderCard(type, data, el) {
 // ------------------------------------------------------------------ persistence
 
 let persistTimer = 0;
+let handedOver = false;   // openOtherTrial() wrote another bot's blob: this page must not write its own over it
 
 /** Reads localStorage 'kb-studio:v1' into trial/ui/milestones (never throws). */
 export function hydrate() {
@@ -212,6 +213,7 @@ export function hydrate() {
 
 /** Writes {trial:{id,token,expiresAt,converted}, ui:{view,mapPinned}, milestones} (debounced 300 ms). */
 export function persist() {
+  if (handedOver) return;
   clearTimeout(persistTimer);
   persistTimer = setTimeout(writeNow, 300);
 }
@@ -229,7 +231,7 @@ function writeNow() {
 
 if (typeof window !== 'undefined') {
   // Never lose the last write to the debounce on navigation (checkout redirect, reload).
-  window.addEventListener('pagehide', () => { if (persistTimer) { clearTimeout(persistTimer); writeNow(); } });
+  window.addEventListener('pagehide', () => { if (persistTimer && !handedOver) { clearTimeout(persistTimer); writeNow(); } });
 }
 
 /** Sets milestones[name] = Date.now() once; emits 'milestone' {name}. Returns true the first time. */
@@ -249,4 +251,25 @@ export function resetTrialState() {
     ui: { ...state.ui, drawer: null, sheet: null, specOpen: false, badges: { setup: 0, bot: 0 } },
   }, 'reset');
   try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+}
+
+/**
+ * B only: make another remembered bot the one this browser opens next (studio/bots.js entry: {id, token, expiresAt,
+ * converted, milestones}). Writes the saved blob at once and stops this page from saving again, so the reload that
+ * follows boots that bot through the usual restore path. The state in memory is left alone: nothing of the bot that is
+ * open is re-keyed to the other one. Returns false when storage is blocked (the switch cannot survive a reload).
+ */
+export function openOtherTrial(bot) {
+  if (!bot || typeof bot.id !== 'string' || typeof bot.token !== 'string') return false;
+  clearTimeout(persistTimer); persistTimer = 0;
+  const m = DEFAULT_MILESTONES();
+  if (bot.milestones && typeof bot.milestones === 'object') for (const k of Object.keys(m)) if (Number.isFinite(bot.milestones[k])) m[k] = bot.milestones[k];
+  const data = {
+    trial: { id: bot.id, token: bot.token, expiresAt: bot.expiresAt || null, converted: bot.converted === true },
+    ui: { view: state.ui.view, mapPinned: state.ui.mapPinned },
+    milestones: m,
+  };
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { return false; }
+  handedOver = true;
+  return true;
 }

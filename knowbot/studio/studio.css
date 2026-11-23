@@ -669,6 +669,21 @@ textarea.st-text { resize: vertical; }
 .st-menu-main { display: flex; flex-direction: column; min-width: 0; }
 .st-menu-sub { font-size: 11.5px; color: var(--dim); }
 .st-menu-note { padding: 8px 10px; font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+/* Your bots (the top of the menu): every bot this browser has opened, with its status; the open one is marked */
+.st-menu-section { display: grid; gap: 2px; }
+.st-menu-label { padding: 6px 10px 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.st-bots { display: grid; gap: 2px; min-width: 0; }
+.st-bots-scroll { display: grid; gap: 2px; max-height: 216px; overflow-y: auto; overscroll-behavior: contain; min-width: 0; }
+.st-bot-row { min-width: 0; }
+.st-bot-row .st-avatar { width: 24px; height: 24px; font-size: 10px; }
+.st-bot-row .st-avatar.is-placeholder { background: var(--raise); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-2); }
+.st-bot-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bot-tag { flex: none; }
+.st-bot-here { flex: none; display: inline-flex; color: var(--accent); }
+.st-menu-item.st-bot-row.is-current { opacity: 1; cursor: default; background: var(--raise); }
+.st-bot-row.is-current .st-bot-name { font-weight: 600; color: var(--strong); }
+.st-bot-row:is(.is-current, :hover, :focus-visible) .st-bot-tag:not(.is-live) { background: var(--panel); }
+.st-menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .st-vtag { display: inline-grid; place-items: center; min-width: 30px; height: 22px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-2); font-size: 11.5px; }
 
 /* spec drawer: a right-side drawer over the Builder pane (desktop), a bottom sheet on mobile */
