@@ -458,22 +458,53 @@ export async function startFakeKnowDrive({ speed = 1, fixtures = [], latencyMs =
   // Production paths (verified 2026-11-12): /.well-known/oauth-authorization-server, /-/oauth/authorize, /-/token,
   // /-/oauth/register (DCR). Free sign-up provisions one owned vector store per account. The fake also offers RFC 7009
   // revocation (/-/oauth/revoke, which production does not advertise) so unlink can be tested both ways.
-  const accounts = new Map();   // email → { id, email, store, revoked }
-  const ownedStores = new Set();
+  // An account can hold several stores, and can be a member of a store ANOTHER account owns (shared with it): the
+  // tenant list then carries that store too. A store can refuse writes (read-only, or a member without write access).
+  const accounts = new Map();   // email → { id, email, store (the first owned store, or null), revoked }
+  const ownedStores = new Set(); // every store that belongs to an account (KnowBot's own key never reaches these)
+  const stores = new Map();     // store id → { id, name, owner (account), plan, readOnly, members: Map<account id, { role, canWrite, row }>, row, vectorRow }
+  const acctOf = (email) => accounts.get(String(email).trim().toLowerCase());
+  const canRead = (acct, st) => { const r = stores.get(st); return !!r && (r.owner === acct || r.members.has(acct.id)); };
+  const canWrite = (acct, st) => { const r = stores.get(st); return !!r && !r.readOnly && (r.owner === acct || r.members.get(acct.id)?.canWrite === true); };
   const oauthClients = new Map(); // client_id → { redirect_uris }
   const codes = new Map();        // code → { client_id, redirect_uri, challenge, account, exp }
   const accessTokens = new Map(); // token → { account, exp }
   const refreshTokens = new Map(); // token → { account, client_id }
-  const auth = { accounts, ownedStores, clients: oauthClients, tokenCalls: [], apiCalls: [], registrations: 0, revocations: 0, revocationEndpoint: true,
-    /** Creates an account (as the hosted sign-up would): one owned store. */
-    createAccount(email) {
+  const auth = { accounts, ownedStores, stores, clients: oauthClients, tokenCalls: [], apiCalls: [], registrations: 0, revocations: 0, revocationEndpoint: true,
+    /** 'all': GET /api/v1/vector_stores lists every store the caller can reach; 'own': only the stores it owns. */
+    vectorStoresScope: 'all',
+    /** Creates an account (as the hosted sign-up would): one owned store (noStore: an account with no store yet). */
+    createAccount(email, { noStore = false } = {}) {
       const e = String(email).trim().toLowerCase();
       if (accounts.has(e)) return accounts.get(e);
       const n = accounts.size + 1;
-      const a = { id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, email: e, store: `vs_acct_${n}`, revoked: false };
-      accounts.set(e, a); ownedStores.add(a.store);
+      const a = { id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, email: e, store: noStore ? null : `vs_acct_${n}`, revoked: false };
+      accounts.set(e, a);
+      if (a.store) { ownedStores.add(a.store); stores.set(a.store, { id: a.store, name: `${e}'s store`, owner: a, plan: 'free', readOnly: false, members: new Map(), row: {}, vectorRow: {} }); }
       return a;
     },
+    /**
+     * Another store the account owns. files: [{ path, text, tags }] already in it (someone's own files, not KnowBot's).
+     * row / vectorRow override what the tenant list / the vector-store list report for it (undefined drops a field).
+     */
+    addStore(email, { id = null, name = null, plan = 'free', files: seed = [], readOnly = false, row: r = {}, vectorRow = {} } = {}) {
+      const a = acctOf(email);
+      if (!a) throw new Error(`fake knowDrive: no account ${email}`);
+      const sid = id || `vs_acct_${[...accounts.values()].indexOf(a) + 1}_${[...stores.values()].filter((x) => x.owner === a).length + 1}`;
+      stores.set(sid, { id: sid, name: name || sid, owner: a, plan, readOnly, members: new Map(), row: r, vectorRow });
+      ownedStores.add(sid);
+      if (!a.store) a.store = sid;
+      for (const f of seed) add({ store: sid, path: f.path, text: f.text || 'x', tags: f.tags || [] });
+      return sid;
+    },
+    /** Shares a store with another account (role member by default; canWrite: whether that member may write). */
+    shareStore(storeId, withEmail, { role = 'member', canWrite: w = true, row: r = {} } = {}) {
+      const st = stores.get(storeId), a = acctOf(withEmail);
+      if (!st || !a) throw new Error('fake knowDrive: shareStore needs an existing store and account');
+      st.members.set(a.id, { role, canWrite: w, row: r });
+    },
+    /** Changes a store: { name, readOnly, plan, row, vectorRow }. */
+    setStore(storeId, patch = {}) { const st = stores.get(storeId); if (!st) throw new Error(`fake knowDrive: no store ${storeId}`); Object.assign(st, patch); return st; },
     /** The user revokes KnowBot's access in KnowDrive: every token for the account stops working. */
     revokeAccount(email) { const a = accounts.get(String(email).toLowerCase()); if (a) a.revoked = true; },
     restoreAccount(email) { const a = accounts.get(String(email).toLowerCase()); if (a) a.revoked = false; },
@@ -592,23 +623,36 @@ ${signup ? '<button id="kd-create" name="action" value="create">Create account</
           call.account = a.account;
           auth.apiCalls.push({ method: req.method, url: p, account: a.account.id });
         }
-        const storeOk = (st) => (call.account ? st === call.account.store : !ownedStores.has(st));
+        const storeOk = (st) => (call.account ? canRead(call.account, st) : !ownedStores.has(st));
+        const writeOk = (st) => (call.account ? canWrite(call.account, st) : !ownedStores.has(st));
         if (call.store && !storeOk(call.store)) return err(403, 'not allowed on this store');
+        // a read-only store (or a member without write access) refuses every write
+        if (call.store && req.method !== 'GET' && !writeOk(call.store)) return err(403, 'this store is read-only for you');
         const pathStore = /^\/api\/v1\/vector_stores\/([^/]+)/.exec(p);
         if (pathStore && pathStore[1] !== 'stats' && !storeOk(decodeURIComponent(pathStore[1]))) return err(403, 'not allowed on this store');
         const fileRef = /^\/api\/v1\/files\/([^/]+)/.exec(p);
         if (fileRef && files.has(decodeURIComponent(fileRef[1])) && !storeOk(files.get(decodeURIComponent(fileRef[1])).store)) return err(403, 'not allowed on this file');
+        if (fileRef && req.method !== 'GET' && files.has(decodeURIComponent(fileRef[1])) && !writeOk(files.get(decodeURIComponent(fileRef[1])).store)) return err(403, 'this store is read-only for you');
         if (p === '/v1/users/me' && req.method === 'GET') {
           if (!call.account) return err(401, 'a user token is required');
           return json(200, { id: call.account.id, email: call.account.email, preferred_language: 'en', timezone: 'UTC', status: 'active', mfa_required: false });
         }
         if (p === '/tenant/v1/stores' && req.method === 'GET') {
           if (!call.account) return err(401, 'a user token is required');
-          return json(200, [{ id: call.account.store, display_name: `${call.account.email}'s store`, owner: true, role: 'owner', plan: 'free', quota_bytes: 1073741824, included_bytes: 1073741824, included_atoms: 0 }]);
+          // "vector stores the caller owns or is a member of": the owned ones, then the ones shared with the account
+          const mine = [...stores.values()].filter((st) => st.owner === call.account);
+          const shared = [...stores.values()].filter((st) => st.members.has(call.account.id));
+          const base0 = (st) => ({ id: st.id, display_name: st.name, plan: st.plan, quota_bytes: 1073741824, included_bytes: 1073741824, included_atoms: 0 });
+          return json(200, [...shared.map((st) => ({ ...base0(st), owner: false, role: st.members.get(call.account.id).role, ...st.members.get(call.account.id).row })),
+            ...mine.map((st) => ({ ...base0(st), owner: true, role: 'owner', ...st.row }))]);
         }
         if (p === '/api/v1/vector_stores' && req.method === 'GET') {
-          const list = call.account ? [call.account.store] : [...new Set([...files.values()].map((f) => f.store))].filter((st) => !ownedStores.has(st));
-          return json(200, { object: 'list', data: list.map((id) => ({ id, object: 'vector_store', name: id, created_by: call.account ? `bearer:${call.account.email}` : 'bearer:knowbot' })), has_more: false });
+          if (call.account) {
+            const list = [...stores.values()].filter((st) => st.owner === call.account || (auth.vectorStoresScope === 'all' && st.members.has(call.account.id)));
+            return json(200, { object: 'list', data: list.map((st) => ({ id: st.id, object: 'vector_store', name: st.name, created_by: `bearer:${st.owner.email}`, ...st.vectorRow })), has_more: false });
+          }
+          const list = [...new Set([...files.values()].map((f) => f.store))].filter((st) => !ownedStores.has(st));
+          return json(200, { object: 'list', data: list.map((id) => ({ id, object: 'vector_store', name: id, created_by: 'bearer:knowbot' })), has_more: false });
         }
         let cm;
         if ((cm = /^\/api\/v1\/files\/([^/]+)\/content$/.exec(p)) && req.method === 'GET') {

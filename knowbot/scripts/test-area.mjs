@@ -42,13 +42,13 @@ export const AREAS = {
     src: [/^server\/(?:answer|evidence|retrievers|research|questions)\.mjs$/, /^lib\/knowbot\.(?:js|css)$/, /^lib\/test\//, /^attendd\//, /^corpus\//, /^scripts\/evidence-/] },
   devapi: { about: 'the developer API and AI agents (MCP)', aka: ['agents'], tests: T('devapi', 'agents'), smokes: ['tools:smoke'],
     src: [/^server\/(?:devapi|agents)\.mjs$/, /^studio\/test\/tools-shots/] },
-  numbers: { about: 'KnowBot numbers and the KnowDrive account step', aka: ['kdaccount'], tests: T('numbers', 'kdaccount'), smokes: ['kd:smoke'],
+  numbers: { about: 'KnowBot numbers and the KnowDrive account step', aka: ['kdaccount'], tests: T('numbers', 'kdaccount', 'kdaccount-store'), smokes: ['kd:smoke'],
     src: [/^server\/(?:numbers|kdaccount|oauthstate)\.mjs$/, /^studio\/(?:numbers|kdaccount)\.js$/, /^studio\/test\/kd-smoke/, /^server\/test\/fake-stripe/] },
   studio: { about: 'Studio core: trials, uploads, events, launch, the server itself', aka: ['core'],
     tests: T('server', 'instances', 'providers', 'trials', 'trials-launch', 'trials-modes', 'expiry-warning'), smokes: ['studio:smoke', 'ftue:smoke', 'onboarding:e2e', 'expiry:smoke'],
     src: [/^server\/(?:trials|server|instances|providers|expiry-warning)\.mjs$/, /^studio\/[^/]+\.(?:js|css|html)$/, /^studio\/samples\//, /^studio\/test\/[^/]+\.mjs$/, /^dashboard\//] },
   billing: { about: 'the KnowBot plan: our own checkout, billing, and the cases that touch paying (convert, numbers, the account step)', aka: ['checkout', 'stripe'],
-    tests: T('billing', 'trials-launch', 'numbers', 'kdaccount'), smokes: ['kd:smoke'],
+    tests: T('billing', 'trials-launch', 'numbers', 'kdaccount', 'kdaccount-store'), smokes: ['kd:smoke'],
     src: [/^studio\/checkout\./, /^server\/(?:billing|checkout|stripe)/, /^server\/test\/(?:billing|checkout|stripe)/] },
 };
 // Shared plumbing: a change here can break any area, so --changed runs everything.

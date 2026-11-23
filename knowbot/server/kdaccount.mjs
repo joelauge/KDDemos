@@ -15,8 +15,10 @@
 //     (x-vector-store-id) writes.
 // Assumed (not verifiable without creating an account): the authorization-code grant returns a refresh_token for the
 // requested scopes; the user's access token carries their own entitlements (functions:/api/v1/* and
-// vector_stores:<owned store>:*) so it can read and write their owned store; the owned store is the one /tenant/v1/stores
-// reports with owner:true (a new free account has exactly one). See discover() for the fallbacks.
+// vector_stores:<owned store>:*) so it can read and write their owned store.
+// NOT assumed any more: that /tenant/v1/stores' owner flag is the truth. In production a store another tenant had merely
+// shared with the account was taken for the account's own and written to. So no store is ever picked here: the owner
+// chooses one (server/trials.mjs, POST …/kd/store), and classifyStore() below only decides what may be offered.
 //
 // Tokens never leave the server: the browser only ever sees a sealed `state` and the callback's ok/error page.
 import { promises as fsp } from 'node:fs';
@@ -27,8 +29,99 @@ import { bearerHash, pkcePair, createStateSealer, ORIGIN_RE } from './oauthstate
 export { bearerHash, pkcePair };
 
 export class KdError extends Error {
-  /** code: reconnect | bad_state | denied | upstream | no_store | not_configured */
+  /** code: reconnect | bad_state | denied | upstream | not_configured */
   constructor(code, message, status = 502) { super(message); this.name = 'KdError'; this.code = code; this.status = status; }
+}
+
+// ------------------------------------------------------------------ whose store is it? (pure; unit tested)
+const lc = (v) => String(v ?? '').trim().toLowerCase();
+const OWNER_ROLES = new Set(['owner']);
+const SHARED_MARKERS = ['shared', 'is_shared', 'shared_with_me', 'invited', 'is_invited', 'guest', 'is_guest', 'external', 'is_external'];
+const SHARED_BY_FIELDS = ['shared_by', 'shared_from', 'invited_by', 'shared_by_email', 'invited_by_email'];
+const OWNER_REF_FIELDS = ['owner_id', 'owner_user_id', 'owner_account_id', 'owner_email', 'created_by', 'created_by_id', 'created_by_email', 'creator', 'creator_id', 'creator_email', 'user_id'];
+const IDENTITY_RE = /@|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** Every id or email a value names: a string ("bearer:a@b.co", a uuid) or an object ({ id, email, … }). */
+function refsOf(v) {
+  if (v == null || typeof v === 'boolean') return [];
+  if (typeof v === 'object') return ['id', 'email', 'user_id', 'sub', 'account_id'].flatMap((k) => refsOf(v[k]));
+  const s = lc(v);
+  if (!s) return [];
+  const out = new Set([s]);
+  for (const part of s.split(/[\s:|,;<>()]+/)) if (part) out.add(part);
+  return [...out];
+}
+/**
+ * What may KnowBot offer for one store? One small pure function, so it can be corrected when the real shape of
+ * KnowDrive's rows is known (their field names are logged the first time, see logShape).
+ *
+ *   input   { tenant: the row from GET /tenant/v1/stores (or null), vector: the row from GET /api/v1/vector_stores
+ *             (or null), vectorListed: whether that second list came back with anything, me: { id, email, tenant_id? } }
+ *   output  { ownership: 'owned' | 'shared' | 'unconfirmed', reasons: string[] }
+ *
+ * Rules, most cautious first:
+ *   says owner   the tenant row has owner === true (the boolean) or is_owner === true, or role is "owner".
+ *   says other   anything that names someone else or marks a share:
+ *                  owner === false / is_owner === false; a role that is not "owner"; a truthy shared / invited /
+ *                  guest / external marker; a shared_by / invited_by value; an owner or creator id or e-mail (on either
+ *                  row, or inside an `owner` object) that is not this account's id or e-mail (free text such as
+ *                  created_by: "system" names nobody and is ignored); a tenant / organization
+ *                  id that differs from the account's own (only when the account record carries one); the store missing
+ *                  from the account's own vector-store list while that list is not empty.
+ *   owned        says owner, and nothing says other.
+ *   shared       does not say owner, and something says other. Never offered.
+ *   unconfirmed  everything else: the flags are missing (no tenant row, or a row with no owner flag and no role), or
+ *                they are mixed (says owner AND something says other). Offered only behind the extra confirmation.
+ */
+export function classifyStore({ tenant = null, vector = null, vectorListed = false, me = {} } = {}) {
+  const t = tenant && typeof tenant === 'object' ? tenant : null;
+  const v = vector && typeof vector === 'object' ? vector : null;
+  const mine = new Set([lc(me.id), lc(me.sub), lc(me.email)].filter(Boolean));
+  const yes = [], no = [];
+  if (t) {
+    if (t.owner === true) yes.push('owner flag');
+    if (t.is_owner === true) yes.push('is_owner flag');
+    if (typeof t.role === 'string' && OWNER_ROLES.has(lc(t.role))) yes.push('role owner');
+    if (t.owner === false || t.is_owner === false) no.push('owner flag is false');
+    if (t.role != null && !(typeof t.role === 'string' && OWNER_ROLES.has(lc(t.role)))) no.push('role is not owner');
+    if (t.owner != null && typeof t.owner !== 'boolean') {
+      // only the boolean is a flag. "true" / 1 is unclear (neither yes nor no: not confirmed); a name, an id or an
+      // object says who owns it, not that the caller does
+      const word = lc(t.owner);
+      if (['false', 'no', '0'].includes(word)) no.push('owner flag is false');
+      else if (!['true', 'yes', '1'].includes(word)) {
+        const refs = refsOf(t.owner);
+        if (refs.some((r) => mine.has(r))) yes.push('owner names this account'); else no.push('owner names another account');
+      }
+    }
+  }
+  for (const [what, row] of [['tenant', t], ['vector', v]]) {
+    if (!row) continue;
+    for (const k of SHARED_MARKERS) if (row[k] === true || (typeof row[k] === 'string' && row[k] && !['false', 'no', '0', 'none'].includes(lc(row[k])))) no.push(`${k} marker`);
+    for (const k of SHARED_BY_FIELDS) if (row[k] != null && row[k] !== '' && row[k] !== false) no.push(`${k} is set`);
+    for (const k of OWNER_REF_FIELDS) {
+      const refs = refsOf(row[k]);
+      // free text ("system", a key's label) names nobody: only an e-mail, a uuid, an *_id field or an object counts
+      const names = typeof row[k] === 'object' || /_(?:id|email)$/.test(k) || refs.some((r) => IDENTITY_RE.test(r));
+      if (refs.length && names && mine.size && !refs.some((r) => mine.has(r))) no.push(`${what} ${k} names another account`);
+    }
+    const myTenant = lc(me.tenant_id ?? me.tenant?.id ?? me.organization_id ?? me.org_id);
+    const theirs = lc(row.tenant_id ?? row.tenant?.id ?? row.organization_id ?? row.org_id);
+    if (myTenant && theirs && myTenant !== theirs) no.push(`${what} row is in another tenant`);
+  }
+  if (t && !v && vectorListed) no.push("not in the account's own store list");
+  const reasons = [...new Set([...yes.map((r) => `+ ${r}`), ...no.map((r) => `- ${r}`)])];
+  if (yes.length && !no.length) return { ownership: 'owned', reasons };
+  if (!yes.length && no.length) return { ownership: 'shared', reasons };
+  return { ownership: 'unconfirmed', reasons: reasons.length ? reasons : ['no ownership fields'] };
+}
+/** The field names (and value types) of a row, for the log: "id:string owner:true role=owner plan:string". No values. */
+export function shapeOf(row) {
+  return Object.keys(row || {}).sort().slice(0, 60).map((k) => {
+    const v = row[k];
+    if (typeof v === 'boolean') return `${k}:${v}`;
+    if (k === 'role' && typeof v === 'string' && /^[a-z_-]{1,24}$/i.test(v)) return `role=${v.toLowerCase()}`;
+    return `${k}:${v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v}`;
+  }).join(' ');
 }
 
 const REFRESH_MARGIN_MS = 60000;
@@ -184,38 +277,55 @@ export function createKdAccount(o = {}) {
     if (!r.ok) return null;
     return r.json().catch(() => null);
   }
-  /**
-   * Who signed in and which vector store they own: GET /v1/users/me (fallback GET /-/state), then the owned store from
-   * GET /tenant/v1/stores (owner:true; fallback GET /api/v1/vector_stores, the caller's own stores). Several owned
-   * stores: the oldest-listed free one, else the first (logged), since a fresh account owns exactly one.
-   */
-  async function discover(access, idClaims = {}) {
+  /** The account that signed in: GET /v1/users/me (fallback GET /-/state). → the raw record (never logged). */
+  async function whoAmI(access, idClaims = {}) {
     const me = (await getJson(apiBase, '/v1/users/me', access)) || (await getJson(authBase, '/-/state', access)) || {};
     const account = String(me.id || me.sub || idClaims.sub || '').trim();
     const email = String(me.email || idClaims.email || '').trim() || null;
     if (!account) throw new KdError('upstream', 'KnowDrive did not say who signed in');
+    return { account, email, me };
+  }
+  // The real shape of a store row is not known for sure (see classifyStore): the first time each shape is seen, its
+  // field NAMES and value types go to the log (never a value, apart from true/false and the role word).
+  const seenShapes = new Set();
+  function logShape(what, row) {
+    if (!row || typeof row !== 'object') return;
+    const sig = `${what} ${shapeOf(row)}`;
+    if (seenShapes.has(sig) || seenShapes.size > 40) return;
+    seenShapes.add(sig);
+    log(`[kd] ${what} fields: ${shapeOf(row)}`);
+  }
+  /**
+   * Signing in links the ACCOUNT only: who signed in, and the stores KnowDrive lists for them, each classified
+   * (classifyStore). No store is ever picked here: the owner chooses one in the Launch dialog (server/trials.mjs).
+   * → { account, email, stores: [{ id, name, plan, ownership: 'owned'|'shared'|'unconfirmed', reasons }] }
+   */
+  async function discover(access, idClaims = {}) {
+    const { account, email, me } = await whoAmI(access, idClaims);
+    logShape('account', me);
     const listed = await getJson(apiBase, '/tenant/v1/stores', access);
-    const rows = Array.isArray(listed) ? listed : Array.isArray(listed?.data) ? listed.data : [];
-    let owned = rows.filter((s) => s && s.id && (s.owner === true || s.role === 'owner'));
-    let storeId = null;
-    if (owned.length) {
-      const pick = owned.find((s) => s.plan === 'free') || owned[0];
-      if (owned.length > 1) log(`[kd] account owns ${owned.length} stores; using ${pick.id}`);
-      storeId = pick.id;
-    } else {
-      const vs = await getJson(apiBase, '/api/v1/vector_stores?limit=100', access);
-      owned = (Array.isArray(vs?.data) ? vs.data : []).filter((s) => s && s.id && s.id !== 'system');
-      const mine = owned.filter((s) => email && String(s.created_by || '').toLowerCase().includes(email.toLowerCase()));
-      storeId = (mine[0] || (owned.length === 1 ? owned[0] : null))?.id || null;
-    }
-    if (!storeId) throw new KdError('no_store', 'Your KnowDrive account has no file store yet. Open KnowDrive once, then try again.', 409);
-    return { account, email, store: String(storeId) };
+    const tenantRows = (Array.isArray(listed) ? listed : Array.isArray(listed?.data) ? listed.data : Array.isArray(listed?.stores) ? listed.stores : []).filter((r) => r && typeof r === 'object' && r.id);
+    const vs = await getJson(apiBase, '/api/v1/vector_stores?limit=100', access);
+    const vsRows = (Array.isArray(vs?.data) ? vs.data : Array.isArray(vs) ? vs : []).filter((r) => r && typeof r === 'object' && r.id && r.id !== 'system');
+    if (tenantRows[0]) logShape('tenant store row', tenantRows[0]);
+    if (vsRows[0]) logShape('vector store row', vsRows[0]);
+    const vsById = new Map(vsRows.map((r) => [String(r.id), r]));
+    const ids = [...new Set([...tenantRows.map((r) => String(r.id)), ...vsRows.map((r) => String(r.id))])];
+    const tenantById = new Map(tenantRows.map((r) => [String(r.id), r]));
+    const stores = ids.map((id) => {
+      const t = tenantById.get(id) || null, v = vsById.get(id) || null;
+      const c = classifyStore({ tenant: t, vector: v, vectorListed: vsRows.length > 0, me: { ...me, id: account, email } });
+      const name = String(t?.display_name || t?.name || v?.display_name || v?.name || id).trim().slice(0, 120) || id;
+      return { id, name, plan: typeof t?.plan === 'string' ? t.plan.slice(0, 40) : null, ownership: c.ownership, reasons: c.reasons };
+    });
+    return { account, email, stores };
   }
   const claimsOf = (idToken) => { try { return JSON.parse(Buffer.from(String(idToken || '').split('.')[1] || '', 'base64url').toString('utf8')) || {}; } catch { return {}; } };
 
   /**
-   * The callback: consumes the state, exchanges the code (server side), finds the account and its owned store.
-   * → { state: {t, bh, o, …}, link: { account, email, store, sealed, scope, authBase, apiBase, linkedAt }, access }
+   * The callback: consumes the state, exchanges the code (server side) and finds the account. The link carries NO
+   * store: the owner chooses one afterwards (link.store, link.storeName, link.storeChosenAt are set by that choice).
+   * → { state: {t, bh, o, …}, link: { account, email, store: null, sealed, scope, authBase, apiBase, linkedAt }, access, stores }
    */
   async function finish({ state, code }) {
     const d = consumeState(state);
@@ -223,8 +333,8 @@ export function createKdAccount(o = {}) {
     const client = await clientFor(d.r);
     const tok = await tokenCall({ grant_type: 'authorization_code', code: String(code), redirect_uri: d.r, code_verifier: d.v }, client);
     if (!tok.refresh_token) throw new KdError('upstream', 'KnowDrive returned no refresh token, so KnowBot could not stay signed in');
-    const who = await discover(tok.access_token, claimsOf(tok.id_token));
-    const link = { ...who, sealed: sealKey(tok.refresh_token, tokenKey), scope: tok.scope || scope, authBase, apiBase, clientRedirect: d.r, linkedAt: new Date(now()).toISOString(), status: 'linked',
+    const who = await whoAmI(tok.access_token, claimsOf(tok.id_token));
+    const link = { account: who.account, email: who.email, store: null, sealed: sealKey(tok.refresh_token, tokenKey), scope: tok.scope || scope, authBase, apiBase, clientRedirect: d.r, linkedAt: new Date(now()).toISOString(), status: 'linked',
       client: { client_id: client.client_id, ...(client.client_secret ? { sealedSecret: sealKey(client.client_secret, tokenKey) } : {}) } };
     return { state: d, link, access: { token: tok.access_token, exp: now() + Math.max(30, Number(tok.expires_in) || 300) * 1000 } };
   }
@@ -296,8 +406,22 @@ export function createKdAccount(o = {}) {
         throw e;
       }
     }
-    return { base, store: link.store, account: link.account, fetch: call, token: () => accessFor(key, link, { onRotate: hooks.onRotate }) };
+    const self = { base, store: link.store || null, account: link.account, fetch: call, token: () => accessFor(key, link, { onRotate: hooks.onRotate }),
+      /** The same sign-in pointed at another of the account's stores (the store step: counting files, the write check). */
+      forStore: (id) => ({ ...self, store: String(id) }) };
+    return self;
+  }
+  /** The account's stores right now, with the owner's sign-in (classified; nothing is chosen). */
+  async function stores(key, link, hooks = {}) {
+    const go = async (force) => discover(await accessFor(key, link, { force, onRotate: hooks.onRotate }));
+    try {
+      try { return await go(false); }
+      catch (e) { if (!(e instanceof KdError) || e.code !== 'reconnect') throw e; forget(key); return await go(true); }
+    } catch (e) {
+      if (e instanceof KdError && e.code === 'reconnect') { forget(key); try { hooks.onReconnect?.(e); } catch { /* never mask */ } }
+      throw e instanceof KdError ? e : new KdError('upstream', `KnowDrive did not list your stores (${e.name === 'TimeoutError' ? 'timed out' : e.message})`);
+    }
   }
 
-  return { authBase, apiBase, required, scope, metadata, clientFor, start, finish, peekState, discover, accessFor, prime, forget, revoke, client, bearerHash };
+  return { authBase, apiBase, required, scope, metadata, clientFor, start, finish, peekState, discover, stores, accessFor, prime, forget, revoke, client, bearerHash };
 }

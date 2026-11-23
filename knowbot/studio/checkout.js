@@ -1497,12 +1497,12 @@ export function mount(ctx) {
     keep.addEventListener('click', () => focusBotComposer());
     // paid, but the bot's KnowDrive sign-in has to be renewed before it can go live
     const recon = h('button', { type: 'button', class: 'btn btn-primary co-btn co-btn-primary is-small', id: 'co-act-reconnect', hidden: true }, 'Reconnect KnowDrive');
-    recon.addEventListener('click', () => { kdStep().then((k) => k.open({ invoker: recon, reconnect: true, onContinue: () => { if (pollWake) pollWake(); else pollConversion(); } })).catch(() => {}); });
+    recon.addEventListener('click', () => { kdStep().then((k) => k.open({ invoker: recon, reconnect: !needStore, onContinue: () => { if (pollWake) pollWake(); else pollConversion(); } })).catch(() => {}); });
     const acts = h('div', { class: 'co-act-actions', hidden: true }, recon, keep, again);
     const card = h('div', { class: 'co-act' },
       h('div', { class: 'co-act-head' }, h('span', { class: 'co-act-ico', html: icon('rocket', 16) }), h('div', null, title, line)), meter, skel, acts, live);
     el.append(card);
-    let st = null, wasKd = false, t0 = Date.now() - (Number(data && data.elapsed) || 0), tick = 0;
+    let st = null, wasKd = false, needStore = false, t0 = Date.now() - (Number(data && data.elapsed) || 0), tick = 0;
     const paintClock = () => {
       const e = Date.now() - t0;
       clk.textContent = st === 'checking' || st === 'pending' ? ` · ${clock(e)}` : '';
@@ -1512,7 +1512,9 @@ export function mount(ctx) {
     function update(d = {}) {
       const next = d.state || 'checking';
       if (d.t0) t0 = d.t0;
-      const needKd = !!d.reconnect && next !== 'done';
+      // paid, but the bot has no chosen KnowDrive store yet (a bot from before the store step): the owner picks one first
+      needStore = !!d.store && !d.reconnect && next !== 'done';
+      const needKd = (!!d.reconnect || needStore) && next !== 'done';
       const paid = !!d.paid;
       const changed = next !== st || needKd !== wasKd;
       wasKd = needKd;
@@ -1528,7 +1530,12 @@ export function mount(ctx) {
       else if (st === 'slow') { title.textContent = 'Taking longer than usual: we\'ll email you'; text.textContent = `We'll email ${email || 'you'} the moment ${botName()} is live. Keep testing meanwhile: your bot is saved.`; }
       else if (st === 'done') { title.textContent = 'Payment confirmed. Thank you!'; text.textContent = `${botName()} now answers from your KnowDrive account.`; card.querySelector('.co-act-ico').innerHTML = icon('checkCircle', 16); }
       recon.hidden = !needKd; keep.hidden = needKd;
-      if (needKd) {
+      recon.textContent = needStore ? 'Choose your store' : 'Reconnect KnowDrive';
+      if (needStore) {
+        title.textContent = 'Payment received. Choose your KnowDrive store to finish.';
+        text.textContent = `${botName()} needs you to pick the store its files live in. Choose it and setup finishes by itself. You won't be charged again.`;
+        acts.hidden = false; meter.hidden = true; skel.hidden = true;
+      } else if (needKd) {
         title.textContent = 'Payment received. Reconnect KnowDrive to finish.';
         text.textContent = `Your KnowDrive sign-in needs renewing before ${botName()} can go live. Reconnect it and setup finishes by itself. You won't be charged again.`;
         acts.hidden = false; meter.hidden = true; skel.hidden = true;
@@ -1653,7 +1660,7 @@ export function mount(ctx) {
       if (gen !== pollGen) return;
       const elapsed = Date.now() - t0;
       if (r && r.billing) setBilling(r.billing);
-      const why = { paid: !!r?.billing?.awaitingLaunch, reconnect: r?.kd?.status === 'reconnect' || r?.billing?.launchError === 'kd_reconnect' };
+      const why = { paid: !!r?.billing?.awaitingLaunch, reconnect: r?.kd?.status === 'reconnect' || r?.billing?.launchError === 'kd_reconnect', store: !!r?.kd?.storeRequired || r?.billing?.launchError === 'kd_store_required' };
       if (r && r.converted) {
         pollWake = null;
         setBilling(r.billing);
@@ -1667,7 +1674,7 @@ export function mount(ctx) {
         cardInst.activating?.update({ state: 'slow', ...why });
         return;   // the card announces its own state; "Check now" restarts a fresh 2-minute poll
       }
-      cardInst.activating?.update({ state: why.reconnect || elapsed >= POLL_FOR_MS ? 'pending' : 'checking', ...why });
+      cardInst.activating?.update({ state: why.reconnect || why.store || elapsed >= POLL_FOR_MS ? 'pending' : 'checking', ...why });
       // a background poll; "Check now" wakes it early
       await new Promise((res) => { const t = setTimeout(res, elapsed >= POLL_FOR_MS ? POLL_SLOW_MS : POLL_MS); pollWake = () => { clearTimeout(t); pollWake = null; res(); }; });
     }

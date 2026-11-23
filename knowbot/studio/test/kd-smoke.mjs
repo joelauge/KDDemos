@@ -5,7 +5,8 @@
 //   1. Launch opens the KnowDrive step (labelled dialog, the one-sentence promise, one primary button); Escape closes it
 //      and focus returns to Launch
 //   2. "Create your KnowDrive account" opens the sign-in popup; the account is created there; the popup closes; the
-//      files move into the new account's own store (samples never); "Continue to checkout" opens the Launch sheet with
+//      owner is shown the account's one store by name and confirms it (nothing preselected, nothing written before);
+//      the files move into that store (samples never); "Continue to checkout" opens the Launch sheet with
 //      the KnowDrive email; "Continue to secure checkout" opens our own checkout page (the fake payments' hosted page,
 //      never knowdrive.ai) for the KnowBot plan, tied to the bot and the account
 //   3. popup blocked: the fallback link opens the same sign-in; cancelling in it shows the error; signing in to an
@@ -15,6 +16,9 @@
 //      bot keeps answering; a cancelled plan shows "Subscription ended" with Reactivate, the bot stops answering
 //      visitors, and Reactivate opens the sheet without a second free month
 //   6. a server with no payments key: Launch says checkout isn't available yet, before any account step
+//   7. "Choose your store" with several stores: a store another account shared is greyed and cannot be picked (the
+//      server refuses it too), a store with other files needs the tick, one KnowDrive does not confirm also needs its
+//      name; by keyboard alone; axe clean; phone width, light and dark; changing the store removes the bot's own copies
 //
 //   npm run kd:smoke                     # SHOTS=<dir> keeps the screenshots somewhere else (default: a temp dir)
 import path from 'node:path';
@@ -79,6 +83,13 @@ async function finishInPopup(popup, { email, action = 'create', cancel = false }
   await popup.locator(cancel ? '#kd-cancel' : action === 'create' ? '#kd-create' : '#kd-signin').click();
 }
 
+/** The store step with one store: it is shown by name, nothing is picked for the owner, and they confirm it. */
+async function chooseOnlyStore(page) {
+  await page.locator('#kda-use').waitFor({ timeout: 15000 });
+  await page.locator('.kda-store input[type="radio"]').first().check();
+  await page.locator('#kda-use:not([disabled])').click();
+}
+
 let browser;
 try {
   browser = await chromium.launch({ headless: !process.env.HEADED });
@@ -123,11 +134,26 @@ try {
   await popup.waitForEvent('close', { timeout: 10000 }).catch(() => {});
   check('the popup closes itself', popup.isClosed());
   check('Signed in as <email>', await page.locator('.kda-who', { hasText: 'casey@example.com' }).first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false));
+  // the store step: one store, still shown by name and confirmed by the owner
+  await page.locator('#kda-use').waitFor({ timeout: 15000 });
+  const acct = dev.kd.auth.accounts.get('casey@example.com');
+  const one = await page.evaluate(() => ({ steps: [...document.querySelectorAll('.kda-steps li')].map((li) => li.textContent.trim()), current: document.querySelector('.kda-steps li[aria-current="step"]')?.textContent.trim(),
+    radios: document.querySelectorAll('.kda-store input[type="radio"]').length, checked: document.querySelectorAll('.kda-store input:checked').length, name: document.querySelector('.kda-store-name')?.textContent,
+    meta: document.querySelector('.kda-store-meta')?.textContent, btn: document.getElementById('kda-use').textContent.trim(), off: document.getElementById('kda-use').disabled, lead: document.getElementById('kda-store-lead')?.textContent }));
+  check('the steps read: KnowDrive account, Choose your store, Move your files, Checkout', one.steps.join(' > ') === 'KnowDrive account > Choose your store > Move your files > Checkout' && one.current === 'Choose your store', JSON.stringify(one.steps));
+  check('one store: shown by name, not preselected, the button waits for the pick', one.radios === 1 && one.checked === 0 && one.name === "casey@example.com's store" && one.off && one.btn === 'Choose a store', JSON.stringify(one));
+  check('says where the files will live and that KnowBot only adds and removes its own', /Choose where .* files will live\. KnowBot only ever adds and removes its own files there\. It never touches yours\./.test(one.lead || '') && /Empty · Your store/.test(one.meta || ''), `${one.lead} | ${one.meta}`);
+  check('nothing is written to the store before the owner chooses', dev.kd.auth.storeFiles(acct.store).length === 0 && !dev.kd.calls.some((x) => x.store === acct.store && x.method !== 'GET'));
+  await page.screenshot({ path: path.join(SHOTS, 'store-one.png') });
+  await page.locator('.kda-store input[type="radio"]').check();
+  check('the button names the store: "Use <store name>"', (await page.locator('#kda-use').textContent()).trim() === "Use casey@example.com's store" && !(await page.locator('#kda-use').isDisabled()));
+  await page.screenshot({ path: path.join(SHOTS, 'store-one-picked.png') });
+  await page.locator('#kda-use').click();
   const sawMoving = await page.locator('.kda-body', { hasText: /Moving 2 files/ }).first().waitFor({ timeout: 8000 }).then(() => true).catch(() => false);
   check('Moving N files (progress)', sawMoving || (await page.locator('#kda-continue').count()) > 0);
   if (sawMoving) await page.screenshot({ path: path.join(SHOTS, 'kd-moving-light.png') });
   await page.locator('#kda-continue').waitFor({ timeout: 30000 });
-  const acct = dev.kd.auth.accounts.get('casey@example.com');
+  check('the chosen store is named, with a way to change it', /Store: casey@example\.com's store/.test(await page.locator('.kda-where').textContent()) && await page.locator('#kda-change').isVisible());
   const copies = dev.kd.auth.storeFiles(acct.store);
   check('the files are in the new account’s own store (samples never)', copies.length === 2 && copies.every((f) => Object.keys(DOCS).some((n) => f.filename.endsWith(n))), copies.map((f) => f.filename).join(', '));
   await page.screenshot({ path: path.join(SHOTS, 'kd-ready-light.png') });
@@ -166,6 +192,7 @@ try {
   await B.page.locator('#kda-fallback').waitFor({ timeout: 10000 });
   [tab] = await Promise.all([B.context.waitForEvent('page'), B.page.locator('#kda-fallback').click()]);
   await finishInPopup(tab, { email: 'dana@example.com', action: 'signin' });
+  await chooseOnlyStore(B.page);
   await B.page.locator('#kda-continue').waitFor({ timeout: 30000 });
   check('an existing account signs in (no duplicate) and the files move', dev.kd.auth.storeFiles(dev.kd.auth.accounts.get('dana@example.com').store).length === 2 && [...dev.kd.auth.accounts.keys()].filter((e) => e === 'dana@example.com').length === 1);
   check('no page errors', !B.errors.length, B.errors.join(' | '));
@@ -283,6 +310,121 @@ try {
       check('no page errors', !errors.length, errors.join(' | '));
       await context.close();
     } finally { await off.close(); }
+  }
+
+  console.log('7. Choose your store: several stores, one shared by another account, one with other files');
+  {
+    const A7 = dev.kd.auth;
+    const me = A7.createAccount('morgan@example.com');
+    A7.createAccount('agency@example.com');
+    A7.setStore(me.store, { name: 'Morgan Bikes' });
+    const handbook = A7.addStore('morgan@example.com', { name: 'Team handbook', files: [{ path: 'hr/leave.md', text: 'Leave policy' }, { path: 'hr/pay.md', text: 'Pay' }, { path: 'notes.txt', text: 'Notes' }] });
+    const shared = A7.addStore('agency@example.com', { name: 'Acme client files', files: [{ path: 'live/a.md', text: 'A' }] });
+    A7.shareStore(shared, 'morgan@example.com', { role: 'member' });
+    // flags that call a shared store "owner" (what happened in production): the creator is someone else
+    const lying = A7.addStore('agency@example.com', { name: 'Agency Bots', files: [{ path: 'bot/faq.md', text: 'FAQ' }] });
+    A7.shareStore(lying, 'morgan@example.com', { role: 'owner', row: { owner: true } });
+    const signInTo = async (X) => {
+      await openLaunch(X.page);
+      await X.page.locator('#kda-signin').waitFor({ timeout: 10000 });
+      const [pop] = await Promise.all([X.context.waitForEvent('page'), X.page.locator('#kda-signin').click()]);
+      await finishInPopup(pop, { email: 'morgan@example.com', action: 'signin' });
+      await X.page.locator('#kda-use').waitFor({ timeout: 15000 });
+    };
+    const axe = async (pg) => { await settled(pg, 3000); return injectAxe(pg).then(() => pg.evaluate(async () => (await window.axe.run(document.querySelector('.kda-dialog'), { runOnly: ['wcag2a', 'wcag2aa'] })).violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' / ')}`))).catch((e) => [`axe did not run: ${e.message}`]); };
+
+    const t7 = await newTrial();
+    const G = await studioPage(browser, t7);
+    const pg = G.page;
+    await signInTo(G);
+    const list = await pg.evaluate(() => ({
+      usable: [...document.querySelectorAll('fieldset.kda-stores .kda-store')].map((el) => [el.querySelector('.kda-store-name').textContent, el.querySelector('.kda-store-meta').textContent, !!el.querySelector('input[type="radio"]')]),
+      off: [...document.querySelectorAll('.kda-stores-off .kda-store')].map((el) => [el.querySelector('.kda-store-name').textContent, el.querySelector('.kda-store-meta').textContent, el.querySelectorAll('input, button, a, [tabindex]').length]),
+      checked: document.querySelectorAll('.kda-dialog input:checked').length, off0: document.getElementById('kda-use').disabled }));
+    check('the list: every store by name, file count and what KnowDrive reports', JSON.stringify(list.usable) === JSON.stringify([['Agency Bots', "1 file · KnowDrive doesn't confirm this store is yours", true], ['Morgan Bikes', 'Empty · Your store', true], ['Team handbook', '3 files · Your store', true]]), JSON.stringify(list.usable));
+    check('the shared store is greyed with the reason, and is not an option (no control at all)', JSON.stringify(list.off) === JSON.stringify([['Acme client files', "Shared with you by another account: can't be used for a bot", 0]]), JSON.stringify(list.off));
+    check('nothing is preselected and the button is off', list.checked === 0 && list.off0);
+    await pg.screenshot({ path: path.join(SHOTS, 'store-many.png') });
+    const v0 = await axe(pg);
+    check('axe: no WCAG A/AA violations in the store list', !v0.length, v0.join(', '));
+    // the server refuses the shared store too, whatever the page sends
+    const direct = await api(`/api/studio/trials/${t7.trialId}/kd/store`, { method: 'POST', headers: { authorization: `Bearer ${t7.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ storeId: shared, confirmed: true, typedName: 'Acme client files' }) });
+    check('the server refuses the shared store too', direct.status === 403 && (await direct.json()).error.code === 'kd_store_shared');
+    // by keyboard alone: the first radio has focus; arrows move through the stores; the gates open one by one
+    check('focus starts on the first store', await pg.evaluate(() => document.activeElement?.matches('.kda-store input[type="radio"]') && !document.activeElement.checked));
+    await pg.keyboard.press('Space');            // Agency Bots: ownership not confirmed
+    await pg.locator('#kda-store-name').waitFor({ timeout: 5000 });
+    const why1 = await pg.locator('#kda-confirm').innerText();
+    check('ownership not confirmed: says so, asks for the tick and the name', /doesn't confirm that "Agency Bots" is yours/.test(why1) && /This is my store, and I want this bot's files added to it/.test(why1) && /Type the store.s name to confirm: Agency Bots/.test(why1.replace(/\s+/g, ' ')), why1);
+    await pg.keyboard.press('Tab'); await pg.keyboard.press('Space'); // the tick
+    check('the tick alone is not enough', await pg.locator('#kda-use').isDisabled() && (await pg.locator('#kda-use').textContent()).trim() === 'Use Agency Bots');
+    await pg.keyboard.press('Tab'); await pg.keyboard.type('agency bots');
+    check('the tick and the typed name enable "Use Agency Bots"', !(await pg.locator('#kda-use').isDisabled()));
+    await pg.screenshot({ path: path.join(SHOTS, 'store-many-name.png') });
+    const v1 = await axe(pg);
+    check('axe: no violations with the name confirmation open', !v1.length, v1.join(', '));
+    // back to the list, down to the store with other files
+    await pg.keyboard.press('Shift+Tab'); await pg.keyboard.press('Shift+Tab');
+    await pg.keyboard.press('ArrowDown'); await pg.keyboard.press('ArrowDown');
+    const pick2 = await pg.evaluate(() => ({ picked: document.querySelector('.kda-store input:checked')?.closest('.kda-store').querySelector('.kda-store-name').textContent, tick: document.getElementById('kda-store-tick')?.checked, name: !!document.getElementById('kda-store-name'),
+      why: document.getElementById('kda-confirm-why')?.textContent, off: document.getElementById('kda-use').disabled, btn: document.getElementById('kda-use').textContent.trim() }));
+    check('a store with other files: says how many, needs the tick (not carried over), no name', pick2.picked === 'Team handbook' && pick2.tick === false && !pick2.name && pick2.off && pick2.btn === 'Use Team handbook' && /"Team handbook" already holds 3 other files\. They stay as they are/.test(pick2.why || ''), JSON.stringify(pick2));
+    await pg.screenshot({ path: path.join(SHOTS, 'store-many-confirm.png') });
+    await pg.keyboard.press('Tab'); await pg.keyboard.press('Space');
+    check('the tick enables "Use Team handbook"', !(await pg.locator('#kda-use').isDisabled()));
+    await pg.screenshot({ path: path.join(SHOTS, 'store-many-confirmed.png') });
+    const v2 = await axe(pg);
+    check('axe: no violations with the confirmation ticked', !v2.length, v2.join(', '));
+    check('still nothing written anywhere', [me.store, handbook, shared, lying].every((id) => !dev.kd.calls.some((x) => x.store === id && x.method !== 'GET')));
+    await pg.keyboard.press('Tab');
+    check('Tab reaches the button', await pg.evaluate(() => document.activeElement?.id === 'kda-use'));
+    await pg.keyboard.press('Enter');
+    await pg.locator('#kda-continue').waitFor({ timeout: 30000 });
+    const inHandbook = A7.storeFiles(handbook);
+    check('the files went to the chosen store, in their own folder; the files already there are untouched', inHandbook.length === 5 && inHandbook.filter((f) => f.filename.startsWith('KnowBot/')).length === 2 && ['hr/leave.md', 'hr/pay.md', 'notes.txt'].every((n) => inHandbook.some((f) => f.filename === n)), inHandbook.map((f) => f.filename).join(', '));
+    check('no other store was written to', A7.storeFiles(me.store).length === 0 && A7.storeFiles(shared).length === 1 && A7.storeFiles(lying).length === 1);
+    check('the dialog names the store', /Store: Team handbook/.test(await pg.locator('.kda-where').textContent()));
+    // changing the choice before launch: the bot's own copies leave the earlier store, and the dialog says so
+    await pg.locator('#kda-change').click();
+    await pg.locator('#kda-use').waitFor({ timeout: 15000 });
+    check('changing: the current store is marked, and can be kept', /Current/.test(await pg.locator('.kda-store[data-store="' + handbook + '"]').textContent()) && /Keep Team handbook/.test(await pg.locator('#kda-keep').textContent()));
+    await pg.locator(`.kda-store[data-store="${me.store}"] input`).check();
+    await pg.locator('#kda-use:not([disabled])').click();
+    await pg.locator('#kda-removed').waitFor({ timeout: 15000 });
+    const note = await pg.locator('#kda-removed').textContent();
+    check('says what it removed from the earlier store', /KnowBot removed its copies of 2 files from "Team handbook"\. Nothing else there was touched\./.test(note), note);
+    await pg.locator('#kda-continue').waitFor({ timeout: 30000 });
+    check('only the bot’s own copies left the earlier store; the files are in the new one', A7.storeFiles(handbook).map((f) => f.filename).sort().join() === 'hr/leave.md,hr/pay.md,notes.txt' && A7.storeFiles(me.store).length === 2, A7.storeFiles(handbook).map((f) => f.filename).join(', '));
+    const text7 = await pg.locator('.kda-dialog').textContent();
+    check('no third-party names, no em dashes in the copy', !/google|oauth|stripe|twilio|anthropic|claude|cloudflare|\u2014/i.test(`${text7} ${why1} ${pick2.why} ${note}`));
+    check('no page errors', !G.errors.length, G.errors.join(' | '));
+    await G.context.close();
+
+    for (const theme of ['light', 'dark']) {
+      const tp = await newTrial();
+      const P7 = await studioPage(browser, tp, { theme, viewport: { width: 390, height: 844 } });
+      await signInTo(P7);
+      await P7.page.locator('fieldset.kda-stores .kda-store', { hasText: 'Team handbook' }).locator('input').check();
+      await P7.page.waitForTimeout(500);
+      const fit = await P7.page.evaluate(() => { const d = document.querySelector('.kda-dialog').getBoundingClientRect(); const taps = [...document.querySelectorAll('fieldset.kda-stores .kda-store, .kda-check, #kda-use')].map((el) => el.getBoundingClientRect().height);
+        return { scroll: document.documentElement.scrollWidth <= innerWidth + 1, dlg: d.width <= innerWidth + 0.5 && d.top >= 0, inner: document.querySelector('.kda-dialog').scrollWidth <= document.querySelector('.kda-dialog').clientWidth + 1, tap: Math.min(...taps) >= 44 }; });
+      check(`${theme} phone: the store list fits (no sideways scroll, 44 px targets)`, fit.scroll && fit.dlg && fit.inner && fit.tap, JSON.stringify(fit));
+      const vp = await axe(P7.page);
+      check(`${theme} phone: axe clean`, !vp.length, vp.join(', '));
+      await P7.page.screenshot({ path: path.join(SHOTS, `store-phone-${theme}.png`) });
+      if (theme === 'dark') {
+        const D7 = await studioPage(browser, tp, { theme, viewport: { width: 1440, height: 1000 } });
+        await openLaunch(D7.page);
+        await D7.page.locator('#kda-use').waitFor({ timeout: 15000 });
+        await D7.page.locator('fieldset.kda-stores .kda-store', { hasText: 'Agency Bots' }).locator('input').check();
+        const vd = await axe(D7.page);
+        check('dark desktop: axe clean', !vd.length, vd.join(', '));
+        await D7.page.screenshot({ path: path.join(SHOTS, 'store-many-dark.png') });
+        await D7.context.close();
+      }
+      check(`${theme} phone: no page errors`, !P7.errors.length, P7.errors.join(' | '));
+      await P7.context.close();
+    }
   }
 } catch (e) {
   check('kd smoke ran to the end', false, e.stack || e.message);

@@ -1463,11 +1463,12 @@ export function createStudio(o = {}) {
   const kdTagOf = (T) => `knowbot:${T.id}`;
   const homeRootOf = (T) => (T.kdLink?.home && T.kdLink.root ? T.kdLink.root : rootOf(T.id));
   const kdClients = new Map(); // trial id → { link, client }
+  const kdHooks = (T) => ({ onRotate: async (sealed) => { if (T.kdLink) { T.kdLink.sealed = sealed; await flushSpec(T); } } /* saved at once: a restart must not lose a rotated sign-in */, onReconnect: (e) => kdNeedsReconnect(T, e) });
   function kdClientOf(T) {
     if (!kdAcct || !T?.kdLink?.sealed) return null;
     let c = kdClients.get(T.id);
     if (!c || c.link !== T.kdLink) {
-      c = { link: T.kdLink, client: kdAcct.client(T.id, T.kdLink, { onRotate: async (sealed) => { if (T.kdLink) { T.kdLink.sealed = sealed; await flushSpec(T); } } /* saved at once: a restart must not lose a rotated sign-in */, onReconnect: (e) => kdNeedsReconnect(T, e) }) };
+      c = { link: T.kdLink, client: kdAcct.client(T.id, T.kdLink, kdHooks(T)) };
       kdClients.set(T.id, c);
     }
     return c.client;
@@ -4557,12 +4558,18 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   }
 
   // ------------------------------------------------------------------------- KnowDrive account (launch, owner decisions 1-4)
-  // Launch → sign in to (or create) a KnowDrive account in a popup → the bot's files are copied into the store that
-  // account owns → checkout, tied to that account → convert. After convert the bot answers only from the customer's
-  // store, through their delegated sign-in (kdClientOf), on every surface; KnowBot's shared copies are removed.
+  // Launch → sign in to (or create) a KnowDrive account in a popup → the owner CHOOSES the store the bot's files go
+  // to → the files are copied into it → checkout, tied to that account → convert. After convert the bot answers only
+  // from the customer's store, through their delegated sign-in (kdClientOf), on every surface; KnowBot's shared copies
+  // are removed.
+  // The store is never picked for the owner (it once was, and files landed in a store another account had only shared):
+  // signing in links the account, and nothing is written to any KnowDrive store until the choice is on record
+  // (kdLink.store + storeName + storeChosenAt). The gates are enforced here, not only in the dialog; see kdChooseStore.
   //   GET    /api/studio/kd/callback?code&state      the sign-in popup lands here (the code is exchanged server side)
   //   GET    /api/studio/trials/:id/kd               status { required, status, email, move, movable, ready }
   //   POST   /api/studio/trials/:id/kd/start {mode}  → { url } the KnowDrive sign-in page (mode signup | signin)
+  //   GET    /api/studio/trials/:id/kd/stores        the account's stores, read live with the owner's sign-in
+  //   POST   /api/studio/trials/:id/kd/store {storeId, confirmed, typedName?}  the owner's choice (gated, write-checked)
   //   POST   /api/studio/trials/:id/kd/move          copies the files (idempotent, resumable; retries failed files)
   //   DELETE /api/studio/trials/:id/kd               signs out (before launch only)
   // Progress rides the trial's events stream as `kd` (the same body as GET /kd, without `movable`).
@@ -4581,11 +4588,21 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     return { state: m.state, total: items.length || m.total || 0, copied: items.filter((it) => it.status === 'copied' || it.status === 'ready').length || m.copied || 0,
       ready: items.filter((it) => it.status === 'ready').length || m.ready || 0, failed: items.length ? failed : (m.failed || []), startedAt: m.startedAt || null, finishedAt: m.finishedAt || null, ...(m.ref ? { ref: m.ref } : {}) };
   }
-  const kdReady = (T) => !!(T.kdLink && T.kdLink.status === 'linked' && T.kdLink.moved);
+  /**
+   * The owner chose this bot's store (or the bot is already live in it). A link saved before the store step existed
+   * carries a store that was picked for the owner (no storeChosenAt): that is NOT a choice, and nothing more is written
+   * there until the owner goes through the step.
+   */
+  const kdStoreChosen = (T) => !!(T.kdLink?.store && (T.kdLink.storeChosenAt || T.kdLink.home));
+  const KD_STORE_REQUIRED = "Choose the KnowDrive store for this bot's files first.";
+  const kdReady = (T) => !!(T.kdLink && T.kdLink.status === 'linked' && T.kdLink.moved && kdStoreChosen(T));
   function kdPublic(T) {
     const L = T.kdLink;
+    const chosen = kdStoreChosen(T);
     return { available: !!kdAcct, required: kdRequired, status: L ? (L.status === 'reconnect' ? 'reconnect' : 'linked') : 'none', email: L?.email || null, account: L?.account || null,
-      linkedAt: L?.linkedAt || null, live: !!L?.home, ready: kdReady(T), move: kdMoveDoc(T), ...(L?.status === 'reconnect' && L.reconnectRef ? { ref: L.reconnectRef } : {}) };
+      linkedAt: L?.linkedAt || null, live: !!L?.home, ready: kdReady(T), move: kdMoveDoc(T),
+      store: chosen ? { id: L.store, name: L.storeName || null, chosenAt: L.storeChosenAt || null } : null, storeRequired: !!L && !chosen,
+      ...(L?.status === 'reconnect' && L.reconnectRef ? { ref: L.reconnectRef } : {}) };
   }
   const kdEventSoon = (T) => {
     if (T.kdEventTimer) return;
@@ -4611,7 +4628,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       out.movable = movableOf(files).length; out.learning = own.filter((f) => !TERMINAL.has(f.stage)).length; out.samplesOnly = !own.length && files.some((f) => f.sample || f.replay);
     } catch { /* status still answers */ }
     // a move a restart interrupted goes on as soon as the Studio looks at it
-    if (T.kdMove?.state === 'moving' && !T.kdMoving && T.kdLink?.status === 'linked') kdMove(T);
+    if (T.kdMove?.state === 'moving' && !T.kdMoving && T.kdLink?.status === 'linked' && kdStoreChosen(T)) kdMove(T);
     return out;
   }
   const kdErrorText = (e) => (e instanceof KdError && e.code === 'reconnect' ? 'Your KnowDrive sign-in expired.' : e?.code === 'file_too_large' ? 'This file is too large for your KnowDrive plan.'
@@ -4631,6 +4648,9 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   async function kdMoveRun(T) {
     const via = kdClientOf(T);
     if (!via) throw new KdError('reconnect', 'KnowDrive is not connected', 401);
+    // the last line of defence: no copy without the owner's recorded choice of store
+    if (!kdStoreChosen(T) || via.store !== T.kdLink.store) fail(409, 'kd_store_required', KD_STORE_REQUIRED);
+    await kdCleanupPending(T);
     const files = movableOf(await filesOf(T, { maxAgeMs: 0 }));
     const rowsById = new Map((T.rows || []).map((r) => [r.id, r]));
     T.kdLink.root ||= `KnowBot/${slugify(botName(T)) || 'bot'}-${T.id.slice(-6)}/`;
@@ -4698,10 +4718,149 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     T.kdMove.state = failed ? 'partial' : 'done';
     T.kdMove.finishedAt = new Date(now()).toISOString();
     T.kdLink.moved = !failed && files.length > 0;
-    log(`[kd] move ${T.id}: ${files.length - failed}/${files.length} files in the customer's store`);
+    log(`[kd] move ${T.id}: ${files.length - failed}/${files.length} files in the customer's store ${T.kdLink.store}`);
     await flushSpec(T);
     clearTimeout(T.kdEventTimer); T.kdEventTimer = null;
     pushEvent(T, 'kd', kdPublic(T));
+    kdLaunchIfPaid(T);
+  }
+  /** A bot that is paid for but could not launch yet (it had no chosen store, or its files were not there) launches now. */
+  function kdLaunchIfPaid(T) {
+    if (T.converted || !T.flags.billing?.status || !kdReady(T)) return;
+    billing.confirm(T).then(() => pushEvent(T, 'billing', { billing: billing.pub(T), converted: !!T.converted })).catch((e) => log(`[billing] launch for ${T.id}: ${e.message}`));
+  }
+
+  // ---- the store step: the owner chooses where the bot's files live
+  const KD_COUNT_PAGES = 4, KD_COUNT_PAGE = 500;
+  const hasTag = (r, tag) => (r.tags || []).some((t) => String(t).toLowerCase() === tag);
+  /** How many files a store holds, how many of them are KnowBot's (tag `knowbot`) and this bot's. Capped: `capped`. */
+  async function kdStoreCounts(T, via) {
+    const mine = kdTagOf(T).toLowerCase();
+    let files = 0, knowbot = 0, own = 0, after = '', capped = false;
+    for (let page = 0; ; page++) {
+      if (page >= KD_COUNT_PAGES) { capped = true; break; }
+      const qs = new URLSearchParams({ limit: String(KD_COUNT_PAGE) });
+      if (after) qs.set('after', after);
+      const j = await kdJson(`/api/v1/vector_stores/${encodeURIComponent(via.store)}/files?${qs}`, { timeout: 15000, via }, 'counting files');
+      for (const r of j.data || []) { files++; if (hasTag(r, 'knowbot')) knowbot++; if (hasTag(r, mine)) own++; }
+      after = j.next_after || j.last_id || (j.data?.length ? j.data[j.data.length - 1].id : '');
+      if (!j.has_more || !after) break;
+    }
+    return { files, knowbot, own, other: files - knowbot, capped };
+  }
+  /**
+   * The account's stores, read live with the owner's sign-in, each with what the dialog (and the gate) needs:
+   *   ownership  owned | shared | unconfirmed (kdaccount.mjs classifyStore)
+   *   selectable false for a store another account shared: never an option
+   *   needs      none (empty, or only KnowBot's files) | confirm (holds other files, or could not be counted: the owner
+   *              ticks "This is my store…") | name (ownership not confirmed: the tick AND the store's name typed)
+   */
+  async function kdStoreList(T) {
+    const L = T.kdLink;
+    const d = await kdAcct.stores(T.id, L, kdHooks(T));
+    if (String(d.account).toLowerCase() !== String(L.account).toLowerCase()) fail(409, 'account_mismatch', 'This sign-in belongs to a different KnowDrive account. Sign in again.');
+    const client = kdClientOf(T);
+    const out = new Array(d.stores.length);
+    const queue = d.stores.map((st, i) => [st, i]);
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (queue.length) {
+        const [st, i] = queue.shift();
+        const selectable = st.ownership !== 'shared';
+        // a store that cannot be used is not opened at all
+        let c = null;
+        if (selectable) { try { c = await kdStoreCounts(T, client.forStore(st.id)); } catch (e) { if (e?.code === 'kd_reconnect') throw e; log(`[kd] ${T.id}: could not count the files in store ${st.id}: ${clip(e?.message || e, 120)}`); } }
+        const needs = !selectable ? null : st.ownership === 'unconfirmed' ? 'name' : (!c || c.other > 0 || c.capped) ? 'confirm' : 'none';
+        out[i] = { id: st.id, name: st.name, plan: st.plan || null, ownership: st.ownership, selectable, needs, files: c ? c.files : null, knowbotFiles: c ? c.knowbot : null, botFiles: c ? c.own : null,
+          otherFiles: c ? c.other : null, capped: !!c?.capped, current: kdStoreChosen(T) && L.store === st.id, reasons: st.reasons };
+      }
+    }));
+    return out;
+  }
+  const kdStoreRowPublic = ({ reasons, ...row }) => row; // the reasons name KnowDrive fields: for the log only
+  const sameName = (a, b) => String(a ?? '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  /** Removes THIS bot's own copies from a store: only files that carry its knowbot:<trial id> tag, never anything else. */
+  async function kdRemoveOwnCopies(T, storeId) {
+    const via = kdClientOf(T).forStore(storeId);
+    const mine = kdTagOf(T).toLowerCase();
+    let removed = 0, failed = 0;
+    for (const r of await listRows({ tags_all: kdTagOf(T) }, via)) {
+      if (!hasTag(r, mine)) continue; // whatever the listing returned, a file without this bot's tag is never touched
+      try { await deleteRow(r.id, via); removed++; } catch (e) { failed++; log(`[kd] ${T.id}: could not remove its copy ${r.id} from store ${storeId}: ${clip(e?.message || e, 120)}`); }
+    }
+    return { removed, failed };
+  }
+  /**
+   * Stores the owner moved away from (kdLink.cleanup: [{ store, name }]) lose this bot's own copies; one that could not
+   * be cleaned stays on the list and is tried again before the next move. → Map store id → { removed, failed }
+   */
+  async function kdCleanupPending(T) {
+    const L = T.kdLink;
+    const out = new Map();
+    const list = (Array.isArray(L?.cleanup) ? L.cleanup : []).filter((x) => x?.store && x.store !== L.store);
+    const left = [];
+    for (const x of list) {
+      try {
+        const r = await kdRemoveOwnCopies(T, x.store);
+        out.set(x.store, r);
+        if (r.failed) left.push(x);
+      } catch (e) {
+        if ((e instanceof KdError && e.code === 'reconnect') || e?.code === 'kd_reconnect') throw e;
+        left.push(x); log(`[kd] ${T.id}: cleanup of store ${x.store} still pending: ${clip(e?.message || e, 120)}`);
+      }
+    }
+    if (L && (L.cleanup || left.length)) { if (left.length) L.cleanup = left; else delete L.cleanup; saveSpecSoon(T); }
+    return out;
+  }
+  /**
+   * The owner's choice of store, with every gate enforced here (the dialog shows the same rules, but is not trusted):
+   *   1. the store is in the list read just now with the owner's sign-in;
+   *   2. a store another account shared is refused;
+   *   3. a store that holds files that are not KnowBot's needs confirmed:true; a store whose ownership KnowDrive does
+   *      not confirm needs confirmed:true AND its name typed;
+   *   4. a real write is proven with the owner's sign-in (a tiny file under the bot's folder, removed at once);
+   *   only then is the choice saved. Changing the store removes this bot's own copies from the earlier one.
+   */
+  async function kdChooseStore(T, body) {
+    const L = T.kdLink;
+    const id = String(body?.storeId ?? '').trim();
+    if (!id || id.length > 200) fail(400, 'bad_request', 'storeId is required.');
+    const stores = await kdStoreList(T);
+    const st = stores.find((x) => x.id === id);
+    if (!st) fail(409, 'kd_store_unknown', 'That store is not in your KnowDrive account. Pick one from the list.');
+    if (!st.selectable) fail(403, 'kd_store_shared', "That store is shared with you by another account, so it can't be used for a bot.");
+    if (st.needs !== 'none' && body?.confirmed !== true) fail(409, 'kd_store_confirm', st.needs === 'name' ? "Confirm this is your store and type its name." : 'This store already holds other files. Confirm it is your store first.');
+    if (st.needs === 'name' && !sameName(body?.typedName, st.name)) fail(409, 'kd_store_name', "The name you typed doesn't match the store's name.");
+    // a real write, with the owner's sign-in, under the bot's own folder; removed at once
+    const root = L.root || `KnowBot/${slugify(botName(T)) || 'bot'}-${T.id.slice(-6)}/`;
+    const via = kdClientOf(T).forStore(id);
+    const mine = kdTagOf(T).toLowerCase();
+    try {
+      const out = await ingest({ storePath: `${root}_knowbot-check.txt`, tags: ['knowbot', kdTagOf(T), 'kind:probe'], mime: 'text/plain', bytes: Buffer.from('KnowBot checked that it can save files here. This file is removed right away.\n'), via, side: true });
+      const probeId = out?.id || out?.file_id || null;
+      if (probeId) await deleteRow(probeId, via);
+      else for (const r of await listRows({ tags_all: kdTagOf(T) }, via)) if (hasTag(r, mine) && hasTag(r, 'kind:probe')) await deleteRow(r.id, via);
+    } catch (e) {
+      if ((e instanceof KdError && e.code === 'reconnect') || e?.code === 'kd_reconnect') throw e;
+      log(`[kd] ${T.id}: store ${id} failed the write check: ${clip(e?.message || e, 160)}`);
+      fail(409, 'kd_store_unwritable', `KnowDrive didn't let KnowBot save a file in "${st.name}", so it can't be used. Pick another store.`);
+    }
+    const prevStore = L.store && L.store !== id ? { store: L.store, name: L.storeName || null } : null;
+    L.store = id; L.storeName = st.name; L.storeChosenAt = new Date(now()).toISOString(); L.storeOwnership = st.ownership; L.root = root;
+    if (prevStore) { L.moved = false; T.kdMove = null; L.cleanup = [...(Array.isArray(L.cleanup) ? L.cleanup : []).filter((x) => x?.store && x.store !== prevStore.store), prevStore]; }
+    kdClients.delete(T.id); // the client is bound to the store
+    await flushSpec(T);
+    log(`[kd] ${T.id} store chosen: ${id} (${st.ownership}${st.reasons?.length ? `: ${st.reasons.join(', ')}` : ''}; files=${st.files ?? '?'} other=${st.otherFiles ?? '?'}${st.needs !== 'none' ? `; confirmed${st.needs === 'name' ? ' by name' : ''}` : ''})${prevStore ? `, was ${prevStore.store}` : ''}`);
+    // the earlier store: this bot's own copies go (only files with its tag)
+    let removed = null;
+    if (prevStore) {
+      const r = (await kdCleanupPending(T).catch((e) => { log(`[kd] ${T.id}: cleanup after a store change: ${clip(e?.message || e, 120)}`); return new Map(); })).get(prevStore.store) || null;
+      removed = { store: prevStore.name || null, files: r?.removed ?? 0, failed: r ? r.failed : null };
+      await flushSpec(T);
+      log(`[kd] ${T.id}: removed ${removed.files} of its own copies from the earlier store ${prevStore.store}${r && !r.failed ? '' : ' (not all; it is retried before the next move)'}`);
+    }
+    pushEvent(T, 'kd', kdPublic(T));
+    kdLaunchIfPaid(T);
+    return { ...(await kdStatus(T)), ...(removed ? { removed } : {}) };
   }
   async function kdUnlink(T) {
     if (T.kdLink?.home) fail(409, 'kd_live', 'This bot is live and answers from your KnowDrive files. Reconnect KnowDrive instead of signing out.');
@@ -4729,11 +4888,30 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const r = await kdAcct.start({ trialId: T.id, bearer: bearer(req), origin: req.headers.origin, redirectUri: kdRedirectUri(req), mode: body?.mode === 'signin' ? 'signin' : 'signup', expiresAt: T.expiresAt });
       return sendJson(res, 200, { url: r.url });
     }
+    if (action === 'stores' || action === 'store') {
+      if (m !== (action === 'stores' ? 'GET' : 'POST')) fail(405, 'not_found', `method ${m} not allowed`);
+      if (!T.kdLink) fail(409, 'kd_required', 'Sign in to KnowDrive first.');
+      if (T.kdLink.status === 'reconnect') fail(409, 'kd_reconnect', 'Reconnect KnowDrive, then try again.', { ref: T.kdLink.reconnectRef || null });
+      limitTrialAndIp(T, req, 'kdstore', 30, 90, 'store requests');
+      if (action === 'stores') {
+        // a live bot keeps its store: there is nothing to choose
+        if (T.kdLink.home) return sendJson(res, 200, { stores: [], locked: true, store: kdPublic(T).store });
+        const stores = await kdStoreList(T);
+        return sendJson(res, 200, { stores: stores.map(kdStoreRowPublic), locked: false, store: kdPublic(T).store });
+      }
+      if (T.kdLink.home || T.converted) fail(409, 'kd_live', "This bot is live, so its store can't be changed here.");
+      if (T.kdMoving) fail(409, 'kd_busy', 'Your files are moving. Wait for it to finish, then change the store.');
+      if (T.kdChoosing) fail(409, 'kd_busy', 'Still checking the store you picked. One moment.');
+      const body = await readBody(req).catch(() => ({}));
+      T.kdChoosing = kdChooseStore(T, body).finally(() => { T.kdChoosing = null; });
+      return sendJson(res, 200, await T.kdChoosing);
+    }
     if (action === 'move') {
       if (m !== 'POST') fail(405, 'not_found', `method ${m} not allowed`);
       if (!T.kdLink) fail(409, 'kd_required', 'Sign in to KnowDrive first.');
       if (T.kdLink.status === 'reconnect') fail(409, 'kd_reconnect', 'Reconnect KnowDrive, then try again.', { ref: T.kdLink.reconnectRef || null });
       if (T.kdLink.home) return sendJson(res, 200, kdPublic(T));
+      if (!kdStoreChosen(T)) fail(409, 'kd_store_required', KD_STORE_REQUIRED);
       if (!T.kdMoving) {
         const st = await kdStatus(T);
         if (st.learning) fail(409, 'files_learning', 'Some files are still learning. Wait a moment, then continue.');
@@ -4741,6 +4919,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
         if (!st.movable) {
           // "Launch with samples anyway": sample files are never moved, so there is nothing to copy; the bot launches
           // empty in the customer's account and they add their own files after launch
+          await kdCleanupPending(T);
           T.kdMove = { state: 'done', total: 0, items: {}, startedAt: new Date(now()).toISOString(), finishedAt: new Date(now()).toISOString() };
           T.kdLink.root ||= `KnowBot/${slugify(botName(T)) || 'bot'}-${T.id.slice(-6)}/`;
           T.kdLink.moved = true;
@@ -4790,14 +4969,17 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const same = !!prev && prev.account === r.link.account;
       if (prev?.home && !same) throw new KdError('account_mismatch', 'This bot is live in another KnowDrive account. Sign in to that account to reconnect it.', 409);
       if (prev && !same) { T.kdMove = null; if (prev.sealed) kdAcct.revoke(prev); }
-      T.kdLink = { ...r.link, root: same ? prev.root || null : null, moved: same ? !!prev.moved : false, home: same ? !!prev.home : false, linkedBy: r.state.bh };
+      // signing in links the account, never a store: a chosen store (and a store an older version picked, which still has
+      // to be confirmed in the store step) only carries over when the same account signs in again
+      const keep = same ? Object.fromEntries(['store', 'storeName', 'storeChosenAt', 'storeOwnership', 'cleanup'].filter((k) => prev[k] != null).map((k) => [k, prev[k]])) : {};
+      T.kdLink = { ...r.link, ...keep, root: same ? prev.root || null : null, moved: same ? !!prev.moved : false, home: same ? !!prev.home : false, linkedBy: r.state.bh };
       kdClients.delete(T.id); kdAcct.forget(T.id); kdAcct.prime(T.id, r.access);
       if (!T.email && r.link.email) T.email = r.link.email;
       await flushSpec(T);
       pushEvent(T, 'kd', kdPublic(T));
       log(`[kd] ${T.id} signed in to KnowDrive account ${r.link.account}${same ? ' (reconnected)' : ''}`);
       // a bot that is already paid for but could not launch (its sign-in had to be reconnected) launches now
-      if (!T.converted && T.flags.billing?.status) billing.confirm(T).then(() => pushEvent(T, 'billing', { billing: billing.pub(T), converted: !!T.converted })).catch((e) => log(`[billing] launch after reconnect for ${T.id}: ${e.message}`));
+      if (!T.converted && T.flags.billing?.status && kdStoreChosen(T)) billing.confirm(T).then(() => pushEvent(T, 'billing', { billing: billing.pub(T), converted: !!T.converted })).catch((e) => log(`[billing] launch after reconnect for ${T.id}: ${e.message}`));
       return kdPage(res, { ...where, ok: true });
     } catch (e) {
       const ref = randomBytes(4).toString('hex');
@@ -4814,6 +4996,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
   async function convertLinked(T, { account, bucketId }) {
     const L = T.kdLink;
     if (String(account).toLowerCase() !== String(L.account).toLowerCase()) fail(409, 'account_mismatch', 'This bot is linked to a different KnowDrive account.');
+    if (!kdStoreChosen(T)) fail(409, 'kd_store_required', KD_STORE_REQUIRED);
     const via = kdClientOf(T);
     let copies;
     try { copies = await listRows({ tags_all: kdTagOf(T) }, via); }
@@ -4883,6 +5066,8 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
     const shop = T.flags?.storeLast?.platform === 'shopify' && T.flags.storeLast.url ? { shopDomain: String(T.flags.storeLast.url) } : {};
     if (T.converted) return { converted: true, files: T.convertedFiles ?? 0, ...shop, ...(T.spec.sendInfo ? { sendInfo: sendInfoSwitches(T.spec.sendInfo) } : {}) };
     let files;
+    // a linked bot never launches without the owner's recorded choice of store
+    if (T.kdLink && !kdStoreChosen(T) && (kdRequired || T.kdLink.moved)) fail(409, 'kd_store_required', KD_STORE_REQUIRED);
     if (T.kdLink?.moved) files = await convertLinked(T, { account, bucketId }); // the customer's own store: no re-tag here
     else {
       if (kdRequired && T.kdLink) fail(409, 'kd_incomplete', "This bot's files are not in its KnowDrive account yet.");
@@ -5798,6 +5983,7 @@ Allowed patch fields: name (≤40), org (≤60), purpose (≤200), audience (cus
       const body = await readBody(req);
       // owner decision 4: checkout only once the KnowDrive account is linked and the files are in its store
       if (kdRequired && !T.converted && !kdReady(T)) {
+        if (T.kdLink && T.kdLink.status !== 'reconnect' && !kdStoreChosen(T)) fail(409, 'kd_store_required', KD_STORE_REQUIRED);
         fail(409, T.kdLink?.status === 'reconnect' ? 'kd_reconnect' : 'kd_required', T.kdLink ? 'Finish moving your files into your KnowDrive account first.' : 'Create or sign in to your KnowDrive account first.');
       }
       const kdAccount = kdReady(T) ? T.kdLink.account : null;

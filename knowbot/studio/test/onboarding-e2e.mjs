@@ -347,7 +347,22 @@ async function localJourney(browser, dev, vp, files) {
     await page.locator('.kda-who', { hasText: email }).first().waitFor({ timeout: 15000 });
   }, { allowNoAction: true });
 
+  await step(page, bucket, 'choose-store', async (rec) => {
+    // the store is never picked for the owner: a new account's one store is shown by name and they confirm it
+    await page.locator('#kda-use').waitFor({ timeout: 20000 });
+    const acct = dev.kd.auth.accounts.get(email);
+    if (await page.locator('.kda-store input:checked').count()) throw new Error('a store was preselected');
+    if (!(await page.locator('#kda-use').isDisabled())) throw new Error('the store button was enabled before a store was picked');
+    if (acct && dev.kd.auth.storeFiles(acct.store).length) throw new Error('files were written before the owner chose a store');
+    const name = (await page.locator('.kda-store-name').first().textContent()).trim();
+    await page.locator('.kda-store input[type="radio"]').first().check();
+    const label = (await page.locator('#kda-use').textContent()).trim();
+    if (label !== `Use ${name}`) throw new Error(`the button should name the store, got "${label}"`);
+    rec.notes.push(`one store, confirmed by name: "${name}"`);
+  });
+
   await step(page, bucket, 'files-moved', async (rec) => {
+    await page.locator('#kda-use:not([disabled])').click();
     await page.locator('#kda-continue').waitFor({ timeout: 60000 });
     const acct = dev.kd.auth.accounts.get(email);
     const copies = acct ? dev.kd.auth.storeFiles(acct.store) : [];

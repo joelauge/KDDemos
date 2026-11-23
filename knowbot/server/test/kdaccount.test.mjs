@@ -77,6 +77,11 @@ function client(S) {
       const res = await fetch(cb, { redirect: 'manual' });
       return { status: res.status, html: await res.text(), url, callback: cb, csp: res.headers.get('content-security-policy') };
     },
+    /** The store step: the owner picks a store (default: the account's only selectable one). → the response */
+    async choose(t, storeId = null, body = {}) {
+      const id = storeId || (await c.json(t, '/kd/stores')).stores.find((x) => x.selectable).id;
+      return c.call(t, '/kd/store', 'POST', { storeId: id, ...body });
+    },
     async waitMove(t, want = ['done', 'partial', 'error', 'paused'], ms = 20000) {
       const t0 = Date.now();
       while (Date.now() - t0 < ms) {
@@ -176,7 +181,11 @@ describe('kdaccount.mjs: PKCE, state, sealing, refresh', () => {
     const back = new URL(r.headers.get('location'));
     const out = await A.finish({ state: back.searchParams.get('state'), code: back.searchParams.get('code') });
     const acct = kd.auth.accounts.get('unit@example.com');
-    assert.deepEqual([out.link.account, out.link.email, out.link.store], [acct.id, 'unit@example.com', acct.store]);
+    assert.deepEqual([out.link.account, out.link.email, out.link.store], [acct.id, 'unit@example.com', null], 'signing in links the account, never a store');
+    assert.ok(!('storeChosenAt' in out.link) && !('storeName' in out.link));
+    A.prime('k0', out.access);
+    const listed = await A.stores('k0', { ...out.link });
+    assert.deepEqual(listed.stores.map((x) => [x.id, x.ownership]), [[acct.store, 'owned']], 'the store is only listed, for the owner to choose');
     assert.match(out.link.sealed, /^v1\./);
     assert.doesNotMatch(JSON.stringify(out.link), TOKEN_RE, 'the link holds no token in the clear');
     // refresh: the cache answers first; past expiry ONE refresh serves concurrent callers, and the rotation is saved
@@ -285,8 +294,26 @@ describe('launch with a KnowDrive account (HTTP flow)', () => {
     const doc = JSON.parse([...S.kd.files.values()].find((f) => f.filename === `knowbot/trials/${t.trialId}/_spec.json`).raw);
     assert.match(doc.kd.sealed, /^v1\./);
     assert.doesNotMatch(JSON.stringify(doc), TOKEN_RE, 'no token in the clear at rest');
+    // signing in chose no store, and nothing was written to the account's store
+    assert.deepEqual([st.store, st.storeRequired], [null, true]);
+    assert.equal(doc.kd.store, null);
+    assert.equal(S.kd.calls.filter((x) => x.store === acct.store && x.method !== 'GET').length, 0, 'no write before the choice');
     co = await c.call(t, '/checkout', 'POST', {});
-    assert.equal((await co.json()).error.code, 'kd_required', 'linked but not moved: still no checkout');
+    assert.equal((await co.json()).error.code, 'kd_store_required', 'linked, no store chosen: no checkout');
+    const early = await c.call(t, '/kd/move', 'POST', {});
+    assert.deepEqual([early.status, (await early.json()).error.code], [409, 'kd_store_required'], 'nothing moves before a store is chosen');
+    assert.equal(S.kd.auth.storeFiles(acct.store).length, 0);
+    // the store step: one store, still shown by name and confirmed by the owner
+    const ls = await c.json(t, '/kd/stores');
+    assert.deepEqual(ls.stores.map((x) => [x.id, x.name, x.ownership, x.selectable, x.needs, x.files]), [[acct.store, "owner@example.com's store", 'owned', true, 'none', 0]]);
+    const ch = await c.choose(t, acct.store);
+    assert.equal(ch.status, 200);
+    st = await ch.json();
+    assert.deepEqual([st.store.id, st.store.name, st.storeRequired], [acct.store, "owner@example.com's store", false]);
+    assert.ok(st.store.chosenAt);
+    assert.equal(S.kd.auth.storeFiles(acct.store).length, 0, 'the write check leaves nothing behind');
+    co = await c.call(t, '/checkout', 'POST', {});
+    assert.equal((await co.json()).error.code, 'kd_required', 'store chosen but not moved: still no checkout');
 
     // the move: progress on the events stream, every own file (original bytes, tags minus trial/expiry) in the customer store
     const mv = await c.call(t, '/kd/move', 'POST', {});
@@ -307,11 +334,11 @@ describe('launch with a KnowDrive account (HTTP flow)', () => {
     assert.ok(!copies.some((x) => x.tags.some((y) => y.startsWith('sample'))), 'samples are never copied');
     // KnowBot wrote them with the customer's token, never its own key
     const writes = S.kd.calls.filter((x) => x.url === '/api/v1/ingest' && x.store === acct.store);
-    assert.ok(writes.length === 3 && writes.every((x) => /^Bearer kdat_/.test(x.auth)));
+    assert.ok(writes.length === 3 + 1 /* the write check */ && writes.every((x) => /^Bearer kdat_/.test(x.auth)));
     // idempotent: moving again copies nothing
     assert.equal((await c.call(t, '/kd/move', 'POST', {})).status, 202);
     st = await c.waitMove(t);
-    assert.equal(S.kd.calls.filter((x) => x.url === '/api/v1/ingest' && x.store === acct.store).length, 3, 'no second copy');
+    assert.equal(S.kd.calls.filter((x) => x.url === '/api/v1/ingest' && x.store === acct.store).length, 4, 'no second copy');
     assert.equal(st.move.state, 'done');
 
     // checkout carries the account, signed with the other params
@@ -390,6 +417,11 @@ describe('launch with a KnowDrive account (HTTP flow)', () => {
     assert.equal(s2.status, 200);
     st = await c.json(t, '/kd');
     assert.deepEqual([st.status, st.live], ['linked', true]);
+    // a launched bot keeps its store: reconnecting kept it, and it cannot be changed from the dialog
+    assert.deepEqual([st.store.id, st.storeRequired], [acct.store, false]);
+    const locked = await c.call(t, '/kd/store', 'POST', { storeId: acct.store, confirmed: true });
+    assert.deepEqual([locked.status, (await locked.json()).error.code], [409, 'kd_live']);
+    assert.equal((await c.json(t, '/kd/stores')).locked, true);
     const back = await c.web(t.trialId, QUESTIONS[0]);
     assert.deepEqual(back.lines, before0[0], 'answers again after reconnecting');
     assert.doesNotMatch(S.logs.join('\n'), TOKEN_RE, 'no token is ever logged');
@@ -417,6 +449,7 @@ describe('launch with a KnowDrive account (HTTP flow)', () => {
     assert.equal(s.status, 200);
     const acct = S.kd.auth.accounts.get('existing@example.com');
     assert.equal(S.kd.auth.accounts.size >= 2, true);
+    assert.equal((await c.choose(t)).status, 200);
     // one copy fails: the move ends partial with a per-file error; a retry copies only what's missing
     S.kd.failNext.ingestStore = { store: acct.store, n: 1 };
     await c.call(t, '/kd/move', 'POST', {});

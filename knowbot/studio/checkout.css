@@ -726,6 +726,32 @@
 .kda-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--dur-3) var(--ease-out); }
 .kda-failed { list-style: none; padding: 0; display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
 .kda-failed b { color: var(--strong); font-weight: 600; overflow-wrap: anywhere; }
+.kda-where .kda-link { margin-left: 6px; font-size: 13px; }
+/* the store step: a radio list (nothing preselected), stores that can't be used greyed below it, the extra confirmation */
+.kda-stores { margin: 0; padding: 0; border: 0; min-width: 0; display: grid; gap: 8px; list-style: none; }
+.kda-legend { padding: 0; margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.kda-store { display: flex; align-items: flex-start; gap: 10px; min-height: 48px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface, transparent); cursor: pointer; min-width: 0; }
+.kda-store:hover { border-color: var(--accent); }
+.kda-store:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.kda-store:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kda-store input[type="radio"] { flex: none; width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--accent); }
+.kda-store-main { display: grid; gap: 2px; min-width: 0; }
+.kda-store-name { font-size: 14.5px; font-weight: 600; color: var(--strong); overflow-wrap: anywhere; }
+.kda-store-meta { font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.kda-store-tag { margin-left: 8px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); font-size: 11px; font-weight: 600; color: var(--muted); vertical-align: 1px; }
+.kda-store.is-off { cursor: default; border-style: dashed; background: var(--raise); }
+.kda-store.is-off:hover { border-color: var(--line-2); }
+.kda-store.is-off .kda-store-name { font-weight: 500; color: var(--muted); }
+.kda-store-lock { flex: none; display: inline-flex; margin-top: 3px; color: var(--muted); }
+.kda-confirm { display: grid; gap: 10px; padding: 12px; border-radius: 12px; background: var(--raise); border: 1px solid var(--line-2); }
+.kda-confirm[hidden] { display: none; }
+.kda-confirm > * { margin: 0; }
+.kda-confirm-why { font-size: 13.5px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+.kda-check { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 4px 0; font-size: 14px; line-height: 1.45; color: var(--strong); cursor: pointer; }
+.kda-check input { flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+.kda-field { display: grid; gap: 6px; font-size: 13.5px; color: var(--text); }
+.kda-field b { color: var(--strong); font-weight: 600; overflow-wrap: anywhere; }
+.kda-cta[disabled]:not(.is-busy) { opacity: .55; cursor: not-allowed; transform: none; }
 .kda-err { margin: 0; }
 .kda-notice { position: fixed; z-index: 70; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding: 10px 14px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); background: var(--panel); box-shadow: var(--st-shadow-2); font-size: 13.5px; color: var(--text); }

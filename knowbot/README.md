@@ -164,11 +164,26 @@ max_tokens 400, seed 7.
 ## Launch with a KnowDrive account (`server/kdaccount.mjs`, `studio/kdaccount.js`)
 
 Launch → the visitor creates (or signs in to) their own KnowDrive account in a popup (OAuth 2.0 authorization code +
-PKCE S256, the KnowBot client registered dynamically and cached) → the bot's ready, enabled, non-sample files are copied
-into the store that account owns (idempotent: each copy is tagged `knowbot:<trial>` and `kbsrc:<shared file id>`) →
+PKCE S256, the KnowBot client registered dynamically and cached) → the owner chooses the store ("Choose your store",
+below) → the bot's ready, enabled, non-sample files are copied
+into that store (idempotent: each copy is tagged `knowbot:<trial>` and `kbsrc:<shared file id>`) →
 checkout, whose link carries the signed `kd_account` → convert removes KnowBot's shared copies and the bot answers from
 the customer's store through their sign-in on every surface. The refresh token is sealed (AES-GCM, `KNOWBOT_SECRET_KEY`)
 in the bot's state doc; access tokens live in memory only; nothing token-shaped reaches the browser or the logs.
+
+**Choose your store.** KnowBot never picks a store for the owner (it once did, and wrote a bot's files into a store
+another account had only shared). Signing in links the account; nothing is written to any KnowDrive store until the
+choice is on record in the link (`store`, `storeName`, `storeChosenAt`). `GET …/kd/stores` reads the account's stores
+live with the owner's sign-in; `POST …/kd/store {storeId, confirmed, typedName?}` saves the choice, and enforces the
+gates the dialog shows: the store must be in the list just read; a store another account shared is refused
+(`kd_store_shared`); a store that holds files that are not KnowBot's needs `confirmed: true` (`kd_store_confirm`); a
+store whose ownership KnowDrive does not confirm also needs its name typed (`kd_store_name`); a tiny file is written
+under the bot's folder and removed again before the choice is saved (`kd_store_unwritable`). `kd/move`, checkout and
+launch answer `kd_store_required` without a choice. Before launch the store can be changed: KnowBot then removes its
+own copies (files tagged `knowbot:<trial>`, nothing else) from the earlier store. A launched bot keeps its store. A
+link saved before this step (a store, no `storeChosenAt`) must go through it before anything else is written.
+`classifyStore()` in `server/kdaccount.mjs` decides owned / shared / unconfirmed from what KnowDrive reports; the field
+names of the rows it sees are logged once (`[kd] tenant store row fields: …`) so the rules can follow the real shape.
 
 Env (all optional): `KNOWBOT_KD_AUTH_URL` (default `https://knowdrive.ai`; `https://dev.knowdrive.ai` for dev),
 `KNOWBOT_KD_API_URL` (default: the auth URL), `KNOWBOT_KD_REDIRECT_URI` (default `<public API base>/api/studio/kd/callback`;

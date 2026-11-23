@@ -491,6 +491,10 @@ export async function kdStatus() { return request('GET', trialPath('/kd')); }
 export async function kdStart(mode = 'signup') { return request('POST', trialPath('/kd/start'), { body: { mode } }); }
 /** POST /kd/move -> status (202): copies the bot's files into the KnowDrive account (idempotent; retries failed files). */
 export async function kdMove() { return request('POST', trialPath('/kd/move'), { body: {} }); }
+/** GET /kd/stores -> {stores: [{id, name, ownership, selectable, needs, files, otherFiles, capped, current}], locked}: the account's stores, read live. */
+export async function kdStores() { return request('GET', trialPath('/kd/stores')); }
+/** POST /kd/store {storeId, confirmed, typedName?} -> status (+ removed {store, files} after a change): the owner's choice of store. */
+export async function kdChooseStore(body) { return request('POST', trialPath('/kd/store'), { body }); }
 /** DELETE /kd -> status: signs out of KnowDrive (before launch only). */
 export async function kdSignOut() { return request('DELETE', trialPath('/kd')); }
 

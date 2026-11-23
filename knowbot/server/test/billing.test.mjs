@@ -94,6 +94,9 @@ function client(S) {
       for (const [n, text] of Object.entries(DOCS)) assert.equal((await c.upload(t, n, text)).status, 201);
       await c.waitReady(t, 2);
       await c.signIn(t, email);
+      // the owner chooses the store (a new account has one, empty: the pick alone is enough)
+      const { stores } = await c.json(t, '/kd/stores');
+      assert.equal((await c.call(t, '/kd/store', 'POST', { storeId: stores[0].id })).status, 200);
       assert.equal((await c.call(t, '/kd/move', 'POST', {})).status, 202);
       const st = await c.waitMove(t);
       assert.equal(st.move.state, 'done', JSON.stringify(st.move));
