@@ -2641,7 +2641,8 @@ function openMoreMenu(anchor) {
     item('command', 'Command palette', () => openPalette()),
     item('table', detailsOn() ? 'Hide details' : 'Show details', toggleDetails),
     mods.checkout?.billing?.canManage ? item('card', 'Manage billing', () => mods.checkout.manageBilling()) : null,
-    t.converted ? null : item('refresh', 'Start over', () => confirmStartOver()),
+    // a live bot can't be deleted from here (Start over deletes the bot and its files), but its owner can begin another
+    t.converted ? item('plus', 'Start a new bot', () => confirmNewBot()) : item('refresh', 'Start over', () => confirmStartOver()),
     t.expiresAt ? h('li', { role: 'none', class: 'st-menu-note' }, h('span', { html: icon('checkCircle', 14) }), ` Saved until ${new Date(t.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`) : null);
   openMenu(anchor, list);
 }
@@ -3013,7 +3014,7 @@ function paletteCommands() {
     { id: 'leads', label: 'Stats & Leads · questions by day, question history, leads, clicks, CSV', ico: 'users', run: () => openLeads() },
     { id: 'crm', label: 'Connect your CRM · HubSpot, Salesforce, Pipedrive, Zoho, Mailchimp, Constant Contact, Zapier, webhook', ico: 'link', run: () => openLeads({ section: 'crm' }) },
     { id: 'details', label: detailsOn() ? 'Hide details (atoms, stages, gauges)' : 'Show details (atoms, stages, gauges)', ico: 'table', run: () => toggleDetails() },
-    ...(getState().trial.converted ? [] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
+    ...(getState().trial.converted ? [{ id: 'newbot', label: 'Start a new bot (this one stays live)', ico: 'plus', run: () => confirmNewBot() }] : [{ id: 'restart', label: 'Start over (delete this bot and its files)', ico: 'refresh', run: () => confirmStartOver() }]),
     { id: 'theme', label: dark ? 'Light theme' : 'Dark theme', ico: dark ? 'sun' : 'moon', run: toggleTheme },
     { id: 'motion', label: motion.reduced() ? 'Full motion' : 'Reduce motion', ico: 'motion', run: toggleMotion },
   ];
@@ -5166,6 +5167,13 @@ function confirmAction({ title, body, confirm = 'Confirm', danger = true } = {})
 }
 on('confirm:ask', (d) => { if (d && typeof d.done === 'function') confirmAction(d).then(d.done); });
 
+/** From a live bot: a fresh bot in this browser. The live bot keeps running and is reopened with its Studio link. */
+async function confirmNewBot() {
+  const name = botName();
+  const ok = await confirmAction({ title: 'Start a new bot?', confirm: 'Start a new bot', danger: false,
+    body: `${name} stays live and keeps answering. This browser will open a new, empty bot. To come back to ${name}, use its Studio link, shown on its live card. Copy it first if you have not saved it.` });
+  if (ok) await startNewBot();
+}
 async function startNewBot() {
   try { sessionStorage.removeItem(logKey()); } catch { /* ignore */ }
   store.resetTrialState();
